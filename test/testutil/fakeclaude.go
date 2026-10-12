@@ -15,6 +15,7 @@
 package testutil
 
 import (
+	"context"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -39,7 +40,6 @@ func (p FakeClaudeProvider) InstallHint() string                { return "" }
 func (p FakeClaudeProvider) VersionInfo() (string, error)       { return "test", nil }
 func (p FakeClaudeProvider) MinVersion() [3]int                 { return [3]int{} }
 func (p FakeClaudeProvider) EnvVarsToExclude() []string         { return nil }
-func (p FakeClaudeProvider) CheckBareAuth() bool                { return true }
 func (p FakeClaudeProvider) SupportsNativeToollessReview() bool { return true }
 func (p FakeClaudeProvider) MatchesModel(model string) bool {
 	return strings.EqualFold(model, "haiku") || strings.EqualFold(model, "haiku[200K]")
@@ -54,6 +54,64 @@ func (p FakeClaudeProvider) ModelCatalog() []llm.ModelInfo {
 		Category:      "cheap",
 	}}
 }
+
+// ContextWindowForModel resolves the fake catalog's window for model.
+func (p FakeClaudeProvider) ContextWindowForModel(model string) int {
+	if entry, ok := llm.LookupModel(p.ModelCatalog(), model); ok && entry.ContextWindow > 0 {
+		return entry.ContextWindow
+	}
+	return 0
+}
+
+// AskingQuestionsClause returns an empty clause: the fake pins the pre-fold
+// prompt behavior (no provider-specific asking section) so suites that render
+// prompts against it stay byte-identical.
+func (p FakeClaudeProvider) AskingQuestionsClause() string { return "" }
+
+// CheckReadiness reports the fake as always ready, matching the readiness
+// behavior its suites relied on before the capability became mandatory.
+func (p FakeClaudeProvider) CheckReadiness(context.Context) llm.ProviderReadiness {
+	return llm.ProviderReadiness{Ready: true}
+}
+
+// ReviewPreferenceBand mirrors the real Claude ranking — haiku-family models
+// first, then cheap models — so automatic-review resolution over the fake
+// behaves like the real provider.
+func (p FakeClaudeProvider) ReviewPreferenceBand(model llm.ModelInfo) (int, bool) {
+	if strings.Contains(strings.ToLower(model.ID), "haiku") {
+		return 0, true
+	}
+	for _, alias := range model.Aliases {
+		if strings.Contains(strings.ToLower(alias), "haiku") {
+			return 0, true
+		}
+	}
+	if model.Category == "cheap" {
+		return 1, true
+	}
+	return 0, false
+}
+
+// DiscoverModelCatalog returns the fake catalog without launching anything.
+func (p FakeClaudeProvider) DiscoverModelCatalog(context.Context) ([]llm.ModelInfo, error) {
+	return p.ModelCatalog(), nil
+}
+
+// DiscoverModelCatalogWithProgress streams the fake catalog to report before
+// returning it.
+func (p FakeClaudeProvider) DiscoverModelCatalogWithProgress(ctx context.Context, report llm.ModelDiscoveryReporter) ([]llm.ModelInfo, error) {
+	models, err := p.DiscoverModelCatalog(ctx)
+	if err == nil && report != nil {
+		for _, model := range models {
+			report(model)
+		}
+	}
+	return models, err
+}
+
+// SetModelCatalog is a no-op: the fake's catalog is fixed. The method exists
+// only to satisfy the provider interface; no caller enriches the fake.
+func (FakeClaudeProvider) SetModelCatalog([]llm.ModelInfo) {}
 
 // BuildCommand carries a system prompt and a resumed session id on the same
 // launch flags the real Claude adapter uses, so scripts can observe them.

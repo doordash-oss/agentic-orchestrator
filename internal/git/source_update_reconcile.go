@@ -20,63 +20,63 @@ import (
 	"strings"
 )
 
-// SourceReconcileState is the typed settlement of one uncertain update
+// sourceReconcileState is the typed settlement of one uncertain update
 // attempt: what the requested branch's tip proves after the attempt can no
 // longer mutate. It is an observation of the ref, never an inference about
 // transport completion.
-type SourceReconcileState string
+type sourceReconcileState string
 
 const (
-	// SourceReconcileTargetPresent reports the branch tip is the expected
+	// sourceReconcileTargetPresent reports the branch tip is the expected
 	// origin SHA the attempt was expected to advance it to.
-	SourceReconcileTargetPresent SourceReconcileState = "expected_target_present"
-	// SourceReconcileOriginalTip reports the branch tip is still the
+	sourceReconcileTargetPresent sourceReconcileState = "expected_target_present"
+	// sourceReconcileOriginalTip reports the branch tip is still the
 	// expected local SHA displayed before the attempt.
-	SourceReconcileOriginalTip SourceReconcileState = "original_tip_remains"
-	// SourceReconcileLocalChanged reports the branch tip is neither
+	sourceReconcileOriginalTip sourceReconcileState = "original_tip_remains"
+	// sourceReconcileLocalChanged reports the branch tip is neither
 	// expected value: something else moved it, and the observation says
 	// nothing about whether the attempt succeeded.
-	SourceReconcileLocalChanged SourceReconcileState = "local_state_changed"
-	// SourceReconcileBranchMissing reports the branch no longer resolves.
-	SourceReconcileBranchMissing SourceReconcileState = "branch_missing"
+	sourceReconcileLocalChanged sourceReconcileState = "local_state_changed"
+	// sourceReconcileBranchMissing reports the branch no longer resolves.
+	sourceReconcileBranchMissing sourceReconcileState = "branch_missing"
 )
 
-// CheckoutReconcileState is the observed state of the original checkout that
+// checkoutReconcileState is the observed state of the original checkout that
 // held the attempted update's branch. The target branch SHA alone only proves
 // the target commit is present; the original tip alone does not prove the
 // index and files were untouched. Only a clean checkout whose HEAD is the
 // observed branch tip supports a whole-checkout completion claim.
-type CheckoutReconcileState string
+type checkoutReconcileState string
 
 const (
-	// CheckoutReconcileClean reports a checkout with a consistent index and
+	// checkoutReconcileClean reports a checkout with a consistent index and
 	// tracked working tree and no in-progress Git operation.
-	CheckoutReconcileClean CheckoutReconcileState = "clean"
-	// CheckoutReconcileDirty reports a checkout with staged, unstaged, or
+	checkoutReconcileClean checkoutReconcileState = "clean"
+	// checkoutReconcileDirty reports a checkout with staged, unstaged, or
 	// otherwise inconsistent tracked content — possibly a partial or
 	// externally changed checkout that truthful guidance must not attribute
 	// to Agentico.
-	CheckoutReconcileDirty CheckoutReconcileState = "dirty"
-	// CheckoutReconcileOperationInProgress reports a merge, rebase,
+	checkoutReconcileDirty checkoutReconcileState = "dirty"
+	// checkoutReconcileOperationInProgress reports a merge, rebase,
 	// cherry-pick, or revert in progress in the checkout.
-	CheckoutReconcileOperationInProgress CheckoutReconcileState = "operation_in_progress"
-	// CheckoutReconcileUnobserved reports the checkout state could not be
+	checkoutReconcileOperationInProgress checkoutReconcileState = "operation_in_progress"
+	// checkoutReconcileUnobserved reports the checkout state could not be
 	// completely inspected; no whole-checkout claim may be based on it.
-	CheckoutReconcileUnobserved CheckoutReconcileState = "unobserved"
+	checkoutReconcileUnobserved checkoutReconcileState = "unobserved"
 )
 
-// CheckoutReconcileObservation is one settlement read's observation of the
+// checkoutReconcileObservation is one settlement read's observation of the
 // original checkout holding the attempted branch. HeadRef and HeadSHA are
 // empty when they could not be read.
-type CheckoutReconcileObservation struct {
+type checkoutReconcileObservation struct {
 	HeadRef string
 	HeadSHA string
-	State   CheckoutReconcileState
+	State   checkoutReconcileState
 }
 
 // SourceReconcileReport is one settlement read's typed observation.
 type SourceReconcileReport struct {
-	State    SourceReconcileState
+	State    sourceReconcileState
 	LocalSHA string
 	// Checkout is the observed state of the original checkout holding the
 	// branch, populated only when the caller asked to settle an
@@ -84,7 +84,7 @@ type SourceReconcileReport struct {
 	// branch itself) and the original checkout still holds the branch. A nil
 	// Checkout on such a request means the checkout no longer holds the
 	// branch.
-	Checkout *CheckoutReconcileObservation
+	Checkout *checkoutReconcileObservation
 }
 
 // ReconcileSourceUpdateState reads the requested branch's current tip and
@@ -119,18 +119,18 @@ func ReconcileSourceUpdateState(ctx context.Context, repoPath, branch, expectedL
 		report.LocalSHA = sha
 		switch {
 		case strings.EqualFold(sha, expectedOriginSHA):
-			report.State = SourceReconcileTargetPresent
+			report.State = sourceReconcileTargetPresent
 		case strings.EqualFold(sha, expectedLocalSHA):
-			report.State = SourceReconcileOriginalTip
+			report.State = sourceReconcileOriginalTip
 		default:
-			report.State = SourceReconcileLocalChanged
+			report.State = sourceReconcileLocalChanged
 		}
 	case 1:
-		report.State = SourceReconcileBranchMissing
+		report.State = sourceReconcileBranchMissing
 	default:
 		return SourceReconcileReport{}, fmt.Errorf("reading the local branch tip: %s", nonemptyBranchProbeDiagnostic(result.Diagnostics))
 	}
-	if observeCheckout && report.State != SourceReconcileBranchMissing {
+	if observeCheckout && report.State != sourceReconcileBranchMissing {
 		observation, err := observeOriginalCheckoutSettlement(ctx, repoPath, branch, options)
 		if err != nil {
 			return SourceReconcileReport{}, err
@@ -145,7 +145,7 @@ func ReconcileSourceUpdateState(ctx context.Context, repoPath, branch, expectedL
 // branch. When the original checkout no longer holds the branch the
 // observation is nil: the checkout cannot support any whole-checkout claim
 // about this branch. The observation never attributes changes to Agentico.
-func observeOriginalCheckoutSettlement(ctx context.Context, repoPath, branch string, options OriginCheckOptions) (*CheckoutReconcileObservation, error) {
+func observeOriginalCheckoutSettlement(ctx context.Context, repoPath, branch string, options OriginCheckOptions) (*checkoutReconcileObservation, error) {
 	checkouts, err := listWorktreeCheckouts(ctx, repoPath, options)
 	if err != nil {
 		return nil, err
@@ -161,22 +161,22 @@ func observeOriginalCheckoutSettlement(ctx context.Context, repoPath, branch str
 	}
 	operation, err := checkoutOperationInProgress(ctx, repoPath, options)
 	if err != nil {
-		return &CheckoutReconcileObservation{State: CheckoutReconcileUnobserved}, nil
+		return &checkoutReconcileObservation{State: checkoutReconcileUnobserved}, nil
 	}
 	head, headErr := observeCheckoutHead(ctx, repoPath, options)
 	clean, cleanErr := checkoutStatusClean(ctx, repoPath, false, options)
 	switch {
 	case operation:
-		observation := &CheckoutReconcileObservation{State: CheckoutReconcileOperationInProgress}
+		observation := &checkoutReconcileObservation{State: checkoutReconcileOperationInProgress}
 		if headErr == nil {
 			observation.HeadRef, observation.HeadSHA = head.Ref, head.SHA
 		}
 		return observation, nil
 	case headErr != nil || cleanErr != nil:
-		return &CheckoutReconcileObservation{State: CheckoutReconcileUnobserved}, nil
+		return &checkoutReconcileObservation{State: checkoutReconcileUnobserved}, nil
 	case !clean:
-		return &CheckoutReconcileObservation{HeadRef: head.Ref, HeadSHA: head.SHA, State: CheckoutReconcileDirty}, nil
+		return &checkoutReconcileObservation{HeadRef: head.Ref, HeadSHA: head.SHA, State: checkoutReconcileDirty}, nil
 	default:
-		return &CheckoutReconcileObservation{HeadRef: head.Ref, HeadSHA: head.SHA, State: CheckoutReconcileClean}, nil
+		return &checkoutReconcileObservation{HeadRef: head.Ref, HeadSHA: head.SHA, State: checkoutReconcileClean}, nil
 	}
 }

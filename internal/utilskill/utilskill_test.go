@@ -22,8 +22,8 @@ import (
 )
 
 func TestRegistryRowsHaveAtLeastOnePhase(t *testing.T) {
-	for name, phases := range Registry() {
-		if len(phases) == 0 {
+	for name, e := range registry {
+		if len(e.phases) == 0 {
 			t.Errorf("utility skill %q has no phases mapped", name)
 		}
 	}
@@ -34,7 +34,7 @@ func TestRegistrySkillsExistInEmbeddedFS(t *testing.T) {
 	if err != nil {
 		t.Fatalf("parsing embedded skills: %v", err)
 	}
-	for name := range Registry() {
+	for name := range registry {
 		if _, ok := embedded[name]; !ok {
 			t.Errorf("utility skill %q is not found in embedded skills FS", name)
 		}
@@ -161,12 +161,11 @@ func TestPhaseAllIncludedEverywhere(t *testing.T) {
 
 func TestAllReturnsAllRegisteredSkills(t *testing.T) {
 	all := All()
-	reg := Registry()
-	if len(all) != len(reg) {
-		t.Fatalf("All() returned %d skills, registry has %d", len(all), len(reg))
+	if len(all) != len(registry) {
+		t.Fatalf("All() returned %d skills, registry has %d", len(all), len(registry))
 	}
 	for _, name := range all {
-		if _, ok := reg[name]; !ok {
+		if _, ok := registry[name]; !ok {
 			t.Errorf("All() returned %q which is not in registry", name)
 		}
 	}

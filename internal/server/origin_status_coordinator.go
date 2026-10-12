@@ -108,12 +108,6 @@ type originCompleted struct {
 	updateBlockers []git.UpdateBlocker
 }
 
-// unavailable reports the third outcome: neither a comparison nor a
-// confirmed-absent origin, i.e. the attempt failed or timed out.
-func (c *originCompleted) unavailable() bool {
-	return c.comparison == nil && !c.absent
-}
-
 type originFlight struct {
 	key  originCheckKey
 	done chan struct{}
@@ -163,7 +157,7 @@ func newOriginCheckCoordinator() *originCheckCoordinator {
 
 // Shutdown cancels every in-flight attempt's context and waits for the
 // attempt goroutines to release their resources.
-func (c *originCheckCoordinator) Shutdown() {
+func (c *originCheckCoordinator) shutdown() {
 	c.cancel()
 	c.wg.Wait()
 }

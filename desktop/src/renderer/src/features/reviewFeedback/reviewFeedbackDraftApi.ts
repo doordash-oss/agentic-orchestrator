@@ -22,6 +22,7 @@ limitations under the License.
  * only references plus the expected revision, and launch is constant size.
  */
 import type { ReviewFeedbackCommentView } from '../../../../shared/ipc';
+import { defined } from '../../../../shared/defined';
 
 /** One comment inside the revisioned pending-draft view. */
 export interface ReviewFeedbackDraftCommentView extends ReviewFeedbackCommentView {
@@ -51,7 +52,7 @@ export interface ReviewFeedbackSelectionUpdate {
   selected: boolean;
 }
 
-export interface ReviewFeedbackLaunchResult {
+interface ReviewFeedbackLaunchResult {
   /** Identity of the created review-feedback child (`child_id ?? feature_id`). */
   childId: string;
   parentId: string;
@@ -108,9 +109,9 @@ export function launchReviewFeedbackDraft(request: {
     .then((result) => ({
       childId: result.childId ?? result.featureId ?? '',
       parentId: result.parentId,
-      ...(result.changed === undefined ? {} : { changed: result.changed }),
-      ...(result.omitted === undefined ? {} : { omitted: result.omitted }),
-      ...(result.deferred === undefined ? {} : { deferred: result.deferred }),
+      ...defined('changed', result.changed),
+      ...defined('omitted', result.omitted),
+      ...defined('deferred', result.deferred),
     }));
 }
 

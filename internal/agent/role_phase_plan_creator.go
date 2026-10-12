@@ -27,8 +27,8 @@ var phasePlanCreatorRoleSpec = roleSpec{
 	Role:      RolePlanPhasePlanner,
 	SkillName: "plan-phase",
 	OutputRoots: []outputRootSpec{
-		artifactDirOutputRoot("Shared per-phase plan artifact root. The phase plan markdown is written here across attempts."),
-		attemptDirOutputRoot("Active phase-plan attempt directory. Debug prompts, attempt metadata, and validator output are written here; the harness records its completion receipt here after validation."),
+		iterationParentOutputRoot("artifact_dir", "Shared per-phase plan artifact root. Write `phase-plan.md` directly here; it persists across attempts."),
+		iterationOutputRoot("attempt_dir", "Active phase-plan attempt directory. Debug prompts, attempt metadata, and validator output are written here; the harness records its completion receipt here after validation. Never write the phase plan markdown here."),
 	},
 	Artifacts: []roleArtifactSpec{
 		phasePlanMarkdownRoleArtifact(),

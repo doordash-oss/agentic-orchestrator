@@ -184,7 +184,7 @@ func (o *Orchestrator) admissionOwnsWork(featureID string) bool {
 			}
 		}
 	}
-	f, err := o.deps.Lifecycle.Get(featureID)
+	f, err := o.deps.Store.Load(featureID)
 	if err != nil {
 		if errors.Is(err, fs.ErrNotExist) {
 			// The feature no longer exists (deleted): nothing left to own.

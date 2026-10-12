@@ -25,44 +25,9 @@ import (
 	gitadapter "github.com/doordash-oss/agentic-orchestrator/internal/git"
 )
 
-const (
-	actionReviewFeedback             = "review-feedback"
-	reviewFeedbackSubactionFetch     = "fetch"
-	reviewFeedbackSubactionSelection = "selection"
-)
-
 // maxReviewFeedbackSelectionUpdates bounds one reference-only selection
 // mutation; it comfortably exceeds any realistic visible comment count.
 const maxReviewFeedbackSelectionUpdates = 512
-
-type addressedReviewFeedbackIDReader interface {
-	LoadAddressedReviewFeedbackIDs(parentID, repoName string) (map[int]bool, error)
-}
-
-type reviewFeedbackDraftStore interface {
-	LoadReviewFeedbackDraft(parentID string) (*feature.ReviewFeedbackDraft, error)
-	SaveReviewFeedbackDraft(parentID string, draft *feature.ReviewFeedbackDraft, expectedRevision int64) error
-}
-
-// reviewFeedbackLaunchReceiptReader reports the durable launch receipt of
-// the active review-feedback child, when one exists.
-type reviewFeedbackLaunchReceiptReader interface {
-	ActiveReviewFeedbackLaunchReceipt(parentID string) (*feature.Feature, *feature.ReviewFeedbackLaunchReceipt, error)
-}
-
-// reviewFeedbackDraftCleaner atomically deletes a pending draft consumed by a
-// durable launch receipt, never a newer committed revision.
-type reviewFeedbackDraftCleaner interface {
-	DeleteReviewFeedbackDraftIfRevision(parentID string, revision int64) error
-}
-
-func reviewFeedbackFetchPath(featureID string) string {
-	return featureActionPath(featureID, actionReviewFeedback) + "/" + reviewFeedbackSubactionFetch
-}
-
-func reviewFeedbackSelectionPath(featureID string) string {
-	return featureActionPath(featureID, actionReviewFeedback) + "/" + reviewFeedbackSubactionSelection
-}
 
 func (h *apiHandler) handleReviewFeedbackFetchTrusted(w http.ResponseWriter, r *http.Request, parentID string) {
 	var req ReviewFeedbackFetchRequest
@@ -88,16 +53,6 @@ func (h *apiHandler) handleReviewFeedbackFetchTrusted(w http.ResponseWriter, r *
 			errcat.WithDiagnostics(fmt.Sprintf("read feature %q: %v", parentID, err)))
 		return
 	}
-	addressedReader, ok := h.store.(addressedReviewFeedbackIDReader)
-	if !ok {
-		writeAPIError(w, http.StatusInternalServerError, errcat.InternalError, errcat.WithDiagnostics("review-feedback addressed-ID store unavailable"))
-		return
-	}
-	draftStore, ok := h.store.(reviewFeedbackDraftStore)
-	if !ok {
-		writeAPIError(w, http.StatusInternalServerError, errcat.InternalError, errcat.WithDiagnostics("review-feedback draft store unavailable"))
-		return
-	}
 
 	fetched := make(map[string][]feature.ReviewFeedbackComment, len(parent.Repos))
 	prURLs := parent.PRURLs()
@@ -106,7 +61,7 @@ func (h *apiHandler) handleReviewFeedbackFetchTrusted(w http.ResponseWriter, r *
 		if prURL == "" {
 			continue
 		}
-		addressed, loadErr := addressedReader.LoadAddressedReviewFeedbackIDs(parent.ID, repo.Name)
+		addressed, loadErr := h.store.LoadAddressedReviewFeedbackIDs(parent.ID, repo.Name)
 		if loadErr != nil {
 			writeReviewFeedbackFetchError(w, repo.Name, loadErr)
 			return
@@ -139,7 +94,7 @@ func (h *apiHandler) handleReviewFeedbackFetchTrusted(w http.ResponseWriter, r *
 		}
 	}
 
-	existing, loadErr := draftStore.LoadReviewFeedbackDraft(parent.ID)
+	existing, loadErr := h.store.LoadReviewFeedbackDraft(parent.ID)
 	if loadErr != nil {
 		writeAPIError(w, http.StatusInternalServerError, errcat.InternalError, errcat.WithDiagnostics("read review feedback draft"))
 		return
@@ -155,8 +110,8 @@ func (h *apiHandler) handleReviewFeedbackFetchTrusted(w http.ResponseWriter, r *
 		if intent := parent.PendingChild; intent != nil && intent.Kind == feature.ChildKindReviewFeedback &&
 			intent.LaunchReceipt != nil {
 			consumedRevision = intent.LaunchReceipt.DraftRevision
-		} else if receiptReader, ok := h.store.(reviewFeedbackLaunchReceiptReader); ok {
-			_, receipt, receiptErr := receiptReader.ActiveReviewFeedbackLaunchReceipt(parent.ID)
+		} else {
+			_, receipt, receiptErr := h.store.ActiveReviewFeedbackLaunchReceipt(parent.ID)
 			if receiptErr != nil {
 				writeAPIError(w, http.StatusInternalServerError, errcat.InternalError, errcat.WithDiagnostics("read review-feedback launch receipt"))
 				return
@@ -166,15 +121,13 @@ func (h *apiHandler) handleReviewFeedbackFetchTrusted(w http.ResponseWriter, r *
 			}
 		}
 		if consumedRevision == existing.Revision {
-			if deleter, ok := h.store.(reviewFeedbackDraftCleaner); ok {
-				// Compare-and-delete under the store lock: a revision
-				// committed after the receipt is never treated as consumed.
-				if delErr := deleter.DeleteReviewFeedbackDraftIfRevision(parent.ID, consumedRevision); delErr != nil {
-					writeAPIError(w, http.StatusInternalServerError, errcat.InternalError, errcat.WithDiagnostics("delete review feedback draft consumed by launch"))
-					return
-				}
-				existing = nil
+			// Compare-and-delete under the store lock: a revision committed
+			// after the receipt is never treated as consumed.
+			if delErr := h.store.DeleteReviewFeedbackDraftIfRevision(parent.ID, consumedRevision); delErr != nil {
+				writeAPIError(w, http.StatusInternalServerError, errcat.InternalError, errcat.WithDiagnostics("delete review feedback draft consumed by launch"))
+				return
 			}
+			existing = nil
 		}
 	}
 	expectedRevision := int64(0)
@@ -182,7 +135,7 @@ func (h *apiHandler) handleReviewFeedbackFetchTrusted(w http.ResponseWriter, r *
 		expectedRevision = existing.Revision
 	}
 	draft := feature.ReconcileReviewFeedbackDraft(parent, existing, fetched)
-	if saveErr := draftStore.SaveReviewFeedbackDraft(parent.ID, draft, expectedRevision); saveErr != nil {
+	if saveErr := h.store.SaveReviewFeedbackDraft(parent.ID, draft, expectedRevision); saveErr != nil {
 		var conflict *feature.ReviewFeedbackRevisionConflictError
 		var consumed *feature.ReviewFeedbackDraftConsumedError
 		if errors.As(saveErr, &conflict) || errors.As(saveErr, &consumed) {
@@ -229,11 +182,6 @@ func (h *apiHandler) handleReviewFeedbackSelectionTrusted(w http.ResponseWriter,
 			errcat.WithDiagnostics(fmt.Sprintf("read feature %q: %v", parentID, err)))
 		return
 	}
-	draftStore, ok := h.store.(reviewFeedbackDraftStore)
-	if !ok {
-		writeAPIError(w, http.StatusInternalServerError, errcat.InternalError, errcat.WithDiagnostics("review-feedback draft store unavailable"))
-		return
-	}
 
 	updates := make(map[feature.StableReviewFeedbackRef]bool, len(req.Updates))
 	for _, update := range req.Updates {
@@ -258,7 +206,7 @@ func (h *apiHandler) handleReviewFeedbackSelectionTrusted(w http.ResponseWriter,
 		updates[ref] = update.Selected
 	}
 
-	draft, loadErr := draftStore.LoadReviewFeedbackDraft(parent.ID)
+	draft, loadErr := h.store.LoadReviewFeedbackDraft(parent.ID)
 	if loadErr != nil {
 		writeAPIError(w, http.StatusInternalServerError, errcat.InternalError, errcat.WithDiagnostics("read review feedback draft"))
 		return
@@ -278,7 +226,7 @@ func (h *apiHandler) handleReviewFeedbackSelectionTrusted(w http.ResponseWriter,
 	}
 	draft.Revision++
 	draft.SnapshotID = feature.ReviewFeedbackSnapshotID(draft.Items)
-	if saveErr := draftStore.SaveReviewFeedbackDraft(parent.ID, draft, draft.Revision-1); saveErr != nil {
+	if saveErr := h.store.SaveReviewFeedbackDraft(parent.ID, draft, draft.Revision-1); saveErr != nil {
 		var conflict *feature.ReviewFeedbackRevisionConflictError
 		var consumed *feature.ReviewFeedbackDraftConsumedError
 		if errors.As(saveErr, &conflict) || errors.As(saveErr, &consumed) {

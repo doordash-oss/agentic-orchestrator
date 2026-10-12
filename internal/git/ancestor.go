@@ -41,10 +41,10 @@ func IsAncestor(repoPath, ancestor, descendant string) bool {
 	return true
 }
 
-// CheckAncestor is IsAncestor for callers that must distinguish "not an
+// checkAncestor is IsAncestor for callers that must distinguish "not an
 // ancestor" (exit status 1) from git being unable to answer, such as an
 // unknown commit or an unreadable repository.
-func CheckAncestor(repoPath, ancestor, descendant string) (bool, error) {
+func checkAncestor(repoPath, ancestor, descendant string) (bool, error) {
 	if ancestor == "" || descendant == "" {
 		return false, errors.New("merge-base --is-ancestor: empty commit")
 	}
@@ -63,5 +63,5 @@ func CheckAncestor(repoPath, ancestor, descendant string) (bool, error) {
 // IsAncestor reports whether ancestor reaches descendant in the given repo,
 // failing rather than guessing when git cannot answer.
 func (m *WorktreeManager) IsAncestor(repoPath, ancestor, descendant string) (bool, error) {
-	return CheckAncestor(repoPath, ancestor, descendant)
+	return checkAncestor(repoPath, ancestor, descendant)
 }

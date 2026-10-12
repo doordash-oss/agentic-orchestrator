@@ -20,6 +20,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -87,7 +88,8 @@ func TestScanRecovery_EmitsRecoveryScannedEvent_WithCountInMessage(t *testing.T)
 	)
 	fake := &fakeRecoveryOp{Items: items}
 
-	o := orchestrator.New(orchestrator.Deps{Recovery: fake}, orchestrator.Hooks{})
+	fs, manager := newStoredFeatureFixture(t)
+	o := orchestrator.New(orchestrator.Deps{Recovery: fake, Store: fs, Manager: manager}, orchestrator.Hooks{})
 
 	got, err := o.ScanRecovery(context.Background())
 	if err != nil {
@@ -124,8 +126,9 @@ func TestScanRecovery_FiresOnRecoveryScannedHookWithCount(t *testing.T) {
 	fake := &fakeRecoveryOp{Items: items}
 	log := &recoveryHookLog{}
 
+	fs, manager := newStoredFeatureFixture(t)
 	o := orchestrator.New(
-		orchestrator.Deps{Recovery: fake},
+		orchestrator.Deps{Recovery: fake, Store: fs, Manager: manager},
 		orchestrator.Hooks{OnRecoveryScanned: log.recordScan},
 	)
 
@@ -148,8 +151,9 @@ func TestScanRecovery_ZeroItems_StillEmitsEventAndHook(t *testing.T) {
 	fake := &fakeRecoveryOp{Items: nil}
 	log := &recoveryHookLog{}
 
+	fs, manager := newStoredFeatureFixture(t)
 	o := orchestrator.New(
-		orchestrator.Deps{Recovery: fake},
+		orchestrator.Deps{Recovery: fake, Store: fs, Manager: manager},
 		orchestrator.Hooks{OnRecoveryScanned: log.recordScan},
 	)
 
@@ -192,8 +196,9 @@ func TestScanRecovery_PortError_PropagatesAndDoesNotEmit(t *testing.T) {
 	fake := &fakeRecoveryOp{ScanErr: wantErr}
 	log := &recoveryHookLog{}
 
+	fs, manager := newStoredFeatureFixture(t)
 	o := orchestrator.New(
-		orchestrator.Deps{Recovery: fake},
+		orchestrator.Deps{Recovery: fake, Store: fs, Manager: manager},
 		orchestrator.Hooks{OnRecoveryScanned: log.recordScan},
 	)
 
@@ -238,7 +243,8 @@ func TestScanRecovery_DropsSessionsThisProcessStillSupervises(t *testing.T) {
 		return []ports.SessionView{mocks.NewMockSessionView("feat-a-implement", "feat-a")}
 	}
 
-	o := orchestrator.New(orchestrator.Deps{Recovery: fake, Sessions: sessions}, orchestrator.Hooks{})
+	fs, manager := newStoredFeatureFixture(t)
+	o := orchestrator.New(orchestrator.Deps{Recovery: fake, Store: fs, Manager: manager, Sessions: sessions}, orchestrator.Hooks{})
 
 	got, err := o.ScanRecovery(context.Background())
 	if err != nil {
@@ -301,12 +307,11 @@ func TestExecuteRecovery_PortError_NoEventsNoRelaunch(t *testing.T) {
 
 	fake := &fakeRecoveryOp{ExecErr: wantErr}
 
-	lifecycle := mocks.NewMockFeatureLifecycle()
 	spy := &fakeRunMultiRepoImpl{}
 	hookLog := &recoveryHookLog{}
 
 	o := orchestrator.New(
-		orchestrator.Deps{Recovery: fake, Lifecycle: lifecycle},
+		orchestrator.Deps{Recovery: fake},
 		orchestrator.Hooks{OnRecoveryAction: hookLog.recordAction},
 	)
 	o.SetRunMultiRepoImplFn(spy.Fn())
@@ -338,7 +343,7 @@ func TestExecuteRecovery_PortError_NoEventsNoRelaunch(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 func TestExecuteRecovery_EmitsOneEventPerItemWithAction(t *testing.T) {
-	// feat-a's relaunch fails via lifecycle.Get returning DefaultError, so
+	// feat-a's relaunch fails because its id is absent from the real store, so
 	// the resume action emits an event but does not fire the relaunch spy —
 	// keeps the test focused on per-item observations. Relaunch behavior is
 	// exercised by T9.
@@ -354,20 +359,18 @@ func TestExecuteRecovery_EmitsOneEventPerItemWithAction(t *testing.T) {
 	}
 
 	fake := &fakeRecoveryOp{}
-	lifecycle := mocks.NewMockFeatureLifecycle()
-	lifecycle.DefaultError = errors.New("feature not found")
+	store, manager := newStoredFeatureFixture(t)
 	hookLog := &recoveryHookLog{}
 	spy := &fakeRunMultiRepoImpl{}
 
 	o := orchestrator.New(
-		orchestrator.Deps{Recovery: fake, Lifecycle: lifecycle},
+		orchestrator.Deps{Recovery: fake, Manager: manager, Store: store},
 		orchestrator.Hooks{OnRecoveryAction: hookLog.recordAction},
 	)
 	o.SetRunMultiRepoImplFn(spy.Fn())
 
 	if err := o.ExecuteRecovery(context.Background(), items, actions); err == nil {
-		// relaunch for feat-a will fail because lifecycle.Get returns
-		// DefaultError — that's fine, we only care about events here.
+		// The missing feature cannot relaunch; recovery events still emit.
 	}
 
 	events := drainEvents(o)
@@ -478,31 +481,26 @@ func TestExecuteRecovery_ResumeActionRelaunchesPhase(t *testing.T) {
 	}
 
 	fake := &fakeRecoveryOp{}
-	store := newFeatureStore(f)
-	lc := lifecycleForFeature(f)
-	// Track any StartImplementation calls; the idempotent relaunch path in
-	// startImplement MUST skip StartImplementation for a feature already in
-	// StatusImplementing. Seeing this function called would be a regression.
-	var startImplCalls int
-	lc.StartImplementationFn = func(id string) error {
-		startImplCalls++
-		return nil
-	}
+	store, manager := newStoredFeatureFixture(t, f)
 
 	spy := &fakeRunMultiRepoImpl{}
 
 	o := orchestrator.New(orchestrator.Deps{
-		Recovery:  fake,
-		Lifecycle: lc,
-		Store:     store,
+		Recovery: fake,
+		Manager:  manager,
+		Store:    store,
 	}, orchestrator.Hooks{})
 	o.SetRunMultiRepoImplFn(spy.Fn())
 
 	if err := o.ExecuteRecovery(context.Background(), items, actions); err != nil {
 		t.Fatalf("ExecuteRecovery: %v", err)
 	}
-	if startImplCalls != 0 {
-		t.Errorf("StartImplementation called %d times; want 0 (feature already StatusImplementing)", startImplCalls)
+	loaded, err := store.Load(f.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if loaded.Status != feature.StatusImplementing || loaded.CurrentPhase != feature.PhaseImplement {
+		t.Fatalf("reloaded feature status/phase = %s/%s, want Implementing/Implement", loaded.Status, loaded.CurrentPhase)
 	}
 	if spy.numCalls() != 1 {
 		t.Fatalf("runMultiRepoImplFn calls = %d, want 1", spy.numCalls())
@@ -557,9 +555,9 @@ func TestExecuteRecovery_Resume_InquiringFeature_RealManager_NoInvalidTransition
 	// Lifecycle.StartInquire (which would have re-fired the invalid
 	// StatusInquiring → StatusInquiring transition).
 	o := orchestrator.New(orchestrator.Deps{
-		Recovery:  fakeRec,
-		Lifecycle: mgr,   // real *feature.Manager — enforces real transition rules
-		Store:     store, // real *feature.Store
+		Recovery: fakeRec,
+		Manager:  mgr,   // real *feature.Manager — enforces real transition rules
+		Store:    store, // real *feature.Store
 	}, orchestrator.Hooks{})
 
 	if err := o.ExecuteRecovery(context.Background(), items, actions); err != nil {
@@ -609,7 +607,7 @@ func TestExecuteRecovery_Resume_InquiringFeature_RealManager_NoInvalidTransition
 // inquiring" error here. Mock-based tests do NOT catch this class of bug.
 //
 // Test shape:
-//   - Real git repo + matching head commit → fresh KB + fresh codebase index.
+//   - Real git repo + matching head commit → fresh KB.
 //   - BuildSessionFn short-circuits RunInquire *after* StartInquire's
 //     transition has been applied, so we can observe that Inquiring was
 //     reached without needing a live claude CLI.
@@ -652,34 +650,9 @@ func TestExecuteRecovery_Resume_BuildingKBFeature_AllFresh_RealManager_NoInvalid
 		t.Fatalf("write KB index: %v", err)
 	}
 
-	// Seed fresh codebase index state too — startKB's allFresh branch calls
-	// RunCodebaseIndexForRepo, which short-circuits when the index is fresh.
-	// If this were missing, RunCodebaseIndexForRepo would call BuildCodebaseIndex
-	// against the real repo and add nondeterministic I/O to the test; the
-	// transition rules we're exercising would still be covered, but leaving
-	// the codebase index fresh keeps the test purely focused on the
-	// orchestrator's transition bridging.
-	idxDir := agent.IndexDir(kbDir)
-	if err := os.MkdirAll(idxDir, 0o755); err != nil {
-		t.Fatalf("mkdir index: %v", err)
-	}
-	idxState, _ := json.Marshal(map[string]any{
-		"head_commit":  headCommit,
-		"last_updated": time.Now().UTC().Format(time.RFC3339),
-		"version":      1,
-		"symbol_count": 0,
-		"file_count":   0,
-	})
-	if err := os.WriteFile(filepath.Join(idxDir, "index-state.json"), idxState, 0o644); err != nil {
-		t.Fatalf("write index state: %v", err)
-	}
-	if err := os.WriteFile(filepath.Join(idxDir, "index.json"), []byte("{}"), 0o644); err != nil {
-		t.Fatalf("write index.json: %v", err)
-	}
-
 	// MockCommandRunner returning the real HEAD commit for any git invocation.
-	// IsKBFresh and IsCodebaseIndexFresh both call GetCurrentCommit via this
-	// runner — matching the seeded head_commit makes both checks succeed.
+	// IsKBFresh calls GetCurrentCommit via this runner — matching the seeded
+	// head_commit makes the check succeed.
 	cmd := mocks.NewMockCommandRunner()
 	cmd.RunFn = func(ctx context.Context, name string, args []string, opts ports.CommandOpts) ([]byte, error) {
 		return []byte(headCommit + "\n"), nil
@@ -731,7 +704,7 @@ func TestExecuteRecovery_Resume_BuildingKBFeature_AllFresh_RealManager_NoInvalid
 	fakeRec := &fakeRecoveryOp{}
 	o := orchestrator.New(orchestrator.Deps{
 		Recovery:    fakeRec,
-		Lifecycle:   mgr, // real *feature.Manager — enforces real transition rules
+		Manager:     mgr, // real *feature.Manager — enforces real transition rules
 		Store:       store,
 		PhaseRunner: pr,
 		CmdRunner:   cmd,
@@ -772,59 +745,33 @@ func TestExecuteRecovery_Resume_BuildingKBFeature_AllFresh_RealManager_NoInvalid
 // ScanRecovery cleanup-orphan-runs wiring tests
 // ---------------------------------------------------------------------------
 
-// TestScanRecovery_CallsCleanupOrphanRunsBeforeScan asserts that ScanRecovery
-// invokes CleanupOrphanRuns on every feature returned by Store.List() BEFORE
-// calling ScanForRecovery. Uses a call-order slice shared between the mock
-// store's cleanup callback and the fake recovery op's scan callback.
-func TestScanRecovery_CallsCleanupOrphanRunsBeforeScan(t *testing.T) {
-	var mu sync.Mutex
-	var callOrder []string
-
-	mockStore := mocks.NewMockFeatureStore()
-	mockStore.ListFn = func() ([]*feature.Feature, error) {
-		return []*feature.Feature{
-			{ID: "feat-a", ActiveRun: 1, RunCount: 1},
-			{ID: "feat-b", ActiveRun: 1, RunCount: 1},
-		}, nil
+// TestScanRecovery_CleansOrphansBeforeScan checks that the real store removes
+// stale run directories before the recovery adapter observes feature state.
+func TestScanRecovery_CleansOrphansBeforeScan(t *testing.T) {
+	features := []*feature.Feature{
+		{ID: "feat-a", Name: "A", Status: feature.StatusCreated, ActiveRun: 1, RunCount: 1},
+		{ID: "feat-b", Name: "B", Status: feature.StatusCreated, ActiveRun: 1, RunCount: 1},
 	}
-	mockStore.CleanupOrphanRunsFn = func(id string) ([]int, error) {
-		mu.Lock()
-		defer mu.Unlock()
-		callOrder = append(callOrder, "cleanup:"+id)
-		return nil, nil
-	}
-
-	fake := &fakeRecoveryOp{
-		ScanFn: func(ctx context.Context) ([]ports.RecoveryItem, error) {
-			mu.Lock()
-			defer mu.Unlock()
-			callOrder = append(callOrder, "scan")
-			return nil, nil
-		},
-	}
-
-	o := orchestrator.New(
-		orchestrator.Deps{Store: mockStore, Recovery: fake},
-		orchestrator.Hooks{},
-	)
-
-	if _, err := o.ScanRecovery(context.Background()); err != nil {
-		t.Fatalf("ScanRecovery: %v", err)
-	}
-
-	mu.Lock()
-	defer mu.Unlock()
-	want := []string{"cleanup:feat-a", "cleanup:feat-b", "scan"}
-	if len(callOrder) != len(want) {
-		t.Fatalf("callOrder = %v, want %v", callOrder, want)
-	}
-	for i, w := range want {
-		if callOrder[i] != w {
-			t.Errorf("callOrder[%d] = %q, want %q (full: %v)", i, callOrder[i], w, callOrder)
+	store, manager := newStoredFeatureFixture(t, features...)
+	var orphans []string
+	for _, f := range features {
+		orphan := store.RunDir(f.ID, 2)
+		if err := os.MkdirAll(orphan, 0o755); err != nil {
+			t.Fatal(err)
 		}
+		orphans = append(orphans, orphan)
 	}
-	if got, want := mockStore.CleanupOrphanRunsCalls, []string{"feat-a", "feat-b"}; !equalStrings(got, want) {
-		t.Errorf("CleanupOrphanRunsCalls = %v, want %v", got, want)
+	fake := &fakeRecoveryOp{ScanFn: func(context.Context) ([]ports.RecoveryItem, error) {
+		for _, orphan := range orphans {
+			if _, err := os.Stat(orphan); !os.IsNotExist(err) {
+				t.Fatalf("orphan %s still exists at scan: %v", orphan, err)
+			}
+		}
+		return nil, nil
+	}}
+	o := orchestrator.New(orchestrator.Deps{Store: store, Manager: manager, Recovery: fake}, orchestrator.Hooks{})
+	if _, err := o.ScanRecovery(context.Background()); err != nil {
+		t.Fatal(err)
 	}
 }
 
@@ -848,6 +795,7 @@ func TestScanRecovery_ReconcilesAbandonedSetupBeforeScan(t *testing.T) {
 	}
 	if err := store.Modify(f.ID, func(ff *feature.Feature) error {
 		setup := ff.Run().Setup
+		setup.Status = feature.SetupStatusRunning
 		setup.LatestLogPath = logPath
 		task := setup.Tasks["worktree:test-repo"]
 		task.Status = feature.SetupStatusRunning
@@ -873,7 +821,7 @@ func TestScanRecovery_ReconcilesAbandonedSetupBeforeScan(t *testing.T) {
 		},
 	}
 
-	o := orchestrator.New(orchestrator.Deps{Store: store, Lifecycle: mgr, Recovery: fake}, orchestrator.Hooks{})
+	o := orchestrator.New(orchestrator.Deps{Store: store, Manager: mgr, Recovery: fake}, orchestrator.Hooks{})
 	if _, err := o.ScanRecovery(context.Background()); err != nil {
 		t.Fatalf("ScanRecovery: %v", err)
 	}
@@ -907,138 +855,56 @@ func TestScanRecovery_ReconcilesAbandonedSetupBeforeScan(t *testing.T) {
 	}
 }
 
-// TestScanRecovery_CleanupError_SuppressesScan asserts that when cleanup
-// returns an error for any feature, ScanRecovery propagates the error and
-// does NOT call ScanForRecovery. This encodes the "recovery decisions always
-// observe a reconciled run set" invariant.
+// TestScanRecovery_CleanupError_SuppressesScan uses a malformed on-disk
+// feature record to make the real cleanup fail before recovery scanning.
 func TestScanRecovery_CleanupError_SuppressesScan(t *testing.T) {
-	wantErr := errors.New("cleanup kaboom")
-
-	mockStore := mocks.NewMockFeatureStore()
-	mockStore.ListFn = func() ([]*feature.Feature, error) {
-		return []*feature.Feature{{ID: "feat-a", ActiveRun: 1, RunCount: 1}}, nil
+	store, manager := newStoredFeatureFixture(t, &feature.Feature{ID: "feat-bad", Name: "Bad", Status: feature.StatusCreated})
+	featurePath := filepath.Join(store.BaseDir, "feat-bad", "feature.yaml")
+	if err := os.WriteFile(featurePath, []byte("id: [not valid yaml"), 0o644); err != nil {
+		t.Fatal(err)
 	}
-	mockStore.CleanupOrphanRunsFn = func(id string) ([]int, error) {
-		return nil, wantErr
-	}
-
 	var scanCount int
-	fake := &fakeRecoveryOp{
-		ScanFn: func(ctx context.Context) ([]ports.RecoveryItem, error) {
-			scanCount++
-			return nil, nil
-		},
-	}
-
+	fake := &fakeRecoveryOp{ScanFn: func(context.Context) ([]ports.RecoveryItem, error) { scanCount++; return nil, nil }}
 	hookLog := &recoveryHookLog{}
-	o := orchestrator.New(
-		orchestrator.Deps{Store: mockStore, Recovery: fake},
-		orchestrator.Hooks{OnRecoveryScanned: hookLog.recordScan},
-	)
-
+	o := orchestrator.New(orchestrator.Deps{Store: store, Manager: manager, Recovery: fake}, orchestrator.Hooks{OnRecoveryScanned: hookLog.recordScan})
 	items, err := o.ScanRecovery(context.Background())
-	if err == nil {
-		t.Fatal("expected error, got nil")
+	if err == nil || !strings.Contains(err.Error(), "cleanup orphan runs") || !strings.Contains(err.Error(), "parsing feature file") {
+		t.Fatalf("ScanRecovery error = %v, want real cleanup parse failure", err)
 	}
-	if !errors.Is(err, wantErr) {
-		t.Errorf("err = %v, want wrapped %v", err, wantErr)
+	if items != nil || scanCount != 0 || hookLog.scanCount() != 0 {
+		t.Fatalf("items=%v scanCount=%d hookCount=%d, want no scan after cleanup failure", items, scanCount, hookLog.scanCount())
 	}
-	if !strings.Contains(err.Error(), "cleanup orphan runs") {
-		t.Errorf("err = %q, want contains %q", err.Error(), "cleanup orphan runs")
+}
+
+// A legacy-schema feature survives orphan cleanup, then the later cascade
+// reconciliation reports the partial load before process scanning starts.
+func TestScanRecovery_LegacyFeatureReportsReconcileError(t *testing.T) {
+	store, manager := newStoredFeatureFixture(t,
+		&feature.Feature{ID: "feat-good", Name: "Good", Status: feature.StatusCreated},
+		&feature.Feature{ID: "feat-legacy", Name: "Legacy", Status: feature.StatusCreated},
+	)
+	legacyPath := filepath.Join(store.BaseDir, "feat-legacy", "feature.yaml")
+	data, err := os.ReadFile(legacyPath)
+	if err != nil {
+		t.Fatal(err)
 	}
-	if !strings.Contains(err.Error(), "kaboom") {
-		t.Errorf("err = %q, want contains %q", err.Error(), "kaboom")
+	currentVersion := "schema_version: " + strconv.Itoa(feature.SchemaVersionCurrent)
+	if !strings.Contains(string(data), currentVersion) {
+		t.Fatalf("feature record missing %q", currentVersion)
 	}
-	if items != nil {
-		t.Errorf("items = %v, want nil on cleanup error", items)
+	data = []byte(strings.Replace(string(data), currentVersion, "schema_version: 1", 1))
+	if err := os.WriteFile(legacyPath, data, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	var scanCount int
+	fake := &fakeRecoveryOp{ScanFn: func(context.Context) ([]ports.RecoveryItem, error) { scanCount++; return nil, nil }}
+	o := orchestrator.New(orchestrator.Deps{Store: store, Manager: manager, Recovery: fake}, orchestrator.Hooks{})
+	if _, err := o.ScanRecovery(context.Background()); err == nil || !strings.Contains(err.Error(), "reconcile cascade deletes") {
+		t.Fatalf("ScanRecovery error = %v, want cascade reconciliation error", err)
 	}
 	if scanCount != 0 {
-		t.Errorf("ScanForRecovery called %d times, want 0 (cleanup error should suppress scan)", scanCount)
+		t.Fatalf("ScanForRecovery calls = %d, want 0", scanCount)
 	}
-	if hookLog.scanCount() != 0 {
-		t.Errorf("OnRecoveryScanned fired %d times; want 0", hookLog.scanCount())
-	}
-	events := drainEvents(o)
-	for _, ev := range events {
-		if ev.Type == ports.RecoveryScanned {
-			t.Errorf("unexpected RecoveryScanned event emitted on cleanup error")
-		}
-	}
-}
-
-// TestScanRecovery_CleanupTolerates_PartialLoadError asserts that cleanup
-// proceeds even when Store.List returns a PartialLoadError, invoking
-// CleanupOrphanRuns on BOTH successfully-loaded features AND the IDs
-// surfaced via PartialLoadError.Warnings. This is the critical invariant:
-// partial-load features are often the ones that MOST need cleanup.
-func TestScanRecovery_CleanupTolerates_PartialLoadError(t *testing.T) {
-	mockStore := mocks.NewMockFeatureStore()
-	mockStore.ListFn = func() ([]*feature.Feature, error) {
-		return []*feature.Feature{
-				{ID: "feat-good", ActiveRun: 1, RunCount: 1},
-			},
-			&feature.PartialLoadError{
-				Warnings: []feature.LoadWarning{
-					{ID: "feat-bad", Err: errors.New("corrupt")},
-				},
-			}
-	}
-	var cleanupIDs []string
-	mockStore.CleanupOrphanRunsFn = func(id string) ([]int, error) {
-		cleanupIDs = append(cleanupIDs, id)
-		return nil, nil
-	}
-
-	var scanCount int
-	fake := &fakeRecoveryOp{
-		ScanFn: func(ctx context.Context) ([]ports.RecoveryItem, error) {
-			scanCount++
-			return nil, nil
-		},
-	}
-
-	o := orchestrator.New(
-		orchestrator.Deps{Store: mockStore, Recovery: fake},
-		orchestrator.Hooks{},
-	)
-
-	if _, err := o.ScanRecovery(context.Background()); err != nil {
-		t.Fatalf("ScanRecovery: %v", err)
-	}
-	// Partial load does NOT propagate as an error from cleanupOrphanRuns.
-	if !containsString(cleanupIDs, "feat-good") {
-		t.Errorf("cleanupIDs = %v, missing feat-good", cleanupIDs)
-	}
-	if !containsString(cleanupIDs, "feat-bad") {
-		t.Errorf("cleanupIDs = %v, missing feat-bad (partial-load features must also get cleanup)", cleanupIDs)
-	}
-	if scanCount != 1 {
-		t.Errorf("ScanForRecovery called %d times, want 1 (cleanup succeeded; scan should proceed)", scanCount)
-	}
-}
-
-// equalStrings is a tiny helper for asserting slice equality in the ordering
-// test, scoped locally to avoid collision with any package-level helper.
-func equalStrings(a, b []string) bool {
-	if len(a) != len(b) {
-		return false
-	}
-	for i := range a {
-		if a[i] != b[i] {
-			return false
-		}
-	}
-	return true
-}
-
-// containsString reports whether sl contains v.
-func containsString(sl []string, v string) bool {
-	for _, s := range sl {
-		if s == v {
-			return true
-		}
-	}
-	return false
 }
 
 // T10. TestExecuteRecovery_Resume_NeedUserInputCycle_DoesNotRelaunch
@@ -1071,14 +937,13 @@ func TestExecuteRecovery_Resume_NoCycle_FallsThroughToPhase(t *testing.T) {
 	}
 
 	fake := &fakeRecoveryOp{}
-	store := newFeatureStore(f)
-	lc := lifecycleForFeature(f)
+	store, manager := newStoredFeatureFixture(t, f)
 	spy := &fakeRunMultiRepoImpl{}
 
 	o := orchestrator.New(orchestrator.Deps{
-		Recovery:  fake,
-		Lifecycle: lc,
-		Store:     store,
+		Recovery: fake,
+		Manager:  manager,
+		Store:    store,
 	}, orchestrator.Hooks{})
 	o.SetRunMultiRepoImplFn(spy.Fn())
 

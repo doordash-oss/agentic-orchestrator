@@ -26,15 +26,15 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
-// RoleContract declares the artifacts a role must emit before requesting a
+// roleContract declares the artifacts a role must emit before requesting a
 // completion commit.
-type RoleContract struct {
+type roleContract struct {
 	Role     Role
-	Required []RequiredArtifact
+	Required []requiredArtifact
 }
 
-// RequiredArtifact describes one artifact in a role's completion contract.
-type RequiredArtifact struct {
+// requiredArtifact describes one artifact in a role's completion contract.
+type requiredArtifact struct {
 	Name          string
 	DisplayPath   string
 	HideFromSkill bool
@@ -51,21 +51,21 @@ type ProtocolViolation struct {
 // Outcome carries parsed artifacts from a successful contract validation.
 type Outcome struct {
 	OK                 bool
-	Progress           *ParsedProgress
-	VerificationReport *VerificationReport
-	ReviewFeedback     *ParsedReviewFeedback
+	Progress           *parsedProgress
+	VerificationReport *verificationReport
+	ReviewFeedback     *parsedReviewFeedback
 	RoadmapPhases      []RoadmapPhase
 	PlanAttemptMeta    *PlanAttemptMeta
 	PlanMarkdownPath   string
 	PhaseArtifactPath  string
 }
 
-// Lookup returns the registered contract for a phase and role.
-func Lookup(phase feature.Phase, role Role) (RoleContract, bool) {
+// lookup returns the registered contract for a phase and role.
+func lookup(phase feature.Phase, role Role) (roleContract, bool) {
 	if spec, ok := lookupRoleSpec(phase, role); ok {
-		return spec.Contract(), true
+		return spec.contract(), true
 	}
-	return RoleContract{}, false
+	return roleContract{}, false
 }
 
 // Validate checks the registered contract for a phase and role.
@@ -73,14 +73,14 @@ func Lookup(phase feature.Phase, role Role) (RoleContract, bool) {
 // Validators receive only iterDir. The registry can later accept richer
 // context for plan-path, repo, state-dir, axis, and helper-dir resolution.
 func Validate(phase feature.Phase, role Role, iterDir string) (Outcome, []ProtocolViolation, error) {
-	contract, ok := Lookup(phase, role)
+	contract, ok := lookup(phase, role)
 	if !ok {
 		return Outcome{}, []ProtocolViolation{{Artifact: string(role), Reason: "no contract registered"}}, nil
 	}
 	return validateContractArtifacts(contract, iterDir, true)
 }
 
-func validateContractArtifacts(contract RoleContract, iterDir string, includeHidden bool) (Outcome, []ProtocolViolation, error) {
+func validateContractArtifacts(contract roleContract, iterDir string, includeHidden bool) (Outcome, []ProtocolViolation, error) {
 	out := Outcome{OK: true}
 	var violations []ProtocolViolation
 	for _, artifact := range contract.Required {
@@ -104,7 +104,7 @@ func validateContractArtifacts(contract RoleContract, iterDir string, includeHid
 // when the harness would tolerate a blocking CHANGES_REQUESTED verdict to
 // route a fix.
 func ValidateArtifactsPreflight(phase feature.Phase, role Role, iterDir string) (Outcome, []ProtocolViolation, error) {
-	contract, ok := Lookup(phase, role)
+	contract, ok := lookup(phase, role)
 	if !ok {
 		return Outcome{}, []ProtocolViolation{{Artifact: string(role), Reason: "no contract registered"}}, nil
 	}
@@ -124,7 +124,7 @@ func ValidateArtifactsPreflight(phase feature.Phase, role Role, iterDir string) 
 		return out, nil, err
 	}
 	violations = append(violations, contractViolations...)
-	if phase == feature.PhaseImplement && role == RoleImplementer {
+	if phase == feature.PhaseImplement && role == roleImplementer {
 		extra, extraErr := validateImplementerAgentOwnedEvidencePreflight(iterDir)
 		if extraErr != nil {
 			return out, nil, extraErr
@@ -152,7 +152,7 @@ func validateImplementerAgentOwnedEvidencePreflight(iterDir string) ([]ProtocolV
 	if err != nil {
 		return nil, fmt.Errorf("reading testing contract for artifact preflight: %w", err)
 	}
-	return ValidateRequiredAgentOwnedEvidence(contract, iterDir), nil
+	return validateRequiredAgentOwnedEvidence(contract, iterDir), nil
 }
 
 func implementerTestingContractPathCandidates(iterDir string) []string {
@@ -259,6 +259,31 @@ func validatePlanAttemptMetaArtifact(_ roleArtifactSpec, _ string, path string, 
 	return nil, nil
 }
 
+// PhasePlanCommandWarnings lints a phase plan's Automated Verification
+// commands for doubled backslashes. Planners that author the plan through a
+// string literal (a JSON payload, a JS patch string) sometimes escape twice,
+// leaving `\\n` where a shell command needs `\n`. A doubled backslash can be
+// legitimate, so this only warns; it never fails the preflight.
+func PhasePlanCommandWarnings(phase feature.Phase, role Role, iterDir string) []string {
+	if phase != feature.PhasePlan || (role != RolePlanPhasePlanner && role != rolePlanPhaseReviser) {
+		return nil
+	}
+	path := resolvePlanMarkdownRoleArtifact("phase-plan.md")(roleRuntime{IterationDir: iterDir}, roleArtifactSpec{})
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return nil
+	}
+	var warnings []string
+	for _, step := range parsePlanVerification(string(data)) {
+		if strings.Contains(step.Command, `\\`) {
+			warnings = append(warnings, fmt.Sprintf(
+				"phase plan markdown: Automated Verification command for %q contains a doubled backslash; write commands exactly as typed in a shell and do not escape backslashes a second time (a regex newline is one backslash plus n)",
+				step.Description))
+		}
+	}
+	return warnings
+}
+
 func validatePhasePlanMarkdownArtifact(_ roleArtifactSpec, iterDir string, path string, _ *Outcome) ([]ProtocolViolation, error) {
 	if path == "" {
 		return []ProtocolViolation{{Artifact: "phase plan markdown", Reason: missingArtifactReason("phase plan markdown", phasePlanArtifactDir(iterDir))}}, nil
@@ -331,7 +356,7 @@ func validateAutomatedVerificationSection(successCriteria string) string {
 	case requirements == 0:
 		return "phase plan markdown `### Automated Verification` must contain executable checklist commands or exactly one `None required: <reason>` checklist item"
 	}
-	parsed := ParsePlanVerification(heading + "\n" + body)
+	parsed := parsePlanVerification(heading + "\n" + body)
 	if len(parsed) != requirements {
 		return "phase plan markdown `### Automated Verification` checklist items must each end with one complete executable command in backticks"
 	}
@@ -404,7 +429,7 @@ func verificationScopeViolations(planText string) []ProtocolViolation {
 		if len(task.Repos) == 1 {
 			taskRepo = strings.TrimSpace(task.Repos[0])
 		}
-		for _, step := range ParsePlanVerification(strings.Join(task.Body, "\n")) {
+		for _, step := range parsePlanVerification(strings.Join(task.Body, "\n")) {
 			if step.Repo != "" && taskRepo != "" && !strings.EqualFold(step.Repo, taskRepo) {
 				violations = append(violations, ProtocolViolation{Artifact: "phase plan markdown", Reason: fmt.Sprintf(
 					"verification command scoped to repo %q appears under a task scoped to repo %q", step.Repo, taskRepo)})
@@ -413,7 +438,7 @@ func verificationScopeViolations(planText string) []ProtocolViolation {
 	}
 	violations = append(violations, evidenceCapabilityViolations(planText)...)
 	topLevel, _ := splitPlanForVerification(planText)
-	for _, step := range ParsePlanVerification(topLevel) {
+	for _, step := range parsePlanVerification(topLevel) {
 		repo := strings.TrimSpace(step.Repo)
 		if len(repos) > 1 && repo == "" {
 			violations = append(violations, ProtocolViolation{Artifact: "phase plan markdown", Reason: "multi-repo phase automated verification must scope every command with `[repo: <name>]`"})
@@ -455,7 +480,7 @@ func phasePlanEvidenceModeViolations(planText string, contractAgentEvidence bool
 	if !contractAgentEvidence {
 		return agentEvidencePlanViolations(planText)
 	}
-	if !ParsePhasePlanFrontend(planText) {
+	if !parsePhasePlanFrontend(planText) {
 		return nil
 	}
 	success := extractMarkdownSection(planText, "## Success Criteria")
@@ -663,24 +688,24 @@ func newestPhaseMarkdownArtifact(dir string) string {
 }
 
 func validateProgressArtifact(_ roleArtifactSpec, iterDir, path string, out *Outcome) ([]ProtocolViolation, error) {
-	parsed, err := ParseProgressMd(path)
+	parsed, err := parseProgressMd(path)
 	if err != nil {
 		return nil, err
 	}
 	out.Progress = parsed
-	if parsed == nil || !parsed.OK() {
+	if parsed == nil || !parsed.ok() {
 		return progressViolations(parsed), nil
 	}
 	return nil, nil
 }
 
 func validateReviewFeedbackArtifact(artifact roleArtifactSpec, _ string, path string, out *Outcome) ([]ProtocolViolation, error) {
-	parsed, err := ParseReviewFeedback(path)
+	parsed, err := parseReviewFeedback(path)
 	if err != nil {
 		return nil, err
 	}
 	out.ReviewFeedback = parsed
-	if parsed == nil || parsed.OK() {
+	if parsed == nil || parsed.ok() {
 		return nil, nil
 	}
 	violations := make([]ProtocolViolation, 0, len(parsed.ProtocolViolations))
@@ -690,7 +715,7 @@ func validateReviewFeedbackArtifact(artifact roleArtifactSpec, _ string, path st
 	return violations, nil
 }
 
-func progressViolations(parsed *ParsedProgress) []ProtocolViolation {
+func progressViolations(parsed *parsedProgress) []ProtocolViolation {
 	if parsed == nil {
 		return []ProtocolViolation{{Artifact: "progress.md", Reason: "progress.md could not be parsed"}}
 	}
@@ -701,7 +726,7 @@ func progressViolations(parsed *ParsedProgress) []ProtocolViolation {
 	return out
 }
 
-func reportGateViolations(gate ReportGateResult) []ProtocolViolation {
+func reportGateViolations(gate reportGateResult) []ProtocolViolation {
 	out := make([]ProtocolViolation, 0, len(gate.Findings))
 	for _, finding := range gate.Findings {
 		reason := finding.Detail
@@ -741,9 +766,9 @@ func protocolViolationsFromError(err error) []ProtocolViolation {
 	return append([]ProtocolViolation(nil), target.violations...)
 }
 
-// JoinProtocolViolations renders protocol violations for LastError and review
+// joinProtocolViolations renders protocol violations for LastError and review
 // feedback text.
-func JoinProtocolViolations(violations []ProtocolViolation) string {
+func joinProtocolViolations(violations []ProtocolViolation) string {
 	parts := make([]string, 0, len(violations))
 	for _, v := range violations {
 		if v.Artifact == "" {
@@ -753,6 +778,18 @@ func JoinProtocolViolations(violations []ProtocolViolation) string {
 		parts = append(parts, v.Artifact+": "+v.Reason)
 	}
 	return strings.Join(parts, "; ")
+}
+
+// FormatSingleShotProtocolViolationError renders the canonical protocol violation LastError.
+func FormatSingleShotProtocolViolationError(role Role, dir string, violations []ProtocolViolation) string {
+	if dir == "" {
+		dir = "<unresolved>"
+	}
+	reason := joinProtocolViolations(violations)
+	if strings.TrimSpace(reason) == "" {
+		reason = "contract validation failed"
+	}
+	return fmt.Sprintf("protocol violation: %s @ %s: %s", role, dir, reason)
 }
 
 // externalHostRE matches a URL or bare domain in evidence prose. It is the
@@ -766,7 +803,7 @@ var externalHostRE = regexp.MustCompile(`(?i)\bhttps?://[^\s)]+|\b[a-z0-9-]+(?:\
 // and the implementer only discovers the missing login after an iteration.
 func evidenceCapabilityViolations(planText string) []ProtocolViolation {
 	var violations []ProtocolViolation
-	check := func(kind, description string, capabilities []VerificationCapability) {
+	check := func(kind, description string, capabilities []verificationCapability) {
 		host := externalHostRE.FindString(description)
 		if host == "" || len(capabilities) > 0 {
 			return
@@ -774,10 +811,10 @@ func evidenceCapabilityViolations(planText string) []ProtocolViolation {
 		violations = append(violations, ProtocolViolation{Artifact: "phase plan markdown", Reason: fmt.Sprintf(
 			"%s evidence %q targets external host %q without a capability declaration; add `[agentico capability: authenticated-browser(<host>)]` (or another built-in capability) to the row, or capture the repository's own surface instead", kind, truncateForFeedback(description, 80), host)})
 	}
-	for _, step := range ParsePlanVisualEvidence(planText) {
+	for _, step := range parsePlanVisualEvidence(planText) {
 		check("visual", step.Description, step.Capabilities)
 	}
-	for _, step := range ParsePlanManualVerification(planText) {
+	for _, step := range parsePlanManualVerification(planText) {
 		check("manual", step.Description, step.Capabilities)
 	}
 	return violations

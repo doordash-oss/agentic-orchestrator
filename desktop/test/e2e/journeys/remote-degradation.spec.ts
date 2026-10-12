@@ -356,6 +356,7 @@ test('remote degradation: gated affordances, copy-path completion, server-valida
     transcript.section('Composer gating: browse, typed paths, attach, drop, @-mention');
     await handle.page.getByRole('button', { name: 'New feature' }).click();
     await expect(handle.page.getByRole('form', { name: 'Create a feature' })).toBeVisible();
+    const createDialog = handle.page.getByRole('dialog', { name: 'New feature' });
 
     // No native browse dialog remotely: server-side typed entry replaces it.
     await expect(handle.page.getByRole('button', { name: 'Browse for folder' })).toHaveCount(0);
@@ -365,25 +366,23 @@ test('remote degradation: gated affordances, copy-path completion, server-valida
     await handle.page.getByRole('button', { name: 'Next: Describe' }).click();
 
     // The attach affordance stays enabled: files now stage via server upload.
-    const attach = handle.page.getByRole('button', { name: 'Attach files or photos' });
+    const attach = createDialog.getByRole('button', { name: 'Attach files or photos' });
     await expect(attach).toBeEnabled();
-    await expect(handle.page.locator('.composer__hint')).toContainText(
+    await expect(createDialog.locator('.composer__hint')).toContainText(
       /files upload to the server/,
     );
     await evidenceShot(handle, 'remote-degradation-composer-gated');
 
     // A synthetic dropped file resolves no local path for the preload
     // (webUtils), so nothing stages; real drops stage upload chips.
-    await handle.page.evaluate((sentinel) => {
-      const composer = document.querySelector('.composer');
-      if (composer === null) throw new Error('composer not mounted');
+    await createDialog.locator('.composer').evaluate((composer, sentinel) => {
       const dataTransfer = new DataTransfer();
       dataTransfer.items.add(new File(['sentinel-bytes'], sentinel, { type: 'image/png' }));
       composer.dispatchEvent(
         new DragEvent('drop', { bubbles: true, cancelable: true, dataTransfer }),
       );
     }, DROP_SENTINEL);
-    await expect(handle.page.getByLabel('Attached files')).toHaveCount(0);
+    await expect(createDialog.getByLabel('Attached files')).toHaveCount(0);
 
     // The @-mention popover still opens and explains instead of searching.
     await handle.page.locator('#feature-description').fill('Look at @read');

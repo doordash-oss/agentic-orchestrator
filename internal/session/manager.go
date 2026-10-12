@@ -104,7 +104,6 @@ var codexHandshakeTimeout = 30 * time.Second
 
 type Manager struct {
 	sessions           map[string]*Session
-	attached           *Session
 	mu                 sync.RWMutex
 	eventCh            chan interface{}
 	stoppingCh         chan struct{} // closed when Shutdown begins
@@ -119,9 +118,9 @@ func NewManager(eventCh chan interface{}) *Manager {
 	}
 }
 
-// NewRecoveringManager constructs a manager and restores live sessions whose
+// newRecoveringManager constructs a manager and restores live sessions whose
 // durable process and transcript metadata survived an abrupt server exit.
-func NewRecoveringManager(eventCh chan interface{}, stateDir string) *Manager {
+func newRecoveringManager(eventCh chan interface{}, stateDir string) *Manager {
 	m := NewManager(eventCh)
 	if stateDir != "" {
 		if err := m.restoreLiveSessions(stateDir); err != nil {
@@ -172,6 +171,9 @@ func (m *Manager) StartSession(id, featureID string, phase feature.Phase, comman
 	// out. The session is registered (made visible to readers) only once it is
 	// fully started below.
 	s := NewSession(id, featureID, phase)
+	if len(opts) == 0 || opts[0] == nil || opts[0].Protocol == nil {
+		return nil, errors.New("starting session: session options must carry a provider protocol")
+	}
 	if len(opts) > 0 && opts[0] != nil {
 		s.pidDir = opts[0].PIDDir
 		s.runNumber = opts[0].RunNumber
@@ -185,9 +187,7 @@ func (m *Manager) StartSession(id, featureID string, phase feature.Phase, comman
 		s.permCacheScope = opts[0].PermCacheScope
 		s.providerName = opts[0].ProviderName
 		s.model = opts[0].Model
-		if opts[0].Protocol != nil {
-			s.protocol = opts[0].Protocol
-		}
+		s.protocol = opts[0].Protocol
 		if opts[0].CriticalAttachSendTimeout > 0 {
 			s.criticalAttachSendTimeout = opts[0].CriticalAttachSendTimeout
 		}
@@ -250,41 +250,25 @@ func (m *Manager) StartSession(id, featureID string, phase feature.Phase, comman
 	}
 
 	// Give the protocol access to stdin for writing.
-	if s.protocol != nil {
-		s.protocol.SetStdin(s.stdin)
-	}
+	s.protocol.SetStdin(s.stdin)
 
-	// Protocol handshake.
-	if s.protocol != nil {
-		// Delegate handshake to the protocol (Claude: initialize + send prompt,
-		// Codex: initialize → thread/start → turn/start).
-		handshakeTimeout := codexHandshakeTimeout
-		if len(opts) > 0 && opts[0] != nil && opts[0].CodexHandshakeTimeout > 0 {
-			handshakeTimeout = opts[0].CodexHandshakeTimeout
-		}
-		ctx, cancel := context.WithTimeout(context.Background(), handshakeTimeout)
-		defer cancel()
-		if err := s.protocol.Handshake(ctx); err != nil {
-			s.Stop()
-			return nil, fmt.Errorf("protocol handshake: %w", err)
-		}
-	} else {
-		// Legacy path (no protocol set): Claude interactive.
-		//
-		// A fast session can exit right after emitting its result without ever
-		// reading stdin (common with mock scripts in tests), closing the pipe
-		// before these writes land. That EPIPE/closed-pipe error is benign: the
-		// child already finished, so there is nothing left to hand off to.
-		if err := s.SendInitialize(); err != nil && !isChildExitedWriteError(err) {
-			_ = s.Stop()
-			return nil, fmt.Errorf("sending initialize handshake: %w", err)
-		}
-		if len(opts) > 0 && opts[0] != nil && opts[0].InitialPrompt != "" {
-			if err := s.SendUserMessage(opts[0].InitialPrompt); err != nil && !isChildExitedWriteError(err) {
-				_ = s.Stop()
-				return nil, fmt.Errorf("sending initial prompt: %w", err)
-			}
-		}
+	// Protocol handshake (Claude: initialize + send prompt, Codex: initialize →
+	// thread/start → turn/start).
+	//
+	// A fast session can exit right after emitting its result without ever
+	// reading stdin (common with mock scripts in tests), closing the pipe
+	// before the handshake writes land. That EPIPE/closed-pipe error is
+	// benign: the child already finished, so there is nothing left to
+	// hand off to.
+	handshakeTimeout := codexHandshakeTimeout
+	if len(opts) > 0 && opts[0] != nil && opts[0].CodexHandshakeTimeout > 0 {
+		handshakeTimeout = opts[0].CodexHandshakeTimeout
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), handshakeTimeout)
+	defer cancel()
+	if err := s.protocol.Handshake(ctx); err != nil && !isChildExitedWriteError(err) {
+		s.Stop()
+		return nil, fmt.Errorf("protocol handshake: %w", err)
 	}
 
 	// Register the fully-started session under the lock, re-checking shutdown
@@ -346,7 +330,7 @@ func (m *Manager) StartSession(id, featureID string, phase feature.Phase, comman
 }
 
 func (m *Manager) restoreLiveSessions(stateDir string) error {
-	pidFiles, err := FindPIDFiles(stateDir)
+	pidFiles, err := findPIDFiles(stateDir)
 	if err != nil {
 		return err
 	}
@@ -370,6 +354,7 @@ func (m *Manager) restoreLiveSessions(stateDir string) error {
 			continue
 		}
 		s := NewSession(pf.ManagerID, pf.FeatureID, phase)
+		s.protocol = restoredProtocol{}
 		s.runNumber = pf.RunNumber
 		s.iteration = pf.Iteration
 		s.repoName = pf.RepoName
@@ -486,6 +471,14 @@ func (m *Manager) handleSessionMessage(s *Session, id, featureID string, phase f
 			break
 		}
 		interactive := s.turnMode == ports.TurnModeInteractive
+		// A phase turn that yields while background tasks are still running
+		// is waiting on those tasks, not on a human: the provider re-invokes
+		// the model when they finish. Treat it like a non-interactive turn
+		// end so it never becomes a synthetic help request. Conversational
+		// sessions keep their between-turn rest so the user can type.
+		if interactive && !s.kind.Conversational() && s.liveBackgroundTaskCountLocked() > 0 {
+			interactive = false
+		}
 		// Result received — turn completed. Preserve WaitingHelp when an
 		// AskUserQuestion is still outstanding. Interactive sessions also
 		// return to WaitingHelp after an unblocked turn because the user is
@@ -518,6 +511,16 @@ func (m *Manager) handleSessionMessage(s *Session, id, featureID string, phase f
 		// incorrectly clobber SessionWaitingPermission before the user can
 		// respond.
 		if s.status == SessionWaitingPermission && len(s.pendingControlRequests) == 0 {
+			s.setStatusLocked(SessionRunning)
+		}
+		// Committed root assistant output while WaitingHelp means the
+		// provider resumed on its own (e.g. re-invoked after a background
+		// task finished), so the session is no longer waiting on a human.
+		// Partials and usage-only updates are excluded: they can trail the
+		// turn's Result without the model actually running again.
+		if s.status == SessionWaitingHelp && msg.Origin.IsRoot() && msg.Subtype != "partial" && msg.UsageUpdate == nil &&
+			len(msg.Assistant.Message.Content) > 0 &&
+			!s.hasUnansweredQuestion && !s.hasPendingAskUserQuestionLocked() {
 			s.setStatusLocked(SessionRunning)
 		}
 	}
@@ -618,44 +621,8 @@ func (m *Manager) FeatureSessions(featureID string) []ports.SessionView {
 	return result
 }
 
-func (m *Manager) SendInput(sessionID string, data []byte) error {
-	m.mu.RLock()
-	s, ok := m.sessions[sessionID]
-	m.mu.RUnlock()
-	if !ok {
-		return fmt.Errorf("session %s not found", sessionID)
-	}
-	return s.SendInput(data)
-}
-
-func (m *Manager) Attach(sessionID string) (ports.SessionView, error) {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	s, ok := m.sessions[sessionID]
-	if !ok {
-		return nil, fmt.Errorf("session %s not found", sessionID)
-	}
-	m.attached = s
-	return s, nil
-}
-
-// RegisterTestSession inserts a pre-built session into the manager for testing.
+// registerTestSession inserts a pre-built session into the manager for testing.
 // It must only be used in tests.
-func (m *Manager) RegisterTestSession(s *Session) {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	m.sessions[s.id] = s
-}
-
-func (m *Manager) Detach() {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	if m.attached != nil {
-		m.attached.SetAttached(false, nil)
-		m.attached = nil
-	}
-}
-
 func (m *Manager) Shutdown() {
 	// Signal that no new sessions should be created.
 	select {

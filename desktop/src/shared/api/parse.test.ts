@@ -18,11 +18,12 @@ import { describe, expect, it } from 'vitest';
 import { z } from 'zod';
 import {
   CanonicalErrorResponseSchema,
+  CompletionPreflightResponseSchema,
+  FeatureDetailResponseSchema,
+  RecoverySnapshotResponseSchema,
   CanonicalErrorSchema,
-  CompletionPreflightRepoSchema,
-  DIFF_SUMMARY_MAX_BYTES,
   FeatureListResponseSchema,
-  HealthResponseSchema,
+  ProbeHealthSchema,
   parseServerJson,
   PromptSnapshotResponseSchema,
   ReadinessResponseSchema,
@@ -32,13 +33,6 @@ import {
   RepositorySourceReconcileResponseSchema,
   RepositoryDiffResponseSchema,
   RewindActionResponseSchema,
-  ServerFeatureDetailSchema,
-  ServerFeatureSummarySchema,
-  ServerRecoveryItemSchema,
-  ServerRelationshipChildSchema,
-  ServerRepoStatusSchema,
-  ServerSetupSchema,
-  ServerSetupTaskSchema,
   SupervisorTranscriptResponseSchema,
   TestingContractResponseSchema,
 } from './parse';
@@ -60,6 +54,109 @@ const healthFixture = {
     runtime_policy: 'loopback-bearer-v1',
     server_build: { version: 'v0.9.0' },
   },
+};
+
+const featureBase = {
+  id: 'abcd1234ef567890',
+  name: 'Search revamp',
+  slug: 'search-revamp',
+  status: 'Failed',
+  current_phase: 'Implement',
+  repos: ['repo-a'],
+  created_at: '2026-07-14T10:00:00Z',
+  active_run: 1,
+  run_count: 1,
+  progress: {},
+};
+const detailBase = {
+  ...featureBase,
+  actions: [],
+  automatic_review: { mode: 'default', enabled: false, source: 'global' },
+  review_gate: { reviewing_gate: false, review_fixing: false, validating_plan: false },
+};
+function through<T>(result: {
+  success: boolean;
+  data?: T;
+  error?: { issues: readonly { path: PropertyKey[] }[] };
+}) {
+  return result;
+}
+const summaryThroughList = {
+  safeParse: (feature: unknown) => {
+    const result = FeatureListResponseSchema.safeParse({ api_version: 'v1', features: [feature] });
+    return through({
+      success: result.success,
+      data: result.data?.features[0],
+      error: result.error,
+    });
+  },
+  parse: (feature: unknown) =>
+    FeatureListResponseSchema.parse({ api_version: 'v1', features: [feature] }).features[0]!,
+};
+const detailThroughResponse = {
+  safeParse: (patch: object) => {
+    const result = FeatureDetailResponseSchema.safeParse({
+      api_version: 'v1',
+      feature: { ...detailBase, ...patch },
+    });
+    return through({ success: result.success, data: result.data?.feature, error: result.error });
+  },
+};
+const childThroughDetail = {
+  safeParse: (child: unknown) => {
+    const result = detailThroughResponse.safeParse({ relationship: child });
+    return through({
+      success: result.success,
+      data: result.data?.relationship,
+      error: result.error,
+    });
+  },
+};
+const setupThroughDetail = {
+  safeParse: (setup: unknown) => {
+    const result = detailThroughResponse.safeParse({ active_run_detail: { setup } });
+    return through({
+      success: result.success,
+      data: result.data?.active_run_detail?.setup,
+      error: result.error,
+    });
+  },
+};
+const taskThroughDetail = {
+  safeParse: (task: unknown) =>
+    setupThroughDetail.safeParse({ status: 'failed', tasks: { task }, task_order: ['task'] }),
+};
+const repoThroughDetail = {
+  safeParse: (repo: unknown) => {
+    const result = detailThroughResponse.safeParse({ repo_status: [repo] });
+    return through({
+      success: result.success,
+      data: result.data?.repo_status?.[0],
+      error: result.error,
+    });
+  },
+  parse: (repo: unknown) =>
+    FeatureDetailResponseSchema.parse({
+      api_version: 'v1',
+      feature: { ...detailBase, repo_status: [repo] },
+    }).feature.repo_status![0]!,
+};
+const preflightThroughResponse = {
+  safeParse: (repo: unknown) =>
+    CompletionPreflightResponseSchema.safeParse({
+      api_version: 'v1',
+      feature_id: featureBase.id,
+      source_revision: 'r1',
+      repos: [repo],
+    }),
+};
+const recoveryThroughSnapshot = {
+  safeParse: (item: unknown) =>
+    RecoverySnapshotResponseSchema.safeParse({
+      api_version: 'v1',
+      snapshot_id: 's1',
+      items: [item],
+    }),
 };
 
 describe('repository source response contract', () => {
@@ -614,28 +711,25 @@ describe('testing contract response contract', () => {
 
 describe('parseServerJson', () => {
   it('parses a well-formed health response', () => {
-    const parsed = parseServerJson(JSON.stringify(healthFixture), HealthResponseSchema);
+    const parsed = parseServerJson(JSON.stringify(healthFixture), ProbeHealthSchema);
     expect(parsed.status).toBe('ok');
-    expect(parsed.owner.pid).toBe(123);
   });
 
   it('accepts a health payload carrying the optional bounded server name', () => {
     const parsed = parseServerJson(
       JSON.stringify({ ...healthFixture, name: 'frothy-macchiato' }),
-      HealthResponseSchema,
+      ProbeHealthSchema,
     );
     expect(parsed.name).toBe('frothy-macchiato');
     // Name-less payloads from older servers stay valid.
-    expect(
-      parseServerJson(JSON.stringify(healthFixture), HealthResponseSchema).name,
-    ).toBeUndefined();
+    expect(parseServerJson(JSON.stringify(healthFixture), ProbeHealthSchema).name).toBeUndefined();
   });
 
   it('drops an oversized or malformed server name instead of failing the health parse', () => {
     for (const bad of ['x'.repeat(65), 42, { nested: true }]) {
       const parsed = parseServerJson(
         JSON.stringify({ ...healthFixture, name: bad }),
-        HealthResponseSchema,
+        ProbeHealthSchema,
       );
       expect(parsed.name).toBeUndefined();
       expect(parsed.status).toBe('ok');
@@ -643,41 +737,41 @@ describe('parseServerJson', () => {
     // Exactly at the bound is accepted.
     const atBound = parseServerJson(
       JSON.stringify({ ...healthFixture, name: 'x'.repeat(64) }),
-      HealthResponseSchema,
+      ProbeHealthSchema,
     );
     expect(atBound.name).toBe('x'.repeat(64));
   });
 
   it('fails closed on malformed JSON without echoing the payload', () => {
-    const safe = failure(() => parseServerJson('{"secretfragment": tru', HealthResponseSchema));
+    const safe = failure(() => parseServerJson('{"secretfragment": tru', ProbeHealthSchema));
     expect(safe.code).toBe('E_MALFORMED_RESPONSE');
     expect(JSON.stringify(safe)).not.toContain('secretfragment');
   });
 
   it('fails closed on oversized payloads before JSON parsing', () => {
     const huge = `{"pad":"${'x'.repeat(MAX_PAYLOAD_BYTES)}"}`;
-    const safe = failure(() => parseServerJson(huge, HealthResponseSchema));
+    const safe = failure(() => parseServerJson(huge, ProbeHealthSchema));
     expect(safe.code).toBe('E_PAYLOAD_TOO_LARGE');
   });
 
   it('fails closed on prototype-polluting payloads', () => {
     const polluted = JSON.stringify(healthFixture).replace('"status"', '"__proto__":{},"status"');
-    const safe = failure(() => parseServerJson(polluted, HealthResponseSchema));
+    const safe = failure(() => parseServerJson(polluted, ProbeHealthSchema));
     expect(safe.code).toBe('E_UNSAFE_PAYLOAD');
   });
 
   it('fails closed on incompatible api_version with remediation', () => {
     const incompatible = JSON.stringify({ ...healthFixture, api_version: 'v9' });
-    const safe = failure(() => parseServerJson(incompatible, HealthResponseSchema));
+    const safe = failure(() => parseServerJson(incompatible, ProbeHealthSchema));
     expect(safe.code).toBe('E_API_VERSION_INCOMPATIBLE');
     expect(safe.remediation).toBeTruthy();
   });
 
   it('fails closed on schema mismatch, reporting paths but never values', () => {
-    const bad = JSON.stringify({ ...healthFixture, owner: { pid: 'not-a-pid-hunter2' } });
-    const safe = failure(() => parseServerJson(bad, HealthResponseSchema));
+    const bad = JSON.stringify({ ...healthFixture, status: { secret: 'not-a-status-hunter2' } });
+    const safe = failure(() => parseServerJson(bad, ProbeHealthSchema));
     expect(safe.code).toBe('E_SCHEMA_MISMATCH');
-    expect(safe.summary).toContain('owner');
+    expect(safe.summary).toContain('status');
     expect(JSON.stringify(safe)).not.toContain('hunter2');
   });
 
@@ -912,7 +1006,7 @@ describe('parseServerJson', () => {
   });
 });
 
-describe('ServerRelationshipChildSchema diff_summary bound', () => {
+describe('childThroughDetail diff_summary bound', () => {
   const child = (diffSummary: string) => ({
     id: 'abcd1234ef567890',
     name: 'Refactor pass',
@@ -929,23 +1023,19 @@ describe('ServerRelationshipChildSchema diff_summary bound', () => {
   });
 
   it('accepts a summary inside the server budget', () => {
-    const parsed = ServerRelationshipChildSchema.safeParse(
-      child('x'.repeat(DIFF_SUMMARY_MAX_BYTES)),
-    );
+    const parsed = childThroughDetail.safeParse(child('x'.repeat(256 * 1024)));
     expect(parsed.success).toBe(true);
   });
 
   it('rejects the oversized field itself rather than the whole payload', () => {
-    const parsed = ServerRelationshipChildSchema.safeParse(
-      child('x'.repeat(DIFF_SUMMARY_MAX_BYTES + 1)),
-    );
+    const parsed = childThroughDetail.safeParse(child('x'.repeat(256 * 1024 + 1)));
     expect(parsed.success).toBe(false);
-    expect(parsed.error?.issues[0]?.path).toEqual(['diff_summary']);
+    expect(parsed.error?.issues[0]?.path).toEqual(['feature', 'relationship', 'diff_summary']);
   });
 
   it('accepts the list projection: has_diff_summary with no body', () => {
     const { diff_summary: _omitted, ...summary } = child('');
-    const parsed = ServerRelationshipChildSchema.safeParse({
+    const parsed = childThroughDetail.safeParse({
       ...summary,
       has_diff_summary: true,
     });
@@ -955,9 +1045,9 @@ describe('ServerRelationshipChildSchema diff_summary bound', () => {
   });
 });
 
-describe('ServerFeatureSummarySchema bounded child history', () => {
+describe('summaryThroughList bounded child history', () => {
   it('carries the true total and the truncation flag', () => {
-    const parsed = ServerFeatureSummarySchema.safeParse({
+    const parsed = summaryThroughList.safeParse({
       id: 'abcd1234ef567890',
       name: 'Search revamp',
       slug: 'search-revamp',
@@ -993,7 +1083,7 @@ describe('integration attention single owner', () => {
   };
 
   it('accepts a canonical transaction attention and rejects the old free-form string', () => {
-    const transactionField = ServerFeatureDetailSchema.pick({ transaction: true });
+    const transactionField = detailThroughResponse;
     const ok = transactionField.safeParse({
       transaction: {
         phase: 'attention',
@@ -1012,7 +1102,7 @@ describe('integration attention single owner', () => {
   });
 
   it('rejects the deleted entry diagnostics, conflict-file, dirty, and cleanup-warning shapes', () => {
-    const transactionField = ServerFeatureDetailSchema.pick({ transaction: true });
+    const transactionField = detailThroughResponse;
     for (const entry of [
       { repo: 'repo-a', diagnostics: 'merge conflict' },
       { repo: 'repo-a', conflict_files: ['query.ts'] },
@@ -1027,7 +1117,7 @@ describe('integration attention single owner', () => {
   });
 
   it('accepts a canonical relationship attention and rejects the old array-of-items shape', () => {
-    const ok = ServerRelationshipChildSchema.safeParse({
+    const ok = childThroughDetail.safeParse({
       id: 'abcd1234ef567890',
       name: 'Refactor pass',
       kind: 'refactor',
@@ -1044,7 +1134,7 @@ describe('integration attention single owner', () => {
     expect(ok.success).toBe(true);
     expect(ok.data?.attention?.class).toBe('needs_action');
 
-    const legacyArray = ServerRelationshipChildSchema.safeParse({
+    const legacyArray = childThroughDetail.safeParse({
       id: 'abcd1234ef567890',
       name: 'Refactor pass',
       kind: 'refactor',
@@ -1062,7 +1152,7 @@ describe('integration attention single owner', () => {
   });
 
   it('accepts a relationship child with no attention at all', () => {
-    const parsed = ServerRelationshipChildSchema.safeParse({
+    const parsed = childThroughDetail.safeParse({
       id: 'abcd1234ef567890',
       name: 'Refactor pass',
       kind: 'refactor',
@@ -1080,8 +1170,8 @@ describe('integration attention single owner', () => {
   });
 });
 
-describe('ServerFeatureDetailSchema failure', () => {
-  const failureField = ServerFeatureDetailSchema.pick({ failure: true });
+describe('detailThroughResponse failure', () => {
+  const failureField = detailThroughResponse;
 
   it('accepts a canonical catalog-rendered failure', () => {
     const parsed = failureField.safeParse({
@@ -1161,9 +1251,9 @@ describe('ServerFeatureDetailSchema failure', () => {
       attempt: 1,
       error: canonicalError,
     };
-    expect(ServerSetupTaskSchema.safeParse(task).success).toBe(true);
+    expect(taskThroughDetail.safeParse(task).success).toBe(true);
     expect(
-      ServerSetupSchema.safeParse({
+      setupThroughDetail.safeParse({
         status: 'failed',
         attempt: 1,
         tasks: { 'worktree:repo-a': task },
@@ -1173,13 +1263,12 @@ describe('ServerFeatureDetailSchema failure', () => {
 
     // The removed last_error strings fail parsing everywhere they could
     // reappear: on the task, on the aggregate, and on a relationship child.
-    expect(ServerSetupTaskSchema.safeParse({ ...task, last_error: 'boom' }).success).toBe(false);
-    expect(ServerSetupSchema.safeParse({ status: 'failed', last_error: 'boom' }).success).toBe(
+    expect(taskThroughDetail.safeParse({ ...task, last_error: 'boom' }).success).toBe(false);
+    expect(setupThroughDetail.safeParse({ status: 'failed', last_error: 'boom' }).success).toBe(
       false,
     );
     expect(
-      ServerRelationshipChildSchema.safeParse({ ...relationshipChildFixture, last_error: 'boom' })
-        .success,
+      childThroughDetail.safeParse({ ...relationshipChildFixture, last_error: 'boom' }).success,
     ).toBe(false);
   });
 });
@@ -1313,9 +1402,9 @@ describe('Repository publish-failure error contract', () => {
   };
 
   it('accepts a repository status and a preflight repository carrying the canonical error', () => {
-    expect(ServerRepoStatusSchema.safeParse(repoStatus).success).toBe(true);
-    expect(CompletionPreflightRepoSchema.safeParse(preflightRepo).success).toBe(true);
-    const parsed = ServerRepoStatusSchema.parse(repoStatus);
+    expect(repoThroughDetail.safeParse(repoStatus).success).toBe(true);
+    expect(preflightThroughResponse.safeParse(preflightRepo).success).toBe(true);
+    const parsed = repoThroughDetail.parse(repoStatus);
     expect(parsed.error?.context?.repositories?.[0]).toEqual({
       name: 'repo-a',
       branch: 'feature/f',
@@ -1332,11 +1421,9 @@ describe('Repository publish-failure error contract', () => {
   });
 
   it('rejects stale last_error keys on the repository status and preflight repository', () => {
-    expect(ServerRepoStatusSchema.safeParse({ ...repoStatus, last_error: 'boom' }).success).toBe(
-      false,
-    );
+    expect(repoThroughDetail.safeParse({ ...repoStatus, last_error: 'boom' }).success).toBe(false);
     expect(
-      CompletionPreflightRepoSchema.safeParse({ ...preflightRepo, last_error: 'boom' }).success,
+      preflightThroughResponse.safeParse({ ...preflightRepo, last_error: 'boom' }).success,
     ).toBe(false);
   });
 });
@@ -1363,16 +1450,16 @@ describe('canonical warning wire shapes', () => {
       integration_state: 'merged',
       warnings: [canonicalWarning],
     };
-    expect(ServerRelationshipChildSchema.safeParse(base).success).toBe(true);
+    expect(childThroughDetail.safeParse(base).success).toBe(true);
     expect(
-      ServerRelationshipChildSchema.safeParse({
+      childThroughDetail.safeParse({
         ...base,
         cleanup_warnings: [{ repo: 'repo-a', message: 'worktree removal failed' }],
       }).success,
     ).toBe(false);
     const { warnings: _omitted, ...missingWarnings } = base;
     void _omitted;
-    expect(ServerRelationshipChildSchema.safeParse(missingWarnings).success).toBe(false);
+    expect(childThroughDetail.safeParse(missingWarnings).success).toBe(false);
   });
 
   it('rejects a rewind response with string warnings or the removed warning_count', () => {
@@ -1424,10 +1511,10 @@ describe('canonical warning wire shapes', () => {
         summary: 'The session process is still alive after its run was interrupted.',
       },
     };
-    expect(ServerRecoveryItemSchema.safeParse(base).success).toBe(true);
+    expect(recoveryThroughSnapshot.safeParse(base).success).toBe(true);
     const { error: _omitted, ...withoutError } = base;
     void _omitted;
-    expect(ServerRecoveryItemSchema.safeParse(withoutError).success).toBe(false);
+    expect(recoveryThroughSnapshot.safeParse(withoutError).success).toBe(false);
   });
 
   it('accepts canonical list-level and per-feature warnings on the feature list response', () => {
@@ -1479,7 +1566,7 @@ describe('owned error wire shapes on the feature summary', () => {
   };
 
   it('parses a summary carrying two owned-error entries', () => {
-    const parsed = ServerFeatureSummarySchema.parse({
+    const parsed = summaryThroughList.parse({
       ...summaryBase,
       errors: [runEntry, repoEntry],
     });
@@ -1494,7 +1581,7 @@ describe('owned error wire shapes on the feature summary', () => {
   });
 
   it('defaults to no errors when the server omits the field', () => {
-    const parsed = ServerFeatureSummarySchema.parse(summaryBase);
+    const parsed = summaryThroughList.parse(summaryBase);
     expect(parsed.errors).toBeUndefined();
   });
 
@@ -1508,9 +1595,9 @@ describe('owned error wire shapes on the feature summary', () => {
         summary: 'The worktree was reset.',
       },
     };
-    expect(
-      ServerFeatureSummarySchema.safeParse({ ...summaryBase, errors: [warningEntry] }).success,
-    ).toBe(false);
+    expect(summaryThroughList.safeParse({ ...summaryBase, errors: [warningEntry] }).success).toBe(
+      false,
+    );
   });
 
   it('rejects an entry whose setup reference lacks the task key', () => {
@@ -1518,20 +1605,20 @@ describe('owned error wire shapes on the feature summary', () => {
       ref: { scope: 'setup', code: 'worktree_setup_failed', feature_id: 'abcd1234ef567890' },
       error: { ...runEntry.error, code: 'worktree_setup_failed' },
     };
-    expect(
-      ServerFeatureSummarySchema.safeParse({ ...summaryBase, errors: [undisciplined] }).success,
-    ).toBe(false);
+    expect(summaryThroughList.safeParse({ ...summaryBase, errors: [undisciplined] }).success).toBe(
+      false,
+    );
   });
 
   it('rejects an entry carrying unknown keys', () => {
     expect(
-      ServerFeatureSummarySchema.safeParse({
+      summaryThroughList.safeParse({
         ...summaryBase,
         errors: [{ ...runEntry, extra: 'x' }],
       }).success,
     ).toBe(false);
     expect(
-      ServerFeatureSummarySchema.safeParse({
+      summaryThroughList.safeParse({
         ...summaryBase,
         errors: [{ ...runEntry, error: { ...runEntry.error, diagnostics: 'raw' } }],
       }).success,

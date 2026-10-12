@@ -32,6 +32,7 @@ import (
 	"github.com/doordash-oss/agentic-orchestrator/internal/server"
 	"github.com/doordash-oss/agentic-orchestrator/internal/session"
 	"github.com/doordash-oss/agentic-orchestrator/test/testutil"
+	"github.com/doordash-oss/agentic-orchestrator/test/testutil/serverclient"
 )
 
 // TestRefactorChildActiveControlsJourney exercises the active-child control
@@ -104,7 +105,7 @@ func TestRefactorChildActiveControlsJourney(t *testing.T) {
 	pr := journeyChildPhaseRunner(t, sm, store, stateDir)
 
 	orch := orchestrator.New(orchestrator.Deps{
-		Lifecycle:   mgr,
+		Manager:     mgr,
 		Store:       store,
 		Sessions:    sm,
 		Worktrees:   wm,
@@ -138,7 +139,7 @@ func TestRefactorChildActiveControlsJourney(t *testing.T) {
 		DisableHostValidation: true,
 	}))
 	t.Cleanup(srv.Close)
-	client, err := server.NewClient(server.ClientOptions{BaseURL: srv.URL})
+	client, err := serverclient.NewClient(serverclient.ClientOptions{BaseURL: srv.URL})
 	if err != nil {
 		t.Fatalf("NewClient() error = %v", err)
 	}

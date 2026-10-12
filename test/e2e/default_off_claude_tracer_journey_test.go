@@ -257,7 +257,7 @@ func TestAutomaticReviewTransparencyJourney(t *testing.T) {
 
 	cfg := config.NewDefault()
 	cfg.Defaults.AutomaticReviewEnabled = true
-	observer := observe.New(true, stateDir, false, "", false, "agentic-test")
+	observer := observerFromModule(t, stateDir, "agentic-test")
 	phaseContext := observe.SpanContextForFeature(featureID, "", "", "").Child()
 	observer.PhaseStarted(phaseContext, "implement")
 

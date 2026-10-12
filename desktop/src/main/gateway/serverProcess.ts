@@ -25,7 +25,7 @@ limitations under the License.
  */
 import type { RedactedLogBuffer } from './logBuffer';
 
-export interface ChildStreamLike {
+interface ChildStreamLike {
   on(event: 'data', listener: (chunk: Buffer | string) => void): unknown;
 }
 
@@ -40,14 +40,14 @@ export interface ChildProcessLike {
   kill(signal?: NodeJS.Signals): boolean;
 }
 
-export interface SpawnOptionsLike {
+interface SpawnOptionsLike {
   detached: boolean;
   shell: false;
   stdio: ['ignore', 'pipe', 'pipe'];
   windowsHide: boolean;
 }
 
-export type SpawnLike = (
+type SpawnLike = (
   file: string,
   args: readonly string[],
   options: SpawnOptionsLike,
@@ -67,7 +67,7 @@ export interface LaunchOptions {
   log: RedactedLogBuffer;
 }
 
-export interface StopOptions {
+interface StopOptions {
   /** Grace period before escalating to SIGKILL. */
   timeoutMs?: number;
 }

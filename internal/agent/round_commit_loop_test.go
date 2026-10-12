@@ -109,7 +109,7 @@ fi
 		RoundCommitHook:     hook,
 	}
 
-	result, err := RunImplementationLoop(cfg, sm)
+	result, err := runImplementationLoop(cfg, sm)
 	if err != nil {
 		t.Fatalf("RunImplementationLoop error: %v", err)
 	}
@@ -220,7 +220,7 @@ fi
 		RoundCommitHook:     hook,
 	}
 
-	result, err := RunImplementationLoop(cfg, sm)
+	result, err := runImplementationLoop(cfg, sm)
 	if err != nil {
 		t.Fatalf("RunImplementationLoop error: %v", err)
 	}
@@ -296,7 +296,7 @@ echo "iteration 1" >> "`+progressFile+`"
 		},
 	}
 
-	result, err := RunImplementationLoop(cfg, sm)
+	result, err := runImplementationLoop(cfg, sm)
 	if err == nil {
 		t.Fatalf("expected loop error on round commit failure; got result %+v", result)
 	}
@@ -380,7 +380,7 @@ fi`,
 		RoundCommitHook: hook,
 	}
 
-	result, err := RunFeatureFinalReviewLoop(cfg, sm)
+	result, err := runFeatureFinalReviewLoop(cfg, sm)
 	if err != nil {
 		t.Fatalf("loop: %v", err)
 	}
@@ -474,7 +474,7 @@ fi`,
 		RoundCommitHook: hook,
 	}
 
-	result, err := RunFeatureFinalReviewLoop(cfg, sm)
+	result, err := runFeatureFinalReviewLoop(cfg, sm)
 	if err != nil {
 		t.Fatalf("loop: %v", err)
 	}
@@ -532,7 +532,7 @@ func TestRunFeatureFinalReviewLoop_DirtyWorktreeAtApprovalToleratesRootArtifacts
 		RoundCommitHook: func(input RoundCommitInput) error { return nil },
 	}
 
-	result, err := RunFeatureFinalReviewLoop(cfg, sm)
+	result, err := runFeatureFinalReviewLoop(cfg, sm)
 	if err != nil {
 		t.Fatalf("loop: %v", err)
 	}
@@ -610,7 +610,7 @@ fi
 		RoundCommitHook:     hook,
 	}
 
-	result, err := RunImplementationLoop(cfg, sm)
+	result, err := runImplementationLoop(cfg, sm)
 	if err != nil {
 		t.Fatalf("RunImplementationLoop error: %v", err)
 	}
@@ -634,7 +634,7 @@ fi
 
 	// The persisted metas must agree with the live counter: a crash resume
 	// scanning them seeds the same fix number.
-	am := NewArtifactManager(artifactDir)
+	am := newArtifactManager(artifactDir)
 	tr := newImplementRoundCommitTracker(am, artifactDir, 3)
 	if tr.changesRequested != 2 {
 		t.Errorf("meta-scan changesRequested = %d, want 2 (live/meta divergence)", tr.changesRequested)
@@ -727,7 +727,7 @@ exit 1
 		RoundCommitHook: hook,
 	}
 
-	result, err := RunFeatureFinalReviewLoop(cfg, sm)
+	result, err := runFeatureFinalReviewLoop(cfg, sm)
 	if err != nil {
 		t.Fatalf("loop: %v", err)
 	}
@@ -744,7 +744,7 @@ exit 1
 // of the interrupted run.
 func TestNewImplementRoundCommitTracker_RecoveryFromMetas(t *testing.T) {
 	artifactDir := t.TempDir()
-	am := NewArtifactManager(artifactDir)
+	am := newArtifactManager(artifactDir)
 
 	writeMeta := func(iter int, agentStatus, reviewStatus string) {
 		t.Helper()
@@ -752,7 +752,7 @@ func TestNewImplementRoundCommitTracker_RecoveryFromMetas(t *testing.T) {
 		if err := os.MkdirAll(iterDir, 0o755); err != nil {
 			t.Fatalf("mkdir iteration dir: %v", err)
 		}
-		if err := am.WriteMeta(iterDir, IterationMeta{Iteration: iter, AgentStatus: agentStatus, ReviewStatus: reviewStatus}); err != nil {
+		if err := am.writeMeta(iterDir, iterationMeta{Iteration: iter, AgentStatus: agentStatus, ReviewStatus: reviewStatus}); err != nil {
 			t.Fatalf("write meta: %v", err)
 		}
 	}
@@ -779,10 +779,10 @@ func TestNewImplementRoundCommitTracker_RecoveryFromMetas(t *testing.T) {
 	// A phase with only a FAILED round: the next round is still the
 	// unlabeled first implementation commit.
 	emptyDir := t.TempDir()
-	am2 := NewArtifactManager(emptyDir)
+	am2 := newArtifactManager(emptyDir)
 	iterDir := filepath.Join(emptyDir, "iteration-01")
 	os.MkdirAll(iterDir, 0o755)
-	_ = am2.WriteMeta(iterDir, IterationMeta{Iteration: 1, AgentStatus: agentStatusFailed})
+	_ = am2.writeMeta(iterDir, iterationMeta{Iteration: 1, AgentStatus: agentStatusFailed})
 	tr2 := newImplementRoundCommitTracker(am2, emptyDir, 1)
 	if tr2.semanticSessions {
 		t.Error("semanticSessions = true, want false after only a FAILED round")
@@ -796,13 +796,13 @@ func TestNewImplementRoundCommitTracker_RecoveryFromMetas(t *testing.T) {
 // lowercase "changes_requested" review statuses.
 func TestNewFRRoundCommitTracker_RecoveryFromMetas(t *testing.T) {
 	artifactDir := t.TempDir()
-	am := NewArtifactManager(artifactDir)
+	am := newArtifactManager(artifactDir)
 	for iter, reviewStatus := range map[int]string{1: "changes_requested", 2: "changes_requested", 3: "approved"} {
 		iterDir := filepath.Join(artifactDir, fmt.Sprintf("iteration-%02d", iter))
 		if err := os.MkdirAll(iterDir, 0o755); err != nil {
 			t.Fatalf("mkdir iteration dir: %v", err)
 		}
-		if err := am.WriteMeta(iterDir, IterationMeta{Iteration: iter, ReviewStatus: reviewStatus}); err != nil {
+		if err := am.writeMeta(iterDir, iterationMeta{Iteration: iter, ReviewStatus: reviewStatus}); err != nil {
 			t.Fatalf("write meta: %v", err)
 		}
 	}

@@ -41,14 +41,14 @@ type fakeInstallStopper struct {
 	stopBlock  chan struct{}
 	onDispatch func()
 	// supervisorProcess and endSupervisorCalls model the supervisor stop.
-	supervisorProcess  bool
+	supervisorRunning  bool
 	endSupervisorCalls int
 }
 
-func (s *fakeInstallStopper) SupervisorProcess() bool {
+func (s *fakeInstallStopper) supervisorProcess() bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	return s.supervisorProcess
+	return s.supervisorRunning
 }
 
 func (s *fakeInstallStopper) endSupervisorCallsN() int {
@@ -57,10 +57,10 @@ func (s *fakeInstallStopper) endSupervisorCallsN() int {
 	return s.endSupervisorCalls
 }
 
-func (s *fakeInstallStopper) EndSupervisor(context.Context) error {
+func (s *fakeInstallStopper) endSupervisor(context.Context) error {
 	s.mu.Lock()
 	s.endSupervisorCalls++
-	s.supervisorProcess = false
+	s.supervisorRunning = false
 	hook := s.onDispatch
 	s.mu.Unlock()
 	if hook != nil {
@@ -102,13 +102,13 @@ func (s *fakeInstallStopper) stopCallsSnapshot() []string {
 	return append([]string(nil), s.stopCalls...)
 }
 
-func (s *fakeInstallStopper) StoppableFeatures(context.Context) ([]string, error) {
+func (s *fakeInstallStopper) stoppableFeatures(context.Context) ([]string, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return append([]string(nil), s.features...), nil
 }
 
-func (s *fakeInstallStopper) StopFeature(_ context.Context, featureID string) error {
+func (s *fakeInstallStopper) stopFeature(_ context.Context, featureID string) error {
 	s.mu.Lock()
 	block := s.stopBlock
 	err := s.stopErrs[featureID]
@@ -133,17 +133,17 @@ type stopMutationTarget struct {
 	stopErr func(featureID string) error
 }
 
-func (m *stopMutationTarget) StopFeature(featureID string) (FeatureStopResponse, error) {
+func (m *stopMutationTarget) RunFeatureLifecycle(featureID string, _ FeatureAction, _ GuardedFeatureActionRequest) (FeatureActionResponse, error) {
 	m.mu.Lock()
 	errFn := m.stopErr
 	m.stopped = append(m.stopped, featureID)
 	m.mu.Unlock()
 	if errFn != nil {
 		if err := errFn(featureID); err != nil {
-			return FeatureStopResponse{}, err
+			return FeatureActionResponse{}, err
 		}
 	}
-	return FeatureStopResponse{FeatureID: featureID, Result: "stopped"}, nil
+	return FeatureActionResponse{FeatureID: featureID, Result: "stopped"}, nil
 }
 
 // setAdmissionActivity mutates the fake admission's observed activity.
@@ -251,7 +251,7 @@ func TestUpdateInstallStopPermissionRequestRefusals(t *testing.T) {
 	})
 	post := func(handler *apiHandler, body string) (*http.Response, ErrorResponse) {
 		w := httptest.NewRecorder()
-		handler.routes().ServeHTTP(w, trustedInstallRequest(http.MethodPost, []byte(body)))
+		handler.ServeHTTP(w, trustedInstallRequest(http.MethodPost, []byte(body)))
 		resp := w.Result()
 		defer resp.Body.Close()
 		var errBody ErrorResponse
@@ -409,7 +409,7 @@ func TestUpdateInstallStopBlockersAfterStagingAbortCleanly(t *testing.T) {
 	if admission.Closed() {
 		t.Fatal("admission must stay open; nothing was stopped")
 	}
-	snapshot := coordinator.Snapshot()
+	snapshot := coordinator.snapshot()
 	if snapshot.Status != UpdateSnapshotStatusFailed || snapshot.Error == nil ||
 		snapshot.Error.Code != string(errcat.UpdateBlockedActiveWork) {
 		t.Fatalf("snapshot = %s err = %+v, want failed update_blocked_active_work", snapshot.Status, snapshot.Error)
@@ -553,7 +553,7 @@ func TestUpdateInstallStopFeaturesAndSupervisorScope(t *testing.T) {
 	})
 	t.Run("supervisor_alone", func(t *testing.T) {
 		t.Parallel()
-		stopper := &fakeInstallStopper{supervisorProcess: true}
+		stopper := &fakeInstallStopper{supervisorRunning: true}
 		coordinator, _, lifecycle, admission, _ := newStopTestCoordinator(t, stopper)
 		// The supervisor's activity settles once its end is dispatched.
 		stopper.setOnDispatch(func() { admission.setAdmissionActivity(workadmission.Activity{}) })
@@ -571,7 +571,7 @@ func TestUpdateInstallStopFeaturesAndSupervisorScope(t *testing.T) {
 	})
 	t.Run("features_and_supervisor_together", func(t *testing.T) {
 		t.Parallel()
-		stopper := &fakeInstallStopper{features: []string{"feat-1"}, supervisorProcess: true}
+		stopper := &fakeInstallStopper{features: []string{"feat-1"}, supervisorRunning: true}
 		coordinator, _, lifecycle, _, _ := newStopTestCoordinator(t, stopper)
 		if refusal := requestStopInstall(t, coordinator, true); refusal != nil {
 			t.Fatalf("stop install refused: %v", refusal)
@@ -640,7 +640,7 @@ func TestUpdateInstallStopUnidentifiableWorkBlocks(t *testing.T) {
 	if admission.Closed() {
 		t.Fatal("the gate must be released after the abort")
 	}
-	snapshot := coordinator.Snapshot()
+	snapshot := coordinator.snapshot()
 	if snapshot.Status != UpdateSnapshotStatusFailed || snapshot.Error == nil ||
 		snapshot.Error.Code != string(errcat.UpdateBlockedActiveWork) {
 		t.Fatalf("snapshot = %s err = %+v, want failed update_blocked_active_work", snapshot.Status, snapshot.Error)
@@ -666,7 +666,7 @@ func TestUpdateInstallStopDetectionFailureDuringConfirmation(t *testing.T) {
 	if got := lifecycle.replaceCallsN(); got != 0 {
 		t.Fatalf("replace calls = %d, want none; failed detection must block", got)
 	}
-	snapshot := coordinator.Snapshot()
+	snapshot := coordinator.snapshot()
 	if snapshot.Status != UpdateSnapshotStatusFailed || snapshot.Error == nil ||
 		snapshot.Error.Code != string(errcat.UpdateBlockedActiveWork) {
 		t.Fatalf("snapshot = %s err = %+v, want failed update_blocked_active_work", snapshot.Status, snapshot.Error)
@@ -764,7 +764,7 @@ func TestUpdateInstallStopFailureAbortsReplacement(t *testing.T) {
 	if admission.Closed() {
 		t.Fatal("the gate must be released after the abort")
 	}
-	snapshot := coordinator.Snapshot()
+	snapshot := coordinator.snapshot()
 	if snapshot.Status != UpdateSnapshotStatusFailed || snapshot.Error == nil ||
 		snapshot.Error.Code != string(errcat.UpdateBlockedActiveWork) {
 		t.Fatalf("snapshot = %s err = %+v, want failed update_blocked_active_work", snapshot.Status, snapshot.Error)
@@ -833,7 +833,7 @@ func TestUpdateInstallStopTimeoutAborts(t *testing.T) {
 	if !findObservedSnapshot(recorder, "install_stop_failed:timeout") {
 		t.Fatalf("observed = %v, want the timeout result", recorderObserved(recorder))
 	}
-	snapshot := coordinator.Snapshot()
+	snapshot := coordinator.snapshot()
 	if snapshot.Status != UpdateSnapshotStatusFailed || snapshot.Error == nil ||
 		snapshot.Error.Code != string(errcat.UpdateBlockedActiveWork) {
 		t.Fatalf("snapshot = %s err = %+v, want failed update_blocked_active_work", snapshot.Status, snapshot.Error)
@@ -859,7 +859,7 @@ func TestUpdateInstallStopCleanupFailureRetriesIdempotently(t *testing.T) {
 		return coordinator.install != nil && coordinator.install.cleanupFailed
 	}, "cleanup failure never retained the operation")
 	// The public failure is the stop failure, not the cleanup error.
-	snapshot := coordinator.Snapshot()
+	snapshot := coordinator.snapshot()
 	if snapshot.Status != UpdateSnapshotStatusFailed || snapshot.Error == nil ||
 		snapshot.Error.Code != string(errcat.UpdateBlockedActiveWork) {
 		t.Fatalf("snapshot = %s err = %+v, want the stop failure reported", snapshot.Status, snapshot.Error)
@@ -978,7 +978,7 @@ func TestPromptRepliesRefusedDuringClosedAdmission(t *testing.T) {
 		req := authorizedUpdateRequest(http.MethodPost, path, []byte(body))
 		req.Header.Set("Content-Type", "application/json")
 		req.Header.Set("X-Agentico-Client", trustedClientHeaderValue)
-		handler.routes().ServeHTTP(w, req)
+		handler.ServeHTTP(w, req)
 		resp := w.Result()
 		resp.Body.Close()
 		return resp
@@ -1027,7 +1027,7 @@ func TestRestartAfterStopFailureIsNotStoppedByStaleWork(t *testing.T) {
 	// settled worker made its last dispatch before failing, and nothing
 	// dispatches afterwards.
 	stopper.mu.Lock()
-	stopper.supervisorProcess = true
+	stopper.supervisorRunning = true
 	stopper.mu.Unlock()
 	time.Sleep(50 * time.Millisecond)
 	if got := stopper.endSupervisorCallsN(); got != 0 {
@@ -1094,7 +1094,7 @@ func TestHandlerStopperProjectionAndOrdering(t *testing.T) {
 	})
 	h := &apiHandler{features: lister}
 	stopper := handlerInstallStopper{handler: h}
-	ids, err := stopper.StoppableFeatures(context.Background())
+	ids, err := stopper.stoppableFeatures(context.Background())
 	if err != nil {
 		t.Fatalf("stoppable features: %v", err)
 	}
@@ -1113,7 +1113,7 @@ func TestHandlerStopperProjectionAndOrdering(t *testing.T) {
 		return nil, errors.New("store unreadable")
 	})
 	h = &apiHandler{features: failing}
-	if _, err := (handlerInstallStopper{handler: h}).StoppableFeatures(context.Background()); err == nil {
+	if _, err := (handlerInstallStopper{handler: h}).stoppableFeatures(context.Background()); err == nil {
 		t.Fatal("listing failure must surface as an error")
 	}
 

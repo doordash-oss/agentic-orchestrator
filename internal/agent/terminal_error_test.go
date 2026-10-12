@@ -36,17 +36,17 @@ func TestWaitForPhaseOutcome_TerminalProviderError(t *testing.T) {
 	for _, delivery := range []string{"status", "reclassify", "exited"} {
 		t.Run(delivery, func(t *testing.T) {
 			sess := newBgTaskSession()
-			sess.result = &llm.ResultMessage{Subtype: "error", IsError: true, Result: terminalImageError}
+			sess.CostVal = &llm.ResultMessage{Subtype: "error", IsError: true, Result: terminalImageError}
 			// Even a success intent and outstanding work cannot override a
 			// terminal provider failure or defer it into an input/task wait.
 			sess.setRootIntent(validSuccessCompletionIntent())
 			sess.setRootAsk(true)
 			sess.liveTasks.Store(1)
 			if delivery == "status" {
-				sess.statusCh <- agentStatusAPIError
+				sess.StatusChVal <- agentStatusAPIError
 			}
 			if delivery == "exited" {
-				close(sess.done)
+				close(sess.DoneChVal)
 			}
 			ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 			defer cancel()
@@ -77,23 +77,23 @@ func TestImplementLoop_TerminalProviderErrorDoesNotCrashResume(t *testing.T) {
 	builds := 0
 	cfg.BuildSession = func(BuildSessionOpts) ([]string, []string, *session.SessionOpts, error) {
 		builds++
-		return []string{"mock-agent"}, nil, &session.SessionOpts{SupportsSessionResume: true}, nil
+		return []string{"mock-agent"}, nil, &session.SessionOpts{}, nil
 	}
 	cfg.SessionStartFunc = func(id, featureID string, phase feature.Phase, command []string, workdir string, env []string, opts ...*session.SessionOpts) (ports.SessionHandle, error) {
 		sess := &crashResumeTestSession{utilityTestSession: newUtilityTestSession(), providerSessionID: "native-failed-turn"}
-		sess.result = &llm.ResultMessage{Subtype: "error", IsError: true, Result: terminalImageError}
+		sess.CostVal = &llm.ResultMessage{Subtype: "error", IsError: true, Result: terminalImageError}
 		// A closed process also exposes the retry bug without hanging the test.
-		close(sess.done)
+		close(sess.DoneChVal)
 		return sess, nil
 	}
-	_, err := RunImplementationLoop(cfg, nil)
+	_, err := runImplementationLoop(cfg, nil)
 	if err == nil || !strings.Contains(err.Error(), terminalImageError) {
 		t.Fatalf("RunImplementationLoop() error = %v, want provider diagnostic", err)
 	}
 	if builds != 1 {
 		t.Fatalf("BuildSession calls = %d, want one (no replay of failed input)", builds)
 	}
-	meta, err := NewArtifactManager(artifactDir).ReadMeta(filepath.Join(artifactDir, "iteration-01"))
+	meta, err := newArtifactManager(artifactDir).readMeta(filepath.Join(artifactDir, "iteration-01"))
 	if err != nil || meta.AgentStatus != agentStatusFailed {
 		t.Fatalf("iteration metadata = %+v, err = %v, want durable FAILED outcome", meta, err)
 	}
@@ -115,8 +115,8 @@ func TestWaitForPhaseOutcome_TerminalErrorShapes(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			sess := newBgTaskSession()
-			sess.result = tc.result
-			sess.statusCh <- statusFromResult(tc.result)
+			sess.CostVal = tc.result
+			sess.StatusChVal <- statusFromResult(tc.result)
 			ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 			defer cancel()
 			got := WaitForPhaseOutcome(sess, PhaseOutcomeWaitOptions{Ctx: ctx})

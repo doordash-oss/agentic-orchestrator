@@ -77,7 +77,7 @@ func TestCaptureManagedSessionLaunchBehavior(t *testing.T) {
 		"- Run the artifact preflight before completion.\n"
 	phasePrompt := "Implement Phase 4 per the approved plan. Output root: " + state + "\n"
 
-	p := New()
+	p := New("", nil)
 	args, env, err := p.BuildCommand(llm.CommandBuildOpts{
 		Model:        "opencode:anthropic/claude-sonnet-4-5",
 		SystemPrompt: role,
@@ -167,7 +167,7 @@ func TestCaptureHostileInheritanceBehavior(t *testing.T) {
 	before, _ := os.ReadFile(globalCfgPath)
 
 	state := t.TempDir()
-	p := New()
+	p := New("", nil)
 	_, env, err := p.BuildCommand(llm.CommandBuildOpts{
 		Model:         "opencode:anthropic/claude-sonnet-4-5",
 		StateDir:      state,

@@ -25,25 +25,24 @@ import (
 // allRoles lists every exported role constant. The coverage test requires the
 // manifest to declare exactly these roles.
 var allRoles = []Role{
-	RoleImplementer,
-	RoleFinalReviewFixer,
+	roleImplementer,
+	roleFinalReviewFixer,
 	RolePlanRoadmapPlanner,
-	RolePlanRoadmapReviser,
+	rolePlanRoadmapReviser,
 	RolePlanPhasePlanner,
-	RolePlanPhaseReviser,
-	RoleValidateRoadmapArchitecture,
-	RoleValidateRoadmapScope,
-	RoleValidatePhasePlanStructural,
-	RoleValidatePhasePlanScope,
-	RoleValidatePhasePlanGrounding,
-	RoleValidatePlanSecurity,
-	RoleValidatePlanPerformance,
-	RoleValidatePlanTesting,
+	rolePlanPhaseReviser,
+	roleValidateRoadmapArchitecture,
+	roleValidateRoadmapScope,
+	roleValidatePhasePlanStructural,
+	roleValidatePhasePlanScope,
+	roleValidatePlanSecurity,
+	roleValidatePlanPerformance,
+	roleValidatePlanTesting,
 	RoleImplementationReviewCraft,
-	RoleImplementationReviewFunctionalityEvidence,
-	RoleImplementationReviewCleanliness,
-	RoleImplementationReviewQA,
-	RoleImplementationReviewDesign,
+	roleImplementationReviewFunctionalityEvidence,
+	roleImplementationReviewCleanliness,
+	roleImplementationReviewQA,
+	roleImplementationReviewDesign,
 	RoleKnowledgeBaseBuilder,
 	RoleInquirer,
 	RoleResearcher,
@@ -86,41 +85,40 @@ func TestRoleContractsResolveArtifactPaths(t *testing.T) {
 		wantPaths map[string]string
 	}
 	tests := []contractCase{
-		{feature.PhaseImplement, RoleImplementer, implementIter, map[string]string{"progress": filepath.Join(base, "phase-01", "implement", "progress.md")}},
+		{feature.PhaseImplement, roleImplementer, implementIter, map[string]string{"progress": filepath.Join(base, "phase-01", "implement", "progress.md")}},
 		{feature.PhasePlan, RolePlanRoadmapPlanner, roadmapAttempt, roadmapPaths},
-		{feature.PhasePlan, RolePlanRoadmapReviser, roadmapAttempt, roadmapPaths},
+		{feature.PhasePlan, rolePlanRoadmapReviser, roadmapAttempt, roadmapPaths},
 		{feature.PhasePlan, RolePlanPhasePlanner, phasePlanAttempt, phasePlanPaths},
-		{feature.PhasePlan, RolePlanPhaseReviser, phasePlanAttempt, phasePlanPaths},
+		{feature.PhasePlan, rolePlanPhaseReviser, phasePlanAttempt, phasePlanPaths},
 		{feature.PhaseKnowledgeBase, RoleKnowledgeBaseBuilder, kbDir, map[string]string{"knowledge_base_index": filepath.Join(kbDir, "index.md")}},
 		{feature.PhaseInquire, RoleInquirer, inquireDir, map[string]string{"phase_markdown_artifact": inquireDir}},
 		{feature.PhaseResearch, RoleResearcher, researchDir, map[string]string{"phase_markdown_artifact": researchDir}},
 		{feature.PhaseDesign, RoleDesigner, designDir, map[string]string{"phase_markdown_artifact": designDir}},
 		// The fixer has no required artifacts: no testing contract executes at
 		// Final Review.
-		{feature.PhaseReview, RoleFinalReviewFixer, reviewIter, map[string]string{}},
+		{feature.PhaseReview, roleFinalReviewFixer, reviewIter, map[string]string{}},
 	}
 	for _, v := range []struct {
 		role Role
 		axis string
 	}{
-		{RoleValidateRoadmapArchitecture, "architecture"},
-		{RoleValidateRoadmapScope, "scope"},
-		{RoleValidatePhasePlanStructural, "structural"},
-		{RoleValidatePhasePlanScope, "scope"},
-		{RoleValidatePhasePlanGrounding, "grounding"},
-		{RoleValidatePlanSecurity, "security"},
-		{RoleValidatePlanPerformance, "performance"},
-		{RoleValidatePlanTesting, "testing"},
+		{roleValidateRoadmapArchitecture, "architecture"},
+		{roleValidateRoadmapScope, "scope"},
+		{roleValidatePhasePlanStructural, "structural"},
+		{roleValidatePhasePlanScope, "scope"},
+		{roleValidatePlanSecurity, "security"},
+		{roleValidatePlanPerformance, "performance"},
+		{roleValidatePlanTesting, "testing"},
 	} {
 		helperDir, paths := validatorPaths(v.axis)
 		tests = append(tests, contractCase{feature.PhasePlan, v.role, helperDir, paths})
 	}
 	for _, role := range []Role{
 		RoleImplementationReviewCraft,
-		RoleImplementationReviewFunctionalityEvidence,
-		RoleImplementationReviewCleanliness,
-		RoleImplementationReviewQA,
-		RoleImplementationReviewDesign,
+		roleImplementationReviewFunctionalityEvidence,
+		roleImplementationReviewCleanliness,
+		roleImplementationReviewQA,
+		roleImplementationReviewDesign,
 	} {
 		tests = append(tests, contractCase{feature.PhaseReview, role, axisDir, reviewAxisPaths})
 	}
@@ -128,7 +126,7 @@ func TestRoleContractsResolveArtifactPaths(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(string(tt.role), func(t *testing.T) {
 			t.Parallel()
-			contract, ok := Lookup(tt.phase, tt.role)
+			contract, ok := lookup(tt.phase, tt.role)
 			if !ok {
 				t.Fatalf("Lookup(%s, %q) ok = false, want true", tt.phase, tt.role)
 			}
@@ -176,7 +174,7 @@ func TestRoleManifestCoverage(t *testing.T) {
 		if !ok || got.SkillName != spec.SkillName {
 			t.Fatalf("lookupRoleSpec(%s, %q) = (%q, %v), want manifest entry", spec.Phase, spec.Role, got.SkillName, ok)
 		}
-		if _, ok := Lookup(spec.Phase, spec.Role); !ok {
+		if _, ok := lookup(spec.Phase, spec.Role); !ok {
 			t.Fatalf("Lookup(%s, %q) ok = false, want true", spec.Phase, spec.Role)
 		}
 		if spec.SkillName == "" {
@@ -205,18 +203,10 @@ func TestRoleManifestCoverage(t *testing.T) {
 		}
 	}
 
-	var domains []validatorDomain
-	for _, risk := range []feature.RiskLevel{feature.RiskLow, feature.RiskHigh} {
-		domains = append(domains, roadmapValidatorsForRisk(risk)...)
-		domains = append(domains, phasePlanValidatorsForRisk(risk)...)
-	}
-	for _, domain := range domains {
-		spec, ok := planValidatorRoleForSkill(domain.Template)
-		if !ok || spec.SkillName != domain.Template || spec.Phase != feature.PhasePlan {
-			t.Fatalf("plan validator domain %q resolves to (skill %q, phase %s, ok %v), want plan validator", domain.Template, spec.SkillName, spec.Phase, ok)
-		}
-		if _, ok := lookupRoleSpec(feature.PhasePlan, spec.Role); !ok {
-			t.Fatalf("plan validator %q is not in the manifest", spec.Role)
+	for _, axis := range planValidatorAxes {
+		spec, ok := lookupRoleSpec(feature.PhasePlan, axis.Role)
+		if !ok || spec.SkillName != axis.SkillName {
+			t.Fatalf("plan validator axis %q resolves to (skill %q, ok %v), want skill %q in plan", axis.Role, spec.SkillName, ok, axis.SkillName)
 		}
 	}
 }
@@ -224,8 +214,125 @@ func TestRoleManifestCoverage(t *testing.T) {
 func TestOnlyIterationStateRolesAllowRetry(t *testing.T) {
 	t.Parallel()
 	for _, spec := range roleSpecs {
-		if got, want := spec.IterationState, spec.Role == RoleImplementer; got != want {
+		if got, want := spec.IterationState, spec.Role == roleImplementer; got != want {
 			t.Fatalf("%q IterationState = %v, want %v", spec.Role, got, want)
+		}
+	}
+}
+
+// TestPlanValidatorAxisNamesArePinned pins every plan-validator row, in
+// selection order, and the on-disk names derived from its axis string (which
+// is also the prompt axis label and stall-tracker key).
+func TestPlanValidatorAxisNamesArePinned(t *testing.T) {
+	t.Parallel()
+	type pinned struct {
+		name, axis, skill, helperDir, feedbackFile string
+		role                                       Role
+	}
+	want := []pinned{
+		{"Architecture", "architecture", "validate-roadmap-architecture", "validate-architecture", "validation-architecture-feedback.md", roleValidateRoadmapArchitecture},
+		{"Structural", "structural", "validate-phase-plan-structural", "validate-structural", "validation-structural-feedback.md", roleValidatePhasePlanStructural},
+		{"Scope", "scope", "validate-phase-plan-scope", "validate-scope", "validation-scope-feedback.md", roleValidatePhasePlanScope},
+		{"Security", "security", "validate-plan-security", "validate-security", "validation-security-feedback.md", roleValidatePlanSecurity},
+		{"Performance", "performance", "validate-plan-performance", "validate-performance", "validation-performance-feedback.md", roleValidatePlanPerformance},
+		{"Scope", "scope", "validate-roadmap-scope", "validate-scope", "validation-scope-feedback.md", roleValidateRoadmapScope},
+		{"Testing", "testing", "validate-plan-testing", "validate-testing", "validation-testing-feedback.md", roleValidatePlanTesting},
+	}
+	if len(planValidatorAxes) != len(want) {
+		t.Fatalf("planValidatorAxes has %d rows, want %d", len(planValidatorAxes), len(want))
+	}
+	for i, w := range want {
+		axis := planValidatorAxes[i]
+		got := pinned{axis.Name, axis.Axis, axis.SkillName, axis.helperDirName(), axis.feedbackFileName(), axis.Role}
+		if got != w {
+			t.Errorf("planValidatorAxes[%d] = %+v, want %+v", i, got, w)
+		}
+		spec := planValidatorRoleSpec(axis)
+		artifact := spec.Artifacts[0]
+		if artifact.DisplayPath != w.feedbackFile || artifact.RelativePath != w.feedbackFile {
+			t.Errorf("%s feedback artifact = (%q, %q), want %q", axis.Role, artifact.DisplayPath, artifact.RelativePath, w.feedbackFile)
+		}
+	}
+}
+
+// TestImplementationReviewAxisSlugsArePinned pins every review axis slug and
+// the role-spec list derived from the registry.
+func TestImplementationReviewAxisSlugsArePinned(t *testing.T) {
+	t.Parallel()
+	want := map[string]string{
+		"Craft":                  "craft",
+		"Functionality/Evidence": "functionality-evidence",
+		"Cleanliness":            "cleanliness",
+		"QA":                     "qa",
+		"Design":                 "design",
+	}
+	if len(implementationReviewAxisRegistry) != len(want) {
+		t.Fatalf("implementationReviewAxisRegistry has %d rows, want %d", len(implementationReviewAxisRegistry), len(want))
+	}
+	if len(implementationReviewAxisRoleSpecs) != len(implementationReviewAxisRegistry) {
+		t.Fatalf("implementationReviewAxisRoleSpecs has %d specs, want %d", len(implementationReviewAxisRoleSpecs), len(implementationReviewAxisRegistry))
+	}
+	for i, axis := range implementationReviewAxisRegistry {
+		if axis.Slug != want[axis.Name] {
+			t.Errorf("%s slug = %q, want %q", axis.Name, axis.Slug, want[axis.Name])
+		}
+		spec := implementationReviewAxisRoleSpecs[i]
+		if spec.Role != axis.Role || spec.SkillName != axis.SkillName {
+			t.Errorf("implementationReviewAxisRoleSpecs[%d] = (%s, %s), want (%s, %s)", i, spec.Role, spec.SkillName, axis.Role, axis.SkillName)
+		}
+	}
+}
+
+// TestRoleOutputRootsArePinned pins every role's output-root names and whether
+// each resolves to the iteration directory or its parent.
+func TestRoleOutputRootsArePinned(t *testing.T) {
+	t.Parallel()
+	const iter, parent = "iteration", "parent"
+	validatorRoots := []string{"attempt_dir=" + parent, "helper_dir=" + iter}
+	reviewRoots := []string{"helper_dir=" + iter}
+	planRoots := []string{"artifact_dir=" + parent, "attempt_dir=" + iter}
+	want := map[Role][]string{
+		roleImplementer:                               {"phase_dir=" + parent, "iteration_dir=" + iter},
+		RolePlanRoadmapPlanner:                        planRoots,
+		rolePlanRoadmapReviser:                        planRoots,
+		RolePlanPhasePlanner:                          planRoots,
+		rolePlanPhaseReviser:                          planRoots,
+		RoleKnowledgeBaseBuilder:                      {"phase_dir=" + iter},
+		RoleInquirer:                                  {"phase_dir=" + iter},
+		RoleResearcher:                                {"phase_dir=" + iter},
+		RoleDesigner:                                  {"phase_dir=" + iter},
+		roleFinalReviewFixer:                          {"iteration_dir=" + iter},
+		roleValidateRoadmapArchitecture:               validatorRoots,
+		roleValidateRoadmapScope:                      validatorRoots,
+		roleValidatePhasePlanStructural:               validatorRoots,
+		roleValidatePhasePlanScope:                    validatorRoots,
+		roleValidatePlanSecurity:                      validatorRoots,
+		roleValidatePlanPerformance:                   validatorRoots,
+		roleValidatePlanTesting:                       validatorRoots,
+		RoleImplementationReviewCraft:                 reviewRoots,
+		roleImplementationReviewFunctionalityEvidence: reviewRoots,
+		roleImplementationReviewCleanliness:           reviewRoots,
+		roleImplementationReviewQA:                    reviewRoots,
+		roleImplementationReviewDesign:                reviewRoots,
+	}
+	if len(roleSpecs) != len(want) {
+		t.Fatalf("roleSpecs has %d specs, want %d", len(roleSpecs), len(want))
+	}
+	rt := roleRuntime{IterationDir: filepath.Join("run", "iter")}
+	for _, spec := range roleSpecs {
+		var got []string
+		for _, root := range spec.OutputRoots {
+			var kind string
+			switch root.ResolvePath(rt) {
+			case rt.IterationDir:
+				kind = iter
+			case filepath.Dir(rt.IterationDir):
+				kind = parent
+			}
+			got = append(got, root.Name+"="+kind)
+		}
+		if !slices.Equal(got, want[spec.Role]) {
+			t.Errorf("%s output roots = %v, want %v", spec.Role, got, want[spec.Role])
 		}
 	}
 }

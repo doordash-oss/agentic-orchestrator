@@ -15,9 +15,8 @@
 package feature
 
 import (
+	"encoding/json"
 	"fmt"
-
-	gitadapter "github.com/doordash-oss/agentic-orchestrator/internal/git"
 )
 
 // This file exposes a handful of unexported helpers to the external
@@ -39,7 +38,7 @@ type StoreSaveHook struct {
 
 // SetSaveHook installs a test-only save interceptor on the Store.
 func (s *Store) SetSaveHook(h *StoreSaveHook) {
-	s.testSaveInterceptor = func(f *Feature) error {
+	s.SetSaveInterceptor(func(f *Feature) error {
 		h.currentCall++
 		if h.FailOnCall > 0 && h.currentCall == h.FailOnCall {
 			if h.FailOnFeatureID == "" || h.FailOnFeatureID == f.ID {
@@ -47,12 +46,12 @@ func (s *Store) SetSaveHook(h *StoreSaveHook) {
 			}
 		}
 		return nil
-	}
+	})
 }
 
 // ResetSaveHook removes any test-only save interceptor.
 func (s *Store) ResetSaveHook() {
-	s.testSaveInterceptor = nil
+	s.SetSaveInterceptor(nil)
 }
 
 // RebaseDescriptionForTest exposes the machine-generated rebase child
@@ -64,9 +63,35 @@ var RebaseDescriptionForTest = rebaseDescription
 var RebaseExitCriteriaForTest = rebaseExitCriteria
 
 // SwapFetchPRCommentsForTest replaces the GitHub comment resolver used by
-// draft-based review-feedback launch and returns a restore function.
-func SwapFetchPRCommentsForTest(fn func(repoPath, prURL string) ([]gitadapter.ReviewComment, error)) func() {
+// draft-based review-feedback launch and returns a restore function. Fixture
+// comments are supplied as GitHub REST comment wire JSON and decoded into the
+// resolver's comment shape here, so the external test package never names the
+// internal comment type.
+func SwapFetchPRCommentsForTest(fn func(repoPath, prURL string) ([][]byte, error)) func() {
 	prior := fetchPRCommentsFunc
-	fetchPRCommentsFunc = fn
+	fetchPRCommentsFunc = decodeFetchComments(prior, fn)
 	return func() { fetchPRCommentsFunc = prior }
+}
+
+// decodeFetchComments adapts a wire-JSON fixture resolver to the prior
+// resolver's comment type, which stays unnamed here.
+func decodeFetchComments[T any](prior func(repoPath, prURL string) ([]T, error), fn func(repoPath, prURL string) ([][]byte, error)) func(repoPath, prURL string) ([]T, error) {
+	if fn == nil {
+		return prior
+	}
+	return func(repoPath, prURL string) ([]T, error) {
+		raw, err := fn(repoPath, prURL)
+		if err != nil {
+			return nil, err
+		}
+		comments := make([]T, 0, len(raw))
+		for _, data := range raw {
+			var c T
+			if err := json.Unmarshal(data, &c); err != nil {
+				return nil, err
+			}
+			comments = append(comments, c)
+		}
+		return comments, nil
+	}
 }

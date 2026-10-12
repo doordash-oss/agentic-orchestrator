@@ -39,19 +39,12 @@ const (
 // and streaming. The exported constants stay fixed documentation; the vars
 // are the working copies tests may shrink to exercise the boundary checks
 // cheaply.
-const (
-	// ArchiveMaxCompressedBytes caps the compressed tarball download.
-	ArchiveMaxCompressedBytes = 64 << 20
-	// DownloadInactivityTimeout bounds progress-free time while streaming.
-	DownloadInactivityTimeout = 60 * time.Second
-	// DownloadTotalTimeout bounds the whole package operation.
-	DownloadTotalTimeout = 10 * time.Minute
-)
-
+// Download bounds and the compressed-archive cap. Tests shrink the working
+// copies to exercise the boundary checks cheaply.
 var (
-	archiveMaxCompressedBytes = int64(ArchiveMaxCompressedBytes)
-	downloadInactivityTimeout = DownloadInactivityTimeout
-	downloadTotalTimeout      = DownloadTotalTimeout
+	archiveMaxCompressedBytes = int64(64 << 20)
+	downloadInactivityTimeout = 60 * time.Second
+	downloadTotalTimeout      = 10 * time.Minute
 )
 
 // StageReleaseOptions carries the installed-build context the staging gate
@@ -65,42 +58,42 @@ type StageReleaseOptions struct {
 	Eligibility Eligibility
 }
 
-// StagedRelease is one authenticated, safely extracted release executable in
+// stagedRelease is one authenticated, safely extracted release executable in
 // updater-owned staging. Its provenance is immutable and is carried into the
 // verified candidate.
-type StagedRelease struct {
+type stagedRelease struct {
 	txID            string
 	txDir           string
 	candidatePath   string
 	candidateDigest string
-	release         VerifiedRelease
+	release         verifiedRelease
 }
 
 // TxID returns the staging transaction's id.
-func (s *StagedRelease) TxID() string { return s.txID }
+func (s *stagedRelease) TxID() string { return s.txID }
 
 // TxDir returns the private staging directory.
-func (s *StagedRelease) TxDir() string { return s.txDir }
+func (s *stagedRelease) TxDir() string { return s.txDir }
 
 // CandidatePath returns the extracted executable's path inside staging.
-func (s *StagedRelease) CandidatePath() string { return s.candidatePath }
+func (s *stagedRelease) CandidatePath() string { return s.candidatePath }
 
 // CandidateDigest returns the sha256 hex digest of the extracted executable.
-func (s *StagedRelease) CandidateDigest() string { return s.candidateDigest }
+func (s *stagedRelease) CandidateDigest() string { return s.candidateDigest }
 
 // Release returns the authenticated release provenance.
-func (s *StagedRelease) Release() VerifiedRelease { return s.release }
+func (s *stagedRelease) Release() verifiedRelease { return s.release }
 
-// ValidateReleaseTarget enforces the staging admission rules for one
+// validateReleaseTarget enforces the staging admission rules for one
 // verified release against the installed build: a clean parseable target,
 // an eligible install, a strictly increasing version, and no exact-version
 // suppression.
-func ValidateReleaseTarget(exec Executable, release VerifiedRelease, opts StageReleaseOptions) error {
+func validateReleaseTarget(exec Executable, release verifiedRelease, opts StageReleaseOptions) error {
 	target := release.Resolved().Version
 	if target == "" {
 		return errors.New("release target version is empty")
 	}
-	if _, ok := ParseReleaseVersion(target); !ok {
+	if _, ok := parseReleaseVersion(target); !ok {
 		return fmt.Errorf("release target version %q is not a clean release version", target)
 	}
 	if !opts.Eligibility.Supported {
@@ -131,11 +124,11 @@ func ValidateReleaseTarget(exec Executable, release VerifiedRelease, opts StageR
 // restart can clean the recognized abandoned files under the existing
 // recovery rules without an install receipt. Staging never writes into the
 // install root and never changes installed bytes, permissions, or receipts.
-func (c *FeedClient) StageVerifiedRelease(ctx context.Context, exec Executable, release VerifiedRelease, opts StageReleaseOptions) (*StagedRelease, error) {
-	if err := ValidateReleaseTarget(exec, release, opts); err != nil {
+func (c *FeedClient) StageVerifiedRelease(ctx context.Context, exec Executable, release verifiedRelease, opts StageReleaseOptions) (*stagedRelease, error) {
+	if err := validateReleaseTarget(exec, release, opts); err != nil {
 		return nil, err
 	}
-	matches, err := exec.PathStillMatches()
+	matches, err := exec.pathStillMatches()
 	if err != nil {
 		return nil, err
 	}
@@ -149,20 +142,20 @@ func (c *FeedClient) StageVerifiedRelease(ctx context.Context, exec Executable, 
 	if err != nil {
 		return nil, err
 	}
-	txDir := filepath.Join(LeaseDir(exec.Path), txDirPrefix+txID)
+	txDir := filepath.Join(leaseDir(exec.Path), txDirPrefix+txID)
 	if err := os.Mkdir(txDir, 0o700); err != nil {
 		return nil, fmt.Errorf("create release staging dir: %w", err)
 	}
 	if err := os.Chmod(txDir, 0o700); err != nil {
 		return nil, fmt.Errorf("repair release staging dir permissions: %w", err)
 	}
-	if err := SyncDir(LeaseDir(exec.Path)); err != nil {
+	if err := SyncDir(leaseDir(exec.Path)); err != nil {
 		return nil, err
 	}
 	// Durable staging ownership precedes every downloaded byte: a later
 	// launch recognizes this dir as owned abandoned staging even though no
 	// install receipt exists.
-	if err := writeStagingRecord(txDir, StagingRecord{
+	if err := writeStagingRecord(txDir, stagingRecord{
 		TransactionID:    txID,
 		ExecutablePath:   exec.Path,
 		ExecutableDigest: exec.Digest,
@@ -170,7 +163,7 @@ func (c *FeedClient) StageVerifiedRelease(ctx context.Context, exec Executable, 
 	}); err != nil {
 		return nil, err
 	}
-	staged := &StagedRelease{
+	staged := &stagedRelease{
 		txID:    txID,
 		txDir:   txDir,
 		release: release,
@@ -188,17 +181,17 @@ func (c *FeedClient) StageVerifiedRelease(ctx context.Context, exec Executable, 
 // downloadAndExtract streams the release archive into staging, verifies its
 // complete digest against the signed manifest entry, and extracts the single
 // intended executable.
-func (c *FeedClient) downloadAndExtract(ctx context.Context, exec Executable, release VerifiedRelease, staged *StagedRelease) error {
+func (c *FeedClient) downloadAndExtract(ctx context.Context, exec Executable, release verifiedRelease, staged *stagedRelease) error {
 	archivePath := filepath.Join(staged.txDir, releaseArchiveName)
 	digest, err := c.downloadArchive(ctx, release, archivePath)
 	if err != nil {
 		return err
 	}
-	if digest != release.TarballDigest() {
-		return fmt.Errorf("downloaded archive digest %s does not match the signed manifest entry %s", digest, release.TarballDigest())
+	if digest != release.signedTarballDigest() {
+		return fmt.Errorf("downloaded archive digest %s does not match the signed manifest entry %s", digest, release.signedTarballDigest())
 	}
 	candidatePath := filepath.Join(staged.txDir, releaseCandidateName)
-	candidateDigest, err := ExtractExecutable(archivePath, candidatePath)
+	candidateDigest, err := extractArchiveExecutable(archivePath, candidatePath)
 	if err != nil {
 		return err
 	}
@@ -213,7 +206,7 @@ func (c *FeedClient) downloadAndExtract(ctx context.Context, exec Executable, re
 // ten-minute total deadline across redirects and streaming, and the same
 // destination policy as every other release request. Cancellation and
 // failures close the response and the file and never leave a candidate.
-func (c *FeedClient) downloadArchive(ctx context.Context, release VerifiedRelease, dst string) (string, error) {
+func (c *FeedClient) downloadArchive(ctx context.Context, release verifiedRelease, dst string) (string, error) {
 	totalCtx, cancel := context.WithTimeout(ctx, downloadTotalTimeout)
 	defer cancel()
 
@@ -238,7 +231,7 @@ func (c *FeedClient) downloadArchive(ctx context.Context, release VerifiedReleas
 		_ = resp.Body.Close()
 		reqCancel()
 		cleanup()
-		return "", &FeedError{
+		return "", &feedError{
 			Reason:     fmt.Sprintf("release package request returned status %s", resp.Status),
 			StatusCode: resp.StatusCode,
 		}
@@ -249,7 +242,7 @@ func (c *FeedClient) downloadArchive(ctx context.Context, release VerifiedReleas
 		_ = resp.Body.Close()
 		reqCancel()
 		cleanup()
-		return "", &FeedError{Reason: fmt.Sprintf("release package declares more than the %d-MiB compressed limit", archiveMaxCompressedBytes>>20)}
+		return "", &feedError{Reason: fmt.Sprintf("release package declares more than the %d-MiB compressed limit", archiveMaxCompressedBytes>>20)}
 	}
 	// The watchdog cancels the final request context when the body stops
 	// making progress, aborting a stalled read.
@@ -262,7 +255,7 @@ func (c *FeedClient) downloadArchive(ctx context.Context, release VerifiedReleas
 	watchdog.stop()
 	if copyErr != nil {
 		cleanup()
-		return "", &FeedError{Reason: fmt.Sprintf("downloading release package: %v", copyErr)}
+		return "", &feedError{Reason: fmt.Sprintf("downloading release package: %v", copyErr)}
 	}
 	info, err := out.Stat()
 	if err != nil {
@@ -271,7 +264,7 @@ func (c *FeedClient) downloadArchive(ctx context.Context, release VerifiedReleas
 	}
 	if info.Size() > archiveMaxCompressedBytes {
 		cleanup()
-		return "", &FeedError{Reason: fmt.Sprintf("release package exceeds the %d-MiB compressed limit", archiveMaxCompressedBytes>>20)}
+		return "", &feedError{Reason: fmt.Sprintf("release package exceeds the %d-MiB compressed limit", archiveMaxCompressedBytes>>20)}
 	}
 	if err := out.Chmod(0o600); err != nil {
 		cleanup()

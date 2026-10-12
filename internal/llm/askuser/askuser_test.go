@@ -259,6 +259,45 @@ func TestMergeConfidence(t *testing.T) {
 	}
 }
 
+func TestRecoverConfidence(t *testing.T) {
+	type block struct {
+		name  string
+		input []byte
+	}
+	project := func(b block) (string, []byte) { return b.name, b.input }
+	withConfidence := func(header string, c float64) []byte {
+		b := signatureBase()
+		b.Questions[0].Header = header
+		b.Questions[0].Options[0].Confidence = conf(c)
+		return b.Encode()
+	}
+	target := signatureBase()
+	header := target.Questions[0].Header
+	blocks := []block{
+		{name: "AskUserQuestion", input: withConfidence(header, 0.2)},
+		{name: "AskUserQuestion", input: withConfidence(header, 0.8)},
+		{name: "AskUserQuestion", input: withConfidence("Different", 0.5)},
+		{name: "AskUserQuestion", input: []byte(`not json`)},
+		{name: "Bash", input: withConfidence(header, 0.4)},
+	}
+
+	merged, ok := RecoverConfidence(target, blocks, project)
+	if !ok {
+		t.Fatal("RecoverConfidence found no match")
+	}
+	if got := merged.Questions[0].Options[0].Confidence; got == nil || *got != 0.8 {
+		t.Fatalf("confidence = %v; want the newest matching block's 0.8", got)
+	}
+
+	missed, ok := RecoverConfidence(target, blocks[2:], project)
+	if ok {
+		t.Fatal("RecoverConfidence matched a different signature or another tool")
+	}
+	if !reflect.DeepEqual(missed, target) {
+		t.Fatalf("miss returned %+v; want the input bundle unchanged", missed)
+	}
+}
+
 func TestDisplay(t *testing.T) {
 	limits := Limits{Question: 5, Header: 3, Label: 4, Description: 6}
 	source := Bundle{Questions: []Question{{

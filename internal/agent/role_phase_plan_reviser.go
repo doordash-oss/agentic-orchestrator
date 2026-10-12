@@ -19,16 +19,16 @@ import (
 	"github.com/doordash-oss/agentic-orchestrator/internal/feature"
 )
 
-// RolePlanPhaseReviser is the per-roadmap-phase plan revision session.
-const RolePlanPhaseReviser Role = "plan_phase_reviser"
+// rolePlanPhaseReviser is the per-roadmap-phase plan revision session.
+const rolePlanPhaseReviser Role = "plan_phase_reviser"
 
 var phasePlanReviserRoleSpec = roleSpec{
 	Phase:     feature.PhasePlan,
-	Role:      RolePlanPhaseReviser,
+	Role:      rolePlanPhaseReviser,
 	SkillName: "revise-phase-plan",
 	OutputRoots: []outputRootSpec{
-		artifactDirOutputRoot("Shared per-phase plan artifact root. Revisions update the phase plan markdown here across attempts."),
-		attemptDirOutputRoot("Active phase-plan revision attempt directory. Debug prompts, attempt metadata, and validator output are written here; the harness records its completion receipt here after validation."),
+		iterationParentOutputRoot("artifact_dir", "Shared per-phase plan artifact root. Revisions update `phase-plan.md` directly here; it persists across attempts."),
+		iterationOutputRoot("attempt_dir", "Active phase-plan revision attempt directory. Debug prompts, attempt metadata, and validator output are written here; the harness records its completion receipt here after validation. Never write the phase plan markdown here."),
 	},
 	Artifacts: []roleArtifactSpec{
 		phasePlanMarkdownRoleArtifact(),

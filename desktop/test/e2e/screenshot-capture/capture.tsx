@@ -51,7 +51,6 @@ import {
   AttentionInbox,
   emptyAttentionDrafts,
 } from '../../../src/renderer/src/features/AttentionInbox';
-import { spineTone } from '../../../src/renderer/src/features/featureView';
 import { classifyHold, railSegments, railTrio } from '../../../src/renderer/src/features/phaseRail';
 import { PhaseRail, PhaseRailTrack } from '../../../src/renderer/src/features/PhaseRailRow';
 import type {
@@ -218,7 +217,11 @@ function RepoInstrumentScene() {
       <div className="cockpit" aria-label="Feature cockpit" style={{ flex: 1, overflow: 'auto' }}>
         <PhaseRailTrack
           segments={railSegments(snapshot, null)}
-          tone={spineTone(snapshot)}
+          tone={
+            snapshot.setup?.status === 'failed' || snapshot.status === 'Failed'
+              ? 'error'
+              : 'progress'
+          }
           label="Feature pipeline"
         />
         <div className="toolbar__cockpit-actions" role="group" aria-label="Feature actions">

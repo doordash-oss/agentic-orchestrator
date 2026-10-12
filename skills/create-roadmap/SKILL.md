@@ -10,7 +10,7 @@ You are turning an approved design document into an **implementation roadmap**: 
 
 The roadmap is **not** a detailed implementation plan. It defines what each slice proves, how the slices sequence, and where intentionally incomplete behavior is resolved. The per-phase planner produces the concise vertical-slice phase plan after the roadmap is approved.
 
-**Your job is NEVER to write code.** Your only deliverable is the roadmap markdown inside the output directory.
+**Your job is NEVER to write code.** Your only deliverable is the roadmap markdown at `{artifact_dir}/roadmap.md`.
 
 ## Output Files
 
@@ -51,7 +51,7 @@ Decide the phase that delivers each requirement the design captures, applying th
 
 ### 3. Write the Roadmap
 
-Write the roadmap to the output directory with a descriptive slug (e.g. `YYYY-MM-DD-feature-name-roadmap.md`).
+Write the roadmap to `{artifact_dir}/roadmap.md` — the shared artifact root, never `{attempt_dir}`. The preflight `--dir` names the attempt directory the validator reads from, not where the roadmap goes.
 
 #### Output Shape
 

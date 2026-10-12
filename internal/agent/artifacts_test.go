@@ -27,9 +27,9 @@ import (
 
 func TestArtifactManagerCreateDir(t *testing.T) {
 	dir := t.TempDir()
-	am := NewArtifactManager(dir)
+	am := newArtifactManager(dir)
 
-	iterDir, err := am.CreateIterationDir(1)
+	iterDir, err := am.createIterationDir(1)
 	if err != nil {
 		t.Fatalf("create dir: %v", err)
 	}
@@ -40,25 +40,17 @@ func TestArtifactManagerCreateDir(t *testing.T) {
 
 func TestArtifactManagerWriteFiles(t *testing.T) {
 	dir := t.TempDir()
-	am := NewArtifactManager(dir)
+	am := newArtifactManager(dir)
 
-	iterDir, _ := am.CreateIterationDir(1)
+	iterDir, _ := am.createIterationDir(1)
 
-	if err := am.WriteResponse(iterDir, "test response"); err != nil {
-		t.Fatalf("write response: %v", err)
-	}
-	content, _ := os.ReadFile(filepath.Join(iterDir, "response.txt"))
-	if string(content) != "test response" {
-		t.Errorf("response content = %q", content)
-	}
-
-	meta := IterationMeta{
+	meta := iterationMeta{
 		Iteration:   1,
 		StartedAt:   time.Now(),
 		Duration:    5 * time.Second,
 		AgentStatus: agentStatusSuccess,
 	}
-	if err := am.WriteMeta(iterDir, meta); err != nil {
+	if err := am.writeMeta(iterDir, meta); err != nil {
 		t.Fatalf("write meta: %v", err)
 	}
 	if _, err := os.Stat(filepath.Join(iterDir, "meta.yaml")); err != nil {
@@ -68,16 +60,16 @@ func TestArtifactManagerWriteFiles(t *testing.T) {
 
 func TestArtifactManagerWriteSummary(t *testing.T) {
 	dir := t.TempDir()
-	am := NewArtifactManager(dir)
+	am := newArtifactManager(dir)
 	summaryPath := filepath.Join(dir, "summary.log")
 
-	meta1 := IterationMeta{Iteration: 1, AgentStatus: "RETRY", MadeProgress: true, Duration: 3 * time.Second}
-	meta2 := IterationMeta{
+	meta1 := iterationMeta{Iteration: 1, AgentStatus: "RETRY", MadeProgress: true, Duration: 3 * time.Second}
+	meta2 := iterationMeta{
 		Iteration:    2,
 		AgentStatus:  agentStatusSuccess,
 		MadeProgress: true,
 		Duration:     5 * time.Second,
-		Context: &ContextMeta{
+		Context: &contextMeta{
 			ThresholdPct:     80,
 			FinalPct:         64,
 			TotalTokens:      171_278,
@@ -86,8 +78,8 @@ func TestArtifactManagerWriteSummary(t *testing.T) {
 		},
 	}
 
-	am.WriteSummary(summaryPath, meta1)
-	am.WriteSummary(summaryPath, meta2)
+	am.writeSummary(summaryPath, meta1)
+	am.writeSummary(summaryPath, meta2)
 
 	content, _ := os.ReadFile(summaryPath)
 	lines := string(content)
@@ -127,7 +119,7 @@ func TestWriteReviewFiles(t *testing.T) {
 
 func TestWriteDebugPrompts(t *testing.T) {
 	dir := t.TempDir()
-	WriteDebugPrompts(dir, "test system prompt", "test user prompt")
+	writeDebugPrompts(dir, "test system prompt", "test user prompt")
 
 	sysData, err := os.ReadFile(filepath.Join(dir, "system-prompt.md"))
 	if err != nil {
@@ -148,33 +140,33 @@ func TestWriteDebugPrompts(t *testing.T) {
 
 func TestArtifactManagerLatestIteration(t *testing.T) {
 	dir := t.TempDir()
-	am := NewArtifactManager(dir)
+	am := newArtifactManager(dir)
 
-	if got := am.LatestIteration(); got != 0 {
+	if got := am.latestIteration(); got != 0 {
 		t.Errorf("empty dir: expected 0, got %d", got)
 	}
 
 	// Directories without meta.yaml are incomplete and should be ignored
-	am.CreateIterationDir(1)
-	am.CreateIterationDir(3)
-	am.CreateIterationDir(2)
+	am.createIterationDir(1)
+	am.createIterationDir(3)
+	am.createIterationDir(2)
 
-	if got := am.LatestIteration(); got != 0 {
+	if got := am.latestIteration(); got != 0 {
 		t.Errorf("dirs without meta: expected 0, got %d", got)
 	}
 
 	// Only completed iterations (with meta.yaml) count
-	iterDir1, _ := am.CreateIterationDir(1)
-	am.WriteMeta(iterDir1, IterationMeta{Iteration: 1, AgentStatus: "RETRY"})
-	iterDir3, _ := am.CreateIterationDir(3)
-	am.WriteMeta(iterDir3, IterationMeta{Iteration: 3, AgentStatus: agentStatusSuccess})
+	iterDir1, _ := am.createIterationDir(1)
+	am.writeMeta(iterDir1, iterationMeta{Iteration: 1, AgentStatus: "RETRY"})
+	iterDir3, _ := am.createIterationDir(3)
+	am.writeMeta(iterDir3, iterationMeta{Iteration: 3, AgentStatus: agentStatusSuccess})
 
-	if got := am.LatestIteration(); got != 3 {
+	if got := am.latestIteration(); got != 3 {
 		t.Errorf("expected 3, got %d", got)
 	}
 
 	// Incomplete iteration-02 (no meta.yaml) between completed ones is skipped
-	if got := am.LatestIteration(); got != 3 {
+	if got := am.latestIteration(); got != 3 {
 		t.Errorf("expected 3 with gap, got %d", got)
 	}
 }
@@ -229,26 +221,26 @@ func TestRestartIterationResolution(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			dir := t.TempDir()
-			am := NewArtifactManager(dir)
-			it1, err := am.CreateIterationDir(1)
+			am := newArtifactManager(dir)
+			it1, err := am.createIterationDir(1)
 			if err != nil {
 				t.Fatalf("create iter dir: %v", err)
 			}
 			if tc.writePhaseDone {
-				writeTestCompletionReceiptFor(t, it1, feature.PhaseImplement, RoleImplementer)
+				writeTestCompletionReceiptFor(t, it1, feature.PhaseImplement, roleImplementer)
 				testutil.WriteImplementHandoffFiles(t, dir, it1, agentStatusSuccess)
 			}
 			if tc.writeMeta {
-				if err := am.WriteMeta(it1, IterationMeta{Iteration: 1, AgentStatus: agentStatusSuccess, ReviewStatus: tc.reviewStatus}); err != nil {
+				if err := am.writeMeta(it1, iterationMeta{Iteration: 1, AgentStatus: agentStatusSuccess, ReviewStatus: tc.reviewStatus}); err != nil {
 					t.Fatalf("write meta: %v", err)
 				}
 			}
 
 			// Mirror the restart-detection logic in implement.go:162-174.
-			startIter := am.LatestIteration()
+			startIter := am.latestIteration()
 			nextIter := startIter + 1
 			nextIterDir := filepath.Join(dir, fmt.Sprintf("iteration-%02d", nextIter))
-			skipImplement := HasCommittedPhaseOutcome(nextIterDir, feature.PhaseImplement, RoleImplementer)
+			skipImplement := hasCommittedPhaseOutcome(nextIterDir, feature.PhaseImplement, roleImplementer)
 
 			if startIter != tc.wantLatestIter {
 				t.Errorf("LatestIteration = %d, want %d", startIter, tc.wantLatestIter)
@@ -324,16 +316,16 @@ func TestWaitForShutdownIntent(t *testing.T) {
 
 func TestArtifactManagerReadMeta(t *testing.T) {
 	dir := t.TempDir()
-	am := NewArtifactManager(dir)
+	am := newArtifactManager(dir)
 
-	iterDir, _ := am.CreateIterationDir(1)
-	meta := IterationMeta{
+	iterDir, _ := am.createIterationDir(1)
+	meta := iterationMeta{
 		Iteration:    1,
 		AgentStatus:  "FAILED",
 		ReviewStatus: agentStatusChangesRequested,
 		MadeProgress: true,
 		Duration:     3 * time.Second,
-		Context: &ContextMeta{
+		Context: &contextMeta{
 			Provider:           "codex",
 			ThresholdPct:       80,
 			FinalPct:           64,
@@ -345,11 +337,11 @@ func TestArtifactManagerReadMeta(t *testing.T) {
 			HandoffTotalTokens: 211_000,
 		},
 	}
-	if err := am.WriteMeta(iterDir, meta); err != nil {
+	if err := am.writeMeta(iterDir, meta); err != nil {
 		t.Fatalf("write meta: %v", err)
 	}
 
-	got, err := am.ReadMeta(iterDir)
+	got, err := am.readMeta(iterDir)
 	if err != nil {
 		t.Fatalf("read meta: %v", err)
 	}
@@ -361,7 +353,7 @@ func TestArtifactManagerReadMeta(t *testing.T) {
 	}
 
 	// Non-existent directory returns error
-	_, err = am.ReadMeta(filepath.Join(dir, "no-such-dir"))
+	_, err = am.readMeta(filepath.Join(dir, "no-such-dir"))
 	if err == nil {
 		t.Error("expected error for non-existent dir")
 	}
@@ -396,18 +388,9 @@ func TestPhasePlanDir(t *testing.T) {
 	}
 }
 
-func TestPhaseImplementDir(t *testing.T) {
-	f := &feature.Feature{ID: "feat1", ActiveRun: 1}
-	got := PhaseImplementDir("/tmp/state", f, 3)
-	want := "/tmp/state/feat1/runs/run-001/phase-03/implement"
-	if got != want {
-		t.Errorf("PhaseImplementDir = %q, want %q", got, want)
-	}
-}
-
 func TestPhaseTestingContractDir(t *testing.T) {
 	f := &feature.Feature{ID: "feat1", ActiveRun: 1}
-	got := PhaseTestingContractDir("/tmp/state", f, 2)
+	got := phaseTestingContractDir("/tmp/state", f, 2)
 	want := "/tmp/state/feat1/runs/run-001/phase-02"
 	if got != want {
 		t.Errorf("PhaseTestingContractDir = %q, want %q", got, want)
@@ -456,10 +439,10 @@ func TestActiveRunDir(t *testing.T) {
 
 // TestRunDir verifies the zero-padded run directory path regardless of feature.
 func TestRunDir(t *testing.T) {
-	if got := RunDir("/s", "x", 9); got != "/s/x/runs/run-009" {
+	if got := runDir("/s", "x", 9); got != "/s/x/runs/run-009" {
 		t.Errorf("RunDir 9 = %q", got)
 	}
-	if got := RunDir("/s", "x", 1000); got != "/s/x/runs/run-1000" {
+	if got := runDir("/s", "x", 1000); got != "/s/x/runs/run-1000" {
 		t.Errorf("RunDir 1000 = %q", got)
 	}
 }

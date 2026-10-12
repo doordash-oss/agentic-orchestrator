@@ -26,9 +26,15 @@ surfaces are strictly additive: neither the compatibility declaration nor
 the discovery schema version changes for it, so older consumers keep working
 against named servers and newer consumers tolerate name-less servers.
 
-The compatibility declaration on `/api/v1/health` reports schema series 4
-and minimum client series 4 under the `loopback-bearer-v1` runtime policy
-(`network-bearer-v1` for non-loopback listeners). In schema series 4,
+The compatibility declaration on `/api/v1/health` reports schema series 5
+and minimum client series 5 under the `loopback-bearer-v1` runtime policy
+(`network-bearer-v1` for non-loopback listeners). Series 5 merges the
+feature-action and child-launch response schemas, removes the unused action
+union and static rebase operation declaration, drops the never-sent start `phase` and `session_ids` fields and the
+restart `phase`, `dispatch`, and `session_ids` fields (the first two were
+emitted but not consumed), adds the routed `selection` subaction enum value, and
+declares the delete response's existing `retryable` field. The rebase URL
+remains served through the generic action route. In schema series 4,
 ask-user questions carry a required one-based `index`; answers on both
 surfaces (the ask-user answer's `answers` and the need-user-input draft) are
 keyed by that index as a string (`"1"`, `"2"`, ...). Ask-user selections use
@@ -58,8 +64,8 @@ SSE endpoints. Mutations also keep the trusted local header,
 
 Shell callers on the server machine use `agentico api METHOD /api/v1/<path>
 [json]` as the sanctioned client instead of building requests by hand. It
-resolves the runtime directory (`--runtime-dir`, then `AGENTICO_RUNTIME_DIR`,
-then the default home runtime directory), trusts the discovery file only when
+resolves the runtime directory (`AGENTICO_RUNTIME_DIR`, then the default
+home runtime directory), trusts the discovery file only when
 it is a regular file owned by the caller with no group or other permission
 bits, and sends `Authorization: Bearer`, `X-Agentico-Client: local`, `Accept:
 application/json` and, with a body, `Content-Type: application/json` to the
@@ -190,9 +196,14 @@ Clients bootstrap from a snapshot and then consume ordered event deltas:
 1. Read discovery metadata.
 2. `GET` the needed snapshot endpoint with the bearer token.
 3. Store `meta.as_of_seq` from the body or `X-Agentico-Seq` from the headers.
-4. Connect to `/api/v1/events?after=<as_of_seq>&epoch=<epoch>`.
-5. Apply events by `seq`. On `stream.reset`, re-read snapshots and reconnect
-   from the returned sequence.
+4. Connect to `/api/v1/events?after=<as_of_seq>` (or send it as
+   `Last-Event-ID`). The server replays retained events after the cursor in
+   order; it keeps the most recent 4096 events. Add `&epoch=<epoch>` once you
+   have seen an event envelope: a cursor without `epoch` is read in the current
+   epoch, so only a supplied epoch lets the server detect a restart.
+5. Apply events by `seq`. On `stream.reset` (cursor older than the retained
+   window, beyond the head, or from another epoch), re-read snapshots and
+   reconnect from the returned sequence and epoch.
 
 Event envelopes include `seq`, `epoch`, `kind`, `resource`,
 `resource_version`, and `snapshot_required`. Snapshot responses include
@@ -259,8 +270,6 @@ e.g. `AGENTICO_BROWSER_STATE_SLACK_COM`) pointing at that file.
 
 CLI:
 
-- `agentico capability-probe <name[(argument)]>` prints available/unavailable
-  with the reason and exits 0/1.
 - `agentico report-blocker --contract <testing-contract.yaml> --dir
   <iteration_dir> --items <id,id,...> --capability <name> --reason <text>`
   writes the blocker gate (`need-user-input.yaml`, source agent) into the

@@ -290,7 +290,7 @@ func TestAgentSessionEntryPointsWireEnvVariable(t *testing.T) {
 						nilEnvCalls = append(nilEnvCalls,
 							fset.Position(call.Pos()).String()+": passes nil instead of env")
 					}
-				case "BuildSession", "RunReadOnlyReviewHelper", "RunBoundedHelper":
+				case "BuildSession", "runReviewHelper", "RunBoundedHelper":
 					sessionEntryPoints++
 				}
 

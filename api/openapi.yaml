@@ -44,10 +44,16 @@ paths:
       operationId: createFeature
       summary: Create a feature.
       description: >-
-        Queues server-owned durable setup for the new feature. While mandatory
-        readiness is not satisfied (no usable provider, invalid
-        configuration), creation is rejected with a structured `not_ready`
-        error whose target carries the outstanding readiness issues.
+        Queues server-owned durable setup for the new feature but does not
+        dispatch it. The created feature reads `SettingUpWorktrees` with
+        `setup.status` `queued`, no `setup.started_at`, every setup task
+        `queued`, and the `setup` action enabled; nothing runs until the
+        client dispatches the `setup` action (setup only, leaving the feature
+        `Created`) or the `start` action (setup, then the first phase).
+        While mandatory readiness is not satisfied (no usable provider,
+        invalid configuration), creation is rejected with a structured
+        `not_ready` error whose target carries the outstanding readiness
+        issues.
       parameters:
         - $ref: "#/components/parameters/TrustedMutationHeader"
       requestBody:
@@ -58,7 +64,7 @@ paths:
               $ref: "#/components/schemas/CreateFeatureMutationRequest"
       responses:
         "201":
-          $ref: "#/components/responses/ActionResponse"
+          $ref: "#/components/responses/CreateFeatureResponse"
         "400":
           $ref: "#/components/responses/ErrorResponse"
         "401":
@@ -105,7 +111,7 @@ paths:
         $ref: "#/components/requestBodies/JSONMutation"
       responses:
         "200":
-          $ref: "#/components/responses/ActionResponse"
+          $ref: "#/components/responses/FeatureActionResponse"
         "401":
           $ref: "#/components/responses/Unauthorized"
 
@@ -325,16 +331,20 @@ paths:
         $ref: "#/components/requestBodies/JSONMutation"
       responses:
         "200":
-          $ref: "#/components/responses/ActionResponse"
+          $ref: "#/components/responses/FeatureActionResponse"
         "201":
           description: >-
-            Child launched. The typed contracts are documented by the static
-            refactorFeature and reviewFeedbackFeature operations at their exact
-            action URLs.
+            Child launched. Refactor and review-feedback have typed static
+            operations at their exact action URLs; rebase uses this generic
+            route. The 200 response is the flat feature-action shape for
+            lifecycle actions. RewindFeatureResponse,
+            TestingContractWaiveResponse, CleanupFeatureResponse,
+            DeleteFeatureResponse, and PublishDescriptionResponse describe
+            action-specific bodies.
           content:
             application/json:
               schema:
-                $ref: "#/components/schemas/ChildFeatureResponse"
+                $ref: "#/components/schemas/ChildLaunchResponse"
         "401":
           $ref: "#/components/responses/Unauthorized"
         "409":
@@ -369,7 +379,7 @@ paths:
           content:
             application/json:
               schema:
-                $ref: "#/components/schemas/RefactorFeatureResponse"
+                $ref: "#/components/schemas/ChildLaunchResponse"
         "401":
           $ref: "#/components/responses/Unauthorized"
         "404":
@@ -509,59 +519,13 @@ paths:
         "409":
           $ref: "#/components/responses/ErrorResponse"
 
-  # Statically documented form of the rebase child launch action. The server
-  # routes the rebase launch through the dynamic /actions/{action} dispatch,
-  # so the served URL is exactly /api/v1/features/{feature_id}/actions/rebase;
-  # this operation pins the typed request/response surface to that URL. The
-  # request is zero-input: any JSON body (including the legacy
-  # source_revision payload) is accepted and ignored.
-  /api/v1/features/{feature_id}/actions/rebase:
-    post:
-      operationId: rebaseFeature
-      summary: Launch a rebase child feature that merge-reconciles behind repositories.
-      description: >-
-        Zero-input child launch: the handler accepts and ignores any JSON body,
-        including the legacy source_revision payload. The orchestrator resolves
-        each repository's merge target (PR base branch, recorded base branch,
-        or repository default branch), fetches, and computes behind-ness. If
-        every repository is up to date, returns the typed
-        rebase_already_up_to_date error naming each resolved target. If any
-        repository fails target resolution or fetch, the whole action fails
-        atomically with a distinct stable code naming the failing repo; no
-        child and no relationship event are created. On success a rebase child
-        of kind "rebase" is created with a pinned medium pipeline, fork-point-
-        pinned worktrees, and persisted resolved targets and behind set.
-        Failure machine codes: 404 parent_not_found; 409 parent_is_child,
-        parent_status_ineligible, active_child_exists, parent_worktrees_dirty,
-        rebase_target_resolution_failed, rebase_fetch_failed, and
-        rebase_already_up_to_date.
-      parameters:
-        - $ref: "#/components/parameters/FeatureID"
-        - $ref: "#/components/parameters/TrustedMutationHeader"
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              $ref: "#/components/schemas/RebaseFeatureRequest"
-      responses:
-        "201":
-          description: Rebase child launched and setup queued.
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/RebaseFeatureResponse"
-        "401":
-          $ref: "#/components/responses/Unauthorized"
-        "404":
-          $ref: "#/components/responses/ErrorResponse"
-        "409":
-          $ref: "#/components/responses/ErrorResponse"
-
   /api/v1/features/{feature_id}/actions/{action}/{subaction}:
     post:
       operationId: runFeatureSubaction
       summary: Run a named feature subaction.
+      description: >-
+        The flat response applies to description actions. Review-feedback
+        fetch and selection have typed static operations at their exact URLs.
       parameters:
         - $ref: "#/components/parameters/FeatureID"
         - $ref: "#/components/parameters/FeatureAction"
@@ -571,7 +535,7 @@ paths:
         $ref: "#/components/requestBodies/JSONMutation"
       responses:
         "200":
-          $ref: "#/components/responses/ActionResponse"
+          $ref: "#/components/responses/FeatureActionResponse"
         "401":
           $ref: "#/components/responses/Unauthorized"
 
@@ -717,7 +681,7 @@ paths:
         $ref: "#/components/requestBodies/JSONMutation"
       responses:
         "200":
-          $ref: "#/components/responses/ActionResponse"
+          $ref: "#/components/responses/RuntimeConfigUpdateResponse"
         "400":
           $ref: "#/components/responses/ErrorResponse"
         "401":
@@ -861,7 +825,7 @@ paths:
         $ref: "#/components/requestBodies/JSONMutation"
       responses:
         "200":
-          $ref: "#/components/responses/ActionResponse"
+          $ref: "#/components/responses/AskUserAnswerResponse"
         "401":
           $ref: "#/components/responses/Unauthorized"
 
@@ -875,7 +839,7 @@ paths:
         $ref: "#/components/requestBodies/JSONMutation"
       responses:
         "200":
-          $ref: "#/components/responses/ActionResponse"
+          $ref: "#/components/responses/HelpSendResponse"
         "401":
           $ref: "#/components/responses/Unauthorized"
 
@@ -903,7 +867,7 @@ paths:
               $ref: "#/components/schemas/PermissionAnswerRequest"
       responses:
         "200":
-          $ref: "#/components/responses/ActionResponse"
+          $ref: "#/components/responses/PermissionAnswerResponse"
         "401":
           $ref: "#/components/responses/Unauthorized"
 
@@ -1375,7 +1339,7 @@ paths:
         $ref: "#/components/requestBodies/JSONMutation"
       responses:
         "200":
-          $ref: "#/components/responses/ActionResponse"
+          $ref: "#/components/responses/RecoveryActionResponse"
         "401":
           $ref: "#/components/responses/Unauthorized"
 
@@ -1523,7 +1487,18 @@ paths:
     get:
       operationId: streamEvents
       summary: Stream ordered runtime events as SSE.
-      description: Emits envelope JSON under SSE `data:` lines. Every non-control event includes a monotonic `seq`, `epoch`, resource identity, and resource version. Clients resume with `Last-Event-ID` or `after`.
+      description: >-
+        Emits envelope JSON under SSE `data:` lines. Every non-control event
+        includes a monotonic `seq`, `epoch`, resource identity, and resource
+        version. Clients resume with `Last-Event-ID` or `after` (for example a
+        snapshot's `meta.as_of_seq`): retained events after the cursor replay
+        in order. The server retains the most recent 4096 events; a cursor
+        older than that window, beyond the head, or paired with an `epoch`
+        that no longer matches yields one `stream.reset` with
+        `snapshot_required`. A cursor without `epoch` is read in the current
+        epoch, so pass the `epoch` from a previously received event to have a
+        server restart detected. With no cursor the stream starts with
+        `connected`.
       security:
         - bearerAuth: []
         - sseAccessToken: []
@@ -1985,6 +1960,7 @@ components:
         enum:
           - description
           - fetch
+          - selection
     Offset:
       name: offset
       in: query
@@ -2362,12 +2338,48 @@ components:
         application/json:
           schema:
             $ref: "#/components/schemas/CloneOperationListResponse"
-    ActionResponse:
+    FeatureActionResponse:
       description: Mutation result.
       content:
         application/json:
           schema:
-            $ref: "#/components/schemas/ActionResponse"
+            $ref: "#/components/schemas/FeatureActionResponse"
+    CreateFeatureResponse:
+      description: Mutation result.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/CreateFeatureResponse"
+    RuntimeConfigUpdateResponse:
+      description: Mutation result.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/RuntimeConfigUpdateResponse"
+    AskUserAnswerResponse:
+      description: Mutation result.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/AskUserAnswerResponse"
+    HelpSendResponse:
+      description: Mutation result.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/HelpSendResponse"
+    PermissionAnswerResponse:
+      description: Mutation result.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/PermissionAnswerResponse"
+    RecoveryActionResponse:
+      description: Mutation result.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/RecoveryActionResponse"
     ErrorResponse:
       description: Structured API error.
       content:
@@ -2467,7 +2479,12 @@ components:
           $ref: "#/components/schemas/Error"
     FeatureAction:
       type: string
-      description: Feature lifecycle action identifier.
+      description: >-
+        Feature lifecycle action identifier. `setup` dispatches a feature's
+        queued durable setup (required after create unless the client
+        dispatches `start`) or reruns only the unfinished tasks of a failed
+        setup, asynchronously and without starting orchestration; the
+        feature becomes `Created` when setup completes.
       enum:
         - setup
         - start
@@ -2848,6 +2865,19 @@ components:
           type: boolean
         issue:
           $ref: "#/components/schemas/Error"
+          x-go-type-skip-optional-pointer: false
+        endpoint_reachable:
+          type: boolean
+          description: >-
+            Result of a bounded, unauthenticated reachability probe of the
+            custom API endpoint(s) the provider CLI is configured to call
+            (any HTTP response counts as reachable). Absent when the provider
+            has no custom endpoint or the background check has not finished.
+            Never affects `ready`.
+          x-go-type-skip-optional-pointer: false
+        warning:
+          $ref: "#/components/schemas/Error"
+          description: Non-blocking warning (provider_endpoint_unreachable) for a provider whose configured endpoint is unreachable.
           x-go-type-skip-optional-pointer: false
     ModelReadiness:
       type: object
@@ -4373,57 +4403,6 @@ components:
                 $ref: "#/components/schemas/RecoveryItem"
     ActionBaseResponse:
       $ref: "#/components/schemas/JSONResponse"
-    ActionResponse:
-      allOf:
-        - $ref: "#/components/schemas/ActionBaseResponse"
-        - type: object
-          properties:
-            create_feature_response:
-              $ref: "#/components/schemas/CreateFeatureResponse"
-            feature_setup_response:
-              $ref: "#/components/schemas/FeatureSetupResponse"
-            feature_start_response:
-              $ref: "#/components/schemas/FeatureStartResponse"
-            feature_stop_response:
-              $ref: "#/components/schemas/FeatureStopResponse"
-            feature_restart_response:
-              $ref: "#/components/schemas/FeatureRestartResponse"
-            feature_config_update_response:
-              $ref: "#/components/schemas/FeatureConfigUpdateResponse"
-            need_user_input_resume_response:
-              $ref: "#/components/schemas/NeedUserInputResumeResponse"
-            need_user_input_draft_response:
-              $ref: "#/components/schemas/NeedUserInputDraftResponse"
-            testing_contract_waive_response:
-              $ref: "#/components/schemas/TestingContractWaiveResponse"
-            permission_answer_response:
-              $ref: "#/components/schemas/PermissionAnswerResponse"
-            ask_user_answer_response:
-              $ref: "#/components/schemas/AskUserAnswerResponse"
-            help_send_response:
-              $ref: "#/components/schemas/HelpSendResponse"
-            runtime_config_update_response:
-              $ref: "#/components/schemas/RuntimeConfigUpdateResponse"
-            publish_feature_response:
-              $ref: "#/components/schemas/PublishFeatureResponse"
-            publish_description_response:
-              $ref: "#/components/schemas/PublishDescriptionResponse"
-            merge_feature_response:
-              $ref: "#/components/schemas/MergeFeatureResponse"
-            rewind_feature_response:
-              $ref: "#/components/schemas/RewindFeatureResponse"
-            retry_feature_response:
-              $ref: "#/components/schemas/RetryFeatureResponse"
-            mark_done_response:
-              $ref: "#/components/schemas/MarkDoneResponse"
-            cleanup_feature_response:
-              $ref: "#/components/schemas/CleanupFeatureResponse"
-            delete_feature_response:
-              $ref: "#/components/schemas/DeleteFeatureResponse"
-            discard_child_response:
-              $ref: "#/components/schemas/DiscardChildResponse"
-            recovery_action_response:
-              $ref: "#/components/schemas/RecoveryActionResponse"
     CreateFeatureResponse:
       allOf:
         - $ref: "#/components/schemas/ActionBaseResponse"
@@ -4504,57 +4483,7 @@ components:
         size:
           type: integer
           format: int64
-    FeatureSetupResponse:
-      description: >-
-        Result of the setup action: durable server-owned setup (fresh run or
-        retry of unfinished tasks) has been dispatched without starting
-        orchestration. Progress is reported through the feature detail setup
-        state and SSE invalidation events; on success the feature reaches a
-        startable pre-orchestration state.
-      allOf:
-        - $ref: "#/components/schemas/ActionBaseResponse"
-        - $ref: "#/components/schemas/FeatureActionResult"
-    FeatureStartResponse:
-      allOf:
-        - $ref: "#/components/schemas/ActionBaseResponse"
-        - $ref: "#/components/schemas/FeatureActionResult"
-        - type: object
-          properties:
-            phase:
-              type: string
-            session_ids:
-              type: array
-              x-go-name: SessionIDs
-              items:
-                type: string
-    FeatureStopResponse:
-      allOf:
-        - $ref: "#/components/schemas/ActionBaseResponse"
-        - $ref: "#/components/schemas/FeatureActionResult"
-    FeatureRestartResponse:
-      allOf:
-        - $ref: "#/components/schemas/ActionBaseResponse"
-        - $ref: "#/components/schemas/FeatureActionResult"
-        - type: object
-          properties:
-            phase:
-              type: string
-            dispatch:
-              type: string
-            session_ids:
-              type: array
-              x-go-name: SessionIDs
-              items:
-                type: string
-    FeatureConfigUpdateResponse:
-      allOf:
-        - $ref: "#/components/schemas/ActionBaseResponse"
-        - $ref: "#/components/schemas/FeatureActionResult"
-    NeedUserInputResumeResponse:
-      allOf:
-        - $ref: "#/components/schemas/ActionBaseResponse"
-        - $ref: "#/components/schemas/FeatureActionResult"
-    NeedUserInputDraftResponse:
+    FeatureActionResponse:
       allOf:
         - $ref: "#/components/schemas/ActionBaseResponse"
         - $ref: "#/components/schemas/FeatureActionResult"
@@ -4660,10 +4589,6 @@ components:
       allOf:
         - $ref: "#/components/schemas/ActionBaseResponse"
         - $ref: "#/components/schemas/ActionResult"
-    PublishFeatureResponse:
-      allOf:
-        - $ref: "#/components/schemas/ActionBaseResponse"
-        - $ref: "#/components/schemas/FeatureActionResult"
     PublishDescriptionResponse:
       allOf:
         - $ref: "#/components/schemas/ActionBaseResponse"
@@ -4675,10 +4600,6 @@ components:
               type: string
             body:
               type: string
-    MergeFeatureResponse:
-      allOf:
-        - $ref: "#/components/schemas/ActionBaseResponse"
-        - $ref: "#/components/schemas/FeatureActionResult"
     RewindFeatureResponse:
       allOf:
         - $ref: "#/components/schemas/ActionBaseResponse"
@@ -4798,10 +4719,6 @@ components:
         reset_kind:
           type: string
           enum: [anchor, base, base-local, none]
-    RetryFeatureResponse:
-      allOf:
-        - $ref: "#/components/schemas/ActionBaseResponse"
-        - $ref: "#/components/schemas/FeatureActionResult"
     RefactorFeatureRequest:
       # Bound by the refactorFeature operation at
       # /api/v1/features/{feature_id}/actions/refactor; oapi-codegen emits the
@@ -4860,16 +4777,7 @@ components:
           x-go-type-import:
             path: github.com/doordash-oss/agentic-orchestrator/internal/feature
             name: feature
-    RefactorFeatureResponse:
-      allOf:
-        - $ref: "#/components/schemas/ActionBaseResponse"
-        - $ref: "#/components/schemas/FeatureActionResult"
-        - type: object
-          required: [parent_id]
-          properties:
-            parent_id:
-              type: string
-    ChildFeatureResponse:
+    ChildLaunchResponse:
       description: Common child reference returned by typed child-launch actions.
       allOf:
         - $ref: "#/components/schemas/ActionBaseResponse"
@@ -5040,13 +4948,9 @@ components:
             review value.
     ReviewFeedbackFeatureResponse:
       allOf:
-        - $ref: "#/components/schemas/ActionBaseResponse"
-        - $ref: "#/components/schemas/FeatureActionResult"
+        - $ref: "#/components/schemas/ChildLaunchResponse"
         - type: object
-          required: [parent_id]
           properties:
-            parent_id:
-              type: string
             child_id:
               type: string
               description: Identity of the created review-feedback child.
@@ -5065,26 +4969,6 @@ components:
               description: >-
                 Comments first observed after the reviewed snapshot, deferred
                 to a future pass.
-    RebaseFeatureRequest:
-      type: object
-      additionalProperties: true
-      description: >-
-        Zero-input request. Any JSON body (including the legacy
-        source_revision payload) is accepted and ignored; the rebase child
-        launch takes no user input.
-    RebaseFeatureResponse:
-      allOf:
-        - $ref: "#/components/schemas/ActionBaseResponse"
-        - $ref: "#/components/schemas/FeatureActionResult"
-        - type: object
-          required: [parent_id]
-          properties:
-            parent_id:
-              type: string
-    MarkDoneResponse:
-      allOf:
-        - $ref: "#/components/schemas/ActionBaseResponse"
-        - $ref: "#/components/schemas/FeatureActionResult"
     CompletionPreflightResponse:
       allOf:
         - $ref: "#/components/schemas/JSONResponse"
@@ -5258,6 +5142,8 @@ components:
               x-go-type-import:
                 path: github.com/doordash-oss/agentic-orchestrator/internal/feature
                 name: feature
+            retryable:
+              type: boolean
             diagnostics:
               type: array
               items:
@@ -5284,10 +5170,6 @@ components:
           type: string
         observed_sha:
           type: string
-    DiscardChildResponse:
-      allOf:
-        - $ref: "#/components/schemas/ActionBaseResponse"
-        - $ref: "#/components/schemas/FeatureActionResult"
     RecoveryActionResponse:
       allOf:
         - $ref: "#/components/schemas/ActionBaseResponse"
@@ -5585,12 +5467,16 @@ components:
       properties:
         status:
           type: string
+          description: >-
+            `queued` (created, awaiting the `setup` or `start` action),
+            `running` (dispatched), `done`, or `failed`.
         attempt:
           type: integer
         started_at:
           type: string
           format: date-time
           x-go-type-skip-optional-pointer: false
+          description: Start of the latest dispatched attempt; absent while setup is queued.
         completed_at:
           type: string
           format: date-time
@@ -5730,6 +5616,12 @@ components:
         tool_call:
           $ref: "#/components/schemas/ToolCall"
           x-go-type-skip-optional-pointer: false
+          description: >-
+            Sanitized tool call detail on tool_use and tool_progress rows.
+            On tool_progress rows only summary is set: one line (at most 200
+            characters) naming what the tool acts on (title, path, pattern,
+            or command), never its output; absent when the provider reports
+            nothing beyond the tool name.
         task:
           $ref: "#/components/schemas/Task"
           x-go-type-skip-optional-pointer: false
@@ -6673,6 +6565,16 @@ components:
           type: boolean
         validator_statuses:
           type: object
+          description: >-
+            Live state per validator: running, retrying, interrupted, error,
+            or its verdict.
+          additionalProperties:
+            type: string
+        validator_errors:
+          type: object
+          description: >-
+            Last error of each validator that failed or is retrying, keyed like
+            validator_statuses.
           additionalProperties:
             type: string
     NeedUserInputGate:
@@ -6863,6 +6765,20 @@ components:
               $ref: "#/components/schemas/Timing"
             cost:
               $ref: "#/components/schemas/Cost"
+            sandbox:
+              x-go-type-skip-optional-pointer: false
+              $ref: "#/components/schemas/RunSandbox"
+    RunSandbox:
+      type: object
+      description: Present only when this run executed harness verification commands or launched review validators while the OS verification sandbox was unavailable (for example nested macOS sandbox-exec); those commands ran unconfined.
+      required: [available]
+      properties:
+        available:
+          type: boolean
+          description: Always false when present.
+        reason:
+          type: string
+          description: Why the sandbox probe failed.
     RunListResponse:
       allOf:
         - $ref: "#/components/schemas/JSONResponse"

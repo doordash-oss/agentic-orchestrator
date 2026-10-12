@@ -29,8 +29,9 @@ import {
 } from '../../../../shared/ipc';
 import type { CanonicalError } from '../../../../shared/api/parse';
 import { actionById, displayStatusLabel, isReadyToStart } from '../featureView';
+import { defined } from '../../../../shared/defined';
 
-export type PassStateId =
+type PassStateId =
   | 'setup'
   | 'setup-failed'
   | 'ready'
@@ -47,7 +48,7 @@ export type PassStateId =
   | 'merged'
   | 'closed';
 
-export interface PassState {
+interface PassState {
   id: PassStateId;
   /** One sentence under the pass name: what is happening and what comes next. */
   sentence: string;
@@ -166,9 +167,9 @@ export function passState(child: FeatureSnapshot): PassState {
   return { id: 'working', sentence: `${displayStatusLabel(child.status)}.`, tone: 'live' };
 }
 
-export type StationState = 'locked' | 'pending' | 'live' | 'attention' | 'done';
+type StationState = 'locked' | 'pending' | 'live' | 'attention' | 'done';
 
-export interface CustodyStation {
+interface CustodyStation {
   id: 'parent' | 'pass' | 'integration';
   eyebrow: string;
   title: string;
@@ -381,7 +382,7 @@ export function relationshipWarningExplain(
       scope: 'transaction',
       code: warning.code,
       featureId: child.id,
-      ...(repository !== undefined ? { repository } : {}),
+      ...defined('repository', repository),
     },
     featureName: child.name,
   };

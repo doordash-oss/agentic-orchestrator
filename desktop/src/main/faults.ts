@@ -30,21 +30,21 @@ limitations under the License.
  */
 
 /** The narrow surface of `process` this module needs; injectable for tests. */
-export interface FaultProcess {
+interface FaultProcess {
   on(event: 'uncaughtException', listener: (error: Error) => void): unknown;
   on(event: 'unhandledRejection', listener: (reason: unknown) => void): unknown;
 }
 
-export interface FaultRecorder {
+interface FaultRecorder {
   recordCrash(input: { processRole: 'main'; category: string; context?: string }): unknown;
 }
 
-export interface FaultHandlerDeps {
+interface FaultHandlerDeps {
   process: FaultProcess;
   log(line: string): void;
 }
 
-export interface FaultHandlers {
+interface FaultHandlers {
   /** Diagnostics is constructed after startup; faults before that are only logged. */
   setRecorder(recorder: FaultRecorder): void;
 }

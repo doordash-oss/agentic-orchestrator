@@ -39,7 +39,7 @@ var (
 // context. Every journal mutation during promotion must flow through this
 // helper so a persistence failure is never silently discarded — the journal
 // is the only recovery input for an interrupted promotion.
-func persistPromotionJournal(store promotionStore, journal *feature.PromotionJournal) error {
+func persistPromotionJournal(store *feature.Store, journal *feature.PromotionJournal) error {
 	if err := store.SavePromotion(journal.ChildID, journal); err != nil {
 		return fmt.Errorf("persisting promotion journal for child %s: %w", journal.ChildID, err)
 	}
@@ -61,7 +61,7 @@ func persistPromotionJournal(store promotionStore, journal *feature.PromotionJou
 // Test-reachable seam: production promotes from child integration;
 // integration tests drive it directly.
 func (o *Orchestrator) PromoteChildKBWorkspaces(childID, parentID string) error {
-	child, err := o.deps.Lifecycle.Get(childID)
+	child, err := o.deps.Store.Load(childID)
 	if err != nil {
 		return fmt.Errorf("load child for promotion: %w", err)
 	}
@@ -74,10 +74,7 @@ func (o *Orchestrator) PromoteChildKBWorkspaces(childID, parentID string) error 
 		return nil
 	}
 
-	store, ok := o.deps.Store.(promotionStore)
-	if !ok {
-		return nil
-	}
+	store := o.deps.Store
 
 	// Load or create the promotion journal.
 	journal, err := store.LoadPromotion(childID)
@@ -121,7 +118,7 @@ func (o *Orchestrator) PromoteChildKBWorkspaces(childID, parentID string) error 
 	// Load the parent as an existence guard. Merge HEADs are read from
 	// the child's transaction journal below; the parent load ensures the
 	// parent feature still exists so promotion targets a live relationship.
-	parent, err := o.deps.Lifecycle.Get(parentID)
+	parent, err := o.deps.Store.Load(parentID)
 	if err != nil {
 		return fmt.Errorf("load parent for promotion: %w", err)
 	}
@@ -396,24 +393,11 @@ func releaseJournalOverlayLocks(journal *feature.PromotionJournal) error {
 	return errors.Join(errs...)
 }
 
-// promotionStore is the subset of Store used for promotion journal persistence.
-type promotionStore interface {
-	LoadPromotion(childID string) (*feature.PromotionJournal, error)
-	SavePromotion(childID string, journal *feature.PromotionJournal) error
-	DeletePromotion(childID string) error
-}
-
 // reconcilePromotions is the idempotent startup reconciliation pass for
 // promotion journals. It runs after integration reconciliation so a merged
 // child with a pending promotion can be recovered.
 func (o *Orchestrator) reconcilePromotions() error {
-	if o.deps.Store == nil {
-		return nil
-	}
-	store, ok := o.deps.Store.(promotionStore)
-	if !ok {
-		return nil
-	}
+	store := o.deps.Store
 	features, listErr := o.deps.Store.List()
 	var partialIDs []string
 	if listErr != nil {
@@ -450,7 +434,7 @@ func (o *Orchestrator) reconcilePromotions() error {
 	return nil
 }
 
-func (o *Orchestrator) reconcileOnePromotion(f *feature.Feature, store promotionStore) error {
+func (o *Orchestrator) reconcileOnePromotion(f *feature.Feature, store *feature.Store) error {
 	if f == nil || !f.IsChild() {
 		return nil
 	}

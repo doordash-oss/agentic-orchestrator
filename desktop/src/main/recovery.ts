@@ -40,8 +40,9 @@ import {
 } from '../shared/ipc';
 import type { ApiRequestInit } from './gateway/runtimeGateway';
 import { serverRequest, type ServerTransport } from './serverClient';
+import { defined, definedNonEmpty } from '../shared/defined';
 
-export type RecoveryTransport = ServerTransport;
+type RecoveryTransport = ServerTransport;
 
 export class RecoveryService {
   constructor(private readonly transport: RecoveryTransport) {}
@@ -58,15 +59,15 @@ export class RecoveryService {
       ...(item.repo_name === undefined || item.repo_name === ''
         ? {}
         : { repoName: item.repo_name }),
-      ...(item.phase === undefined || item.phase === '' ? {} : { phase: item.phase }),
-      ...(item.iteration === undefined ? {} : { iteration: item.iteration }),
-      ...(item.pid === undefined ? {} : { pid: item.pid }),
+      ...definedNonEmpty('phase', item.phase),
+      ...defined('iteration', item.iteration),
+      ...defined('pid', item.pid),
       processAlive: item.process_alive,
       // Canonical error object crosses IPC intact except diagnostics, which
       // pass through the same redaction defensively even though the server
       // promises none.
       error: redactedCanonicalError(item.error),
-      ...(item.log_available === undefined ? {} : { logAvailable: item.log_available }),
+      ...defined('logAvailable', item.log_available),
       allowedActions: item.allowed_actions ?? [],
       defaultAction: item.default_action,
     }));

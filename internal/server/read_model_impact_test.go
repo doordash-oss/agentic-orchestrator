@@ -21,6 +21,7 @@ import (
 
 	"github.com/doordash-oss/agentic-orchestrator/internal/feature"
 	"github.com/doordash-oss/agentic-orchestrator/internal/ports"
+	"github.com/doordash-oss/agentic-orchestrator/test/testutil/mocks"
 )
 
 // actionJSONByID returns the raw JSON projection of one action from a detail
@@ -137,16 +138,18 @@ func TestDiscardActionCarriesStructuredImpactPreview(t *testing.T) {
 	}
 	opts := baseReadHandlerOptions(store)
 	opts.Sessions = fakeSessionManager{views: []ports.SessionView{&fakeSessionView{
-		id:        "sess-implement-1",
-		featureID: child.ID,
-		label:     "Implement phase-1",
-		status:    ports.SessionRunning,
-		startedAt: time.Date(2026, 7, 28, 11, 0, 0, 0, time.UTC),
+		MockSessionView: &mocks.MockSessionView{
+			IDVal:        "sess-implement-1",
+			FeatureIDVal: child.ID,
+			LabelVal:     "Implement phase-1",
+			StatusVal:    ports.SessionRunning,
+			StartedAtVal: time.Date(2026, 7, 28, 11, 0, 0, 0, time.UTC),
+		},
 	}}}
 	handler := NewHandler(opts)
 
 	body := getJSONMap(t, handler, "/api/v1/features/"+child.ID)[entityFeature].(map[string]any)
-	discard := actionJSONByID(t, body, actionDiscard)
+	discard := actionJSONByID(t, body, string(FeatureActionDiscard))
 	if discard["enabled"] != true {
 		t.Fatalf("discard enabled = %v, want true for an active child", discard["enabled"])
 	}
@@ -170,7 +173,7 @@ func TestDiscardActionCarriesStructuredImpactPreview(t *testing.T) {
 
 	for _, raw := range body["actions"].([]any) {
 		action := raw.(map[string]any)
-		if action["id"] == actionDiscard {
+		if action["id"] == string(FeatureActionDiscard) {
 			continue
 		}
 		if _, present := action["impact_preview"]; present {
@@ -196,7 +199,7 @@ func TestDiscardImpactPreviewSessionFallback(t *testing.T) {
 	handler := NewHandler(baseReadHandlerOptions(store))
 
 	body := getJSONMap(t, handler, "/api/v1/features/"+child.ID)[entityFeature].(map[string]any)
-	discard := actionJSONByID(t, body, actionDiscard)
+	discard := actionJSONByID(t, body, string(FeatureActionDiscard))
 	preview, ok := discard["impact_preview"].(map[string]any)
 	if !ok {
 		t.Fatalf("discard action missing impact_preview: %+v", discard)
@@ -252,7 +255,7 @@ func TestParentDeleteCarriesCascadeImpactPreview(t *testing.T) {
 
 	handler := NewHandler(baseReadHandlerOptions(store))
 	body := getJSONMap(t, handler, "/api/v1/features/"+parent.ID)[entityFeature].(map[string]any)
-	del := actionJSONByID(t, body, actionDelete)
+	del := actionJSONByID(t, body, string(FeatureActionDelete))
 	if del["enabled"] != true {
 		t.Fatalf("delete enabled = %v, want cascade delete available during active work", del["enabled"])
 	}
@@ -303,7 +306,7 @@ func TestParentDeleteCarriesCascadeImpactPreview(t *testing.T) {
 	}
 
 	body = getJSONMap(t, handler, "/api/v1/features/"+parent.ID)[entityFeature].(map[string]any)
-	preview = actionJSONByID(t, body, actionDelete)["impact_preview"].(map[string]any)
+	preview = actionJSONByID(t, body, string(FeatureActionDelete))["impact_preview"].(map[string]any)
 	knowledge := impactCategoryItems(t, preview, "knowledge")
 	itemsContain(t, knowledge, "knowledge overlay", repoNameSelf)
 	itemsContain(t, knowledge, "temporary knowledge workspace", active.ID, repoNameSelf)
@@ -324,7 +327,7 @@ func TestCascadeKnowledgeImpactEmptyForMediumOnlyRelationship(t *testing.T) {
 	handler := NewHandler(baseReadHandlerOptions(store))
 
 	body := getJSONMap(t, handler, "/api/v1/features/"+parent.ID)[entityFeature].(map[string]any)
-	preview := actionJSONByID(t, body, actionDelete)["impact_preview"].(map[string]any)
+	preview := actionJSONByID(t, body, string(FeatureActionDelete))["impact_preview"].(map[string]any)
 	if knowledge := impactCategoryItems(t, preview, "knowledge"); len(knowledge) != 0 {
 		t.Fatalf("medium-only relationship knowledge = %v, want explicitly empty", knowledge)
 	}

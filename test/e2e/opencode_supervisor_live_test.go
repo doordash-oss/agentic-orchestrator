@@ -47,7 +47,7 @@ func TestOpenCodeSupervisorLive(t *testing.T) {
 			t.Setenv(key, value)
 		}
 	}
-	p := opencode.NewWithBinary(bin)
+	p := opencode.New(bin, nil)
 	p.SetModelCatalog([]llm.ModelInfo{{ID: model, DisplayName: model, ContextWindow: 200000}})
 	h := newHarnessBase(t, "opencode")
 	h.registry = llm.NewRegistry()

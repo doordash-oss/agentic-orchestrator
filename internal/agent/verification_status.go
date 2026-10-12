@@ -18,7 +18,6 @@ import (
 	"strings"
 
 	"github.com/doordash-oss/agentic-orchestrator/internal/feature"
-	"github.com/doordash-oss/agentic-orchestrator/internal/ports"
 )
 
 // Harness verification progress is its own presentation surface, distinct
@@ -31,13 +30,13 @@ const verifyingPhaseStatus = "verifying"
 // beginVerificationStatuses marks the feature as running harness
 // verification and seeds one pending entry per harness-owned command item,
 // preserving contract order.
-func beginVerificationStatuses(store ports.FeatureStore, featureID string, contract *TestingContract, onProgress ...func(string)) {
+func beginVerificationStatuses(store FeatureStore, featureID string, contract *TestingContract, onProgress ...func(string)) {
 	if store == nil || contract == nil {
 		return
 	}
 	items := make([]feature.VerificationItemStatus, 0, len(contract.Items))
 	for _, item := range contract.Items {
-		if item.Owner != TestingContractOwnerHarness || item.Run == nil || strings.TrimSpace(item.Run.Shell) == "" {
+		if item.Owner != testingContractOwnerHarness || item.Run == nil || strings.TrimSpace(item.Run.Shell) == "" {
 			continue
 		}
 		if IsTestingContractItemWaived(item) {
@@ -58,7 +57,7 @@ func beginVerificationStatuses(store ports.FeatureStore, featureID string, contr
 }
 
 // updateVerificationStatus records one command's progress state.
-func updateVerificationStatus(store ports.FeatureStore, featureID, name, state string, onProgress ...func(string)) {
+func updateVerificationStatus(store FeatureStore, featureID, name, state string, onProgress ...func(string)) {
 	if store == nil || strings.TrimSpace(name) == "" {
 		return
 	}
@@ -77,7 +76,7 @@ func updateVerificationStatus(store ports.FeatureStore, featureID, name, state s
 }
 
 // clearVerificationStatuses removes the verification substep markers.
-func clearVerificationStatuses(store ports.FeatureStore, featureID string, onProgress ...func(string)) {
+func clearVerificationStatuses(store FeatureStore, featureID string, onProgress ...func(string)) {
 	if store == nil {
 		return
 	}

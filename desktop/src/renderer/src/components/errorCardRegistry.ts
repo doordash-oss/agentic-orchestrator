@@ -77,7 +77,7 @@ export function useRegisteredErrorCard(ref: ErrorReference | undefined): boolean
  * no card is registered under the reference yet (e.g. the hosting modal has
  * not mounted), so callers can retry.
  */
-export function focusErrorCard(ref: ErrorReference): boolean {
+function focusErrorCard(ref: ErrorReference): boolean {
   const card = cards.get(errorCardKey(ref));
   if (card === undefined) return false;
   if (typeof card.scrollIntoView === 'function') {

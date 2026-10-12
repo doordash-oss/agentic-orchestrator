@@ -16,11 +16,12 @@ package agent
 
 import (
 	"fmt"
-	"regexp"
 	"strconv"
+	"strings"
 	"sync"
 
 	"github.com/doordash-oss/agentic-orchestrator/internal/llm"
+	"github.com/doordash-oss/agentic-orchestrator/internal/llm/clirun"
 )
 
 // VersionResult holds the outcome of checking a single provider's CLI version.
@@ -80,7 +81,7 @@ func checkOneProviderVersion(p llm.LLMProvider) VersionResult {
 	return r
 }
 
-// BelowMinVersion reports whether a provider's installed CLI version parsed
+// belowMinVersion reports whether a provider's installed CLI version parsed
 // cleanly and is strictly below its declared MinVersion(). It is the hard
 // version gate used at startup for providers that implement llm.VersionEnforcer.
 //
@@ -90,7 +91,7 @@ func checkOneProviderVersion(p llm.LLMProvider) VersionResult {
 // version could not be determined. The returned version is the raw VersionInfo()
 // output (empty on error) and minVer echoes the provider's MinVersion(), so
 // callers can build a precise diagnostic without re-querying the provider.
-func BelowMinVersion(p llm.LLMProvider) (below bool, version string, minVer [3]int) {
+func belowMinVersion(p llm.LLMProvider) (below bool, version string, minVer [3]int) {
 	minVer = p.MinVersion()
 	version, err := p.VersionInfo()
 	if err != nil {
@@ -106,7 +107,7 @@ func BelowMinVersion(p llm.LLMProvider) (below bool, version string, minVer [3]i
 // BelowMinVersionGuidance returns the single detail/remedy pair used by both
 // startup and readiness when a provider fails its minimum-version gate.
 func BelowMinVersionGuidance(p llm.LLMProvider) (below bool, detail, remedy string) {
-	below, version, minVer := BelowMinVersion(p)
+	below, version, minVer := belowMinVersion(p)
 	if !below {
 		return false, "", ""
 	}
@@ -116,17 +117,22 @@ func BelowMinVersionGuidance(p llm.LLMProvider) (below bool, detail, remedy stri
 		"Upgrade with: " + p.InstallHint()
 }
 
-// versionRe matches version strings like "1.2.3" or "claude 1.2.3".
-var versionRe = regexp.MustCompile(`(\d+)\.(\d+)\.(\d+)`)
-
+// parseCLIVersion delegates semver extraction to clirun.ParseVersionOutput —
+// the same leftmost `(\d+)\.(\d+)\.(\d+)` match this package previously
+// duplicated — so the two parsers accept and reject identical inputs. It keeps
+// its own error text and integer-split behavior for its callers.
 func parseCLIVersion(output string) (major, minor, patch int, err error) {
-	m := versionRe.FindStringSubmatch(output)
-	if m == nil {
+	version, parseErr := clirun.ParseVersionOutput([]byte(output))
+	if parseErr != nil {
 		return 0, 0, 0, fmt.Errorf("no version pattern found in %q", output)
 	}
-	major, _ = strconv.Atoi(m[1])
-	minor, _ = strconv.Atoi(m[2])
-	patch, _ = strconv.Atoi(m[3])
+	parts := strings.Split(version, ".")
+	if len(parts) != 3 {
+		return 0, 0, 0, fmt.Errorf("no version pattern found in %q", output)
+	}
+	major, _ = strconv.Atoi(parts[0])
+	minor, _ = strconv.Atoi(parts[1])
+	patch, _ = strconv.Atoi(parts[2])
 	return major, minor, patch, nil
 }
 

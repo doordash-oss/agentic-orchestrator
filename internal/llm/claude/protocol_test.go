@@ -108,6 +108,32 @@ func TestClaudeProtocol_InjectsContextWindowIntoAssistantUsage(t *testing.T) {
 	}
 }
 
+// TestClaudeProtocol_DefaultsContextWindowWhenCatalogHasNone pins the live
+// window fallback for models whose catalog entry carries no window: a
+// [<window>] selector suffix wins, otherwise Claude's standard 200K applies.
+func TestClaudeProtocol_DefaultsContextWindowWhenCatalogHasNone(t *testing.T) {
+	tests := []struct {
+		model string
+		want  int
+	}{
+		{"claude-haiku-5-5", 200_000},
+		{"opus[1m]", 1_000_000},
+		{"sonnet[1M]", 1_000_000},
+		{"", 200_000},
+	}
+	line := []byte(`{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"hi"}],"usage":{"input_tokens":2,"output_tokens":8,"cache_read_input_tokens":20000}}}`)
+	for _, tt := range tests {
+		p := NewProtocol(llm.ProtocolOpts{Model: tt.model})
+		msgs, err := p.ParseLine(line)
+		if err != nil {
+			t.Fatalf("ParseLine(%q): %v", tt.model, err)
+		}
+		if got := msgs[0].Assistant.Message.Usage.ContextWindow; got != tt.want {
+			t.Errorf("model %q: assistant usage contextWindow = %d, want %d", tt.model, got, tt.want)
+		}
+	}
+}
+
 func TestClaudeProtocol_UpdatesContextWindowFromResultModelUsage(t *testing.T) {
 	p := NewProtocol(llm.ProtocolOpts{Model: "opus"})
 

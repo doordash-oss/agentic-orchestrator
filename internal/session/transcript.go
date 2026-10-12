@@ -18,21 +18,15 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
-	"path/filepath"
 	"strings"
-
-	"github.com/doordash-oss/agentic-orchestrator/internal/claudeconfig"
 )
 
-// TranscriptErrorDetail reads the provider's transcript file to extract
+// transcriptErrorDetail reads the provider's transcript file to extract
 // the last error message. This catches errors like "Request too large" that
 // the CLI writes to its transcript but not to the stream-json stdout protocol.
 //
-// Best-effort: returns "" if no protocol is set or the transcript can't be found.
-func (s *Session) TranscriptErrorDetail() string {
-	if s.protocol == nil {
-		return ""
-	}
+// Best-effort: returns "" if the transcript can't be found.
+func (s *Session) transcriptErrorDetail() string {
 	path := s.protocol.TranscriptPath()
 	if path == "" {
 		return ""
@@ -166,60 +160,7 @@ func (s *Session) ErrorDetail() string {
 			return detail
 		}
 	}
-	return s.TranscriptErrorDetail()
-}
-
-// ErrorDetailFromOutput extracts the error from a CLI transcript by parsing
-// the Claude session ID from the phase output file and looking up the
-// transcript on disk. This works without a live Session object, making it
-// usable for features that failed in a previous app run.
-func ErrorDetailFromOutput(outputPath, workDir string) string {
-	sessionID := extractSessionIDFromOutput(outputPath)
-	if sessionID == "" || workDir == "" {
-		return ""
-	}
-
-	configDir, err := claudeconfig.DefaultDir()
-	if err != nil {
-		return ""
-	}
-
-	path := filepath.Join(claudeconfig.ProjectsDir(configDir, workDir), sessionID+".jsonl")
-
-	return readTranscriptError(path)
-}
-
-// extractSessionIDFromOutput reads the first line of output.txt and extracts
-// the Claude session ID from the "[init] session=..." line.
-func extractSessionIDFromOutput(outputPath string) string {
-	f, err := os.Open(outputPath)
-	if err != nil {
-		return ""
-	}
-	defer func() { _ = f.Close() }()
-
-	buf := make([]byte, 512)
-	n, _ := f.Read(buf)
-	if n == 0 {
-		return ""
-	}
-
-	line := string(buf[:n])
-	if idx := strings.IndexByte(line, '\n'); idx >= 0 {
-		line = line[:idx]
-	}
-
-	const prefix = "session="
-	start := strings.Index(line, prefix)
-	if start < 0 {
-		return ""
-	}
-	start += len(prefix)
-	end := strings.IndexByte(line[start:], ' ')
-	if end < 0 {
-		return strings.TrimSpace(line[start:])
-	}
-	return line[start : start+end]
+	return s.transcriptErrorDetail()
 }
 
 // looksLikeNormalChat returns true if the text appears to be normal assistant

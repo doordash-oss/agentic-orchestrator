@@ -36,7 +36,7 @@ func TestFeatureDetailDTOCarriesVerificationItems(t *testing.T) {
 			{Name: "Build", State: "running"},
 		},
 	}
-	h := &apiHandler{}
+	h := &apiHandler{store: feature.NewStore(t.TempDir())}
 
 	detail, err := h.featureDetailDTO(f)
 	if err != nil {

@@ -40,10 +40,10 @@ import {
   type DiscoveryRecord,
 } from './discovery';
 
-export const AGENTICO_HOME_DIR = '.agentic-orchestrator';
-export const AGENTICO_LEGACY_HOME_DIR = '.agentic-workflow';
-export const REGISTRY_SUBDIR = 'servers';
-export const REGISTRY_ENTRY_SUFFIX = '.json';
+const AGENTICO_HOME_DIR = '.agentic-orchestrator';
+const AGENTICO_LEGACY_HOME_DIR = '.agentic-workflow';
+const REGISTRY_SUBDIR = 'servers';
+const REGISTRY_ENTRY_SUFFIX = '.json';
 
 export interface RegistryDeps extends DiscoveryDeps {
   /** Lists entry basenames; null means the directory is absent (may also throw). */
@@ -65,7 +65,7 @@ export interface RegistryCandidate {
   record: DiscoveryRecord;
 }
 
-export interface RegistryRejection {
+interface RegistryRejection {
   serverKey: string;
   /** Fixed redacted reason; never content-derived. */
   reason: string;

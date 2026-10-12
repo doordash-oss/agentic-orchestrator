@@ -249,7 +249,7 @@ func TestWaitForIdleFallbackPollCoversMissedEvents(t *testing.T) {
 		t.Fatalf("waiter returned while busy: %v", err)
 	case <-time.After(50 * time.Millisecond):
 	}
-	busy.Store(false) // no NotifyChanged: the event is "missed"
+	busy.Store(false) // no notifyChanged: the event is "missed"
 	select {
 	case err := <-done:
 		if err != nil {
@@ -308,9 +308,9 @@ func TestActivityProtectedBusy(t *testing.T) {
 func TestActivityBlocksIdleInstall(t *testing.T) {
 	t.Parallel()
 	waiting := Activity{SupervisorActive: true, SupervisorWaiting: true}
-	if !waiting.Busy() || waiting.BlocksIdleInstall() || waiting.SupervisorWorking() {
+	if !waiting.Busy() || waiting.BlocksIdleInstall() || waiting.supervisorWorking() {
 		t.Fatalf("waiting supervisor %+v: busy=%v blocks=%v working=%v, want busy only",
-			waiting, waiting.Busy(), waiting.BlocksIdleInstall(), waiting.SupervisorWorking())
+			waiting, waiting.Busy(), waiting.BlocksIdleInstall(), waiting.supervisorWorking())
 	}
 	for _, activity := range []Activity{
 		{SupervisorActive: true},
@@ -376,7 +376,7 @@ func TestWaitForIdleIgnoresWaitingSupervisor(t *testing.T) {
 	case <-time.After(50 * time.Millisecond):
 	}
 	current.Store(Activity{SupervisorActive: true, SupervisorWaiting: true})
-	c.NotifyChanged()
+	c.notifyChanged()
 	select {
 	case err := <-done:
 		if err != nil {

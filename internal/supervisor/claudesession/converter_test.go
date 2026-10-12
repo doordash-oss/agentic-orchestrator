@@ -489,7 +489,7 @@ func TestRebuildConversionErrorWritesNothing(t *testing.T) {
 			recs := append(append([]supervisor.Record(nil), base...), rec)
 			for _, existing := range []bool{false, true} {
 				cfg := t.TempDir()
-				path := SessionPath(cfg, testWorkDir, testSessionID)
+				path := sessionPath(cfg, testWorkDir, testSessionID)
 				const previous = "previous content\n"
 				if existing {
 					if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
@@ -637,7 +637,7 @@ func TestRebuildDefaultConfigDirHonoursClaudeConfigDir(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Rebuild: %v", err)
 	}
-	if want := SessionPath(custom, testWorkDir, testSessionID); res.Path != want {
+	if want := sessionPath(custom, testWorkDir, testSessionID); res.Path != want {
 		t.Fatalf("Rebuild path = %q, want %q", res.Path, want)
 	}
 	if got := keys(snapshot(t, home)); len(got) != 1 {
@@ -655,7 +655,7 @@ func TestRebuildDefaultConfigDirFallsBackToHome(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Rebuild: %v", err)
 	}
-	if want := SessionPath(filepath.Join(home, ".claude"), testWorkDir, testSessionID); res.Path != want {
+	if want := sessionPath(filepath.Join(home, ".claude"), testWorkDir, testSessionID); res.Path != want {
 		t.Fatalf("Rebuild path = %q, want %q", res.Path, want)
 	}
 }
@@ -664,7 +664,7 @@ func TestRebuildReplacesExistingFileAtomically(t *testing.T) {
 	t.Parallel()
 	root := t.TempDir()
 	cfg := filepath.Join(root, "claude")
-	path := SessionPath(cfg, testWorkDir, testSessionID)
+	path := sessionPath(cfg, testWorkDir, testSessionID)
 	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
 		t.Fatal(err)
 	}

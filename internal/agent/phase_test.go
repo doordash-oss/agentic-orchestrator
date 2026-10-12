@@ -106,36 +106,6 @@ func TestAgentModuleWiresPermissionCacheIntoPhaseRunner(t *testing.T) {
 	}
 }
 
-func TestPhaseRunnerGetPhaseOutput(t *testing.T) {
-	dir := t.TempDir()
-	eventCh := make(chan any, 100)
-	sm := session.NewManager(eventCh)
-	store := feature.NewStore(dir)
-	pr := NewPhaseRunner(sm, store, dir)
-
-	f := &feature.Feature{ID: "test-feat", ActiveRun: 1, RunCount: 1}
-
-	// No output yet
-	output := pr.GetPhaseOutput(f, "research")
-	if output != "" {
-		t.Errorf("expected empty output, got %q", output)
-	}
-
-	// Write some output — run-aware path.
-	researchDir := filepath.Join(ActiveRunDir(dir, f), "research")
-	if err := os.MkdirAll(researchDir, 0o755); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(filepath.Join(researchDir, "output.txt"), []byte("research findings\n"), 0o644); err != nil {
-		t.Fatal(err)
-	}
-
-	output = pr.GetPhaseOutput(f, "research")
-	if output != "research findings" {
-		t.Errorf("expected 'research findings', got %q", output)
-	}
-}
-
 func TestNewPhaseRunner(t *testing.T) {
 	dir := t.TempDir()
 	eventCh := make(chan any, 100)
@@ -170,7 +140,7 @@ func TestPhaseRunnerRunResearchBuildPrompt(t *testing.T) {
 		},
 	}
 
-	prompt := BuildResearchFromQuestionsPrompt(f, "", "/state/feat-1/inquire/questions.md")
+	prompt := buildResearchFromQuestionsPrompt(f, "/state/feat-1/inquire/questions.md")
 
 	if prompt == "" {
 		t.Error("expected non-empty research prompt")
@@ -252,6 +222,7 @@ func TestBuildResearchPhaseSession_ClaudeProvider(t *testing.T) {
 			InitialPrompt: opts.Prompt,
 			RepoName:      opts.RepoName,
 			LogPath:       opts.LogPath,
+			Protocol:      testSessionProtocol(opts.Prompt),
 		}
 		return []string{"claude", "--model", opts.Model}, nil, sessOpts, nil
 	}
@@ -312,6 +283,7 @@ func TestBuildResearchPhaseSession_MultiRepoAdditionalDirs(t *testing.T) {
 			InitialPrompt: opts.Prompt,
 			RepoName:      opts.RepoName,
 			LogPath:       opts.LogPath,
+			Protocol:      testSessionProtocol(opts.Prompt),
 		}
 		return []string{"claude", "--model", opts.Model}, nil, sessOpts, nil
 	}
@@ -698,7 +670,7 @@ func TestRunInteractivePhase_CommandStructure(t *testing.T) {
 				copy(dirs, opts.AdditionalDirs)
 				captured = append(captured, capturedArgs{model: opts.Model, systemPrompt: opts.SystemPrompt, prompt: opts.Prompt, additionalDirs: dirs})
 				mu.Unlock()
-				return []string{"bash", script}, nil, &session.SessionOpts{PIDDir: opts.PIDDir}, nil
+				return []string{"bash", script}, nil, &session.SessionOpts{PIDDir: opts.PIDDir, Protocol: testSessionProtocol(opts.Prompt)}, nil
 			}
 
 			eventCh := make(chan any, 100)
@@ -836,7 +808,7 @@ func TestRunInteractivePhase_RemovesPriorCompletionReceiptBeforeSession(t *testi
 		StateDir: stateDir,
 		BuildSessionFn: func(opts BuildSessionOpts) ([]string, []string, *session.SessionOpts, error) {
 			buildCalled = true
-			_, receiptErr := ReadCompletionReceipt(artifactDir)
+			_, receiptErr := readCompletionReceipt(artifactDir)
 			receiptPresentAtBuild = receiptErr == nil
 			return nil, nil, nil, fmt.Errorf("test: stopping after capture")
 		},
@@ -907,7 +879,7 @@ func TestRunInteractivePhase_EmptyConfiguredModel_UsesDefaultAskingClause(t *tes
 				mu.Lock()
 				captured = append(captured, capturedArgs{model: opts.Model, systemPrompt: opts.SystemPrompt})
 				mu.Unlock()
-				return []string{"bash", script}, nil, &session.SessionOpts{PIDDir: opts.PIDDir}, nil
+				return []string{"bash", script}, nil, &session.SessionOpts{PIDDir: opts.PIDDir, Protocol: testSessionProtocol(opts.Prompt)}, nil
 			}
 
 			// Set up a registry with a mock provider that has a catalog default
@@ -1009,7 +981,7 @@ func TestRunResearch_SkillReadInstruction(t *testing.T) {
 		mu.Lock()
 		capturedOpts = append(capturedOpts, opts)
 		mu.Unlock()
-		return []string{"bash", script}, nil, &session.SessionOpts{PIDDir: opts.PIDDir}, nil
+		return []string{"bash", script}, nil, &session.SessionOpts{PIDDir: opts.PIDDir, Protocol: testSessionProtocol(opts.Prompt)}, nil
 	}
 
 	eventCh := make(chan any, 100)
@@ -1097,7 +1069,7 @@ func TestRunKnowledgeBaseForRepo_SkillReadInstruction(t *testing.T) {
 		mu.Lock()
 		capturedOpts = append(capturedOpts, opts)
 		mu.Unlock()
-		return []string{"bash", script}, nil, &session.SessionOpts{PIDDir: opts.PIDDir}, nil
+		return []string{"bash", script}, nil, &session.SessionOpts{PIDDir: opts.PIDDir, Protocol: testSessionProtocol(opts.Prompt)}, nil
 	}
 
 	eventCh := make(chan any, 100)
@@ -1194,7 +1166,7 @@ func TestRunKnowledgeBaseForRepo_RemovesPriorCompletionReceiptBeforeSession(t *t
 	pr := NewPhaseRunner(nil, nil, stateDir)
 	pr.BuildSessionFn = func(opts BuildSessionOpts) ([]string, []string, *session.SessionOpts, error) {
 		buildCalled = true
-		_, receiptErr := ReadCompletionReceipt(kbDir)
+		_, receiptErr := readCompletionReceipt(kbDir)
 		receiptPresentAtBuild = receiptErr == nil
 		return nil, nil, nil, fmt.Errorf("test: stopping after capture")
 	}
@@ -1234,7 +1206,9 @@ func TestRunKnowledgeBaseForRepo_PassesLogPathBeforeSessionStart(t *testing.T) {
 		if len(opts) > 0 && opts[0] != nil {
 			startSessionLogPath = opts[0].LogPath
 		}
-		return session.NewSession(id, featureID, phase), nil
+		started := session.NewSession(id, featureID, phase)
+		started.SetProtocolForTest(testSessionProtocol(""))
+		return started, nil
 	}
 	pr := &PhaseRunner{
 		SessionManager: sm,
@@ -1242,7 +1216,7 @@ func TestRunKnowledgeBaseForRepo_PassesLogPathBeforeSessionStart(t *testing.T) {
 		CommandRunner:  cmd,
 		BuildSessionFn: func(opts BuildSessionOpts) ([]string, []string, *session.SessionOpts, error) {
 			capturedLogPath = opts.LogPath
-			return []string{"true"}, nil, &session.SessionOpts{}, nil
+			return []string{"true"}, nil, &session.SessionOpts{Protocol: testSessionProtocol(opts.Prompt)}, nil
 		},
 	}
 
@@ -1270,13 +1244,13 @@ func TestRunKnowledgeBaseForRepo_PassesLogPathBeforeSessionStart(t *testing.T) {
 
 func newRegistryWithProviders() *llm.Registry {
 	reg := llm.NewRegistry()
-	claudeProvider := &claude.Provider{}
+	claudeProvider := claude.NewProvider("")
 	claudeProvider.SetModelCatalog([]llm.ModelInfo{
 		{ID: "opus[1M]", Category: "capable", Aliases: []string{"opus"}},
 		{ID: "sonnet[200K]", Category: "balanced", Aliases: []string{"sonnet"}},
 		{ID: "haiku[200K]", Category: "cheap", Aliases: []string{"haiku"}},
 	})
-	codexProvider := &codex.Provider{}
+	codexProvider := codex.NewProvider("")
 	codexProvider.SetModelCatalog([]llm.ModelInfo{
 		{ID: "gpt-5.4[272K]", Category: "capable", Aliases: []string{"gpt-5.4"}},
 		{ID: "gpt-5.4-mini[400K]", Category: "balanced", Aliases: []string{"gpt-5.4-mini"}},
@@ -1293,7 +1267,6 @@ type captureProvider struct {
 	contextWindow  int
 	watchdog       bool
 	boundedSandbox bool
-	sessionResume  bool
 	buildOpts      llm.CommandBuildOpts
 	protocolOpts   llm.ProtocolOpts
 }
@@ -1318,11 +1291,25 @@ func (p *captureProvider) MinVersion() [3]int { return [3]int{} }
 func (p *captureProvider) EnvVarsToExclude() []string {
 	return nil
 }
-func (p *captureProvider) ComputeCost(string, int64, int64) float64 { return 0 }
-func (p *captureProvider) ContextWindowForModel(string) int         { return p.contextWindow }
-func (p *captureProvider) EnablesPendingToolWatchdog() bool         { return p.watchdog }
-func (p *captureProvider) UsesBoundedHelperSandbox() bool           { return p.boundedSandbox }
-func (p *captureProvider) SupportsSessionResume() bool              { return p.sessionResume }
+func (p *captureProvider) ContextWindowForModel(string) int { return p.contextWindow }
+func (p *captureProvider) EnablesPendingToolWatchdog() bool { return p.watchdog }
+func (p *captureProvider) UsesBoundedHelperSandbox() bool   { return p.boundedSandbox }
+func (p *captureProvider) ModelCatalog() []llm.ModelInfo {
+	return []llm.ModelInfo{{ID: p.model}}
+}
+func (p *captureProvider) SetModelCatalog([]llm.ModelInfo) {}
+func (p *captureProvider) DiscoverModelCatalog(context.Context) ([]llm.ModelInfo, error) {
+	return nil, nil
+}
+func (p *captureProvider) DiscoverModelCatalogWithProgress(context.Context, llm.ModelDiscoveryReporter) ([]llm.ModelInfo, error) {
+	return nil, nil
+}
+func (p *captureProvider) AskingQuestionsClause() string      { return "" }
+func (p *captureProvider) SupportsNativeToollessReview() bool { return false }
+func (p *captureProvider) CheckReadiness(context.Context) llm.ProviderReadiness {
+	return llm.ProviderReadiness{Ready: true}
+}
+func (p *captureProvider) ReviewPreferenceBand(llm.ModelInfo) (int, bool) { return 0, false }
 
 type captureProtocol struct{}
 
@@ -1454,36 +1441,6 @@ func TestBuildSession_SurfacesBoundedHelperSandboxCapability(t *testing.T) {
 			}
 			if sessOpts.UsesBoundedHelperSandbox != tc.sandbox {
 				t.Errorf("UsesBoundedHelperSandbox = %v, want %v", sessOpts.UsesBoundedHelperSandbox, tc.sandbox)
-			}
-		})
-	}
-}
-
-func TestBuildSession_SurfacesSessionResumeCapability(t *testing.T) {
-	dir := t.TempDir()
-	for _, tc := range []struct {
-		name   string
-		resume bool
-	}{
-		{name: "capable provider", resume: true},
-		{name: "incapable provider", resume: false},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			provider := &captureProvider{name: "capture", model: "model-a[1M]", contextWindow: 1_000_000, sessionResume: tc.resume}
-			pr := NewPhaseRunner(session.NewManager(make(chan any, 8)), feature.NewStore(dir), dir)
-			pr.Registry = newRegistryWithCaptureProvider(provider)
-			_, _, sessOpts, err := pr.BuildSession(BuildSessionOpts{
-				Model:              "model-a[1M]",
-				Prompt:             "p",
-				SystemPrompt:       "s",
-				WorkDir:            dir,
-				CompletionProtocol: true,
-			})
-			if err != nil {
-				t.Fatalf("BuildSession() error: %v", err)
-			}
-			if sessOpts.SupportsSessionResume != tc.resume {
-				t.Errorf("SupportsSessionResume = %v, want %v", sessOpts.SupportsSessionResume, tc.resume)
 			}
 		})
 	}
@@ -1623,7 +1580,7 @@ func TestBuildSession_ClaudeSeedsProtocolContextWindow(t *testing.T) {
 	pr := NewPhaseRunner(sm, store, dir)
 
 	reg := llm.NewRegistry()
-	claudeProvider := &claude.Provider{}
+	claudeProvider := claude.NewProvider("")
 	claudeProvider.SetModelCatalog([]llm.ModelInfo{
 		{ID: "opus", ContextWindow: 1_000_000, Category: "capable"},
 	})
@@ -2070,6 +2027,7 @@ func TestBuildSession_TestOverride(t *testing.T) {
 			InitialPrompt: opts.Prompt,
 			RepoName:      opts.RepoName,
 			LogPath:       opts.LogPath,
+			Protocol:      testSessionProtocol(opts.Prompt),
 		}
 		return []string{testMockIdentifier, "--model", opts.Model}, nil, sessOpts, nil
 	}
@@ -2097,9 +2055,9 @@ func TestBuildSession_TestOverride(t *testing.T) {
 	if env != nil {
 		t.Errorf("expected nil env for test override, got %v", env)
 	}
-	// Test override path should NOT set protocol
-	if sessOpts.Protocol != nil {
-		t.Error("expected nil Protocol for test override")
+	// The test override carries a protocol so the session manager accepts it.
+	if sessOpts.Protocol == nil {
+		t.Error("expected non-nil Protocol for test override")
 	}
 	if sessOpts.RepoName != "test-repo" {
 		t.Errorf("expected RepoName 'test-repo', got %q", sessOpts.RepoName)
@@ -2121,7 +2079,6 @@ func TestNoLegacyBuilderCallersInAgentLayer(t *testing.T) {
 	}
 	files := []string{
 		"describe.go",
-		"summarize.go",
 		"research.go",
 		"phase.go",
 	}
@@ -2847,32 +2804,6 @@ func TestBuildSession_SkillsInjection_Codex_EmptySkillsDir(t *testing.T) {
 	}
 }
 
-func TestResolveImplementArtifactDir_NoPrefix(t *testing.T) {
-	stateDir := t.TempDir()
-
-	tests := []struct {
-		name    string
-		feature *feature.Feature
-		wantDir string
-	}{
-		{
-			"no roadmap phase",
-			&feature.Feature{ID: "f1", ActiveRun: 1},
-			filepath.Join(stateDir, "f1", "runs", "run-001", "implement"),
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			pr := &PhaseRunner{StateDir: stateDir}
-			got := pr.resolveImplementArtifactDir(tt.feature)
-			if got != tt.wantDir {
-				t.Errorf("resolveImplementArtifactDir() = %q, want %q", got, tt.wantDir)
-			}
-		})
-	}
-}
-
 func TestBuildSessionResolvesFeatureAutomaticReviewMode(t *testing.T) {
 	t.Parallel()
 
@@ -2995,7 +2926,7 @@ func TestSessionRuntimeConfigResolverReadsLatestFeatureModel(t *testing.T) {
 	}
 
 	pr := NewPhaseRunner(nil, store, dir)
-	resolve := pr.SessionRuntimeConfigResolver(f.ID)
+	resolve := pr.sessionRuntimeConfigResolver(f.ID)
 	if resolve == nil {
 		t.Fatal("SessionRuntimeConfigResolver() = nil")
 	}
@@ -3145,4 +3076,27 @@ func TestBuildSessionSkipPermissionsLiveOverrides(t *testing.T) {
 		t.Fatal(err)
 	}
 	check("")
+}
+
+func TestStartLoop(t *testing.T) {
+	failed := func(lastError string) *LoopResult {
+		return &LoopResult{FinalStatus: "failed", LastError: lastError}
+	}
+
+	t.Run("loop error yields failed result with the error text", func(t *testing.T) {
+		loopErr := fmt.Errorf("running implementation loop: %w", io.ErrUnexpectedEOF)
+		got := <-startLoop(func() (*LoopResult, error) {
+			return &LoopResult{FinalStatus: "all_passed"}, loopErr
+		}, failed)
+		if got.FinalStatus != "failed" || got.LastError != loopErr.Error() {
+			t.Fatalf("result = %+v, want failed with LastError %q", got, loopErr.Error())
+		}
+	})
+
+	t.Run("loop result is forwarded", func(t *testing.T) {
+		want := &LoopResult{FinalStatus: "all_passed"}
+		if got := <-startLoop(func() (*LoopResult, error) { return want, nil }, failed); got != want {
+			t.Fatalf("result = %+v, want the loop's result %+v", got, want)
+		}
+	})
 }

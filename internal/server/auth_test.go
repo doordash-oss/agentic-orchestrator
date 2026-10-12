@@ -18,12 +18,14 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"testing"
+
+	"github.com/doordash-oss/agentic-orchestrator/internal/feature"
 )
 
 func TestBearerTokenRequiredForAPIReads(t *testing.T) {
 	t.Parallel()
 
-	handler := NewHandler(HandlerOptions{AuthToken: testAuthToken, DisableHostValidation: true})
+	handler := NewHandler(HandlerOptions{AuthToken: testAuthToken, FeatureStore: feature.NewStore(t.TempDir()), DisableHostValidation: true})
 	w := httptest.NewRecorder()
 	handler.ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/api/v1/features", nil))
 	if w.Result().StatusCode != http.StatusUnauthorized {

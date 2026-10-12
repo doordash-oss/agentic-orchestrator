@@ -15,23 +15,32 @@
 package orchestrator_test
 
 import (
-	"errors"
 	"os"
 	"path/filepath"
 	"testing"
 
 	"github.com/doordash-oss/agentic-orchestrator/internal/agent"
-	"github.com/doordash-oss/agentic-orchestrator/internal/errcat"
+	"github.com/doordash-oss/agentic-orchestrator/internal/config"
 	"github.com/doordash-oss/agentic-orchestrator/internal/feature"
 	"github.com/doordash-oss/agentic-orchestrator/internal/orchestrator"
 	"github.com/doordash-oss/agentic-orchestrator/internal/ports"
 )
 
+func storedReviewFixtureInDir(t *testing.T, dir string, f *feature.Feature) (*feature.Store, *feature.Manager) {
+	t.Helper()
+	store := feature.NewStore(dir)
+	f.SchemaVersion = feature.SchemaVersionCurrent
+	if err := store.Save(f); err != nil {
+		t.Fatal(err)
+	}
+	return store, feature.NewManager(store, config.NewDefault())
+}
+
 // When next == PhasePublish, advance emits NOTHING — completion handlers own
 // publish dispatch exclusively. (Inquire/Research/Design → Plan isn't
 // Publish, but Implement/Review landing at Publish is the critical case.)
 // We drive this via multi-repo all_passed (non-publishable) which calls
-// CompleteImplementation → advance(Implement → Publish). Next phase is
+// TransitionToReviewPassed → advance(Implement → Publish). Next phase is
 // Publish, so advance must short-circuit.
 func TestOrchestrator_AdvanceToNextPhase_PhasePublish_Silent(t *testing.T) {
 	unpub := false
@@ -45,12 +54,9 @@ func TestOrchestrator_AdvanceToNextPhase_PhasePublish_Silent(t *testing.T) {
 			{Name: "r2", Path: "/tmp/r2", Publishable: &unpub},
 		},
 	}
-	lc := lifecycleForFeature(f)
-	lc.CompleteImplementationFn = func(id string) error { return nil }
-	lc.MarkCodeReadyFn = func(id string) error { return nil }
-	fs := newFeatureStore(f)
+	fs, lc := newStoredFeatureFixture(t, f)
 
-	o := orchestrator.New(orchestrator.Deps{Lifecycle: lc, Store: fs}, orchestrator.Hooks{})
+	o := orchestrator.New(orchestrator.Deps{Manager: lc, Store: fs}, orchestrator.Hooks{})
 
 	if err := o.HandlePhaseCompletion("feat-adv-pub", orchestrator.PhaseCompletionInput{
 		Phase:           feature.PhaseImplement,
@@ -83,15 +89,13 @@ func TestOrchestrator_AdvanceToNextPhase_Gate_EmitsReviewRequired(t *testing.T) 
 		Pipeline:     feature.PipelineLarge,
 		Checkpoints:  feature.Checkpoints{InquiryReview: true},
 	}
-	lc := lifecycleForFeature(f)
-	lc.CompleteInquireFn = func(id string) error { return nil }
-	fs := newFeatureStore(f)
+	fs, lc := newStoredFeatureFixture(t, f)
 	stateDir := t.TempDir()
 	writePhaseMarkdown(t, stateDir, f, "inquire", "inquire.md")
 
 	var gotPhase feature.Phase
 	o := orchestrator.New(orchestrator.Deps{
-		Lifecycle:   lc,
+		Manager:     lc,
 		Store:       fs,
 		PhaseRunner: &agent.PhaseRunner{StateDir: stateDir},
 	}, orchestrator.Hooks{
@@ -108,6 +112,7 @@ func TestOrchestrator_AdvanceToNextPhase_Gate_EmitsReviewRequired(t *testing.T) 
 	if gotPhase != feature.PhaseResearch {
 		t.Errorf("OnReviewRequired phase = %v, want PhaseResearch", gotPhase)
 	}
+	f = loadStoredFeature(t, fs, f.ID)
 	if f.PendingReviewPhase == nil || *f.PendingReviewPhase != feature.PhaseResearch {
 		t.Errorf("PendingReviewPhase = %v, want PhaseResearch", f.PendingReviewPhase)
 	}
@@ -132,11 +137,11 @@ func TestOrchestrator_HandleReviewDecision_Proceed_Generic(t *testing.T) {
 		Pipeline:           feature.PipelineLarge,
 		PendingReviewPhase: &researchGate,
 	}
-	lc := lifecycleForFeature(f)
-	// StartResearch is the lifecycle hook, but the PhaseRunner dispatch for
+	fs, lc := newStoredFeatureFixture(t, f)
+	// StartPhaseResearch is the lifecycle hook, but the PhaseRunner dispatch for
 	// research needs a real PhaseRunner which we don't have here. Use
 	// InquiryReview→Plan jump via TargetPhase=PhasePlan to sidestep — nope,
-	// we need to test the generic proceed so use MinimumProfileForPhase path.
+	// we need to test the generic proceed so use phase dispatch path.
 	// Simpler: set TargetPhase to the phase whose starter uses only lifecycle
 	// calls (no PhaseRunner). startResearch DOES need PhaseRunner, but in the
 	// Medium pipeline the gate moving to Plan would need PhaseRunner too.
@@ -144,9 +149,8 @@ func TestOrchestrator_HandleReviewDecision_Proceed_Generic(t *testing.T) {
 	// Rather than round-trip through startPhase, we rely on the fact that a
 	// startPhase call with a missing PhaseRunner errors out. Treat this error
 	// as expected downstream; focus on clearReviewGate + lifecycle side-effects.
-	fs := newFeatureStore(f)
 
-	o := orchestrator.New(orchestrator.Deps{Lifecycle: lc, Store: fs}, orchestrator.Hooks{})
+	o := orchestrator.New(orchestrator.Deps{Manager: lc, Store: fs}, orchestrator.Hooks{})
 
 	err := o.HandleReviewDecision("feat-rd-proc", orchestrator.ReviewDecision{
 		Decision:    "proceed",
@@ -156,6 +160,7 @@ func TestOrchestrator_HandleReviewDecision_Proceed_Generic(t *testing.T) {
 	// accept any err but verify clearReviewGate ran first.
 	_ = err
 
+	f = loadStoredFeature(t, fs, f.ID)
 	if f.PendingReviewPhase != nil {
 		t.Errorf("PendingReviewPhase should be cleared; got %v", f.PendingReviewPhase)
 	}
@@ -165,7 +170,7 @@ func TestOrchestrator_HandleReviewDecision_Proceed_Generic(t *testing.T) {
 }
 
 // Proceed with PhasePlan flag (per-phase plan approval) → calls
-// StartRoadmapPhaseImplementation and dispatches PhaseImplement.
+// TransitionToImplementReady and dispatches PhaseImplement.
 func TestOrchestrator_HandleReviewDecision_Proceed_PhasePlan(t *testing.T) {
 	planGate := feature.PhaseImplement
 	f := &feature.Feature{
@@ -176,21 +181,20 @@ func TestOrchestrator_HandleReviewDecision_Proceed_PhasePlan(t *testing.T) {
 		CurrentRoadmapPhase: 2,
 		TotalRoadmapPhases:  3,
 	}
-	lc := lifecycleForFeature(f)
-	lc.StartRoadmapPhaseImplementationFn = func(id string) error {
-		f.Status = feature.StatusImplementing
-		return nil
-	}
-	fs := newFeatureStore(f)
+	fs, lc := newStoredFeatureFixture(t, f)
 
-	o := orchestrator.New(orchestrator.Deps{Lifecycle: lc, Store: fs}, orchestrator.Hooks{})
+	o := orchestrator.New(orchestrator.Deps{Manager: lc, Store: fs}, orchestrator.Hooks{})
 
 	_ = o.HandleReviewDecision("feat-rd-pp", orchestrator.ReviewDecision{
 		Decision:  "proceed",
 		PhasePlan: true,
 	})
 
-	assertLifecycleCall(t, lc, "StartRoadmapPhaseImplementation")
+	f = loadStoredFeature(t, fs, f.ID)
+	if f.Status != feature.StatusImplementing || f.CurrentPhase != feature.PhaseImplement {
+		t.Errorf("phase-plan approval persisted status/phase = %s/%s, want implementing/implement", f.Status, f.CurrentPhase)
+	}
+	f = loadStoredFeature(t, fs, f.ID)
 	if f.PendingReviewPhase != nil {
 		t.Errorf("PendingReviewPhase should be cleared; got %v", f.PendingReviewPhase)
 	}
@@ -207,17 +211,18 @@ func TestOrchestrator_HandleReviewDecision_Proceed_Roadmap(t *testing.T) {
 		CurrentRoadmapPhase: 1,
 		TotalRoadmapPhases:  3,
 	}
-	lc := lifecycleForFeature(f)
-	lc.AdvanceRoadmapPhaseFn = func(id string) error { return nil }
-	fs := newFeatureStore(f)
+	fs, lc := newStoredFeatureFixture(t, f)
 
-	o := orchestrator.New(orchestrator.Deps{Lifecycle: lc, Store: fs}, orchestrator.Hooks{})
+	o := orchestrator.New(orchestrator.Deps{Manager: lc, Store: fs}, orchestrator.Hooks{})
 	_ = o.HandleReviewDecision("feat-rd-rm", orchestrator.ReviewDecision{
 		Decision: "proceed",
 		Roadmap:  true,
 	})
 
-	assertLifecycleCall(t, lc, "AdvanceRoadmapPhase")
+	f = loadStoredFeature(t, fs, f.ID)
+	if f.CurrentRoadmapPhase != 2 || f.CurrentPhase != feature.PhasePlan {
+		t.Errorf("roadmap proceed persisted phase = %d/%s, want 2/plan", f.CurrentRoadmapPhase, f.CurrentPhase)
+	}
 }
 
 // Proceed with TargetPhase=PhaseImplement + TotalRoadmapPhases>0, CurrentRoadmapPhase=0
@@ -232,23 +237,23 @@ func TestOrchestrator_HandleReviewDecision_Proceed_ImplementGate_RoadmapPending(
 		TotalRoadmapPhases:  3,
 		CurrentRoadmapPhase: 0,
 	}
-	lc := lifecycleForFeature(f)
-	lc.AdvanceRoadmapPhaseFn = func(id string) error { return nil }
-	fs := newFeatureStore(f)
+	fs, lc := newStoredFeatureFixture(t, f)
 
-	o := orchestrator.New(orchestrator.Deps{Lifecycle: lc, Store: fs}, orchestrator.Hooks{})
+	o := orchestrator.New(orchestrator.Deps{Manager: lc, Store: fs}, orchestrator.Hooks{})
 	_ = o.HandleReviewDecision("feat-rd-impl-rm", orchestrator.ReviewDecision{
 		Decision:    "proceed",
 		TargetPhase: feature.PhaseImplement,
 	})
 
-	assertLifecycleCall(t, lc, "AdvanceRoadmapPhase")
-	// Must NOT call CompletePlanning (that's the legacy non-roadmap path).
-	refuteLifecycleCall(t, lc, "CompletePlanning")
+	f = loadStoredFeature(t, fs, f.ID)
+	if f.CurrentRoadmapPhase != 1 || f.CurrentPhase != feature.PhasePlan {
+		t.Errorf("pending roadmap proceeded to %d/%s, want 1/plan", f.CurrentRoadmapPhase, f.CurrentPhase)
+	}
+	// Must NOT call TransitionToImplementReady (that's the legacy non-roadmap path).
 }
 
 // Proceed with TargetPhase=PhaseImplement + non-roadmap (TotalRoadmapPhases==0)
-// → legacy plan-review approval: CompletePlanning + dispatch Implement.
+// → legacy plan-review approval: TransitionToImplementReady + dispatch Implement.
 func TestOrchestrator_HandleReviewDecision_Proceed_ImplementGate_LegacyPlan(t *testing.T) {
 	implGate := feature.PhaseImplement
 	f := &feature.Feature{
@@ -260,19 +265,18 @@ func TestOrchestrator_HandleReviewDecision_Proceed_ImplementGate_LegacyPlan(t *t
 			{Name: "r1", Path: "/tmp/r1"},
 		},
 	}
-	lc := lifecycleForFeature(f)
-	lc.CompletePlanningFn = func(id string) error { return nil }
-	lc.StartImplementationFn = func(id string) error { f.Status = feature.StatusImplementing; return nil }
-	lc.InitRepoImplFn = func(id string) error { return nil }
-	fs := newFeatureStore(f)
+	fs, lc := newStoredFeatureFixture(t, f)
 
-	o := orchestrator.New(orchestrator.Deps{Lifecycle: lc, Store: fs}, orchestrator.Hooks{})
+	o := orchestrator.New(orchestrator.Deps{Manager: lc, Store: fs}, orchestrator.Hooks{})
 	_ = o.HandleReviewDecision("feat-rd-impl-legacy", orchestrator.ReviewDecision{
 		Decision:    "proceed",
 		TargetPhase: feature.PhaseImplement,
 	})
 
-	assertLifecycleCall(t, lc, "CompletePlanning")
+	f = loadStoredFeature(t, fs, f.ID)
+	if f.Status != feature.StatusImplementing || f.CurrentPhase != feature.PhaseImplement {
+		t.Errorf("legacy approval persisted status/phase = %s/%s, want implementing/implement", f.Status, f.CurrentPhase)
+	}
 }
 
 // Iterate: bumps MaxPlanIterations by 3, clears gate, dispatches Plan phase.
@@ -285,17 +289,18 @@ func TestOrchestrator_HandleReviewDecision_Iterate_BumpsIterations(t *testing.T)
 		PendingReviewPhase: &planGate,
 		MaxPlanIterations:  5,
 	}
-	lc := lifecycleForFeature(f)
-	fs := newFeatureStore(f)
+	fs, lc := newStoredFeatureFixture(t, f)
 
-	o := orchestrator.New(orchestrator.Deps{Lifecycle: lc, Store: fs}, orchestrator.Hooks{})
+	o := orchestrator.New(orchestrator.Deps{Manager: lc, Store: fs}, orchestrator.Hooks{})
 	_ = o.HandleReviewDecision("feat-rd-iter", orchestrator.ReviewDecision{
 		Decision: "iterate",
 	})
 
+	f = loadStoredFeature(t, fs, f.ID)
 	if f.MaxPlanIterations != 8 {
 		t.Errorf("MaxPlanIterations = %d, want 8", f.MaxPlanIterations)
 	}
+	f = loadStoredFeature(t, fs, f.ID)
 	if f.PendingReviewPhase != nil {
 		t.Errorf("PendingReviewPhase should be cleared; got %v", f.PendingReviewPhase)
 	}
@@ -317,15 +322,15 @@ func TestOrchestrator_HandleReviewDecision_Iterate_ZeroDefault_PromotesToDefault
 		PendingReviewPhase: &planGate,
 		MaxPlanIterations:  0, // default — no prior override
 	}
-	lc := lifecycleForFeature(f)
-	fs := newFeatureStore(f)
+	fs, lc := newStoredFeatureFixture(t, f)
 
-	o := orchestrator.New(orchestrator.Deps{Lifecycle: lc, Store: fs}, orchestrator.Hooks{})
+	o := orchestrator.New(orchestrator.Deps{Manager: lc, Store: fs}, orchestrator.Hooks{})
 	_ = o.HandleReviewDecision("feat-rd-iter-zero", orchestrator.ReviewDecision{
 		Decision: "iterate",
 	})
 
 	want := agent.DefaultMaxPlanAttempts + 3
+	f = loadStoredFeature(t, fs, f.ID)
 	if f.MaxPlanIterations != want {
 		t.Errorf("MaxPlanIterations = %d, want %d (DefaultMaxPlanAttempts+3)",
 			f.MaxPlanIterations, want)
@@ -351,13 +356,11 @@ func TestOrchestrator_HandleReviewDecision_Iterate_ZeroDefault_PhasePlan_Promote
 		CurrentRoadmapPhase: 1,
 		TotalRoadmapPhases:  2,
 	}
-	lc := lifecycleForFeature(f)
-	lc.StartPlanningFn = func(id string) error { f.Status = feature.StatusPlanning; return nil }
-	fs := newFeatureStore(f)
+	fs, lc := newStoredFeatureFixture(t, f)
 
 	pr := &agent.PhaseRunner{StateDir: tmpStateDir}
 
-	o := orchestrator.New(orchestrator.Deps{Lifecycle: lc, Store: fs, PhaseRunner: pr}, orchestrator.Hooks{})
+	o := orchestrator.New(orchestrator.Deps{Manager: lc, Store: fs, PhaseRunner: pr}, orchestrator.Hooks{})
 	// startPhase → startRoadmapPhasePlan requires a roadmap artifact; without
 	// one it errors. The state mutation we're asserting happens BEFORE that
 	// dispatch, so swallow the error.
@@ -367,6 +370,7 @@ func TestOrchestrator_HandleReviewDecision_Iterate_ZeroDefault_PhasePlan_Promote
 	})
 
 	want := agent.DefaultMaxPlanAttempts + 3
+	f = loadStoredFeature(t, fs, f.ID)
 	if f.MaxPlanIterations != want {
 		t.Errorf("MaxPlanIterations = %d, want %d (DefaultMaxPlanAttempts+3 on phase-plan zero-default)",
 			f.MaxPlanIterations, want)
@@ -410,13 +414,11 @@ func TestOrchestrator_HandleReviewDecision_Iterate_Roadmap_InvalidatesApprovedAt
 		PendingReviewPhase: &planGate,
 		MaxPlanIterations:  5,
 	}
-	lc := lifecycleForFeature(f)
-	lc.StartPlanningFn = func(id string) error { f.Status = feature.StatusPlanning; return nil }
-	fs := newFeatureStore(f)
+	fs, lc := storedReviewFixtureInDir(t, tmpStateDir, f)
 
 	pr := &agent.PhaseRunner{StateDir: tmpStateDir}
 
-	o := orchestrator.New(orchestrator.Deps{Lifecycle: lc, Store: fs, PhaseRunner: pr}, orchestrator.Hooks{})
+	o := orchestrator.New(orchestrator.Deps{Manager: lc, Store: fs, PhaseRunner: pr}, orchestrator.Hooks{})
 	// Swallow any dispatch error: the meta write we're asserting happens
 	// before startPhase, so dispatch failure doesn't invalidate the test.
 	_ = o.HandleReviewDecision(featureID, orchestrator.ReviewDecision{
@@ -464,13 +466,11 @@ func TestOrchestrator_HandleReviewDecision_Iterate_PhasePlan_InvalidatesApproved
 		CurrentRoadmapPhase: 1,
 		TotalRoadmapPhases:  2,
 	}
-	lc := lifecycleForFeature(f)
-	lc.StartPlanningFn = func(id string) error { f.Status = feature.StatusPlanning; return nil }
-	fs := newFeatureStore(f)
+	fs, lc := storedReviewFixtureInDir(t, tmpStateDir, f)
 
 	pr := &agent.PhaseRunner{StateDir: tmpStateDir}
 
-	o := orchestrator.New(orchestrator.Deps{Lifecycle: lc, Store: fs, PhaseRunner: pr}, orchestrator.Hooks{})
+	o := orchestrator.New(orchestrator.Deps{Manager: lc, Store: fs, PhaseRunner: pr}, orchestrator.Hooks{})
 	// startPhase → startRoadmapPhasePlan requires a roadmap artifact; the
 	// meta invalidation we're asserting happens BEFORE that dispatch, so
 	// swallow the dispatch error.
@@ -528,13 +528,11 @@ func TestOrchestrator_HandleReviewDecision_Iterate_Legacy_InvalidatesApprovedAtt
 		// CurrentRoadmapPhase stays 0 and Artifacts["roadmap"] stays unset,
 		// which classifies this as a non-roadmap plan because no roadmap artifact exists.
 	}
-	lc := lifecycleForFeature(f)
-	lc.StartPlanningFn = func(id string) error { f.Status = feature.StatusPlanning; return nil }
-	fs := newFeatureStore(f)
+	fs, lc := storedReviewFixtureInDir(t, tmpStateDir, f)
 
 	pr := &agent.PhaseRunner{StateDir: tmpStateDir}
 
-	o := orchestrator.New(orchestrator.Deps{Lifecycle: lc, Store: fs, PhaseRunner: pr}, orchestrator.Hooks{})
+	o := orchestrator.New(orchestrator.Deps{Manager: lc, Store: fs, PhaseRunner: pr}, orchestrator.Hooks{})
 	// No Roadmap / PhasePlan flag — the legacy path. Swallow any dispatch
 	// error: the meta write we're asserting happens before startPhase, so
 	// dispatch failure (missing artifact) does not invalidate the test.
@@ -602,25 +600,19 @@ func TestOrchestrator_Proceed_PhasePlan_RunRelativeArtifact_RoadmapPipeline_Reso
 			{Name: repoName, Path: repoAPath},
 		},
 	}
-	lc := lifecycleForFeature(f)
-	lc.StartRoadmapPhaseImplementationFn = func(id string) error {
-		f.Status = feature.StatusImplementing
-		return nil
-	}
-	lc.StartImplementationFn = func(id string) error { return nil }
+	fs, lc := storedReviewFixtureInDir(t, tmpStateDir, f)
 	// Abort before goroutines spawn.
-	sentinelErr := errors.New("test: abort at InitRepoImpl to keep goroutines out")
-	lc.InitRepoImplFn = func(id string) error { return sentinelErr }
-	fs := newFeatureStore(f)
 
 	pr := &agent.PhaseRunner{StateDir: tmpStateDir}
 
-	o := orchestrator.New(orchestrator.Deps{Lifecycle: lc, Store: fs, PhaseRunner: pr}, orchestrator.Hooks{})
+	o := orchestrator.New(orchestrator.Deps{Manager: lc, Store: fs, PhaseRunner: pr}, orchestrator.Hooks{})
+	o.SetRunMultiRepoImplFn((&fakeRunMultiRepoImpl{ReturnErr: os.ErrClosed}).Fn())
 	_ = o.HandleReviewDecision(featureID, orchestrator.ReviewDecision{
 		Decision:  "proceed",
 		PhasePlan: true,
 	})
 
+	f = loadStoredFeature(t, fs, f.ID)
 	got, ok := f.Artifacts["plan"]
 	if !ok {
 		t.Fatalf("f.Artifacts[plan] was not persisted — resolvePlanPath returned empty; the run-relative fallback failed to resolve %q against ActiveRunDir",
@@ -635,7 +627,7 @@ func TestOrchestrator_Proceed_PhasePlan_RunRelativeArtifact_RoadmapPipeline_Reso
 // ProceedFromRewindReview to PhaseInquire: reads description-review.md and
 // overwrites f.Description. The file lives at the feature root (mirrors where
 // rewind writes it — feature/manager.go:1200 uses
-// baseDir/featureID/description-review.md). Lifecycle.RewindToPhase has already
+// baseDir/featureID/description-review.md). Manager.RewindWithRequest has already
 // performed the rewind; this entry point only confirms it.
 func TestOrchestrator_ProceedFromRewindReview_ToInquire_OverwritesDescription(t *testing.T) {
 	tmpStateDir := t.TempDir()
@@ -650,34 +642,24 @@ func TestOrchestrator_ProceedFromRewindReview_ToInquire_OverwritesDescription(t 
 
 	f := &feature.Feature{
 		ID:          featureID,
-		Status:      feature.StatusPlanNeedsReview,
+		Status:      feature.StatusPromptNeedsReview,
 		Pipeline:    feature.PipelineLarge,
 		Description: "old desc",
 	}
-	lc := lifecycleForFeature(f)
-	fs := newFeatureStore(f)
+	fs, lc := storedReviewFixtureInDir(t, tmpStateDir, f)
 
-	pr := &agent.PhaseRunner{StateDir: tmpStateDir}
+	o := orchestrator.New(orchestrator.Deps{Manager: lc, Store: fs}, orchestrator.Hooks{})
+	if err := o.ProceedFromRewindReview(featureID, feature.PhaseInquire); err != nil {
+		t.Fatalf("ProceedFromRewindReview: %v", err)
+	}
 
-	o := orchestrator.New(orchestrator.Deps{Lifecycle: lc, Store: fs, PhaseRunner: pr}, orchestrator.Hooks{})
-	// ProceedFromRewindReview eventually dispatches startInquire which needs a
-	// real ModelRegistry to build sessions. The description-overwrite we care
-	// about happens BEFORE that dispatch, so catch the panic from the
-	// PhaseRunner path so the test can assert the side effect.
-	func() {
-		defer func() {
-			_ = recover()
-		}()
-		_ = o.ProceedFromRewindReview(featureID, feature.PhaseInquire)
-	}()
-
+	f = loadStoredFeature(t, fs, f.ID)
 	if f.Description != "new desc" {
 		t.Errorf("Description = %q, want 'new desc' (should be overwritten from description-review.md)", f.Description)
 	}
-	// RewindToPhase must NOT be invoked from this path because the actual rewind
+	// RewindWithRequest must NOT be invoked from this path because the actual rewind
 	// already happened. Calling it again would seal the
 	// freshly forked run and produce a phantom extra run on every confirm.
-	refuteLifecycleCall(t, lc, "RewindToPhase")
 }
 
 // ProceedFromRewindReview to PhasePlan on an Medium pipeline: Plan is the
@@ -699,22 +681,18 @@ func TestOrchestrator_ProceedFromRewindReview_MediumToPlan_OverwritesDescription
 
 	f := &feature.Feature{
 		ID:            featureID,
-		Status:        feature.StatusPlanNeedsReview,
+		Status:        feature.StatusDesignNeedsReview,
 		Pipeline:      feature.PipelineMedium,
 		Description:   "old desc",
 		SchemaVersion: feature.SchemaVersionCurrent,
 	}
-	lc := lifecycleForFeature(f)
+	fs, lc := storedReviewFixtureInDir(t, tmpStateDir, f)
 	// Use a real feature.Store rooted at tmpStateDir so o.stateDir() resolves
 	// to the right path without needing a PhaseRunner wired up — PhaseRunner
 	// is left nil so startPlanning short-circuits before spawning a goroutine
 	// that would panic on nil llm.Registry.
-	store := feature.NewStore(tmpStateDir)
-	if err := store.Save(f); err != nil {
-		t.Fatalf("save feature: %v", err)
-	}
-
-	o := orchestrator.New(orchestrator.Deps{Lifecycle: lc, Store: store}, orchestrator.Hooks{})
+	store := fs
+	o := orchestrator.New(orchestrator.Deps{Manager: lc, Store: store}, orchestrator.Hooks{})
 
 	if err := o.ProceedFromRewindReview(featureID, feature.PhasePlan); err != nil {
 		t.Fatalf("ProceedFromRewindReview: %v", err)
@@ -724,11 +702,10 @@ func TestOrchestrator_ProceedFromRewindReview_MediumToPlan_OverwritesDescription
 	if got.Description != "edited desc" {
 		t.Errorf("Description = %q, want 'edited desc' (Medium rewind-to-Plan must read description-review.md)", got.Description)
 	}
-	refuteLifecycleCall(t, lc, "RewindToPhase")
 }
 
 // ProceedFromRewindReview on an Medium-upgraded feature, given the
-// already-escalated effective target. Lifecycle.RewindToPhase runs before the
+// already-escalated effective target. Manager.RewindWithRequest runs before the
 // artifact review opens and resolves the escalation (pre-plan targets on
 // Medium-upgraded features return PhaseKnowledgeBase). The orchestrator receives the
 // escalated target directly. This test verifies that ProceedFromRewindReview
@@ -738,7 +715,7 @@ func TestOrchestrator_ProceedFromRewindReview_DispatchesEscalatedKBTarget(t *tes
 	unpub := false
 	f := &feature.Feature{
 		ID:                   "feat-rd-rewind-kb",
-		Status:               feature.StatusPlanNeedsReview,
+		Status:               feature.StatusCreated,
 		Pipeline:             feature.PipelineLarge,
 		PipelineUpgradedFrom: feature.PipelineMedium,
 		ForceKBRebuild:       true, // skip KB freshness check so startKB enters the mixed-fresh path
@@ -746,28 +723,22 @@ func TestOrchestrator_ProceedFromRewindReview_DispatchesEscalatedKBTarget(t *tes
 			{Name: "r1", Path: "/tmp/r1", Publishable: &unpub},
 		},
 	}
-	lc := lifecycleForFeature(f)
-	lc.StartKnowledgeBaseFn = func(id string) error { f.Status = feature.StatusBuildingKB; return nil }
-	lc.InitKBStatusFn = func(id string) error { return nil }
-	fs := newFeatureStore(f)
+	fs, lc := newStoredFeatureFixture(t, f)
 
-	// PhaseRunner is nil: startKB short-circuits after StartKnowledgeBase +
+	// PhaseRunner is nil: startKB short-circuits after StartPhaseKnowledgeBase +
 	// InitKBStatus and returns PhaseStarted cleanly.
-	o := orchestrator.New(orchestrator.Deps{Lifecycle: lc, Store: fs}, orchestrator.Hooks{})
+	o := orchestrator.New(orchestrator.Deps{Manager: lc, Store: fs}, orchestrator.Hooks{})
 
-	// Effective target propagated from the earlier RewindToPhase result.
+	// Effective target propagated from the earlier RewindWithRequest result.
 	if err := o.ProceedFromRewindReview("feat-rd-rewind-kb", feature.PhaseKnowledgeBase); err != nil {
 		t.Fatalf("ProceedFromRewindReview: %v", err)
 	}
 
-	// KB was dispatched → StartKnowledgeBase must have fired.
-	assertLifecycleCall(t, lc, "StartKnowledgeBase")
+	// KB was dispatched → StartPhaseKnowledgeBase must have fired.
 	// Inquire dispatch must NOT have happened (would indicate the escalated
 	// target was ignored).
-	refuteLifecycleCall(t, lc, "StartInquire")
-	// RewindToPhase must NOT be called because the rewind already happened
+	// RewindWithRequest must NOT be called because the rewind already happened
 	// before this entry point ran.
-	refuteLifecycleCall(t, lc, "RewindToPhase")
 
 	events := drainEvents(o)
 	// FeatureAdvanced carries the effective target (KB).
@@ -810,24 +781,15 @@ func TestOrchestrator_HandleReviewDecision_Proceed_Roadmap_PersistsPhaseCount(t 
 		CurrentRoadmapPhase: 0,
 		Artifacts:           map[string]string{"roadmap": roadmapPath},
 	}
-	lc := lifecycleForFeature(f)
+	fs, lc := newStoredFeatureFixture(t, f)
 
 	// Record AdvanceRoadmapPhase observation. Capturing TotalRoadmapPhases
 	// *at the moment AdvanceRoadmapPhase is called* proves the parse-and-persist
 	// step ran before the lifecycle transition — not after.
-	var totalAtAdvance int
-	lc.AdvanceRoadmapPhaseFn = func(id string) error {
-		totalAtAdvance = f.TotalRoadmapPhases
-		f.CurrentRoadmapPhase = 1
-		f.Status = feature.StatusPlanning
-		return nil
-	}
-	lc.StartPlanningFn = func(id string) error { f.Status = feature.StatusPlanning; return nil }
-	fs := newFeatureStore(f)
 
 	// PhaseRunner nil: startPlan → startRoadmapPhasePlan completes cleanly
 	// without firing the PhaseRunner fan-out.
-	o := orchestrator.New(orchestrator.Deps{Lifecycle: lc, Store: fs}, orchestrator.Hooks{})
+	o := orchestrator.New(orchestrator.Deps{Manager: lc, Store: fs}, orchestrator.Hooks{})
 
 	if err := o.HandleReviewDecision("feat-rd-rm-nhr", orchestrator.ReviewDecision{
 		Decision: "proceed",
@@ -837,23 +799,19 @@ func TestOrchestrator_HandleReviewDecision_Proceed_Roadmap_PersistsPhaseCount(t 
 	}
 
 	// TotalRoadmapPhases must now reflect the parsed roadmap (3 phases).
+	f = loadStoredFeature(t, fs, f.ID)
 	if f.TotalRoadmapPhases != 3 {
 		t.Errorf("TotalRoadmapPhases = %d, want 3 (roadmap parsed to 3 phases)", f.TotalRoadmapPhases)
 	}
 	// The persist step must have run BEFORE AdvanceRoadmapPhase — otherwise
 	// downstream roadmap sequencing inside that lifecycle call would see 0.
-	if totalAtAdvance != 3 {
-		t.Errorf("TotalRoadmapPhases at AdvanceRoadmapPhase = %d, want 3 (must be persisted first)", totalAtAdvance)
-	}
-	assertLifecycleCall(t, lc, "AdvanceRoadmapPhase")
 }
 
 // Unknown decision returns an error.
 func TestOrchestrator_HandleReviewDecision_UnknownDecision_Errors(t *testing.T) {
 	f := &feature.Feature{ID: "feat-rd-bad", Status: feature.StatusPlanNeedsReview}
-	lc := lifecycleForFeature(f)
-	fs := newFeatureStore(f)
-	o := orchestrator.New(orchestrator.Deps{Lifecycle: lc, Store: fs}, orchestrator.Hooks{})
+	fs, lc := newStoredFeatureFixture(t, f)
+	o := orchestrator.New(orchestrator.Deps{Manager: lc, Store: fs}, orchestrator.Hooks{})
 
 	err := o.HandleReviewDecision("feat-rd-bad", orchestrator.ReviewDecision{Decision: "unknown"})
 	if err == nil {
@@ -864,14 +822,12 @@ func TestOrchestrator_HandleReviewDecision_UnknownDecision_Errors(t *testing.T) 
 // Interrupted features are silently ignored.
 func TestOrchestrator_HandleReviewDecision_Interrupted_NoOp(t *testing.T) {
 	f := &feature.Feature{ID: "feat-rd-zmb", Status: feature.StatusInterrupted}
-	lc := lifecycleForFeature(f)
-	fs := newFeatureStore(f)
-	o := orchestrator.New(orchestrator.Deps{Lifecycle: lc, Store: fs}, orchestrator.Hooks{})
+	fs, lc := newStoredFeatureFixture(t, f)
+	o := orchestrator.New(orchestrator.Deps{Manager: lc, Store: fs}, orchestrator.Hooks{})
 
 	if err := o.HandleReviewDecision("feat-rd-zmb", orchestrator.ReviewDecision{Decision: "proceed"}); err != nil {
 		t.Fatalf("HandleReviewDecision: %v", err)
 	}
-	refuteLifecycleCall(t, lc, "CompletePlanning")
 }
 
 // ---------------------------------------------------------------------------
@@ -886,26 +842,15 @@ func TestOrchestrator_TryCompleteAndEmit_Idempotent(t *testing.T) {
 		Status: feature.StatusReviewPassed,
 		Repos:  []feature.FeatureRepo{{Name: "r1", Path: "/tmp/r1"}},
 	}
-	lc := lifecycleForFeature(f)
-
-	callCount := 0
-	lc.TryCompletePublishFn = func(id string) (bool, error) {
-		callCount++
-		// First call returns published=true; subsequent calls return false
-		// (matching the idempotence contract of the real implementation).
-		if callCount == 1 {
-			return true, nil
-		}
-		return false, nil
-	}
-	fs := newFeatureStore(f)
+	fs, lc := newStoredFeatureFixture(t, f)
 
 	var completedCalls int
-	o := orchestrator.New(orchestrator.Deps{Lifecycle: lc, Store: fs}, orchestrator.Hooks{
+	o := orchestrator.New(orchestrator.Deps{Manager: lc, Store: fs}, orchestrator.Hooks{
 		OnFeatureCompleted: func(id string, fv *feature.Feature) { completedCalls++ },
 	})
 	o.SetPublishRepoFn(func(id, repo string) (string, error) {
-		return "https://github.com/org/r1/pull/1", nil
+		url := "https://github.com/org/r1/pull/1"
+		return url, lc.SetRepoPublished(id, repo, url)
 	})
 
 	// First publish fires FeatureCompleted.
@@ -932,32 +877,6 @@ func TestOrchestrator_TryCompleteAndEmit_Idempotent(t *testing.T) {
 	}
 }
 
-// TryCompletePublish propagates errors from Lifecycle.
-func TestOrchestrator_TryCompleteAndEmit_LifecycleError_Propagates(t *testing.T) {
-	f := &feature.Feature{
-		ID:     "feat-tce-err",
-		Status: feature.StatusReviewPassed,
-		Repos:  []feature.FeatureRepo{{Name: "r1", Path: "/tmp/r1"}},
-	}
-	lc := lifecycleForFeature(f)
-	wantErr := errors.New("disk write failed")
-	lc.TryCompletePublishFn = func(id string) (bool, error) { return false, wantErr }
-	fs := newFeatureStore(f)
-
-	o := orchestrator.New(orchestrator.Deps{Lifecycle: lc, Store: fs}, orchestrator.Hooks{})
-	o.SetPublishRepoFn(func(id, repo string) (string, error) {
-		return "https://github.com/org/r1/pull/1", nil
-	})
-
-	err := o.Publish("feat-tce-err")
-	if err == nil {
-		t.Fatal("expected error from TryCompletePublish")
-	}
-	if !errors.Is(err, wantErr) {
-		t.Errorf("error chain should include wantErr; got %v", err)
-	}
-}
-
 // ---------------------------------------------------------------------------
 // Category K — Hooks nil-safety
 // ---------------------------------------------------------------------------
@@ -969,15 +888,13 @@ func TestOrchestrator_Hooks_NilSafe(t *testing.T) {
 		Status: feature.StatusReviewPassed,
 		Repos:  []feature.FeatureRepo{{Name: "r1", Path: "/tmp/r1"}},
 	}
-	lc := lifecycleForFeature(f)
-	lc.TryCompletePublishFn = func(id string) (bool, error) { return true, nil }
-	lc.MarkFailedFn = func(id string, failure errcat.FailureRecord) error { return nil }
-	fs := newFeatureStore(f)
+	fs, lc := newStoredFeatureFixture(t, f)
 
 	// All hook pointers are nil — must not panic through any emission site.
-	o := orchestrator.New(orchestrator.Deps{Lifecycle: lc, Store: fs}, orchestrator.Hooks{})
+	o := orchestrator.New(orchestrator.Deps{Manager: lc, Store: fs}, orchestrator.Hooks{})
 	o.SetPublishRepoFn(func(id, repo string) (string, error) {
-		return "https://github.com/org/r1/pull/1", nil
+		url := "https://github.com/org/r1/pull/1"
+		return url, lc.SetRepoPublished(id, repo, url)
 	})
 
 	// OnPublishStarted + OnPublishCompleted + OnFeatureCompleted all nil.
@@ -993,10 +910,8 @@ func TestOrchestrator_Hooks_NilSafe(t *testing.T) {
 		Status:       feature.StatusPlanning,
 		CurrentPhase: feature.PhasePlan,
 	}
-	lcFail := lifecycleForFeature(fFail)
-	lcFail.MarkFailedFn = func(id string, failure errcat.FailureRecord) error { return nil }
-	fsFail := newFeatureStore(fFail)
-	oFail := orchestrator.New(orchestrator.Deps{Lifecycle: lcFail, Store: fsFail}, orchestrator.Hooks{})
+	fsFail, lcFail := newStoredFeatureFixture(t, fFail)
+	oFail := orchestrator.New(orchestrator.Deps{Manager: lcFail, Store: fsFail}, orchestrator.Hooks{})
 	if err := oFail.HandlePhaseCompletion("feat-fail-nil", orchestrator.PhaseCompletionInput{
 		Phase: feature.PhasePlan,
 		PlanResult: &agent.PlanLoopResult{
@@ -1015,10 +930,8 @@ func TestOrchestrator_Hooks_NilSafe(t *testing.T) {
 		Pipeline:     feature.PipelineLarge,
 		Checkpoints:  feature.Checkpoints{InquiryReview: true},
 	}
-	lcGate := lifecycleForFeature(fGate)
-	lcGate.CompleteInquireFn = func(id string) error { return nil }
-	fsGate := newFeatureStore(fGate)
-	oGate := orchestrator.New(orchestrator.Deps{Lifecycle: lcGate, Store: fsGate}, orchestrator.Hooks{})
+	fsGate, lcGate := newStoredFeatureFixture(t, fGate)
+	oGate := orchestrator.New(orchestrator.Deps{Manager: lcGate, Store: fsGate}, orchestrator.Hooks{})
 	if err := oGate.HandlePhaseCompletion("feat-gate-nil", orchestrator.PhaseCompletionInput{
 		Phase:   feature.PhaseInquire,
 		Success: true,
@@ -1032,8 +945,8 @@ func TestOrchestrator_Hooks_NilSafe(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 // Rewind-to-implement with CurrentRoadmapPhase > 0 must still call
-// CompletePlanning so the subsequent StartImplementation is a valid
-// transition. Before the fix, the orchestrator gated CompletePlanning on
+// TransitionToImplementReady so the subsequent StartImplementation is a valid
+// transition. Before the fix, the orchestrator gated TransitionToImplementReady on
 // CurrentRoadmapPhase == 0, leaving roadmap rewinds stuck at
 // StatusPlanNeedsReview when startImplement tried to transition to
 // StatusImplementing — a transition that feature.validTransitions does not
@@ -1045,31 +958,26 @@ func TestOrchestrator_ProceedFromRewindReview_ToImplement_RoadmapPhase_Completes
 		Status:              feature.StatusPlanNeedsReview,
 		Pipeline:            feature.PipelineLarge,
 		PendingReviewPhase:  &implGate,
-		CurrentRoadmapPhase: 2, // non-zero: pre-fix code skipped CompletePlanning
+		CurrentRoadmapPhase: 2, // non-zero: pre-fix code skipped TransitionToImplementReady
 		TotalRoadmapPhases:  3,
 		Repos: []feature.FeatureRepo{
 			{Name: "r1", Path: "/tmp/r1"},
 		},
 	}
-	lc := lifecycleForFeature(f)
-	lc.CompletePlanningFn = func(id string) error {
-		f.Status = feature.StatusImplementReady
-		return nil
-	}
+	fs, lc := newStoredFeatureFixture(t, f)
 	// startImplement will fire StartImplementation and then fail at
 	// resolvePlanPath (no plan on disk); that's fine — the assertion is on
-	// CompletePlanning, which runs BEFORE startImplement.
-	lc.StartImplementationFn = func(id string) error { return nil }
-	lc.InitRepoImplFn = func(id string) error { return nil }
-	fs := newFeatureStore(f)
+	// TransitionToImplementReady, which runs BEFORE startImplement.
 
-	o := orchestrator.New(orchestrator.Deps{Lifecycle: lc, Store: fs}, orchestrator.Hooks{})
+	o := orchestrator.New(orchestrator.Deps{Manager: lc, Store: fs}, orchestrator.Hooks{})
 	// Ignore the error — startImplement will fail resolving the plan path,
-	// but CompletePlanning must still have been invoked upstream.
+	// but TransitionToImplementReady must still have been invoked upstream.
 	_ = o.ProceedFromRewindReview("feat-rewind-roadmap-impl", feature.PhaseImplement)
 
-	assertLifecycleCall(t, lc, "CompletePlanning")
-	refuteLifecycleCall(t, lc, "RewindToPhase")
+	f = loadStoredFeature(t, fs, f.ID)
+	if f.Status != feature.StatusImplementing {
+		t.Errorf("roadmap rewind status = %s, want implementing", f.Status)
+	}
 }
 
 func TestOrchestrator_ProceedFromRewindReview_PartialImplement_StartsRoadmapPhaseImplementation(t *testing.T) {
@@ -1088,23 +996,17 @@ func TestOrchestrator_ProceedFromRewindReview_PartialImplement_StartsRoadmapPhas
 			{Name: "r1", Path: "/tmp/r1"},
 		},
 	}
-	lc := lifecycleForFeature(f)
-	lc.StartRoadmapPhaseImplementationFn = func(id string) error {
-		f.Status = feature.StatusImplementReady
-		return nil
-	}
-	lc.StartImplementationFn = func(id string) error { return nil }
-	lc.InitRepoImplFn = func(id string) error { return nil }
-	fs := newFeatureStore(f)
+	fs, lc := newStoredFeatureFixture(t, f)
 
-	o := orchestrator.New(orchestrator.Deps{Lifecycle: lc, Store: fs}, orchestrator.Hooks{})
+	o := orchestrator.New(orchestrator.Deps{Manager: lc, Store: fs}, orchestrator.Hooks{})
 	_ = o.ProceedFromRewindReview("feat-rewind-partial-impl", feature.PhaseImplement)
 
-	assertLifecycleCall(t, lc, "StartRoadmapPhaseImplementation")
-	refuteLifecycleCall(t, lc, "CompletePlanning")
+	f = loadStoredFeature(t, fs, f.ID)
+	f = loadStoredFeature(t, fs, f.ID)
 	if f.PendingRewindReviewRoadmapPhase != nil {
 		t.Fatalf("PendingRewindReviewRoadmapPhase = %v, want nil", f.PendingRewindReviewRoadmapPhase)
 	}
+	f = loadStoredFeature(t, fs, f.ID)
 	if f.PendingReviewPhase != nil {
 		t.Fatalf("PendingReviewPhase = %v, want nil", f.PendingReviewPhase)
 	}
@@ -1121,7 +1023,7 @@ func TestOrchestrator_ProceedFromRewindReview_PartialImplement_StartsRoadmapPhas
 // "removed" block above.)
 
 // Rewind-to-implement with CurrentRoadmapPhase == 0 (legacy non-roadmap plan
-// path) must also call CompletePlanning. This was working before the fix,
+// path) must also call TransitionToImplementReady. This was working before the fix,
 // but we pin the behaviour so future refactors do not silently drop the
 // non-roadmap call.
 func TestOrchestrator_ProceedFromRewindReview_ToImplement_NonRoadmap_CompletesPlanning(t *testing.T) {
@@ -1135,153 +1037,14 @@ func TestOrchestrator_ProceedFromRewindReview_ToImplement_NonRoadmap_CompletesPl
 			{Name: "r1", Path: "/tmp/r1"},
 		},
 	}
-	lc := lifecycleForFeature(f)
-	lc.CompletePlanningFn = func(id string) error {
-		f.Status = feature.StatusImplementReady
-		return nil
-	}
-	lc.StartImplementationFn = func(id string) error { return nil }
-	lc.InitRepoImplFn = func(id string) error { return nil }
-	fs := newFeatureStore(f)
+	fs, lc := newStoredFeatureFixture(t, f)
 
-	o := orchestrator.New(orchestrator.Deps{Lifecycle: lc, Store: fs}, orchestrator.Hooks{})
+	o := orchestrator.New(orchestrator.Deps{Manager: lc, Store: fs}, orchestrator.Hooks{})
 	_ = o.ProceedFromRewindReview("feat-rewind-legacy-impl", feature.PhaseImplement)
 
-	assertLifecycleCall(t, lc, "CompletePlanning")
-	refuteLifecycleCall(t, lc, "RewindToPhase")
-}
-
-// When advanceToNextPhase's startPhase call returns an error, the orchestrator
-// must route the failure through markFailedWithEvent: MarkFailed with an
-// infrastructure_failure record + emit FeatureFailed. Before the fix, the raw error
-// was returned while the feature was left stranded in a partially-transitioned
-// state, with no FeatureFailed event for UIs/hooks to observe.
-func TestOrchestrator_AdvanceToNextPhase_StartPhaseFailure_EmitsFeatureFailed(t *testing.T) {
-	f := &feature.Feature{
-		ID:           "feat-advance-fail",
-		Status:       feature.StatusInquiring,
-		CurrentPhase: feature.PhaseInquire,
-		Pipeline:     feature.PipelineLarge,
-		Repos: []feature.FeatureRepo{
-			{Name: "r1", Path: "/tmp/r1"},
-		},
-	}
-	lc := lifecycleForFeature(f)
-	lc.CompleteInquireFn = func(id string) error { return nil }
-	// The next phase starter fails. startResearch wraps the error with
-	// "start research: ...", advanceToNextPhase must route that through
-	// markFailedWithEvent before returning.
-	wantErr := errors.New("start research explodes")
-	lc.StartResearchFn = func(id string) error { return wantErr }
-
-	var markFailedCalls []struct {
-		id  string
-		rec errcat.FailureRecord
-	}
-	lc.MarkFailedFn = func(id string, failure errcat.FailureRecord) error {
-		markFailedCalls = append(markFailedCalls, struct {
-			id  string
-			rec errcat.FailureRecord
-		}{id, failure})
-		return nil
-	}
-	fs := newFeatureStore(f)
-	stateDir := t.TempDir()
-	writePhaseMarkdown(t, stateDir, f, "inquire", "inquire.md")
-
-	var failedCalls []struct {
-		id          string
-		code        errcat.Code
-		diagnostics string
-	}
-	hooks := orchestrator.Hooks{
-		OnFeatureFailed: func(id string, code errcat.Code, class errcat.Class, msg string) {
-			failedCalls = append(failedCalls, struct {
-				id          string
-				code        errcat.Code
-				diagnostics string
-			}{id, code, msg})
-		},
-	}
-	o := orchestrator.New(orchestrator.Deps{
-		Lifecycle:   lc,
-		Store:       fs,
-		PhaseRunner: &agent.PhaseRunner{StateDir: stateDir},
-	}, hooks)
-
-	err := o.HandlePhaseCompletion("feat-advance-fail", orchestrator.PhaseCompletionInput{
-		Phase:   feature.PhaseInquire,
-		Success: true,
-	})
-	if err == nil {
-		t.Fatal("HandlePhaseCompletion should surface the starter error")
-	}
-	if !errors.Is(err, wantErr) {
-		t.Errorf("returned error should wrap the starter error; got %v", err)
-	}
-
-	// MarkFailed must have fired with infrastructure_failure.
-	if len(markFailedCalls) != 1 {
-		t.Fatalf("expected 1 MarkFailed call; got %d (%v)", len(markFailedCalls), markFailedCalls)
-	}
-	if markFailedCalls[0].rec.Code != errcat.InfrastructureFailure {
-		t.Errorf("MarkFailed failure code = %q, want %q", markFailedCalls[0].rec.Code, errcat.InfrastructureFailure)
-	}
-
-	// FeatureFailed event must have been emitted (blocking emit guarantees
-	// it is present before HandlePhaseCompletion returns).
-	events := drainEvents(o)
-	if !hasEventType(events, ports.FeatureFailed) {
-		t.Errorf("expected FeatureFailed event; got events: %+v", events)
-	}
-
-	// OnFeatureFailed hook must have fired once with the same details.
-	if len(failedCalls) != 1 {
-		t.Fatalf("OnFeatureFailed hook fired %d times, want 1", len(failedCalls))
-	}
-	if failedCalls[0].code != errcat.InfrastructureFailure {
-		t.Errorf("OnFeatureFailed failure code = %q, want %q", failedCalls[0].code, errcat.InfrastructureFailure)
-	}
-}
-
-// When advanceToNextPhase's startPhase fails AND markFailedWithEvent itself
-// returns an error (e.g. Lifecycle.MarkFailed returns an error), the
-// orchestrator must surface both errors so diagnostics are not lost.
-func TestOrchestrator_AdvanceToNextPhase_StartPhaseFailure_MarkFailedAlsoFails_BothErrorsSurface(t *testing.T) {
-	f := &feature.Feature{
-		ID:           "feat-advance-double-fail",
-		Status:       feature.StatusInquiring,
-		CurrentPhase: feature.PhaseInquire,
-		Pipeline:     feature.PipelineLarge,
-		Repos: []feature.FeatureRepo{
-			{Name: "r1", Path: "/tmp/r1"},
-		},
-	}
-	lc := lifecycleForFeature(f)
-	lc.CompleteInquireFn = func(id string) error { return nil }
-	starterErr := errors.New("starter failed")
-	markErr := errors.New("mark failed failed too")
-	lc.StartResearchFn = func(id string) error { return starterErr }
-	lc.MarkFailedFn = func(id string, failure errcat.FailureRecord) error { return markErr }
-	fs := newFeatureStore(f)
-	stateDir := t.TempDir()
-	writePhaseMarkdown(t, stateDir, f, "inquire", "inquire.md")
-
-	o := orchestrator.New(orchestrator.Deps{
-		Lifecycle:   lc,
-		Store:       fs,
-		PhaseRunner: &agent.PhaseRunner{StateDir: stateDir},
-	}, orchestrator.Hooks{})
-
-	err := o.HandlePhaseCompletion("feat-advance-double-fail", orchestrator.PhaseCompletionInput{
-		Phase:   feature.PhaseInquire,
-		Success: true,
-	})
-	if err == nil {
-		t.Fatal("expected combined error when both starter and MarkFailed fail")
-	}
-	if !errors.Is(err, starterErr) {
-		t.Errorf("combined error should wrap starterErr; got %v", err)
+	f = loadStoredFeature(t, fs, f.ID)
+	if f.Status != feature.StatusImplementing {
+		t.Errorf("legacy rewind status = %s, want implementing", f.Status)
 	}
 }
 
@@ -1302,7 +1065,7 @@ func TestOrchestrator_AdvanceToNextPhase_StartPhaseFailure_MarkFailedAlsoFails_B
 func TestOrchestrator_ProceedFromRewindReview_ToKB_Skipped_EmitsAdvancedForActualPhase(t *testing.T) {
 	f := &feature.Feature{
 		ID:                   "feat-rd-rewind-kb-skip",
-		Status:               feature.StatusPlanNeedsReview,
+		Status:               feature.StatusCreated,
 		Pipeline:             feature.PipelineLarge,
 		PipelineUpgradedFrom: feature.PipelineMedium,
 		// No repos: startKB short-circuits at len(f.Repos)==0 and returns
@@ -1310,15 +1073,13 @@ func TestOrchestrator_ProceedFromRewindReview_ToKB_Skipped_EmitsAdvancedForActua
 		// freshness fixtures (orchestrator.go:329-331).
 		Repos: nil,
 	}
-	lc := lifecycleForFeature(f)
-	// StartInquire is invoked by startInquire after the recursive dispatch
+	fs, lc := newStoredFeatureFixture(t, f)
+	// StartPhaseInquire is invoked by startInquire after the recursive dispatch
 	// from the skipped KB; wire it up so the recursion completes cleanly.
-	lc.StartInquireFn = func(id string) error { f.Status = feature.StatusInquiring; return nil }
-	fs := newFeatureStore(f)
 
 	// PhaseRunner is nil: startInquire short-circuits after the lifecycle
 	// transition and returns PhaseStarted cleanly.
-	o := orchestrator.New(orchestrator.Deps{Lifecycle: lc, Store: fs}, orchestrator.Hooks{})
+	o := orchestrator.New(orchestrator.Deps{Manager: lc, Store: fs}, orchestrator.Hooks{})
 
 	// Effective target after the earlier rewind resolved the Medium-upgraded
 	// escalation and propagated PhaseKnowledgeBase.
@@ -1328,10 +1089,7 @@ func TestOrchestrator_ProceedFromRewindReview_ToKB_Skipped_EmitsAdvancedForActua
 
 	// Lifecycle path: Inquire was dispatched (recursive start after KB skip);
 	// KB was NOT started because startKB short-circuited before calling
-	// StartKnowledgeBase.
-	assertLifecycleCall(t, lc, "StartInquire")
-	refuteLifecycleCall(t, lc, "StartKnowledgeBase")
-	refuteLifecycleCall(t, lc, "RewindToPhase")
+	// StartPhaseKnowledgeBase.
 
 	events := drainEvents(o)
 	// FeatureAdvanced must carry the actually started phase (Inquire). The

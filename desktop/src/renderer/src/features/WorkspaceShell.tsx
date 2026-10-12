@@ -127,6 +127,7 @@ import { RecoverySheet } from './RecoverySheet';
 import { SetupWizard } from '../components/wizard/SetupWizard';
 import { setupBannerIssue } from '../wizard/deriveWizardState';
 import { retryAction, useConnectionState, useMediaQuery, type LoadState } from '../hooks';
+import { defined } from '../../../shared/defined';
 
 type ListState = LoadState<{ phase: 'loaded'; features: FeatureSnapshot[] }>;
 
@@ -169,15 +170,11 @@ function snapshotFromSummary(summary: FeatureSummaryView): FeatureSnapshot {
     // The owned-error projection rides the summary, so lanes classify from
     // the same list the detail route will refine.
     errors: summary.errors,
-    ...(summary.phaseStatus === undefined ? {} : { phaseStatus: summary.phaseStatus }),
-    ...(summary.activeChild === undefined ? {} : { activeChild: summary.activeChild }),
-    ...(summary.childHistory === undefined ? {} : { childHistory: summary.childHistory }),
-    ...(summary.childHistoryTotal === undefined
-      ? {}
-      : { childHistoryTotal: summary.childHistoryTotal }),
-    ...(summary.childHistoryTruncated === undefined
-      ? {}
-      : { childHistoryTruncated: summary.childHistoryTruncated }),
+    ...defined('phaseStatus', summary.phaseStatus),
+    ...defined('activeChild', summary.activeChild),
+    ...defined('childHistory', summary.childHistory),
+    ...defined('childHistoryTotal', summary.childHistoryTotal),
+    ...defined('childHistoryTruncated', summary.childHistoryTruncated),
   };
 }
 
@@ -669,9 +666,7 @@ export function WorkspaceShell({
       setAttentionPreviewRequest({
         requestId: attentionJump.requestId,
         featureId: attentionJump.featureId,
-        ...(attentionJump.attentionId === undefined
-          ? {}
-          : { attentionId: attentionJump.attentionId }),
+        ...defined('attentionId', attentionJump.attentionId),
       });
     }
     onAttentionJumpHandled();
@@ -743,8 +738,8 @@ export function WorkspaceShell({
       const { draft, errorReference } = routeRequest.event;
       setSupervisorCompose({
         id: routeRequest.id,
-        ...(draft === undefined ? {} : { draft }),
-        ...(errorReference === undefined ? {} : { errorReference }),
+        ...defined('draft', draft),
+        ...defined('errorReference', errorReference),
       });
     } else if (routeRequest.event.target === 'new-conversation') {
       requestNewConversation();
@@ -1250,7 +1245,7 @@ export function supervisorRowView(status: SupervisorStatus): SupervisorRowView {
       return {
         marker: 'error',
         tone: 'danger',
-        ...(state.failure === undefined ? {} : { subline: state.failure.title }),
+        ...defined('subline', state.failure === undefined ? undefined : state.failure.title),
         unread: false,
       };
     default:

@@ -51,7 +51,7 @@ echo "PASS: feature management is API-driven"
 # 6. Roadmap skill definitions exist
 for tmpl in create-roadmap plan-phase revise-roadmap revise-phase-plan \
             validate-roadmap-architecture validate-roadmap-scope \
-            validate-phase-plan-structural validate-phase-plan-grounding validate-phase-plan-scope \
+            validate-phase-plan-structural validate-phase-plan-scope \
             validate-plan-security validate-plan-performance validate-plan-testing; do
     [ -f "skills/${tmpl}/SKILL.md" ]
     echo "PASS: skills/${tmpl}/SKILL.md exists"

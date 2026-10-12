@@ -222,15 +222,4 @@ describe('UploadService.stageFiles', () => {
 
     expect(result.results[0]).toMatchObject({ ok: false, error: { code: 'E_SCHEMA_MISMATCH' } });
   });
-
-  it('fails closed when the gateway has no upload transport wired', async () => {
-    const { service } = makeService({});
-
-    const result = await service.stageFiles('image', ['/shots/a.png']);
-
-    expect(result.results[0]).toMatchObject({
-      ok: false,
-      error: { code: 'E_UPLOAD_UNAVAILABLE' },
-    });
-  });
 });

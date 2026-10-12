@@ -60,6 +60,7 @@ import {
 import { renderSanitizedMarkdown } from './sanitizedMarkdown';
 import { CloseIcon, MaximizeIcon, MinimizeIcon } from '../components/icons';
 import { useModalDismiss } from '../components/useModalDismiss';
+import { defined } from '../../../shared/defined';
 
 const IDLE_ACTIVITY_LABEL = 'Thinking through the next step';
 const LIVE_METRICS_REFRESH_MS = 1000;
@@ -79,7 +80,7 @@ function formatBytes(bytes: number): string {
  */
 type PreviewView = 'conversation' | 'trace' | 'files';
 
-export interface CurrentRunInspectionProps {
+interface CurrentRunInspectionProps {
   featureId: string;
   runNumber: number;
   /** Whether retained work for this inspection may fetch or subscribe. */
@@ -178,7 +179,7 @@ function artifactSortKey(id: string): [number, number, string] {
   }
 }
 
-export function orderRunArtifacts(artifacts: readonly RunArtifact[]): RunArtifact[] {
+function orderRunArtifacts(artifacts: readonly RunArtifact[]): RunArtifact[] {
   return [...artifacts].sort((a, b) => {
     const left = artifactSortKey(a.id);
     const right = artifactSortKey(b.id);
@@ -223,7 +224,7 @@ interface LogChannel {
  * hundreds of `phase-06/verification-events/*` entries collapse into one
  * countable channel the reader can triage before drilling in.
  */
-export function groupLogsByChannel(logs: readonly RunLogView[]): LogChannel[] {
+function groupLogsByChannel(logs: readonly RunLogView[]): LogChannel[] {
   const buckets = new Map<string, RunLogView[]>();
   for (const log of logs) {
     const slash = log.path.lastIndexOf('/');
@@ -732,7 +733,7 @@ export function CurrentRunInspection({
       } catch (cause) {
         setContentError({
           error: parseIpcError(cause),
-          request: { kind, id, ...(size === undefined ? {} : { size }), label },
+          request: { kind, id, ...defined('size', size), label },
         });
       } finally {
         setLoadingContent(false);
@@ -1394,7 +1395,11 @@ function ReviewGateSummary({
         <>
           <ul className="review-gate__axes" aria-label="Review axes">
             {statuses.map(([name, status]) => (
-              <li key={name} data-status={reviewStatusTone(status)} title={`${name}: ${status}`}>
+              <li
+                key={name}
+                data-status={reviewStatusTone(status)}
+                title={reviewAxisTitle(name, status, gate.validatorErrors?.[name])}
+              >
                 <span>{reviewAxisShortName(name)}</span>
                 <span aria-hidden="true">{reviewStatusSymbol(status)}</span>
               </li>
@@ -1409,6 +1414,11 @@ function ReviewGateSummary({
       )}
     </section>
   );
+}
+
+/** Hover text for one review axis: its state plus the last error, if any. */
+function reviewAxisTitle(name: string, status: string, lastError?: string): string {
+  return lastError ? `${name}: ${status} — ${lastError}` : `${name}: ${status}`;
 }
 
 function reviewGateTarget(

@@ -17,10 +17,18 @@
 package agent
 
 import (
+	"bytes"
+	"context"
+	"errors"
 	"fmt"
+	"io/fs"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
+	"time"
+
+	"github.com/doordash-oss/agentic-orchestrator/internal/ports"
 )
 
 // sandboxExecPath is the macOS process sandbox launcher.
@@ -42,8 +50,45 @@ func wrapHelperSandbox(command []string, worktreesBase string) ([]string, bool, 
 }
 
 func sandboxExecAvailable() bool {
-	info, err := os.Stat(sandboxExecPath)
-	return err == nil && info.Mode().IsRegular()
+	return !SandboxAvailability().Unavailable
+}
+
+// sandboxProbeTimeout bounds the functional sandbox-exec probe.
+const sandboxProbeTimeout = 2 * time.Second
+
+func platformSandboxProbe() SandboxStatus {
+	return probeSandboxExec(NewExecCommandRunner())
+}
+
+// probeSandboxExec applies a trivial allow-all profile to /usr/bin/true. It
+// proves sandbox-exec exists and can apply a profile: macOS refuses to nest
+// seatbelt sandboxes, so under an outer sandbox (hardened CI, Agentico
+// validating itself) sandbox-exec exits 71 with "sandbox_apply: Operation
+// not permitted" for every command it would wrap.
+func probeSandboxExec(runner ports.CommandRunner) SandboxStatus {
+	ctx, cancel := context.WithTimeout(context.Background(), sandboxProbeTimeout)
+	defer cancel()
+	var stderr bytes.Buffer
+	_, err := runner.Run(ctx, sandboxExecPath, []string{"-p", "(version 1)(allow default)", "/usr/bin/true"},
+		ports.CommandOpts{Stderr: &stderr})
+	if err == nil {
+		return SandboxStatus{}
+	}
+	detail := strings.TrimSpace(stderr.String())
+	switch {
+	case errors.Is(err, fs.ErrNotExist) || errors.Is(err, exec.ErrNotFound):
+		return SandboxStatus{Unavailable: true, Reason: sandboxExecPath + " is not installed"}
+	case commandExitCode(err) == 71 && strings.Contains(strings.ToLower(detail), "sandbox_apply"):
+		return SandboxStatus{Unavailable: true,
+			Reason: "nested sandbox-exec is not permitted (Agentico already runs inside a sandbox): " + detail}
+	case errors.Is(ctx.Err(), context.DeadlineExceeded):
+		return SandboxStatus{Unavailable: true, Reason: "sandbox-exec probe timed out after " + sandboxProbeTimeout.String()}
+	}
+	reason := "sandbox-exec probe failed: " + err.Error()
+	if detail != "" {
+		reason += ": " + detail
+	}
+	return SandboxStatus{Unavailable: true, Reason: reason}
 }
 
 // wrapVerificationSandbox runs a planner-authored verification command under

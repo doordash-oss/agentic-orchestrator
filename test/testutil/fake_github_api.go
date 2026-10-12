@@ -21,8 +21,6 @@ import (
 	"strings"
 	"sync"
 	"testing"
-
-	"github.com/doordash-oss/agentic-orchestrator/internal/github"
 )
 
 // FakeGitHubAPI is an httptest-backed GitHub API double. Install it and
@@ -38,8 +36,9 @@ type FakeGitHubAPI struct {
 }
 
 // InstallFakeGitHubAPI starts the server and routes internal/github
-// clients at it for the duration of the test. Not safe for t.Parallel()
-// (process-global override).
+// clients at it for the duration of the test through the
+// "AGENTICO_GITHUB_API_BASE" environment variable. Not safe for t.Parallel()
+// (it sets a process environment variable).
 func InstallFakeGitHubAPI(t testing.TB) *FakeGitHubAPI {
 	t.Helper()
 	f := &FakeGitHubAPI{Mux: http.NewServeMux()}
@@ -52,11 +51,8 @@ func InstallFakeGitHubAPI(t testing.TB) *FakeGitHubAPI {
 		f.Mux.ServeHTTP(w, r)
 	}))
 	f.URL = server.URL
-	restore := github.OverrideForTest(server.URL, "test-token")
-	t.Cleanup(func() {
-		restore()
-		server.Close()
-	})
+	t.Setenv("AGENTICO_GITHUB_API_BASE", server.URL)
+	t.Cleanup(server.Close)
 	return f
 }
 

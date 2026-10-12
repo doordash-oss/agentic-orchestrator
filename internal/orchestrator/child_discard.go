@@ -43,7 +43,7 @@ func (o *Orchestrator) DiscardChild(childID string) error {
 }
 
 func (o *Orchestrator) discardChild(childID string) error {
-	child, err := o.deps.Lifecycle.Get(childID)
+	child, err := o.deps.Store.Load(childID)
 	if err != nil {
 		return fmt.Errorf("load child: %w", err)
 	}
@@ -87,7 +87,7 @@ func (o *Orchestrator) discardChild(childID string) error {
 
 // resumeDiscard continues the discard from the last durable step.
 func (o *Orchestrator) resumeDiscard(childID string) error {
-	child, err := o.deps.Lifecycle.Get(childID)
+	child, err := o.deps.Store.Load(childID)
 	if err != nil {
 		return fmt.Errorf("load child for discard: %w", err)
 	}
@@ -185,7 +185,7 @@ func (o *Orchestrator) resumeDiscard(childID string) error {
 
 	// Step 7: Cleanup tail (disposable worktrees, ephemeral branches).
 	if step == feature.DiscardStepClosed {
-		child, err = o.deps.Lifecycle.Get(childID)
+		child, err = o.deps.Store.Load(childID)
 		if err != nil {
 			return fmt.Errorf("reload child for cleanup: %w", err)
 		}
@@ -210,12 +210,10 @@ func (o *Orchestrator) resumeDiscard(childID string) error {
 		// promote). Release the journal's recorded overlay locks first so a
 		// discarded child with an interrupted promotion cannot strand a
 		// stable lock for every later child of this parent.
-		if store, ok := o.deps.Store.(promotionStore); ok {
-			if journal, jerr := store.LoadPromotion(childID); jerr == nil && journal != nil {
-				_ = releaseJournalOverlayLocks(journal)
-			}
-			_ = store.DeletePromotion(childID)
+		if journal, jerr := o.deps.Store.LoadPromotion(childID); jerr == nil && journal != nil {
+			_ = releaseJournalOverlayLocks(journal)
 		}
+		_ = o.deps.Store.DeletePromotion(childID)
 		// Durably record per-repo cleanup warnings on the transaction
 		// journal so they remain visible and retryable after restart.
 		if child.Parent.Transaction != nil {
@@ -231,7 +229,7 @@ func (o *Orchestrator) resumeDiscard(childID string) error {
 		// durably visible (worktree path still set, warning recorded)
 		// and retryable through ReconcileDiscardIntents so the parent
 		// can launch a new child while the older cleanup tail retries.
-		reloaded, reloadErr := o.deps.Lifecycle.Get(childID)
+		reloaded, reloadErr := o.deps.Store.Load(childID)
 		if reloadErr != nil {
 			return fmt.Errorf("reload child after cleanup: %w", reloadErr)
 		}
@@ -281,9 +279,6 @@ func (o *Orchestrator) setDiscardStep(childID string, step feature.DiscardStep) 
 // failed update.
 func (o *Orchestrator) resolveChildAttention(childID string) error {
 	// Clear permission queue entries for this feature.
-	if o.deps.Store == nil {
-		return nil
-	}
 	if err := o.deps.Store.Modify(childID, func(f *feature.Feature) error {
 		f.PermissionsQueue = nil
 		f.HelpQueue = nil
@@ -305,7 +300,7 @@ func (o *Orchestrator) resolveChildAttention(childID string) error {
 // all parent refs are safe (no child candidate remains), false when safety
 // cannot be proven.
 func (o *Orchestrator) ensureDiscardRefSafety(childID string) (bool, error) {
-	child, err := o.deps.Lifecycle.Get(childID)
+	child, err := o.deps.Store.Load(childID)
 	if err != nil {
 		return false, fmt.Errorf("load child for ref safety: %w", err)
 	}
@@ -338,7 +333,7 @@ func (o *Orchestrator) ensureDiscardRefSafety(childID string) (bool, error) {
 		return false, fmt.Errorf("ref CAS operations not configured for discard safety")
 	}
 
-	parent, err := o.deps.Lifecycle.Get(child.Parent.ParentID)
+	parent, err := o.deps.Store.Load(child.Parent.ParentID)
 	if err != nil {
 		return false, fmt.Errorf("load parent for discard safety: %w", err)
 	}
@@ -453,9 +448,6 @@ func countPendingWorktrees(f *feature.Feature) int {
 // Test-reachable seam: production runs it from startup recovery; e2e
 // recovery tests drive it directly.
 func (o *Orchestrator) ReconcileDiscardIntents() error {
-	if o.deps.Store == nil {
-		return nil
-	}
 	features, listErr := o.deps.Store.List()
 	var partialIDs []string
 	if listErr != nil {

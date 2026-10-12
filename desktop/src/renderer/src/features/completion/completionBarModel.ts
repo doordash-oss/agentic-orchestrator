@@ -17,6 +17,7 @@ limitations under the License.
 import { isEligibleForPublish } from './completionShared';
 import { isInitialMerge, UNMERGED_CHANGES, UNPUBLISHED_CHANGES } from './pendingDelivery';
 import type { CompletionPreflightResult } from '../../../../shared/ipc';
+import { defined } from '../../../../shared/defined';
 
 export type CompletionVerb = 'publish' | 'merge' | 'mark-done' | 'cleanup';
 
@@ -85,7 +86,7 @@ export function completionBarModel(
       label: d.label ?? (d.state === 'done' ? LABELS[verb].done : LABELS[verb].available),
       state: d.state,
       primary: false,
-      ...(d.blocker !== undefined ? { blocker: d.blocker } : {}),
+      ...defined('blocker', d.blocker),
     });
   }
 

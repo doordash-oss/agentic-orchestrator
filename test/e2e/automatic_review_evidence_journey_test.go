@@ -36,6 +36,8 @@ import (
 	"github.com/doordash-oss/agentic-orchestrator/internal/server"
 	"github.com/doordash-oss/agentic-orchestrator/internal/session"
 	"github.com/doordash-oss/agentic-orchestrator/test/testutil"
+	"github.com/doordash-oss/agentic-orchestrator/test/testutil/serverclient"
+	"go.uber.org/fx"
 )
 
 const (
@@ -43,6 +45,26 @@ const (
 	automaticReviewJourneySessionID = "session-automatic-review"
 	automaticReviewJourneyCommand   = "curl https://example.com/artifact"
 )
+
+// observerFromModule builds an enabled JSONL observer through the fx module
+// (the production construction path) with the given state dir and service
+// name.
+func observerFromModule(t *testing.T, stateDir, serviceName string) *observe.Observer {
+	t.Helper()
+	cfg := config.NewDefault()
+	cfg.Observability.OTelServiceName = serviceName
+	var obs *observe.Observer
+	app := fx.New(
+		fx.Supply(cfg, fx.Annotate(stateDir, fx.ResultTags(`name:"stateDir"`))),
+		observe.Module,
+		fx.Populate(&obs),
+		fx.NopLogger,
+	)
+	if err := app.Err(); err != nil {
+		t.Fatalf("build observer: %v", err)
+	}
+	return obs
+}
 
 // TestAutomaticReviewFreshAllowOwningSessionJourney proves that the owning
 // session persists approval provenance before returning the native permission
@@ -67,7 +89,7 @@ func TestAutomaticReviewFreshAllowOwningSessionJourney(t *testing.T) {
 		t.Fatalf("save feature: %v", err)
 	}
 
-	observer := observe.New(true, stateDir, false, "", false, "agentic-test")
+	observer := observerFromModule(t, stateDir, "agentic-test")
 	phaseContext := observe.SpanContextForFeature(automaticReviewJourneyFeatureID, "", "", "").Child()
 	observer.PhaseStarted(phaseContext, "implement")
 	opts := automaticReviewJourneySessionOpts(t, store, workDir, observer, testutil.FakeClaudeAllowScriptBody())
@@ -109,22 +131,13 @@ func TestAutomaticReviewFreshAllowOwningSessionJourney(t *testing.T) {
 		t.Fatalf("durable order = status %d, Bash %d; want adjacent status before activity", rawStatusIndex, rawBashIndex)
 	}
 
-	attached, err := manager.Attach(automaticReviewJourneySessionID)
-	if err != nil {
-		t.Fatalf("Attach() error: %v", err)
-	}
-	attachStatusIndex, attachBashIndex := automaticReviewRawOrder(t, attached.MessageLog().Messages(), wantStatus)
-	if attachStatusIndex != rawStatusIndex || attachBashIndex != rawBashIndex {
-		t.Fatalf("attach order = (%d,%d), want durable (%d,%d)", attachStatusIndex, attachBashIndex, rawStatusIndex, rawBashIndex)
-	}
-
 	httpServer := httptest.NewServer(server.NewHandler(server.HandlerOptions{
 		FeatureStore:          store,
 		Sessions:              manager,
 		DisableHostValidation: true,
 	}))
 	t.Cleanup(httpServer.Close)
-	client, err := server.NewClient(server.ClientOptions{BaseURL: httpServer.URL})
+	client, err := serverclient.NewClient(serverclient.ClientOptions{BaseURL: httpServer.URL})
 	if err != nil {
 		t.Fatalf("NewClient() error: %v", err)
 	}
@@ -135,13 +148,13 @@ func TestAutomaticReviewFreshAllowOwningSessionJourney(t *testing.T) {
 	}
 	previewStatusIndex, previewBashIndex := automaticReviewDTOOrder(t, preview.Transcript, wantStatus)
 
-	transcript, err := client.Transcript(t.Context(), automaticReviewJourneySessionID, server.CursorQuery{Limit: 100})
+	transcript, err := client.Transcript(t.Context(), automaticReviewJourneySessionID, serverclient.CursorQuery{Limit: 100})
 	if err != nil {
 		t.Fatalf("Transcript() error: %v", err)
 	}
 	transcriptStatusIndex, transcriptBashIndex := automaticReviewDTOOrder(t, transcript.Messages, wantStatus)
 
-	records, streamErrors := client.SubscribeSessionOutput(t.Context(), automaticReviewJourneySessionID, server.SessionOutputStreamOptions{})
+	records, streamErrors := client.SubscribeSessionOutput(t.Context(), automaticReviewJourneySessionID, serverclient.SessionOutputStreamOptions{})
 	var streamed []server.TranscriptMessage
 	for record := range records {
 		streamed = append(streamed, record.Message)
@@ -183,7 +196,7 @@ func TestAutomaticReviewIntentionalSilenceJourneys(t *testing.T) {
 	if err := os.MkdirAll(filepath.Join(stateDir, automaticReviewJourneyFeatureID), 0o755); err != nil {
 		t.Fatalf("create feature event directory: %v", err)
 	}
-	observer := observe.New(true, stateDir, false, "", false, "agentic-test")
+	observer := observerFromModule(t, stateDir, "agentic-test")
 	slowAllow := testutil.FakeClaudeInitLines() +
 		"sleep 0.2\n" +
 		"printf '%s\\n' '{\"type\":\"assistant\",\"message\":{\"role\":\"assistant\",\"content\":[{\"type\":\"text\",\"text\":\"ALLOW\"}]}}'\n" +
@@ -248,7 +261,8 @@ func TestAutomaticReviewIntentionalSilenceJourneys(t *testing.T) {
 		t.Fatalf("follower added side effects: statuses=%d events=%d", statusCalls.Load(), automaticReviewEventCount(t, stateDir))
 	}
 
-	overLength := strings.Repeat("x", permission.GuardrailMaxCommandLen+1)
+	// one byte over the frozen 4096-byte guardrail command limit
+	overLength := strings.Repeat("x", 4097)
 	if got, err := handler.CanUseTool(request(overLength)); err != nil || got.Behavior != "" {
 		t.Fatalf("unreviewable result = %+v, %v; want human deferral", got, err)
 	}
@@ -277,7 +291,7 @@ func assertAutomaticReviewUnavailableSessionNotice(t *testing.T) {
 
 	cfg := config.NewDefault()
 	cfg.Defaults.AutomaticReviewEnabled = true
-	observer := observe.New(true, stateDir, false, "", false, "agentic-test")
+	observer := observerFromModule(t, stateDir, "agentic-test")
 	runner := agent.NewPhaseRunner(nil, store, store.BaseDir)
 	runner.Registry = registry
 	runner.Config = cfg
@@ -340,7 +354,7 @@ func TestAutomaticReviewSideEffectFailureJourney(t *testing.T) {
 	if err := os.WriteFile(brokenObserverRoot, []byte("not a directory"), 0o600); err != nil {
 		t.Fatalf("create broken observer root: %v", err)
 	}
-	observer := observe.New(true, brokenObserverRoot, false, "", false, "agentic-test")
+	observer := observerFromModule(t, brokenObserverRoot, "agentic-test")
 	opts := automaticReviewJourneySessionOpts(t, store, workDir, observer, testutil.FakeClaudeAllowScriptBody())
 	failingHandler := &automaticReviewStatusFailingHandler{inner: opts.PermHandler}
 	opts.PermHandler = failingHandler
@@ -434,7 +448,6 @@ func automaticReviewJourneySessionOpts(
 	if err != nil {
 		t.Fatalf("BuildSession() error: %v", err)
 	}
-	opts.Protocol = nil
 	opts.ResultShutdownGrace = 50 * time.Millisecond
 	return opts
 }

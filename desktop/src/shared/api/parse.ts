@@ -72,36 +72,143 @@ export function validateWithSchema<Schema extends z.ZodType>(
   return result.data;
 }
 
+export const ServerModelDefaultsSchema = z.object({
+  inquiry: z.string().optional(),
+  research: z.string().optional(),
+  planning: z.string().optional(),
+  implementation: z.string().optional(),
+  review: z.string().optional(),
+  utilities: z.string().optional(),
+  kb_build: z.string().optional(),
+  automatic_review: z.string().optional(),
+});
+export const ServerEffortDefaultsSchema = ServerModelDefaultsSchema.omit({
+  automatic_review: true,
+});
+export const ServerCheckpointsSchema = z.object({
+  inquiry_review: z.boolean().optional(),
+  research_review: z.boolean().optional(),
+  design_review: z.boolean().optional(),
+  roadmap_review: z.boolean().optional(),
+  phase_plan_review: z.boolean().optional(),
+  manual_publish: z.boolean().optional(),
+  draft_publish: z.boolean().optional(),
+});
+export const ServerFeatureConfigSchema = z.object({
+  models: ServerModelDefaultsSchema,
+  effort: ServerEffortDefaultsSchema.optional(),
+  inquireness: z.string(),
+  checkpoints: ServerCheckpointsSchema,
+  pipeline: z.string().optional(),
+  input_notifications: z.string().optional(),
+  automatic_review_mode: z.string().optional(),
+});
+export const FeatureConfigResponseSchema = z.object({
+  api_version: z.string(),
+  feature_id: z.string(),
+  current: ServerFeatureConfigSchema,
+  defaults: ServerFeatureConfigSchema,
+  publishability: z.object({ manual_publish: z.boolean() }),
+});
+export const RuntimeConfigResponseSchema = z.object({
+  api_version: z.string(),
+  workspace_roots: z.array(z.string()).optional(),
+  feature_defaults: z.object({
+    models: ServerModelDefaultsSchema,
+    effort: ServerEffortDefaultsSchema.optional(),
+    inquireness: z.string().optional(),
+    checkpoints: ServerCheckpointsSchema.optional(),
+    pipeline: z.string().optional(),
+    automatic_review_enabled: z.boolean().optional(),
+    dangerously_skip_permissions: z.boolean().optional(),
+  }),
+  notifications: z.object({ mute_feature_input: z.boolean() }),
+});
+const ServerModelInfoSchema = z.object({
+  id: z.string(),
+  display_name: z.string().optional(),
+  aliases: z.array(z.string()).optional(),
+  category: z.string().optional(),
+  context_window: z.number().int().optional(),
+  effort_capabilities: z.array(z.string()).optional(),
+});
+export const ModelCatalogResponseSchema = z.object({
+  api_version: z.string(),
+  provider_order: z.array(z.string()),
+  provider_models: z.record(z.string(), z.array(ServerModelInfoSchema)),
+  phase_defaults: ServerModelDefaultsSchema,
+  phase_provider_models: z.record(z.string(), z.record(z.string(), z.array(z.string()))),
+  chat_default_effort: z
+    .record(z.string(), z.enum(['low', 'medium', 'high', 'xhigh', 'max']))
+    .optional(),
+});
+export const ActionResponseSchema = z.object({ api_version: z.string() });
+export const WireSnapshotSchema = z
+  .object({
+    status: z.string(),
+    policy: z.string(),
+    current_version: z.string(),
+    latest_version: z.string().optional(),
+    target_version: z.string().optional(),
+    latest_release_url: z.string().optional(),
+    installation: z.string(),
+    remediation: z.string().optional(),
+    signature: z.string(),
+    method: z.string().optional(),
+    stop_active_work: z.boolean().optional(),
+    scheduled_for: z.string().nullable(),
+    last_check_at: z.string().optional(),
+    next_check_at: z.string().optional(),
+    error: z.unknown().optional(),
+    active_work_summary: z
+      .object({
+        feature_count: z.number().int().nonnegative(),
+        supervisor_active: z.boolean(),
+        supervisor_waiting: z.boolean(),
+        clone_count: z.number().int().nonnegative(),
+        upload_count: z.number().int().nonnegative(),
+        origin_check_count: z.number().int().nonnegative(),
+        pending_admissions: z.number().int().nonnegative(),
+        detection_failed: z.boolean(),
+      })
+      .passthrough(),
+  })
+  .passthrough();
+export const WireResponseSchema = z.object({ update: WireSnapshotSchema }).passthrough();
+export const StageUploadResponseSchema = z.object({
+  api_version: z.string(),
+  reference: z.string().min(1).max(128),
+  kind: z.enum(['image', 'attachment']),
+  name: z.string().min(1).max(255),
+  size: z.number().int().nonnegative(),
+});
+export const SseEventEnvelopeSchema = z.object({
+  seq: z.number().int().nonnegative().optional(),
+  epoch: z.string().max(200).optional(),
+  kind: z.string().max(200),
+  resource: z.object({
+    type: z.string().max(200),
+    id: z.string().max(500).optional(),
+    feature_id: z.string().max(500).optional(),
+    parent_id: z.string().max(500).optional(),
+    child_id: z.string().max(500).optional(),
+    relationship_deleted: z.boolean().optional(),
+  }),
+  snapshot_required: z.boolean(),
+});
+
+export type SseEventEnvelope = z.output<typeof SseEventEnvelopeSchema>;
+
 // --- Runtime response schemas ---------------------------------------------
 // Each schema is type-checked below against the generated OpenAPI types so it
 // cannot drift from api/openapi.yaml without failing `npm run check`.
 
-export const RuntimeIdentitySchema = z.object({
-  runtime_dir: z.string(),
-  state_dir: z.string(),
-  config_path: z.string(),
-});
-
-export const LaunchPolicySchema = z.object({
-  resolved: z.boolean(),
-  providers: z.array(z.string()),
-  dangerously_skip_permissions: z.boolean(),
-});
-
-export const OwnerSchema = z.object({
-  pid: z.number().int(),
-  pgid: z.number().int().optional(),
-  started_at: z.string(),
-  version: z.string().optional(),
-});
-
-export const BuildIdentitySchema = z.object({
+const BuildIdentitySchema = z.object({
   version: z.string(),
   revision: z.string().optional(),
 });
 
 export type BuildIdentity = z.output<typeof BuildIdentitySchema>;
-
 export const CompatibilityDeclarationSchema = z.object({
   api_version: z.string(),
   schema_version: z.number().int(),
@@ -110,26 +217,16 @@ export const CompatibilityDeclarationSchema = z.object({
   server_build: BuildIdentitySchema,
 });
 
-export type CompatibilityDeclaration = z.output<typeof CompatibilityDeclarationSchema>;
+type CompatibilityDeclaration = z.output<typeof CompatibilityDeclarationSchema>;
 
-export const HealthResponseSchema = z.object({
-  api_version: z.string(),
+/** Lenient health subset for auth-exempt discovery probes. */
+export const ProbeHealthSchema = z.object({
   status: z.string(),
-  /**
-   * Optional operator-assigned server display name (server cap:
-   * MaxServerNameLength = 64). Informational only — never gates
-   * compatibility; an oversized or malformed name is dropped, not fatal.
-   */
+  compatibility: z.unknown().optional(),
+  runtime: z.object({ state_dir: z.string() }).optional(),
   name: z.string().max(64).optional().catch(undefined),
-  runtime: RuntimeIdentitySchema,
-  launch_policy: LaunchPolicySchema,
-  started_at: z.string(),
-  owner: OwnerSchema,
-  server_time: z.string(),
-  compatibility: CompatibilityDeclarationSchema,
 });
-
-export type HealthResponse = z.output<typeof HealthResponseSchema>;
+export type ProbeHealth = z.output<typeof ProbeHealthSchema>;
 
 // --- Blocking attention (GET /api/v1/prompts, /api/v1/permissions) ---------
 // These responses are deliberately bounded before they are translated to the
@@ -137,14 +234,13 @@ export type HealthResponse = z.output<typeof HealthResponseSchema>;
 
 const AttentionTextSchema = z.string().max(64 * 1024);
 const AttentionIDSchema = z.string().min(1).max(200);
-
-export const ServerAskUserOptionSchema = z.object({
+const ServerAskUserOptionSchema = z.object({
   // Matches the server's SafeDisplayText budget for AskUser option labels.
   label: z.string().max(1000).optional(),
   description: AttentionTextSchema.optional(),
   confidence: z.number().min(0).max(1).optional(),
 });
-export const ServerAskUserQuestionSchema = z.object({
+const ServerAskUserQuestionSchema = z.object({
   /** One-based position of the question within its prompt; answers are keyed by it. */
   index: z.number().int().min(1),
   question: AttentionTextSchema,
@@ -152,14 +248,14 @@ export const ServerAskUserQuestionSchema = z.object({
   multi_select: z.boolean().optional(),
   options: z.array(ServerAskUserOptionSchema).max(100).optional(),
 });
-export const ServerRememberPreviewSchema = z.object({
+const ServerRememberPreviewSchema = z.object({
   pattern: z.string().max(4096),
   scope: z.string().max(4096),
   scope_display: z.string().max(4096),
 });
 /** Who raised a permission or question: the session's own agent or one of its sub-agents. */
-export const ServerRequestOriginSchema = z.enum(['root', 'child']);
-export const ServerControlRequestSchema = z.object({
+const ServerRequestOriginSchema = z.enum(['root', 'child']);
+const ServerControlRequestSchema = z.object({
   request_id: AttentionIDSchema,
   session_id: AttentionIDSchema.optional(),
   feature_id: AttentionIDSchema.optional(),
@@ -185,7 +281,7 @@ export const ServerControlRequestSchema = z.object({
   origin: ServerRequestOriginSchema.optional(),
   child_session_id: AttentionIDSchema.optional(),
 });
-export const ServerHelpQueueSchema = z.object({
+const ServerHelpQueueSchema = z.object({
   feature_id: AttentionIDSchema,
   session_id: AttentionIDSchema.optional(),
   question: AttentionTextSchema,
@@ -207,7 +303,7 @@ const ServerNeedUserInputVerificationSchema = z.object({
   blockers: z.array(ServerNeedUserInputVerificationBlockerSchema).max(100),
   allowed_actions: z.array(z.string().max(50)).max(3),
 });
-export const ServerNeedUserInputGateSchema = z.object({
+const ServerNeedUserInputGateSchema = z.object({
   feature_id: AttentionIDSchema.optional(),
   open: z.boolean(),
   scope: z.string().max(100).optional(),
@@ -238,7 +334,6 @@ export const PermissionSnapshotResponseSchema = z.object({
   api_version: z.string(),
   requests: z.array(ServerControlRequestSchema).max(1000),
 });
-export type ServerPromptSnapshot = z.output<typeof PromptSnapshotResponseSchema>;
 export type ServerPermissionSnapshot = z.output<typeof PermissionSnapshotResponseSchema>;
 
 // --- Review sessions -------------------------------------------------------
@@ -259,7 +354,6 @@ export const ReviewSessionResponseSchema = z.object({
   can_iterate: z.boolean(),
 });
 export type ServerReviewSession = z.output<typeof ReviewSessionResponseSchema>;
-
 export const ReviewDraftValidationResponseSchema = z.object({
   api_version: z.string(),
   feature_id: z.string().min(1),
@@ -270,7 +364,6 @@ export const ReviewDraftValidationResponseSchema = z.object({
   findings: z.array(z.object({ code: z.string().min(1), message: z.string().min(1) })).max(100),
 });
 export type ServerReviewDraftValidation = z.output<typeof ReviewDraftValidationResponseSchema>;
-
 export const ReviewDecisionResponseSchema = z.object({
   api_version: z.string(),
   feature_id: z.string().min(1),
@@ -283,13 +376,6 @@ export type ServerReviewDecision = z.output<typeof ReviewDecisionResponseSchema>
 // --- Runtime config (GET /api/v1/config/runtime) — workspace-roots subset ---
 // Only the fields the desktop setup flow consumes; the full response has
 // many more, which z.object tolerates and strips.
-
-export const RuntimeConfigWorkspaceSchema = z.object({
-  api_version: z.string(),
-  workspace_roots: z.array(z.string()).optional(),
-});
-
-export type RuntimeConfigWorkspace = z.output<typeof RuntimeConfigWorkspaceSchema>;
 
 // --- Canonical server error body (ErrorResponse) -----------------------------
 // Strict on purpose: the canonical shape is a real contract, so unknown
@@ -380,13 +466,20 @@ export const CanonicalErrorResponseSchema = z.strictObject({
   error: CanonicalErrorSchema,
 });
 
-export type CanonicalErrorResponse = z.output<typeof CanonicalErrorResponseSchema>;
+type CanonicalErrorResponse = z.output<typeof CanonicalErrorResponseSchema>;
 
 // --- Readiness (GET /api/v1/readiness, POST /api/v1/readiness/refresh) -----
 // Readiness issues are the canonical catalog-rendered error for their code:
 // the strict CanonicalErrorSchema accepts them and rejects the pre-canonical
 // `{code, message, remedy}` shape.
 
+const RepositoryIdentitySchema = z.strictObject({
+  path: z.string().min(1).max(4096),
+  common_dir: z.string().min(1).max(4096),
+  device: z.string().regex(/^[0-9]{1,20}$/),
+  inode: z.string().regex(/^[0-9]{1,20}$/),
+  birth_time: z.string().max(64).optional(),
+});
 export const ReadinessResponseSchema = z.object({
   api_version: z.string(),
   ready: z.boolean(),
@@ -398,6 +491,9 @@ export const ReadinessResponseSchema = z.object({
       version: z.string().optional(),
       ready: z.boolean(),
       issue: CanonicalErrorSchema.optional(),
+      // Advisory endpoint reachability; never affects `ready`.
+      endpoint_reachable: z.boolean().optional(),
+      warning: CanonicalErrorSchema.optional(),
     }),
   ),
   models: z.object({
@@ -429,15 +525,7 @@ export const ReadinessResponseSchema = z.object({
         // Server-resolved repository identity; malformed identity data is
         // rejected rather than half-parsed, and a missing identity simply
         // leaves the repository unselectable upstream.
-        identity: z
-          .strictObject({
-            path: z.string().min(1).max(4096),
-            common_dir: z.string().min(1).max(4096),
-            device: z.string().regex(/^[0-9]{1,20}$/),
-            inode: z.string().regex(/^[0-9]{1,20}$/),
-            birth_time: z.string().max(64).optional(),
-          })
-          .optional(),
+        identity: RepositoryIdentitySchema.optional(),
       }),
     ),
   }),
@@ -447,24 +535,18 @@ export const ReadinessResponseSchema = z.object({
 export type ReadinessResponse = z.output<typeof ReadinessResponseSchema>;
 export const RuntimeReadinessResponseSchema = ReadinessResponseSchema.omit({ workspace: true });
 export type RuntimeReadinessResponse = z.output<typeof RuntimeReadinessResponseSchema>;
-const _runtimeReadinessSubset = (
-  value: components['schemas']['RuntimeReadinessResponse'],
-): RuntimeReadinessResponse => value;
-void _runtimeReadinessSubset;
-
+export const ProviderModelRefreshResponseSchema = z.object({
+  api_version: z.string(),
+  readiness: ReadinessResponseSchema,
+  catalog: ModelCatalogResponseSchema,
+});
 export const RepositorySourcesResponseSchema = z.object({
   api_version: z.string(),
   repositories: z
     .array(
       z.strictObject({
         repo_key: z.string().min(1),
-        identity: z.strictObject({
-          path: z.string().min(1),
-          common_dir: z.string().min(1),
-          device: z.string().regex(/^[0-9]{1,20}$/),
-          inode: z.string().regex(/^[0-9]{1,20}$/),
-          birth_time: z.string().max(64).optional(),
-        }),
+        identity: RepositoryIdentitySchema,
         mode: z.enum(['default', 'current']),
         kind: z.enum(['branch', 'detached']),
         branch: z.string().optional(),
@@ -474,11 +556,7 @@ export const RepositorySourcesResponseSchema = z.object({
     .min(1)
     .max(32),
 });
-
-export type RepositorySourcesResponse = z.output<typeof RepositorySourcesResponseSchema>;
-
 const OriginCommitShaSchema = z.string().regex(/^[0-9a-f]{40,64}$/);
-
 const OriginComparisonWireSchema = z.strictObject({
   status: z.enum(['up_to_date', 'behind', 'ahead', 'diverged']),
   local_sha: OriginCommitShaSchema,
@@ -488,16 +566,9 @@ const OriginComparisonWireSchema = z.strictObject({
   behind_count: z.number().int().min(0),
   checked_at: z.string().min(1),
 });
-
 const RepositoryOriginStatusWireSchema = z.strictObject({
   repo_key: z.string().min(1),
-  identity: z.strictObject({
-    path: z.string().min(1),
-    common_dir: z.string().min(1),
-    device: z.string().regex(/^[0-9]{1,20}$/),
-    inode: z.string().regex(/^[0-9]{1,20}$/),
-    birth_time: z.string().max(64).optional(),
-  }),
+  identity: RepositoryIdentitySchema,
   mode: z.enum(['default', 'current']),
   kind: z.enum(['branch', 'detached']),
   branch: z.string().optional(),
@@ -541,7 +612,6 @@ const RepositoryOriginStatusWireSchema = z.strictObject({
   checkout_head_ref: z.string().min(1).max(512).optional(),
   checkout_head_sha: OriginCommitShaSchema.optional(),
 });
-
 export const RepositoryOriginStatusResponseSchema = z.object({
   api_version: z.string(),
   repositories: z.array(RepositoryOriginStatusWireSchema).min(1).max(32),
@@ -550,7 +620,6 @@ export const RepositoryOriginStatusResponseSchema = z.object({
 export type RepositoryOriginStatusWireResponse = z.output<
   typeof RepositoryOriginStatusResponseSchema
 >;
-
 export const RepositoryUpdateSourceResponseSchema = z.object({
   api_version: z.string(),
   result: z.enum(['updated', 'already_up_to_date', 'stale']),
@@ -571,13 +640,7 @@ export const RepositoryUpdateSourceResponseSchema = z.object({
     ])
     .optional(),
   repo_key: z.string().min(1),
-  identity: z.strictObject({
-    path: z.string().min(1),
-    common_dir: z.string().min(1),
-    device: z.string().regex(/^[0-9]{1,20}$/),
-    inode: z.string().regex(/^[0-9]{1,20}$/),
-    birth_time: z.string().max(64).optional(),
-  }),
+  identity: RepositoryIdentitySchema,
   mode: z.enum(['default', 'current']),
   branch: z.string().min(1),
   origin_branch: z.string().min(1),
@@ -586,11 +649,6 @@ export const RepositoryUpdateSourceResponseSchema = z.object({
   fetched_sha: OriginCommitShaSchema.optional(),
   status: RepositoryOriginStatusWireSchema.optional(),
 });
-
-export type RepositoryUpdateSourceWireResponse = z.output<
-  typeof RepositoryUpdateSourceResponseSchema
->;
-
 const RepositorySourceReconcileCheckoutWireSchema = z.strictObject({
   state: z.enum(['clean', 'dirty', 'operation_in_progress', 'unobserved']),
   // The server sends an empty head_ref when the checkout HEAD could not be
@@ -601,7 +659,6 @@ const RepositorySourceReconcileCheckoutWireSchema = z.strictObject({
     .regex(/^[0-9a-f]{40,64}$/)
     .optional(),
 });
-
 export const RepositorySourceReconcileResponseSchema = z.object({
   api_version: z.string(),
   outcome: z.enum([
@@ -611,13 +668,7 @@ export const RepositorySourceReconcileResponseSchema = z.object({
     'branch_missing',
   ]),
   repo_key: z.string().min(1),
-  identity: z.strictObject({
-    path: z.string().min(1),
-    common_dir: z.string().min(1),
-    device: z.string().regex(/^[0-9]{1,20}$/),
-    inode: z.string().regex(/^[0-9]{1,20}$/),
-    birth_time: z.string().max(64).optional(),
-  }),
+  identity: RepositoryIdentitySchema,
   mode: z.enum(['default', 'current']),
   branch: z.string().min(1),
   origin_branch: z.string().min(1),
@@ -625,13 +676,7 @@ export const RepositorySourceReconcileResponseSchema = z.object({
   selection: z
     .strictObject({
       repo_key: z.string().min(1),
-      identity: z.strictObject({
-        path: z.string().min(1),
-        common_dir: z.string().min(1),
-        device: z.string().regex(/^[0-9]{1,20}$/),
-        inode: z.string().regex(/^[0-9]{1,20}$/),
-        birth_time: z.string().max(64).optional(),
-      }),
+      identity: RepositoryIdentitySchema,
       mode: z.enum(['default', 'current']),
       kind: z.enum(['branch', 'detached']),
       branch: z.string().optional(),
@@ -641,16 +686,12 @@ export const RepositorySourceReconcileResponseSchema = z.object({
   checkout: RepositorySourceReconcileCheckoutWireSchema.optional(),
 });
 
-export type RepositorySourceReconcileWireResponse = z.output<
-  typeof RepositorySourceReconcileResponseSchema
->;
-
 // --- Clone operations (POST/GET /api/v1/workspace/repositories/clone) ------
 // Authoritative snapshots from the server-owned clone lifecycle. State,
 // pending outcome and progress come from the durable record, never from
 // git text or transport completion.
 
-export const CloneOperationDTOSchema = z.object({
+const CloneOperationDTOSchema = z.object({
   id: z.string(),
   state: z.enum([
     'accepted',
@@ -683,15 +724,7 @@ export const CloneOperationDTOSchema = z.object({
       published_at: z.string(),
       // Server-resolved identity of the repository actually published;
       // absent for older records or an unprovable destination.
-      identity: z
-        .strictObject({
-          path: z.string().min(1).max(4096),
-          common_dir: z.string().min(1).max(4096),
-          device: z.string().regex(/^[0-9]{1,20}$/),
-          inode: z.string().regex(/^[0-9]{1,20}$/),
-          birth_time: z.string().max(64).optional(),
-        })
-        .optional(),
+      identity: RepositoryIdentitySchema.optional(),
     })
     .optional(),
   created_at: z.string(),
@@ -701,7 +734,6 @@ export const CloneOperationDTOSchema = z.object({
 });
 
 export type CloneOperationDTO = z.output<typeof CloneOperationDTOSchema>;
-
 export const CloneActionResponseSchema = z.object({
   api_version: z.string(),
   result: z.string(),
@@ -709,14 +741,12 @@ export const CloneActionResponseSchema = z.object({
 });
 
 export type CloneActionResponse = z.output<typeof CloneActionResponseSchema>;
-
 export const CloneOperationResponseSchema = z.object({
   api_version: z.string(),
   operation: CloneOperationDTOSchema,
 });
 
-export type CloneOperationResponse = z.output<typeof CloneOperationResponseSchema>;
-
+type CloneOperationResponse = z.output<typeof CloneOperationResponseSchema>;
 export const CloneOperationListResponseSchema = z.object({
   api_version: z.string(),
   operations: z.array(CloneOperationDTOSchema),
@@ -740,15 +770,7 @@ export const CreateRepositoryResponseSchema = z.object({
     root: z.string(),
     // Absent only for a replayed success whose destination no longer
     // matches the publication marker; such a result is never adopted.
-    identity: z
-      .strictObject({
-        path: z.string().min(1).max(4096),
-        common_dir: z.string().min(1).max(4096),
-        device: z.string().regex(/^[0-9]{1,20}$/),
-        inode: z.string().regex(/^[0-9]{1,20}$/),
-        birth_time: z.string().max(64).optional(),
-      })
-      .optional(),
+    identity: RepositoryIdentitySchema.optional(),
   }),
 });
 
@@ -767,15 +789,7 @@ export const InitializeRepositoryResponseSchema = z.object({
     path: z.string(),
     has_head: z.boolean(),
     root: z.string(),
-    identity: z
-      .strictObject({
-        path: z.string().min(1).max(4096),
-        common_dir: z.string().min(1).max(4096),
-        device: z.string().regex(/^[0-9]{1,20}$/),
-        inode: z.string().regex(/^[0-9]{1,20}$/),
-        birth_time: z.string().max(64).optional(),
-      })
-      .optional(),
+    identity: RepositoryIdentitySchema.optional(),
   }),
 });
 
@@ -785,7 +799,7 @@ export type InitializeRepositoryResponse = z.output<typeof InitializeRepositoryR
 // Lenient subsets: z.object tolerates and strips fields this view does not
 // consume yet.
 
-export const ServerSetupTaskSchema = z.object({
+const ServerSetupTaskSchema = z.object({
   key: z.string(),
   kind: z.string(),
   label: z.string().optional(),
@@ -804,9 +818,8 @@ export const ServerSetupTaskSchema = z.object({
   last_error: z.never().optional(),
 });
 
-export type ServerSetupTask = z.output<typeof ServerSetupTaskSchema>;
-
-export const ServerSetupSchema = z.object({
+type ServerSetupTask = z.output<typeof ServerSetupTaskSchema>;
+const ServerSetupSchema = z.object({
   status: z.string(),
   attempt: z.number().int().optional(),
   tasks: z.record(z.string(), ServerSetupTaskSchema).optional(),
@@ -816,15 +829,13 @@ export const ServerSetupSchema = z.object({
 });
 
 export type ServerSetup = z.output<typeof ServerSetupSchema>;
-
-export const ServerActionImpactSchema = z.object({
+const ServerActionImpactSchema = z.object({
   kind: z.enum(['child_discard', 'parent_cascade_delete']),
   subject: z.object({ id: z.string(), name: z.string() }),
   categories: z.array(z.object({ key: z.string(), label: z.string(), items: z.array(z.string()) })),
   retained: z.array(z.string()),
 });
-
-export const ServerActionSchema = z.object({
+const ServerActionSchema = z.object({
   id: z.string(),
   enabled: z.boolean(),
   required_inputs: z
@@ -846,9 +857,8 @@ export const ServerActionSchema = z.object({
  * field rejects one oversized summary instead of letting an unbounded history
  * grow the whole payload past the boundary limit.
  */
-export const DIFF_SUMMARY_MAX_BYTES = 256 * 1024;
-
-export const ServerRelationshipChildSchema = z.object({
+const DIFF_SUMMARY_MAX_BYTES = 256 * 1024;
+const ServerRelationshipChildSchema = z.object({
   id: z.string(),
   name: z.string(),
   kind: z.string(),
@@ -906,7 +916,7 @@ const SERVER_ERROR_REFERENCE_FORBIDDEN_KEYS = {
 } as const;
 
 /** Owner reference mirroring the generated ErrorReference component (snake_case). */
-export const ServerErrorReferenceSchema = z
+const ServerErrorReferenceSchema = z
   .strictObject({
     scope: z.enum(['run', 'transaction', 'repository', 'setup', 'recovery']),
     code: z.string().min(1).max(128),
@@ -936,10 +946,9 @@ export const ServerErrorReferenceSchema = z
       }
     }
   });
-export type ServerErrorReference = z.output<typeof ServerErrorReferenceSchema>;
 
 /** One owned-error entry on the feature summary, mirroring the generated OwnedError component. */
-export const ServerOwnedErrorSchema = z
+const ServerOwnedErrorSchema = z
   .strictObject({
     ref: ServerErrorReferenceSchema,
     error: CanonicalErrorSchema,
@@ -957,8 +966,7 @@ export const ServerOwnedErrorSchema = z
     }
   });
 export type ServerOwnedError = z.output<typeof ServerOwnedErrorSchema>;
-
-export const ServerFeatureSummarySchema = z.object({
+const ServerFeatureSummarySchema = z.object({
   id: z.string(),
   name: z.string(),
   slug: z.string(),
@@ -985,10 +993,7 @@ export const ServerFeatureSummarySchema = z.object({
   child_history_total: z.number().int().nonnegative().optional(),
   child_history_truncated: z.boolean().optional(),
 });
-
-export type ServerFeatureSummary = z.output<typeof ServerFeatureSummarySchema>;
-
-export const ServerRepoStatusSchema = z.object({
+const ServerRepoStatusSchema = z.object({
   name: z.string(),
   publishable: z.boolean(),
   touched: z.boolean().optional(),
@@ -1003,9 +1008,9 @@ export const ServerRepoStatusSchema = z.object({
   rebase_target: z.string().optional(),
   conflict_files: z.array(z.string()).optional(),
 });
-export type ServerRepoStatus = z.output<typeof ServerRepoStatusSchema>;
+type ServerRepoStatus = z.output<typeof ServerRepoStatusSchema>;
 
-export const ServerNeedUserInputGateDetailSchema = z.object({
+const ServerNeedUserInputGateDetailSchema = z.object({
   feature_id: z.string().optional(),
   open: z.boolean(),
   scope: z.string().optional(),
@@ -1023,9 +1028,9 @@ export const ServerNeedUserInputGateDetailSchema = z.object({
     .optional(),
   verification: ServerNeedUserInputVerificationSchema.optional(),
 });
-export type ServerNeedUserInputGateDetail = z.output<typeof ServerNeedUserInputGateDetailSchema>;
+type ServerNeedUserInputGateDetail = z.output<typeof ServerNeedUserInputGateDetailSchema>;
 
-export const ServerReviewFeedbackCommentSchema = z.object({
+const ServerReviewFeedbackCommentSchema = z.object({
   repo: z.string(),
   id: z.number().int(),
   type: z.enum(['review', 'issue', 'review_body']),
@@ -1040,7 +1045,7 @@ export const ServerReviewFeedbackCommentSchema = z.object({
 export type ServerReviewFeedbackComment = z.output<typeof ServerReviewFeedbackCommentSchema>;
 
 /** One comment inside the server-owned, revisioned review-feedback pending draft. */
-export const ServerReviewFeedbackDraftCommentSchema = ServerReviewFeedbackCommentSchema.extend({
+const ServerReviewFeedbackDraftCommentSchema = ServerReviewFeedbackCommentSchema.extend({
   stable_ref: z.string(),
   selected: z.boolean(),
 });
@@ -1054,7 +1059,7 @@ const ServerReviewFeedbackRepoCommentsSchema = z.object({
   comments: z.array(ServerReviewFeedbackDraftCommentSchema),
 });
 
-export const ServerFeatureDetailSchema = ServerFeatureSummarySchema.extend({
+const ServerFeatureDetailSchema = ServerFeatureSummarySchema.extend({
   description: z.string().optional(),
   wait_reason: z.string().optional(),
   pipeline: z.string().optional(),
@@ -1081,6 +1086,7 @@ export const ServerFeatureDetailSchema = ServerFeatureSummarySchema.extend({
     review_fixing: z.boolean(),
     validating_plan: z.boolean(),
     validator_statuses: z.record(z.string(), z.string()).optional(),
+    validator_errors: z.record(z.string(), z.string()).optional(),
   }),
   need_user_input: ServerNeedUserInputGateDetailSchema.optional(),
   // The durable run failure, rendered by the server through the error
@@ -1137,23 +1143,23 @@ export const FeatureListResponseSchema = z.object({
   warnings: z.array(CanonicalErrorSchema).max(100).optional(),
 });
 
-export type FeatureListResponse = z.output<typeof FeatureListResponseSchema>;
+type FeatureListResponse = z.output<typeof FeatureListResponseSchema>;
 
 export const FeatureDetailResponseSchema = z.object({
   api_version: z.string(),
   feature: ServerFeatureDetailSchema,
 });
 
-export type FeatureDetailResponse = z.output<typeof FeatureDetailResponseSchema>;
+type FeatureDetailResponse = z.output<typeof FeatureDetailResponseSchema>;
 
 // --- Testing contract (GET /features/{id}/testing-contract) ----------------
 
-export const ServerTestingContractDispositionSchema = z.object({
+const ServerTestingContractDispositionSchema = z.object({
   status: z.string().min(1).max(100),
   reason: z.string().max(2000).optional(),
   changed_by: z.string().max(200).optional(),
 });
-export const ServerTestingContractItemSchema = z.object({
+const ServerTestingContractItemSchema = z.object({
   item_id: AttentionIDSchema,
   source: z.string().min(1).max(100),
   owner: z.string().min(1).max(100),
@@ -1176,11 +1182,11 @@ export const TestingContractResponseSchema = z.object({
   revision: z.number().int().positive(),
   items: z.array(ServerTestingContractItemSchema).max(500),
 });
-export type TestingContractResponse = z.output<typeof TestingContractResponseSchema>;
+type TestingContractResponse = z.output<typeof TestingContractResponseSchema>;
 
 // --- Run listing (GET /runs, GET /runs/{n}, GET /runs/{n}/sessions) --------
 
-export const ServerRunSummarySchema = z.object({
+const ServerRunSummarySchema = z.object({
   run_number: z.number().int().nonnegative(),
   started_at: z.string().optional(),
   sealed_at: z.string().optional(),
@@ -1197,7 +1203,7 @@ export const ServerRunSummarySchema = z.object({
 });
 export type ServerRunSummary = z.output<typeof ServerRunSummarySchema>;
 
-export const ServerRunDetailSchema = ServerRunSummarySchema.extend({
+const ServerRunDetailSchema = ServerRunSummarySchema.extend({
   rewind_target: z.string().optional(),
   rewind_roadmap_phase: z.number().int().nonnegative().optional(),
   carried_from_run: z.number().int().nonnegative().optional(),
@@ -1219,19 +1225,19 @@ export const RunListResponseSchema = z.object({
   total: z.number().int().nonnegative(),
   total_pages: z.number().int().nonnegative(),
 });
-export type RunListResponse = z.output<typeof RunListResponseSchema>;
+type RunListResponse = z.output<typeof RunListResponseSchema>;
 
 export const RunDetailResponseSchema = z.object({
   api_version: z.string(),
   run: ServerRunDetailSchema,
 });
-export type RunDetailResponse = z.output<typeof RunDetailResponseSchema>;
+type RunDetailResponse = z.output<typeof RunDetailResponseSchema>;
 
 // RunSessionListResponse is declared after ServerSessionSummarySchema below.
 
 // --- Artifacts + logs (run-scoped) ------------------------------------------
 
-export const ServerArtifactSchema = z.object({
+const ServerArtifactSchema = z.object({
   id: z.string(),
   type: z.string().optional(),
   category: z.string().optional(),
@@ -1247,21 +1253,19 @@ export const ArtifactListResponseSchema = z.object({
   api_version: z.string(),
   artifacts: z.array(ServerArtifactSchema),
 });
-export type ArtifactListResponse = z.output<typeof ArtifactListResponseSchema>;
+type ArtifactListResponse = z.output<typeof ArtifactListResponseSchema>;
 
-export const ServerRunLogSchema = z.object({
+const ServerRunLogSchema = z.object({
   id: z.string(),
   path: z.string(),
   size: z.number().int().nonnegative(),
   modified_at: z.string(),
 });
-export type ServerRunLog = z.output<typeof ServerRunLogSchema>;
 
 export const RunLogListResponseSchema = z.object({
   api_version: z.string(),
   logs: z.array(ServerRunLogSchema),
 });
-export type RunLogListResponse = z.output<typeof RunLogListResponseSchema>;
 
 export const TextContentResponseSchema = z.object({
   api_version: z.string(),
@@ -1272,22 +1276,22 @@ export const TextContentResponseSchema = z.object({
   text: z.string(),
   truncated: z.boolean(),
 });
-export type TextContentResponse = z.output<typeof TextContentResponseSchema>;
+type TextContentResponse = z.output<typeof TextContentResponseSchema>;
 
 // --- Rewind preview + execution --------------------------------------------
 
-export const ServerRewindChoiceSchema = z.object({
+const ServerRewindChoiceSchema = z.object({
   phase: z.string(),
   escalates_to: z.string().optional(),
   override_phase: z.string().optional(),
 });
 
-export const ServerRewindPRConsequenceSchema = z.object({
+const ServerRewindPRConsequenceSchema = z.object({
   repo: z.string(),
   pr_url: z.string(),
 });
 
-export const ServerRewindWorktreeConsequenceSchema = z.object({
+const ServerRewindWorktreeConsequenceSchema = z.object({
   repo: z.string(),
   reset_kind: z.enum(['anchor', 'base', 'base-local', 'none']),
 });
@@ -1311,7 +1315,7 @@ export const RewindPreviewResponseSchema = z.object({
   backup_branch_repos: z.array(z.string()).optional(),
   validation_findings: z.array(z.string()).optional(),
 });
-export type RewindPreviewResponse = z.output<typeof RewindPreviewResponseSchema>;
+type RewindPreviewResponse = z.output<typeof RewindPreviewResponseSchema>;
 
 export const RewindActionResponseSchema = z.object({
   api_version: z.string(),
@@ -1329,7 +1333,7 @@ export const RewindActionResponseSchema = z.object({
   // (pull-request close, backup branch, worktree reset).
   warnings: z.array(CanonicalErrorSchema).max(100).optional(),
 });
-export type RewindActionResponse = z.output<typeof RewindActionResponseSchema>;
+type RewindActionResponse = z.output<typeof RewindActionResponseSchema>;
 
 /** Shared shape of create/setup action responses (FeatureActionResult). */
 export const FeatureActionResponseSchema = z.object({
@@ -1339,12 +1343,9 @@ export const FeatureActionResponseSchema = z.object({
   warnings: z.array(CanonicalErrorSchema).max(32).optional(),
 });
 
-export type FeatureActionResponse = z.output<typeof FeatureActionResponseSchema>;
+type FeatureActionResponse = z.output<typeof FeatureActionResponseSchema>;
 
-export const ServerFeatureOperationalActionResponseSchema = FeatureActionResponseSchema.extend({
-  phase: z.string().optional(),
-  session_ids: z.array(z.string()).max(100).optional(),
-});
+export const ServerFeatureOperationalActionResponseSchema = FeatureActionResponseSchema;
 
 // --- Sessions ---------------------------------------------------------------
 
@@ -1377,7 +1378,7 @@ const ServerTaskActivitySchema = z.object({
   finished_at: z.string().optional(),
 });
 
-export const ServerSessionSummarySchema = z.object({
+const ServerSessionSummarySchema = z.object({
   id: z.string(),
   feature_id: z.string(),
   run_number: z.number().int().nonnegative(),
@@ -1403,9 +1404,9 @@ export const RunSessionListResponseSchema = z.object({
   run_number: z.number().int().positive(),
   sessions: z.array(ServerSessionSummarySchema),
 });
-export type RunSessionListResponse = z.output<typeof RunSessionListResponseSchema>;
+type RunSessionListResponse = z.output<typeof RunSessionListResponseSchema>;
 
-export const ServerTranscriptCursorSchema = z.object({
+const ServerTranscriptCursorSchema = z.object({
   total: z.number().int().nonnegative(),
   start: z.number().int().nonnegative(),
   end: z.number().int().nonnegative(),
@@ -1438,7 +1439,7 @@ const ServerTaskSchema = z.object({
   output_file: z.string().optional(),
 });
 
-export const ServerTranscriptMessageSchema = z.object({
+const ServerTranscriptMessageSchema = z.object({
   index: z.number().int().nonnegative(),
   block_index: z.number().int().nonnegative().optional(),
   role: z.string(),
@@ -1517,19 +1518,19 @@ export const LivePreviewResponseSchema = z.object({
 const ServerSupervisorIdSchema = z.string().max(200);
 const ServerSupervisorSeqSchema = z.number().int().nonnegative();
 
-export const ServerSupervisorSettingsSchema = z.object({
+const ServerSupervisorSettingsSchema = z.object({
   harness: z.string().max(100),
   model: z.string().max(200),
   effort: z.string().max(40),
 });
 
-export const ServerSupervisorPermissionModeSchema = z.object({
+const ServerSupervisorPermissionModeSchema = z.object({
   requested: z.string().max(100),
   effective: z.string().max(100),
   restricted_by_policy: z.boolean(),
 });
 
-export const ServerSupervisorBackgroundTaskSchema = z.object({
+const ServerSupervisorBackgroundTaskSchema = z.object({
   activity: z
     .array(z.object({ at: z.string().max(100), detail: z.string().max(1000) }))
     .max(8)
@@ -1547,7 +1548,7 @@ export const ServerSupervisorBackgroundTaskSchema = z.object({
   expires_at: z.string().max(100),
 });
 
-export const ServerSupervisorStateSchema = z.object({
+const ServerSupervisorStateSchema = z.object({
   background_tasks: z.array(ServerSupervisorBackgroundTaskSchema).optional(),
   conversation_id: ServerSupervisorIdSchema,
   generation: ServerSupervisorSeqSchema,
@@ -1592,7 +1593,7 @@ export const ServerSupervisorStateSchema = z.object({
 });
 export type ServerSupervisorState = z.output<typeof ServerSupervisorStateSchema>;
 
-export const ServerSupervisorRequestRecordSchema = z.object({
+const ServerSupervisorRequestRecordSchema = z.object({
   request_id: AttentionIDSchema,
   tool_name: z.string().max(500),
   stage: z.enum(['requested', 'resolved']),
@@ -1602,7 +1603,7 @@ export const ServerSupervisorRequestRecordSchema = z.object({
   child_session_id: AttentionIDSchema.optional(),
 });
 
-export const ServerSupervisorMarkerRecordSchema = z.object({
+const ServerSupervisorMarkerRecordSchema = z.object({
   marker: z.enum([
     'interrupted',
     'error',
@@ -1623,7 +1624,7 @@ export const ServerSupervisorMarkerRecordSchema = z.object({
   truncated: z.boolean().optional(),
 });
 
-export const ServerSupervisorCheckpointRecordSchema = z.object({
+const ServerSupervisorCheckpointRecordSchema = z.object({
   covers_through_seq: ServerSupervisorSeqSchema,
   reason: z.literal('native_auto'),
   model: z.string().max(200),
@@ -1633,14 +1634,14 @@ export const ServerSupervisorCheckpointRecordSchema = z.object({
 });
 
 /** A user record's attachment: the conversation copy the server made. */
-export const ServerSupervisorAttachmentSchema = z.object({
+const ServerSupervisorAttachmentSchema = z.object({
   path: z.string().min(1).max(4096),
   kind: z.enum(['image', 'file']),
   name: z.string().max(1024),
   size: z.number().int().nonnegative(),
 });
 
-export const ServerSupervisorRecordSchema = z.object({
+const ServerSupervisorRecordSchema = z.object({
   seq: z.number().int().positive(),
   id: ServerSupervisorIdSchema,
   conversation_id: ServerSupervisorIdSchema,
@@ -1675,7 +1676,7 @@ export const SupervisorStateResponseSchema = z.object({
   api_version: z.string(),
   state: ServerSupervisorStateSchema,
 });
-export type SupervisorStateResponse = z.output<typeof SupervisorStateResponseSchema>;
+type SupervisorStateResponse = z.output<typeof SupervisorStateResponseSchema>;
 
 export const SupervisorTranscriptResponseSchema = z.object({
   api_version: z.string(),
@@ -1695,14 +1696,14 @@ export const SupervisorMessageResponseSchema = z.object({
   launched: z.boolean(),
   deduplicated: z.boolean(),
 });
-export type SupervisorMessageResponse = z.output<typeof SupervisorMessageResponseSchema>;
+type SupervisorMessageResponse = z.output<typeof SupervisorMessageResponseSchema>;
 
 export const SupervisorActionResponseSchema = z.object({
   api_version: z.string(),
   result: z.enum(['accepted', 'ended', 'not_active']),
   state: ServerSupervisorStateSchema,
 });
-export type SupervisorActionResponse = z.output<typeof SupervisorActionResponseSchema>;
+type SupervisorActionResponse = z.output<typeof SupervisorActionResponseSchema>;
 
 export const SupervisorResetResponseSchema = z.object({
   api_version: z.string(),
@@ -1710,9 +1711,9 @@ export const SupervisorResetResponseSchema = z.object({
   previous_conversation_id: ServerSupervisorIdSchema,
   state: ServerSupervisorStateSchema,
 });
-export type SupervisorResetResponse = z.output<typeof SupervisorResetResponseSchema>;
+type SupervisorResetResponse = z.output<typeof SupervisorResetResponseSchema>;
 
-export const ServerSupervisorDeltaSchema = z.object({
+const ServerSupervisorDeltaSchema = z.object({
   turn_id: ServerSupervisorIdSchema,
   stream_message_id: ServerSupervisorIdSchema,
   chunk_index: z.number().int().nonnegative(),
@@ -1736,41 +1737,9 @@ export type ServerSupervisorStreamEvent = z.output<typeof ServerSupervisorStream
 
 // --- Runtime config (GET /api/v1/config/runtime) — creation-defaults subset --
 
-export const ServerModelDefaultsSchema = z.object({
-  inquiry: z.string().optional(),
-  research: z.string().optional(),
-  planning: z.string().optional(),
-  implementation: z.string().optional(),
-  review: z.string().optional(),
-  utilities: z.string().optional(),
-  kb_build: z.string().optional(),
-});
-
-export const ServerEffortDefaultsSchema = z.object({
-  inquiry: z.string().optional(),
-  research: z.string().optional(),
-  planning: z.string().optional(),
-  implementation: z.string().optional(),
-  review: z.string().optional(),
-  utilities: z.string().optional(),
-  kb_build: z.string().optional(),
-});
-
-export const RuntimeConfigCreationSchema = z.object({
-  api_version: z.string(),
-  feature_defaults: z.object({
-    models: ServerModelDefaultsSchema,
-    effort: ServerEffortDefaultsSchema.optional(),
-    inquireness: z.string().optional(),
-    pipeline: z.string().optional(),
-  }),
-});
-
-export type RuntimeConfigCreation = z.output<typeof RuntimeConfigCreationSchema>;
-
 // --- Recovery, cycle actions, preflight, and bulk preview -------------------
 
-export const ServerRecoveryItemSchema = z.object({
+const ServerRecoveryItemSchema = z.object({
   key: z.string(),
   feature_id: z.string(),
   feature_name: z.string().optional(),
@@ -1786,36 +1755,26 @@ export const ServerRecoveryItemSchema = z.object({
   allowed_actions: z.array(z.string()),
   default_action: z.string(),
 });
-export type ServerRecoveryItem = z.output<typeof ServerRecoveryItemSchema>;
+type ServerRecoveryItem = z.output<typeof ServerRecoveryItemSchema>;
 
 export const RecoverySnapshotResponseSchema = z.object({
   api_version: z.string(),
   snapshot_id: z.string(),
   items: z.array(ServerRecoveryItemSchema),
 });
-export type RecoverySnapshotResponse = z.output<typeof RecoverySnapshotResponseSchema>;
+type RecoverySnapshotResponse = z.output<typeof RecoverySnapshotResponseSchema>;
 
 export const RecoveryActionResponseSchema = z.object({
   api_version: z.string(),
   result: z.string(),
 });
-export type RecoveryActionResponse = z.output<typeof RecoveryActionResponseSchema>;
 
-export const RebaseFeatureResponseSchema = z.object({
+export const ChildLaunchResponseSchema = z.object({
   api_version: z.string(),
   feature_id: z.string(),
   parent_id: z.string(),
   result: z.string(),
 });
-export type RebaseFeatureResponse = z.output<typeof RebaseFeatureResponseSchema>;
-
-export const RefactorFeatureResponseSchema = z.object({
-  api_version: z.string(),
-  feature_id: z.string(),
-  parent_id: z.string(),
-  result: z.string(),
-});
-export type RefactorFeatureResponse = z.output<typeof RefactorFeatureResponseSchema>;
 
 export const ReviewFeedbackFetchResponseSchema = z.object({
   api_version: z.string(),
@@ -1823,16 +1782,14 @@ export const ReviewFeedbackFetchResponseSchema = z.object({
   snapshot_id: z.string(),
   repos: z.array(ServerReviewFeedbackRepoCommentsSchema),
 });
-export type ReviewFeedbackFetchResponse = z.output<typeof ReviewFeedbackFetchResponseSchema>;
+type ReviewFeedbackFetchResponse = z.output<typeof ReviewFeedbackFetchResponseSchema>;
 
 export const ReviewFeedbackSelectionResponseSchema = z.object({
   api_version: z.string(),
   revision: z.number().int().nonnegative(),
   repos: z.array(ServerReviewFeedbackRepoCommentsSchema),
 });
-export type ReviewFeedbackSelectionResponse = z.output<
-  typeof ReviewFeedbackSelectionResponseSchema
->;
+type ReviewFeedbackSelectionResponse = z.output<typeof ReviewFeedbackSelectionResponseSchema>;
 
 export const ReviewFeedbackFeatureResponseSchema = z.object({
   api_version: z.string(),
@@ -1844,7 +1801,7 @@ export const ReviewFeedbackFeatureResponseSchema = z.object({
   omitted: z.number().int().nonnegative().optional(),
   deferred: z.number().int().nonnegative().optional(),
 });
-export type ReviewFeedbackFeatureResponse = z.output<typeof ReviewFeedbackFeatureResponseSchema>;
+type ReviewFeedbackFeatureResponse = z.output<typeof ReviewFeedbackFeatureResponseSchema>;
 
 export const DiscardChildResponseSchema = z.object({
   api_version: z.string(),
@@ -1861,7 +1818,7 @@ export const DeleteFeatureResponseSchema = z.object({
     .optional(),
 });
 
-export const CompletionPreflightRepoSchema = z.object({
+const CompletionPreflightRepoSchema = z.object({
   repo: z.string(),
   publishable: z.boolean(),
   touched: z.boolean(),
@@ -1882,7 +1839,6 @@ export const CompletionPreflightRepoSchema = z.object({
   pending_dirty_files: z.array(z.string()).optional(),
   pending_dirty_file_total: z.number().optional(),
 });
-export type CompletionPreflightRepo = z.output<typeof CompletionPreflightRepoSchema>;
 
 export const CompletionPreflightResponseSchema = z.object({
   api_version: z.string(),
@@ -1892,9 +1848,9 @@ export const CompletionPreflightResponseSchema = z.object({
   mark_done_blocker: z.string().optional(),
   repos: z.array(CompletionPreflightRepoSchema),
 });
-export type CompletionPreflightResponse = z.output<typeof CompletionPreflightResponseSchema>;
+type CompletionPreflightResponse = z.output<typeof CompletionPreflightResponseSchema>;
 
-export const RepositoryDiffFileSchema = z.object({
+const RepositoryDiffFileSchema = z.object({
   path: z.string(),
   old_path: z.string().optional(),
   operation: z.string(),
@@ -1903,7 +1859,6 @@ export const RepositoryDiffFileSchema = z.object({
   binary: z.boolean().optional(),
   fingerprint: z.string().optional(),
 });
-export type RepositoryDiffFile = z.output<typeof RepositoryDiffFileSchema>;
 
 export const RepositoryDiffResponseSchema = z.object({
   api_version: z.string(),
@@ -1922,7 +1877,7 @@ export const RepositoryDiffResponseSchema = z.object({
   // this repository's inspection; absent when it was fully inspected.
   error: CanonicalErrorSchema.optional(),
 });
-export type RepositoryDiffResponse = z.output<typeof RepositoryDiffResponseSchema>;
+type RepositoryDiffResponse = z.output<typeof RepositoryDiffResponseSchema>;
 
 export const RepositoryPathResponseSchema = z.object({
   api_version: z.string(),
@@ -1930,7 +1885,7 @@ export const RepositoryPathResponseSchema = z.object({
   repo: z.string(),
   path: z.string(),
 });
-export type RepositoryPathResponse = z.output<typeof RepositoryPathResponseSchema>;
+type RepositoryPathResponse = z.output<typeof RepositoryPathResponseSchema>;
 
 export const PublishDescriptionResponseSchema = z.object({
   api_version: z.string(),
@@ -1939,235 +1894,250 @@ export const PublishDescriptionResponseSchema = z.object({
   title: z.string(),
   body: z.string(),
 });
-export type PublishDescriptionResponse = z.output<typeof PublishDescriptionResponseSchema>;
+type PublishDescriptionResponse = z.output<typeof PublishDescriptionResponseSchema>;
 
-// Compile-time drift guards: zod outputs must stay assignable to the
-// generated OpenAPI component types.
-// The canonical error schema is a strict superset check: the generated
-// component must remain assignable to the parsed output (remediation action
-// IDs parse as plain strings; the generated type narrows them to the
-// feature-action enum, which is what the server-side catalog test pins).
-type CanonicalErrorDTO = components['schemas']['Error'];
-const _canonicalErrorSubset = (value: CanonicalErrorDTO): CanonicalError => value;
-void _canonicalErrorSubset;
-type CanonicalErrorResponseDTO = components['schemas']['ErrorResponse'];
-const _canonicalErrorResponseSubset = (value: CanonicalErrorResponseDTO): CanonicalErrorResponse =>
-  value;
-void _canonicalErrorResponseSubset;
-type HealthDTO = components['schemas']['HealthResponse'];
-const _healthAssignable = (value: HealthResponse): HealthDTO => value;
-void _healthAssignable;
-type CompatibilityDTO = components['schemas']['CompatibilityDeclaration'];
-const _compatibilityAssignable = (value: CompatibilityDeclaration): CompatibilityDTO => value;
-void _compatibilityAssignable;
-type ReadinessDTO = components['schemas']['ReadinessResponse'];
-// Reverse guard for the readiness subset: the generated component (whose
-// issue entries are canonical Errors with feature-action-enum remediation
-// actions) must remain assignable to the parsed output, exactly like the
-// canonical error guard above.
-const _readinessSubset = (value: ReadinessDTO): ReadinessResponse => value;
-void _readinessSubset;
-// Reverse guard for the subset schema: every field it parses must exist on
-// the generated RuntimeConfigResponse with a compatible type.
-type RuntimeConfigDTO = components['schemas']['RuntimeConfigResponse'];
-const _runtimeConfigSubset = (value: RuntimeConfigDTO): RuntimeConfigWorkspace => value;
-void _runtimeConfigSubset;
-// Reverse guards for the feature subsets: every parsed field must exist on
-// the generated types with a compatible shape.
-type FeatureListDTO = components['schemas']['FeatureListResponse'];
-const _featureListSubset = (value: FeatureListDTO): FeatureListResponse => value;
-void _featureListSubset;
-type TestingContractDTO = components['schemas']['TestingContractResponse'];
-const _testingContractSubset = (value: TestingContractDTO): TestingContractResponse => value;
-void _testingContractSubset;
-type FeatureDetailResponseDTO = components['schemas']['FeatureDetailResponse'];
-const _featureDetailSubset = (value: FeatureDetailResponseDTO): FeatureDetailResponse => value;
-void _featureDetailSubset;
-type SetupDTO = components['schemas']['Setup'];
-const _setupSubset = (value: SetupDTO): ServerSetup => value;
-void _setupSubset;
-type SetupTaskDTO = components['schemas']['SetupTask'];
-const _setupTaskSubset = (value: SetupTaskDTO): ServerSetupTask => value;
-void _setupTaskSubset;
-type CreateFeatureResponseDTO = components['schemas']['CreateFeatureResponse'];
-const _createFeatureSubset = (value: CreateFeatureResponseDTO): FeatureActionResponse => value;
-void _createFeatureSubset;
-type FeatureSetupResponseDTO = components['schemas']['FeatureSetupResponse'];
-const _featureSetupSubset = (value: FeatureSetupResponseDTO): FeatureActionResponse => value;
-void _featureSetupSubset;
-type SessionListDTO = components['schemas']['SessionListResponse'];
-const _sessionListSubset = (value: SessionListDTO): z.output<typeof SessionListResponseSchema> =>
-  value;
-void _sessionListSubset;
-type SessionDetailDTO = components['schemas']['SessionDetailResponse'];
-const _sessionDetailSubset = (
-  value: SessionDetailDTO,
-): z.output<typeof SessionDetailResponseSchema> => value;
-void _sessionDetailSubset;
-type TranscriptDTO = components['schemas']['TranscriptResponse'];
-const _transcriptSubset = (value: TranscriptDTO): z.output<typeof TranscriptResponseSchema> =>
-  value;
-void _transcriptSubset;
-type OutputChunkDTO = components['schemas']['SessionOutputChunk'];
-const _outputChunkSubset = (value: OutputChunkDTO): z.output<typeof SessionOutputChunkSchema> =>
-  value;
-void _outputChunkSubset;
-type ReviewSessionDTO = components['schemas']['ReviewSessionResponse'];
-const _reviewSessionSubset = (value: ReviewSessionDTO): ServerReviewSession => value;
-void _reviewSessionSubset;
-type ReviewValidationDTO = components['schemas']['ReviewDraftValidationResponse'];
-const _reviewValidationSubset = (value: ReviewValidationDTO): ServerReviewDraftValidation => value;
-void _reviewValidationSubset;
-type ReviewDecisionDTO = components['schemas']['ReviewSessionDecisionResponse'];
-const _reviewDecisionSubset = (value: ReviewDecisionDTO): ServerReviewDecision => value;
-void _reviewDecisionSubset;
-const _runtimeConfigCreationSubset = (value: RuntimeConfigDTO): RuntimeConfigCreation => value;
-void _runtimeConfigCreationSubset;
-type RunListDTO = components['schemas']['RunListResponse'];
-const _runListSubset = (value: RunListDTO): RunListResponse => value;
-void _runListSubset;
-type RunDetailDTO = components['schemas']['RunDetailResponse'];
-const _runDetailSubset = (value: RunDetailDTO): RunDetailResponse => value;
-void _runDetailSubset;
-type RunSessionListDTO = components['schemas']['RunSessionListResponse'];
-const _runSessionListSubset = (value: RunSessionListDTO): RunSessionListResponse => value;
-void _runSessionListSubset;
-type ArtifactListDTO = components['schemas']['ArtifactListResponse'];
-const _artifactListSubset = (value: ArtifactListDTO): ArtifactListResponse => value;
-void _artifactListSubset;
-type TextContentDTO = components['schemas']['TextContentResponse'];
-const _textContentSubset = (value: TextContentDTO): TextContentResponse => value;
-void _textContentSubset;
-type RecoverySnapshotDTO = components['schemas']['RecoverySnapshotResponse'];
-const _recoverySnapshotSubset = (value: RecoverySnapshotDTO): RecoverySnapshotResponse => value;
-void _recoverySnapshotSubset;
-type RecoveryItemDTO = components['schemas']['RecoveryItem'];
-const _recoveryItemSubset = (value: RecoveryItemDTO): ServerRecoveryItem => value;
-void _recoveryItemSubset;
-type RebaseFeatureDTO = components['schemas']['RebaseFeatureResponse'];
-const _rebaseFeatureSubset = (value: RebaseFeatureDTO): RebaseFeatureResponse => value;
-void _rebaseFeatureSubset;
-type RefactorFeatureDTO = components['schemas']['RefactorFeatureResponse'];
-const _refactorFeatureSubset = (value: RefactorFeatureDTO): RefactorFeatureResponse => value;
-void _refactorFeatureSubset;
-type ReviewFeedbackFetchDTO = components['schemas']['ReviewFeedbackFetchResponse'];
-const _reviewFeedbackFetchSubset = (value: ReviewFeedbackFetchDTO): ReviewFeedbackFetchResponse =>
-  value;
-void _reviewFeedbackFetchSubset;
-type ReviewFeedbackCommentDTO = components['schemas']['ReviewFeedbackComment'];
-const _reviewFeedbackCommentSubset = (
-  value: ReviewFeedbackCommentDTO,
-): ServerReviewFeedbackComment => value;
-void _reviewFeedbackCommentSubset;
-type ReviewFeedbackDraftCommentDTO = components['schemas']['ReviewFeedbackDraftComment'];
-const _reviewFeedbackDraftCommentSubset = (
-  value: ReviewFeedbackDraftCommentDTO,
-): ServerReviewFeedbackDraftComment => value;
-void _reviewFeedbackDraftCommentSubset;
-type ReviewFeedbackSelectionDTO = components['schemas']['ReviewFeedbackSelectionResponse'];
-const _reviewFeedbackSelectionSubset = (
-  value: ReviewFeedbackSelectionDTO,
-): ReviewFeedbackSelectionResponse => value;
-void _reviewFeedbackSelectionSubset;
-type ReviewFeedbackFeatureDTO = components['schemas']['ReviewFeedbackFeatureResponse'];
-const _reviewFeedbackFeatureSubset = (
-  value: ReviewFeedbackFeatureDTO,
-): ReviewFeedbackFeatureResponse => value;
-void _reviewFeedbackFeatureSubset;
-type RepoStatusDTO = components['schemas']['RepoStatus'];
-const _repoStatusSubset = (value: RepoStatusDTO): ServerRepoStatus => value;
-void _repoStatusSubset;
-type NeedUserInputGateDTO = components['schemas']['NeedUserInputGate'];
-const _needUserInputGateSubset = (value: NeedUserInputGateDTO): ServerNeedUserInputGateDetail =>
-  value;
-void _needUserInputGateSubset;
-type NeedUserInputVerificationDTO = components['schemas']['NeedUserInputVerification'];
-const _needUserInputVerificationSubset = (
-  value: NeedUserInputVerificationDTO,
-): z.output<typeof ServerNeedUserInputVerificationSchema> => value;
-void _needUserInputVerificationSubset;
-// Ask-user and gate questions are guarded in both directions: the generated
-// component must parse, and the parsed output must carry every field the
-// server now requires (the one-based `index` answers are keyed by).
-type AskUserQuestionDTO = components['schemas']['AskUserQuestion'];
-type ServerAskUserQuestion = z.output<typeof ServerAskUserQuestionSchema>;
-const _askUserQuestionSubset = (value: AskUserQuestionDTO): ServerAskUserQuestion => value;
-void _askUserQuestionSubset;
-const _askUserQuestionAssignable = (value: ServerAskUserQuestion): AskUserQuestionDTO => value;
-void _askUserQuestionAssignable;
-type NeedUserInputQuestionDTO = components['schemas']['NeedUserInputQuestion'];
-type ServerNeedUserInputQuestion = NonNullable<
-  z.output<typeof ServerNeedUserInputGateSchema>['questions']
->[number];
-const _needUserInputQuestionSubset = (
-  value: NeedUserInputQuestionDTO,
-): ServerNeedUserInputQuestion => value;
-void _needUserInputQuestionSubset;
-const _needUserInputQuestionAssignable = (
-  value: ServerNeedUserInputQuestion,
-): NeedUserInputQuestionDTO => value;
-void _needUserInputQuestionAssignable;
-type RewindPreviewDTO = components['schemas']['RewindPreviewResponse'];
-const _rewindPreviewSubset = (value: RewindPreviewDTO): RewindPreviewResponse => value;
-void _rewindPreviewSubset;
-type RewindActionDTO = components['schemas']['RewindFeatureResponse'];
-const _rewindActionSubset = (value: RewindActionDTO): RewindActionResponse => value;
-void _rewindActionSubset;
-type RepositoryPathDTO = components['schemas']['RepositoryPathDTO'];
-const _repositoryPathSubset = (value: RepositoryPathDTO): RepositoryPathResponse => value;
-void _repositoryPathSubset;
-type PublishDescriptionDTO = components['schemas']['PublishDescriptionResponse'];
-const _publishDescriptionSubset = (value: PublishDescriptionDTO): PublishDescriptionResponse =>
-  value;
-void _publishDescriptionSubset;
-type CompletionPreflightDTO = components['schemas']['CompletionPreflightResponse'];
-const _completionPreflightSubset = (value: CompletionPreflightDTO): CompletionPreflightResponse =>
-  value;
-void _completionPreflightSubset;
-type RepositoryDiffDTO = components['schemas']['RepositoryDiffResponse'];
-const _repositoryDiffSubset = (value: RepositoryDiffDTO): RepositoryDiffResponse => value;
-void _repositoryDiffSubset;
-type CloneOperationWireDTO = components['schemas']['CloneOperation'];
-const _cloneOperationSubset = (value: CloneOperationWireDTO): CloneOperationDTO => value;
-void _cloneOperationSubset;
-type CloneActionWireDTO = components['schemas']['CloneActionResponse'];
-const _cloneActionSubset = (value: CloneActionWireDTO): CloneActionResponse => value;
-void _cloneActionSubset;
-type CloneOperationResponseWireDTO = components['schemas']['CloneOperationResponse'];
-const _cloneOperationResponseSubset = (
-  value: CloneOperationResponseWireDTO,
-): CloneOperationResponse => value;
-void _cloneOperationResponseSubset;
-type CloneOperationListWireDTO = components['schemas']['CloneOperationListResponse'];
-const _cloneOperationListSubset = (value: CloneOperationListWireDTO): CloneOperationListResponse =>
-  value;
-void _cloneOperationListSubset;
-type CreateRepositoryWireDTO = components['schemas']['CreateRepositoryResponse'];
-const _createRepositorySubset = (value: CreateRepositoryWireDTO): CreateRepositoryResponse => value;
-void _createRepositorySubset;
-type SupervisorStateResponseDTO = components['schemas']['SupervisorStateResponse'];
-const _supervisorStateSubset = (value: SupervisorStateResponseDTO): SupervisorStateResponse =>
-  value;
-void _supervisorStateSubset;
-type SupervisorTranscriptResponseDTO = components['schemas']['SupervisorTranscriptResponse'];
-const _supervisorTranscriptSubset = (
-  value: SupervisorTranscriptResponseDTO,
-): SupervisorTranscriptResponse => value;
-void _supervisorTranscriptSubset;
-type SupervisorMessageResponseDTO = components['schemas']['SupervisorMessageResponse'];
-const _supervisorMessageSubset = (value: SupervisorMessageResponseDTO): SupervisorMessageResponse =>
-  value;
-void _supervisorMessageSubset;
-type SupervisorActionResponseDTO = components['schemas']['SupervisorActionResponse'];
-const _supervisorActionSubset = (value: SupervisorActionResponseDTO): SupervisorActionResponse =>
-  value;
-void _supervisorActionSubset;
-type SupervisorResetResponseDTO = components['schemas']['SupervisorResetResponse'];
-const _supervisorResetSubset = (value: SupervisorResetResponseDTO): SupervisorResetResponse =>
-  value;
-void _supervisorResetSubset;
-type SupervisorStreamEventDTO = components['schemas']['SupervisorStreamEvent'];
-const _supervisorStreamEventSubset = (
-  value: SupervisorStreamEventDTO,
-): ServerSupervisorStreamEvent => value;
-void _supervisorStreamEventSubset;
+// Each alias proves one direction of the generated OpenAPI contract.
+// Subset schemas use generated -> parsed; narrowed wire enums use parsed -> generated.
+type DriftGuard<_Actual extends Expected, Expected> = true;
+type Wire = components['schemas'];
+type _canonicalErrorSubset = DriftGuard<components['schemas']['Error'], CanonicalError>;
+type _canonicalErrorResponseSubset = DriftGuard<Wire['ErrorResponse'], CanonicalErrorResponse>;
+type _healthSubset = DriftGuard<components['schemas']['HealthResponse'], ProbeHealth>;
+type _compatibilityAssignable = DriftGuard<
+  CompatibilityDeclaration,
+  Wire['CompatibilityDeclaration']
+>;
+type _readinessSubset = DriftGuard<components['schemas']['ReadinessResponse'], ReadinessResponse>;
+type _runtimeConfigSubset = DriftGuard<
+  Wire['RuntimeConfigResponse'],
+  Omit<z.output<typeof RuntimeConfigResponseSchema>, 'feature_defaults'>
+>;
+type _featureListSubset = DriftGuard<Wire['FeatureListResponse'], FeatureListResponse>;
+type _testingContractSubset = DriftGuard<Wire['TestingContractResponse'], TestingContractResponse>;
+type _featureDetailSubset = DriftGuard<Wire['FeatureDetailResponse'], FeatureDetailResponse>;
+type _setupSubset = DriftGuard<components['schemas']['Setup'], ServerSetup>;
+type _setupTaskSubset = DriftGuard<components['schemas']['SetupTask'], ServerSetupTask>;
+type _createFeatureSubset = DriftGuard<Wire['FeatureActionResponse'], FeatureActionResponse>;
+type _sessionListSubset = DriftGuard<
+  Wire['SessionListResponse'],
+  z.output<typeof SessionListResponseSchema>
+>;
+type _sessionDetailSubset = DriftGuard<
+  Wire['SessionDetailResponse'],
+  z.output<typeof SessionDetailResponseSchema>
+>;
+type _transcriptSubset = DriftGuard<
+  Wire['TranscriptResponse'],
+  z.output<typeof TranscriptResponseSchema>
+>;
+type _outputChunkSubset = DriftGuard<
+  components['schemas']['SessionOutputChunk'],
+  z.output<typeof SessionOutputChunkSchema>
+>;
+type _reviewSessionSubset = DriftGuard<Wire['ReviewSessionResponse'], ServerReviewSession>;
+type _reviewValidationSubset = DriftGuard<
+  components['schemas']['ReviewDraftValidationResponse'],
+  ServerReviewDraftValidation
+>;
+type _reviewDecisionSubset = DriftGuard<
+  components['schemas']['ReviewSessionDecisionResponse'],
+  ServerReviewDecision
+>;
+type _runListSubset = DriftGuard<components['schemas']['RunListResponse'], RunListResponse>;
+type _runDetailSubset = DriftGuard<components['schemas']['RunDetailResponse'], RunDetailResponse>;
+type _runSessionListSubset = DriftGuard<
+  components['schemas']['RunSessionListResponse'],
+  RunSessionListResponse
+>;
+type _artifactListSubset = DriftGuard<
+  components['schemas']['ArtifactListResponse'],
+  ArtifactListResponse
+>;
+type _textContentSubset = DriftGuard<
+  components['schemas']['TextContentResponse'],
+  TextContentResponse
+>;
+type _recoverySnapshotSubset = DriftGuard<
+  components['schemas']['RecoverySnapshotResponse'],
+  RecoverySnapshotResponse
+>;
+type _recoveryItemSubset = DriftGuard<components['schemas']['RecoveryItem'], ServerRecoveryItem>;
+type _childLaunch = DriftGuard<
+  components['schemas']['ChildLaunchResponse'],
+  z.output<typeof ChildLaunchResponseSchema>
+>;
+type _reviewFeedbackFetchSubset = DriftGuard<
+  components['schemas']['ReviewFeedbackFetchResponse'],
+  ReviewFeedbackFetchResponse
+>;
+type _reviewFeedbackCommentSubset = DriftGuard<
+  components['schemas']['ReviewFeedbackComment'],
+  ServerReviewFeedbackComment
+>;
+type _reviewFeedbackDraftCommentSubset = DriftGuard<
+  components['schemas']['ReviewFeedbackDraftComment'],
+  ServerReviewFeedbackDraftComment
+>;
+type _reviewFeedbackSelectionSubset = DriftGuard<
+  components['schemas']['ReviewFeedbackSelectionResponse'],
+  ReviewFeedbackSelectionResponse
+>;
+type _reviewFeedbackFeatureSubset = DriftGuard<
+  components['schemas']['ReviewFeedbackFeatureResponse'],
+  ReviewFeedbackFeatureResponse
+>;
+type _repoStatusSubset = DriftGuard<components['schemas']['RepoStatus'], ServerRepoStatus>;
+type _needUserInputGateSubset = DriftGuard<
+  components['schemas']['NeedUserInputGate'],
+  ServerNeedUserInputGateDetail
+>;
+type _needUserInputVerificationSubset = DriftGuard<
+  components['schemas']['NeedUserInputVerification'],
+  z.output<typeof ServerNeedUserInputVerificationSchema>
+>;
+type _askUserQuestionSubset = DriftGuard<
+  components['schemas']['AskUserQuestion'],
+  z.output<typeof ServerAskUserQuestionSchema>
+>;
+type _askUserQuestionAssignable = DriftGuard<
+  z.output<typeof ServerAskUserQuestionSchema>,
+  components['schemas']['AskUserQuestion']
+>;
+type _needUserInputQuestionSubset = DriftGuard<
+  components['schemas']['NeedUserInputQuestion'],
+  NonNullable<z.output<typeof ServerNeedUserInputGateSchema>['questions']>[number]
+>;
+type _needUserInputQuestionAssignable = DriftGuard<
+  NonNullable<z.output<typeof ServerNeedUserInputGateSchema>['questions']>[number],
+  components['schemas']['NeedUserInputQuestion']
+>;
+type _rewindPreviewSubset = DriftGuard<
+  components['schemas']['RewindPreviewResponse'],
+  RewindPreviewResponse
+>;
+type _rewindActionSubset = DriftGuard<
+  components['schemas']['RewindFeatureResponse'],
+  RewindActionResponse
+>;
+type _repositoryPathSubset = DriftGuard<
+  components['schemas']['RepositoryPathDTO'],
+  RepositoryPathResponse
+>;
+type _publishDescriptionSubset = DriftGuard<
+  components['schemas']['PublishDescriptionResponse'],
+  PublishDescriptionResponse
+>;
+type _completionPreflightSubset = DriftGuard<
+  components['schemas']['CompletionPreflightResponse'],
+  CompletionPreflightResponse
+>;
+type _repositoryDiffSubset = DriftGuard<
+  components['schemas']['RepositoryDiffResponse'],
+  RepositoryDiffResponse
+>;
+type _cloneOperationSubset = DriftGuard<components['schemas']['CloneOperation'], CloneOperationDTO>;
+type _cloneActionSubset = DriftGuard<
+  components['schemas']['CloneActionResponse'],
+  CloneActionResponse
+>;
+type _cloneOperationResponseSubset = DriftGuard<
+  components['schemas']['CloneOperationResponse'],
+  CloneOperationResponse
+>;
+type _cloneOperationListSubset = DriftGuard<
+  components['schemas']['CloneOperationListResponse'],
+  CloneOperationListResponse
+>;
+type _createRepositorySubset = DriftGuard<
+  components['schemas']['CreateRepositoryResponse'],
+  CreateRepositoryResponse
+>;
+type _supervisorStateSubset = DriftGuard<
+  components['schemas']['SupervisorStateResponse'],
+  SupervisorStateResponse
+>;
+type _supervisorTranscriptSubset = DriftGuard<
+  components['schemas']['SupervisorTranscriptResponse'],
+  SupervisorTranscriptResponse
+>;
+type _supervisorMessageSubset = DriftGuard<
+  components['schemas']['SupervisorMessageResponse'],
+  SupervisorMessageResponse
+>;
+type _supervisorActionSubset = DriftGuard<
+  components['schemas']['SupervisorActionResponse'],
+  SupervisorActionResponse
+>;
+type _supervisorResetSubset = DriftGuard<
+  components['schemas']['SupervisorResetResponse'],
+  SupervisorResetResponse
+>;
+type _supervisorStreamEventSubset = DriftGuard<
+  components['schemas']['SupervisorStreamEvent'],
+  ServerSupervisorStreamEvent
+>;
+// Wire schemas moved from their main-process consumers.
+type _runtimeReadinessSubset = DriftGuard<
+  components['schemas']['RuntimeReadinessResponse'],
+  RuntimeReadinessResponse
+>;
+type _modelDefaults = DriftGuard<
+  components['schemas']['ModelDefaults'],
+  z.output<typeof ServerModelDefaultsSchema>
+>;
+type _effortDefaults = DriftGuard<
+  components['schemas']['EffortConfig'],
+  z.output<typeof ServerEffortDefaultsSchema>
+>;
+type _checkpoints = DriftGuard<
+  components['schemas']['Checkpoints'],
+  z.output<typeof ServerCheckpointsSchema>
+>;
+type _featureConfigPayload = DriftGuard<
+  components['schemas']['FeatureConfig'],
+  z.output<typeof ServerFeatureConfigSchema>
+>;
+type _featureDefaults = DriftGuard<
+  components['schemas']['FeatureDefaults'],
+  Omit<z.output<typeof RuntimeConfigResponseSchema>['feature_defaults'], 'checkpoints'>
+>;
+type _modelInfo = DriftGuard<
+  components['schemas']['Model'],
+  z.output<typeof ServerModelInfoSchema>
+>;
+type _configAction = DriftGuard<
+  components['schemas']['RuntimeConfigUpdateResponse'],
+  z.output<typeof ActionResponseSchema>
+>;
+type _sseEnvelope = DriftGuard<
+  components['schemas']['SSEEvent'],
+  z.output<typeof SseEventEnvelopeSchema>
+>;
+type _featureConfig = DriftGuard<
+  components['schemas']['FeatureConfigResponse'],
+  z.output<typeof FeatureConfigResponseSchema>
+>;
+type _modelCatalog = DriftGuard<
+  components['schemas']['ModelCatalogResponse'],
+  Omit<z.output<typeof ModelCatalogResponseSchema>, 'chat_default_effort'>
+>;
+type _providerRefresh = DriftGuard<
+  components['schemas']['ProviderModelRefreshResponse'],
+  Omit<z.output<typeof ProviderModelRefreshResponseSchema>, 'catalog'>
+>;
+type _catalogEffort = DriftGuard<
+  NonNullable<z.output<typeof ModelCatalogResponseSchema>['chat_default_effort']>,
+  components['schemas']['ModelCatalogResponse']['chat_default_effort']
+>;
+type _stageUpload = DriftGuard<
+  z.output<typeof StageUploadResponseSchema>,
+  components['schemas']['StageUploadResponse']
+>;
+type _updateSnapshot = DriftGuard<
+  components['schemas']['UpdateSnapshot'],
+  z.output<typeof WireSnapshotSchema>
+>;
+type _updateResponse = DriftGuard<
+  components['schemas']['UpdateSnapshotResponse'],
+  z.output<typeof WireResponseSchema>
+>;

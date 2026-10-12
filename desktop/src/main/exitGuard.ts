@@ -28,7 +28,7 @@ limitations under the License.
  */
 import { Worker } from 'node:worker_threads';
 
-export interface HardExitGuardOptions {
+interface HardExitGuardOptions {
   /** Delay before the guard ends the process. */
   timeoutMs: number;
   /** App-owned child pids to stop before the process is killed. */
@@ -38,13 +38,13 @@ export interface HardExitGuardOptions {
   log?(line: string): void;
 }
 
-export interface HardExitGuard {
+interface HardExitGuard {
   disarm(): void;
 }
 
 // Matches the bundled server's own SIGTERM budget for reaping provider
 // process groups (see serverProcess.ts DEFAULT_STOP_TIMEOUT_MS).
-export const DEFAULT_CHILD_GRACE_MS = 15_000;
+const DEFAULT_CHILD_GRACE_MS = 15_000;
 
 /** The line the worker writes to stderr when it fires; the E2E harness keys on it. */
 export const HARD_EXIT_MARKER = 'forcing exit off the main thread';

@@ -15,22 +15,30 @@
 package agent
 
 import (
-	"context"
-	"fmt"
 	"path/filepath"
 	"reflect"
 	"strings"
 	"sync"
 	"testing"
 
+	"github.com/doordash-oss/agentic-orchestrator/internal/llm"
+	"github.com/doordash-oss/agentic-orchestrator/internal/llm/claude"
 	"github.com/doordash-oss/agentic-orchestrator/internal/permission"
-	"github.com/doordash-oss/agentic-orchestrator/internal/ports"
 	"github.com/doordash-oss/agentic-orchestrator/internal/session"
 )
 
+// testSessionProtocol returns the Claude protocol mock sessions run under, so
+// test-built session options satisfy the manager's mandatory-protocol
+// requirement while keeping the wire behavior the protocol-less mock sessions
+// had: the initialize handshake plus the initial prompt as a user-input
+// message on stdin, and stdout JSONL parsed with the raw-text fallback.
+func testSessionProtocol(initialPrompt string) llm.Protocol {
+	return claude.NewProtocol(llm.ProtocolOpts{InitialPrompt: initialPrompt})
+}
+
 // isReviewHelper reports whether opts.PermHandler indicates a bounded review
-// or validator helper run. New bounded helpers use BoundedHelperArtifactHandler;
-// a legacy path still uses ReadOnlyHandler. Tests treat both as "review session".
+// or validator helper run: bounded helpers use BoundedHelperArtifactHandler and
+// live-run reviews use LiveRunReviewHandler. Tests treat both as "review session".
 func isReviewHelper(h interface{}) bool {
 	switch typed := h.(type) {
 	case *permission.SessionGuardHandler:
@@ -38,8 +46,6 @@ func isReviewHelper(h interface{}) bool {
 	case *permission.BoundedHelperArtifactHandler:
 		return true
 	case *permission.LiveRunReviewHandler:
-		return true
-	case *permission.ReadOnlyHandler:
 		return true
 	}
 	return false
@@ -76,8 +82,29 @@ func mockBuildSession(agentScript, reviewScript string) func(BuildSessionOpts) (
 			InitialPrompt: opts.Prompt,
 			RepoName:      opts.RepoName,
 			LogPath:       opts.LogPath,
+			Protocol:      testSessionProtocol(opts.Prompt),
 		}
 		return cmd, nil, sessOpts, nil
+	}
+}
+
+// mockBuildSessionStillCrashingOnResume wraps mockBuildSession so a
+// crash-resume invocation (ResumeSessionID set) launches a process that
+// exits immediately without a result. The mock agent's silent exit is a
+// process crash in production terms, and the loop's crash resume restarts
+// the provider once; a provider that crashes again leaves the iteration
+// FAILED, exactly like the pre-protocol mock sessions did.
+func mockBuildSessionStillCrashingOnResume(agentScript, reviewScript string) func(BuildSessionOpts) ([]string, []string, *session.SessionOpts, error) {
+	base := mockBuildSession(agentScript, reviewScript)
+	return func(opts BuildSessionOpts) ([]string, []string, *session.SessionOpts, error) {
+		if opts.ResumeSessionID == "" {
+			return base(opts)
+		}
+		_, env, sessOpts, err := base(opts)
+		if err != nil {
+			return nil, nil, nil, err
+		}
+		return []string{"true"}, env, sessOpts, nil
 	}
 }
 
@@ -124,6 +151,7 @@ func mockBuildSessionByModel(scripts map[string]string) func(BuildSessionOpts) (
 			InitialPrompt: opts.Prompt,
 			RepoName:      opts.RepoName,
 			LogPath:       opts.LogPath,
+			Protocol:      testSessionProtocol(opts.Prompt),
 		}
 		return cmd, nil, sessOpts, nil
 	}
@@ -174,22 +202,4 @@ func assertExplorationAgentNames(t *testing.T, got []string) {
 	if !reflect.DeepEqual(got, explorationAgentNames()) {
 		t.Fatalf("AgentNames = %#v, want exploration set %#v", got, explorationAgentNames())
 	}
-}
-
-type fakeGitRunner struct {
-	head string
-	log  string
-}
-
-func (r *fakeGitRunner) Run(ctx context.Context, name string, args []string, opts ports.CommandOpts) ([]byte, error) {
-	if name != "git" {
-		return nil, fmt.Errorf("unexpected command %q", name)
-	}
-	if len(args) == 2 && args[0] == "rev-parse" && args[1] == "HEAD" {
-		return []byte(r.head + "\n"), nil
-	}
-	if len(args) == 3 && args[0] == "log" && args[1] == "--oneline" {
-		return []byte(r.log), nil
-	}
-	return nil, fmt.Errorf("unexpected git args %v in %s", args, opts.Dir)
 }

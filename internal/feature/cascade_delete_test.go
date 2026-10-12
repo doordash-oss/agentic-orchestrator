@@ -144,7 +144,7 @@ func TestBeginCascadeDeleteCanonicalizesSymlinkSpelledResourcePaths(t *testing.T
 		t.Fatalf("BeginCascadeDelete: %v", err)
 	}
 	canonicalStateDir := filepath.Join(root, "features")
-	want := map[CascadeResourceKind]string{
+	want := map[cascadeResourceKind]string{
 		CascadeResourceCopiedInput: filepath.Join(canonicalStateDir, "parent", "attachments", "notes.txt"),
 		CascadeResourceWorktree:    filepath.Join(root, "worktrees", "parent", "a"),
 		CascadeResourceOverlay:     filepath.Join(root, "overlays", "parent", "repo-a"),

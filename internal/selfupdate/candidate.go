@@ -26,14 +26,14 @@ import (
 // target banner, so a caller-provided path, digest, or fabricated verified
 // flag can never stand in for the trust chain.
 type VerifiedCandidate struct {
-	release          VerifiedRelease
+	release          verifiedRelease
 	executablePath   string
 	executableDigest string
-	probe            ProbeResult
+	probe            probeResult
 }
 
 // Release returns the authenticated release provenance.
-func (c VerifiedCandidate) Release() VerifiedRelease { return c.release }
+func (c VerifiedCandidate) Release() verifiedRelease { return c.release }
 
 // ExecutablePath returns the staged executable's path.
 func (c VerifiedCandidate) ExecutablePath() string { return c.executablePath }
@@ -42,14 +42,14 @@ func (c VerifiedCandidate) ExecutablePath() string { return c.executablePath }
 func (c VerifiedCandidate) ExecutableDigest() string { return c.executableDigest }
 
 // Probe returns the successful isolated probe result.
-func (c VerifiedCandidate) Probe() ProbeResult { return c.probe }
+func (c VerifiedCandidate) Probe() probeResult { return c.probe }
 
 // AdmitStagedRelease admits one staged release as a verified candidate after
 // its isolated probe succeeded. The probe's banner version must equal the
 // release target, and the probe's recorded executable digest must equal the
 // staged candidate digest, so no unverified manifest, archive, envelope, or
 // unsafe extracted entry can reach execution through this path.
-func AdmitStagedRelease(staged *StagedRelease, probe ProbeResult) (VerifiedCandidate, error) {
+func AdmitStagedRelease(staged *stagedRelease, probe probeResult) (VerifiedCandidate, error) {
 	if staged == nil {
 		return VerifiedCandidate{}, errors.New("no staged release to admit")
 	}
@@ -71,7 +71,7 @@ func AdmitStagedRelease(staged *StagedRelease, probe ProbeResult) (VerifiedCandi
 	}, nil
 }
 
-// RevalidateVerifiedCandidate re-runs every trust check from the retained
+// revalidateVerifiedCandidate re-runs every trust check from the retained
 // provenance immediately before the candidate is copied into transaction
 // staging: the manifest signature is re-verified over the retained bytes
 // with the retained trust root — which must be one of the two embeddings —
@@ -79,12 +79,12 @@ func AdmitStagedRelease(staged *StagedRelease, probe ProbeResult) (VerifiedCandi
 // staged executable's actual bytes are re-digested, and the target must
 // still be eligible, unsuppressed, and strictly newer. Nothing is refetched
 // and no probe is re-run.
-func RevalidateVerifiedCandidate(exec Executable, cand VerifiedCandidate, opts StageReleaseOptions) error {
+func revalidateVerifiedCandidate(exec Executable, cand VerifiedCandidate, opts StageReleaseOptions) error {
 	if err := revalidateReleaseProvenance(exec, cand, opts); err != nil {
 		return err
 	}
 	// The staged executable must still be exactly the admitted bytes.
-	if err := VerifyCandidate(cand.executablePath, cand.executableDigest); err != nil {
+	if err := verifyCandidate(cand.executablePath, cand.executableDigest); err != nil {
 		return fmt.Errorf("verified candidate executable: %w", err)
 	}
 	return nil
@@ -103,18 +103,18 @@ func revalidateReleaseProvenance(exec Executable, cand VerifiedCandidate, opts S
 	if cand.executableDigest == "" || cand.probe.Version == "" {
 		return errors.New("verified candidate carries incomplete admission state")
 	}
-	production, err := ProductionReleasePublicKey()
+	production, err := productionReleasePublicKey()
 	if err != nil {
 		return err
 	}
-	fixture, err := FixtureReleasePublicKey()
+	fixture, err := fixtureReleasePublicKey()
 	if err != nil {
 		return err
 	}
 	if !bytes.Equal(rel.trustRoot, production) && !bytes.Equal(rel.trustRoot, fixture) {
 		return errors.New("verified candidate trust root is not a known release embedding")
 	}
-	if err := VerifyReleaseSignature(rel.manifestBytes, rel.manifestSignature, rel.trustRoot); err != nil {
+	if err := verifyReleaseSignature(rel.manifestBytes, rel.manifestSignature, rel.trustRoot); err != nil {
 		return fmt.Errorf("retained manifest provenance: %w", err)
 	}
 	entries, err := parseChecksumManifest(rel.manifestBytes)
@@ -131,7 +131,7 @@ func revalidateReleaseProvenance(exec Executable, cand VerifiedCandidate, opts S
 			return fmt.Errorf("retained manifest no longer binds %q to its digest", rel.resolved.Envelope.Name)
 		}
 	}
-	if err := ValidateReleaseTarget(exec, rel, opts); err != nil {
+	if err := validateReleaseTarget(exec, rel, opts); err != nil {
 		return fmt.Errorf("verified candidate target: %w", err)
 	}
 	return nil
@@ -146,7 +146,7 @@ func revalidateReleaseProvenance(exec Executable, cand VerifiedCandidate, opts S
 // The provenance rides along on the transaction and is re-validated again
 // immediately before commit.
 func BeginVerifiedRelease(exec Executable, cand VerifiedCandidate, opts BeginOptions, stageOpts StageReleaseOptions, seams FileOps) (*Transaction, error) {
-	if err := RevalidateVerifiedCandidate(exec, cand, stageOpts); err != nil {
+	if err := revalidateVerifiedCandidate(exec, cand, stageOpts); err != nil {
 		return nil, err
 	}
 	target := cand.release.Resolved().Version

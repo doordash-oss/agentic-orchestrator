@@ -297,11 +297,6 @@ type SessionOpts struct {
 	// UsesBoundedHelperSandbox carries the resolved provider's sandbox
 	// capability so helper runners need not resolve the provider again.
 	UsesBoundedHelperSandbox bool
-	// SupportsSessionResume reports that the resolved provider can resume a
-	// prior provider-native session via BuildSessionOpts.ResumeSessionID.
-	// Used by crash-resume: when a provider process dies mid-turn, the loop
-	// may start a fresh process that continues the same conversation.
-	SupportsSessionResume bool
 	// EffectiveEffort is the resolved provider-safe effort level for this
 	// session launch. Empty means no effort was resolved (utility sessions,
 	// legacy callers). Set by the implementation launch path from
@@ -367,9 +362,8 @@ type AutoReviewSnapshot struct {
 // message stream. It mirrors the methods on the concrete session MessageLog
 // so *session.MessageLog satisfies it structurally.
 type MessageLog interface {
-	Append(msg llm.SDKMessage)
-	UpdateLast(msg llm.SDKMessage)
-	UpdateLastAssistantPartial(msg llm.SDKMessage)
+	Append(msg llm.SDKMessage) int
+	UpdateLastAssistantPartial(msg llm.SDKMessage) int
 	Messages() []llm.SDKMessage
 	Len() int
 	Text() string
@@ -506,7 +500,6 @@ type SessionHandle interface {
 	SetLogFile(f *os.File)
 	AddCleanupFunc(fn func())
 	SetHasUnansweredQuestion(v bool)
-	CloseStdin()
 	SetOnToolAllowed(fn func(toolName string, input json.RawMessage))
 	SetOnFileRead(fn func(read llm.FileReadEvent))
 	SetOnSubagentEvent(fn func(msg llm.SDKMessage))
@@ -522,9 +515,6 @@ type SessionManager interface {
 	ActiveSessions() []SessionView
 	RecentSessions(limit int) []SessionView
 	FeatureSessions(featureID string) []SessionView
-	SendInput(sessionID string, data []byte) error
-	Attach(sessionID string) (SessionView, error)
-	Detach()
 	Shutdown()
 	IsShuttingDown() bool
 }

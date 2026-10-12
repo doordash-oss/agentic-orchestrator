@@ -45,7 +45,7 @@ import {
 } from './featureView';
 import { HistoricalTimeline } from './RunTimeline';
 
-export interface ArchiveModeProps {
+interface ArchiveModeProps {
   featureId: string;
   selectedRunNumber: number;
   /** Whether this retained archive may perform authoritative refresh work. */

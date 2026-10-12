@@ -1,0 +1,266 @@
+// Copyright 2026 DoorDash, Inc.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+package serverclient
+
+import (
+	"bytes"
+	"context"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"net"
+	"net/http"
+	"net/url"
+	"strconv"
+	"strings"
+	"time"
+
+	"github.com/doordash-oss/agentic-orchestrator/internal/server"
+)
+
+const defaultClientTimeout = 10 * time.Second
+
+type ClientOptions struct {
+	BaseURL    string
+	HTTPClient *http.Client
+	Timeout    time.Duration
+	Token      string
+}
+
+type Client struct {
+	baseURL string
+	client  *http.Client
+	token   string
+}
+
+// apiError is the typed client's decoded canonical error value. Code, class,
+// title, and summary always come from the server's catalog rendering.
+type apiError struct {
+	Status      int
+	Code        string
+	Class       string
+	Title       string
+	Summary     string
+	Remediation *server.ErrorRemediation
+	Context     *server.ErrorContext
+	Diagnostics string
+	Method      string
+	Path        string
+}
+
+func (e *apiError) Error() string {
+	if e == nil {
+		return ""
+	}
+	code := e.Code
+	if code == "" {
+		code = strings.ToLower(strings.ReplaceAll(http.StatusText(e.Status), " ", "_"))
+	}
+	title := e.Title
+	if title == "" {
+		title = http.StatusText(e.Status)
+	}
+	return fmt.Sprintf("api %s %s: %s (%d): %s", e.Method, e.Path, code, e.Status, title)
+}
+
+type CursorQuery struct {
+	Cursor int `json:"cursor,omitempty"`
+	Limit  int `json:"limit,omitempty"`
+}
+
+func NewClient(opts ClientOptions) (*Client, error) {
+	baseURL := strings.TrimRight(strings.TrimSpace(opts.BaseURL), "/")
+	if baseURL == "" {
+		return nil, errors.New("base URL is required")
+	}
+	if !isLoopbackBaseURL(baseURL) {
+		return nil, fmt.Errorf("base URL must be loopback HTTP: %s", baseURL)
+	}
+	httpClient := opts.HTTPClient
+	if httpClient == nil {
+		httpClient = &http.Client{Timeout: clientTimeout(opts.Timeout)}
+	} else if httpClient.Timeout == 0 {
+		copyClient := *httpClient
+		copyClient.Timeout = clientTimeout(opts.Timeout)
+		httpClient = &copyClient
+	}
+	return &Client{
+		baseURL: baseURL,
+		client:  httpClient,
+		token:   strings.TrimSpace(opts.Token),
+	}, nil
+}
+
+func clientTimeout(timeout time.Duration) time.Duration {
+	if timeout <= 0 {
+		return defaultClientTimeout
+	}
+	return timeout
+}
+
+func (c *Client) Transcript(ctx context.Context, sessionID string, query CursorQuery) (server.TranscriptResponse, error) {
+	var out server.TranscriptResponse
+	err := c.getJSON(ctx, "/api/v1/sessions/"+pathSegment(sessionID)+"/transcript", transcriptValues(query), &out)
+	return out, err
+}
+
+func (c *Client) LivePreview(ctx context.Context, featureID string) (server.LivePreviewResponse, error) {
+	var out server.LivePreviewResponse
+	err := c.getJSON(ctx, "/api/v1/features/"+pathSegment(featureID)+"/live-preview", nil, &out)
+	return out, err
+}
+
+func (c *Client) UpdateFeatureConfig(ctx context.Context, featureID string, req server.FeatureConfigMutationRequest) (server.FeatureActionResponse, error) {
+	var out server.FeatureActionResponse
+	err := c.doJSON(ctx, http.MethodPost, "/api/v1/features/"+pathSegment(featureID)+"/config", nil, req, &out, true)
+	return out, err
+}
+
+func (c *Client) RefactorFeature(ctx context.Context, featureID string, req server.RefactorFeatureRequest) (server.ChildLaunchResponse, error) {
+	var out server.ChildLaunchResponse
+	err := c.doJSON(ctx, http.MethodPost, featureActionPath(featureID, string(server.FeatureActionRefactor)), nil, req, &out, true)
+	return out, err
+}
+
+func (c *Client) ReviewFeedbackFeature(ctx context.Context, featureID string, req server.ReviewFeedbackFeatureRequest) (server.ReviewFeedbackFeatureResponse, error) {
+	var out server.ReviewFeedbackFeatureResponse
+	err := c.doJSON(ctx, http.MethodPost, featureActionPath(featureID, string(server.FeatureActionReviewFeedback)), nil, req, &out, true)
+	return out, err
+}
+
+func (c *Client) RebaseFeature(ctx context.Context, featureID string) (server.ChildLaunchResponse, error) {
+	var out server.ChildLaunchResponse
+	err := c.doJSON(ctx, http.MethodPost, featureActionPath(featureID, string(server.FeatureActionRebase)), nil, map[string]any{}, &out, true)
+	return out, err
+}
+
+func (c *Client) FetchReviewFeedback(ctx context.Context, featureID string) (server.ReviewFeedbackFetchResponse, error) {
+	var out server.ReviewFeedbackFetchResponse
+	err := c.doJSON(ctx, http.MethodPost, featureActionPath(featureID, string(server.FeatureActionReviewFeedback))+"/fetch", nil, server.ReviewFeedbackFetchRequest{}, &out, true)
+	return out, err
+}
+
+// UpdateReviewFeedbackSelection commits a bounded, reference-only selection
+// change against the pending draft and returns the acknowledged draft view.
+func (c *Client) UpdateReviewFeedbackSelection(ctx context.Context, featureID string, req server.ReviewFeedbackSelectionRequest) (server.ReviewFeedbackSelectionResponse, error) {
+	var out server.ReviewFeedbackSelectionResponse
+	err := c.doJSON(ctx, http.MethodPost, featureActionPath(featureID, string(server.FeatureActionReviewFeedback))+"/selection", nil, req, &out, true)
+	return out, err
+}
+
+func (c *Client) getJSON(ctx context.Context, path string, query url.Values, out any) error {
+	return c.doJSON(ctx, http.MethodGet, path, query, nil, out, false)
+}
+
+func (c *Client) doJSON(ctx context.Context, method, path string, query url.Values, in, out any, trusted bool) error {
+	var body *bytes.Reader
+	if in == nil {
+		body = bytes.NewReader(nil)
+	} else {
+		data, err := json.Marshal(in)
+		if err != nil {
+			return fmt.Errorf("encode request: %w", err)
+		}
+		body = bytes.NewReader(data)
+	}
+	req, err := http.NewRequestWithContext(ctx, method, c.endpoint(path, query), body)
+	if err != nil {
+		return fmt.Errorf("build request: %w", err)
+	}
+	if in != nil {
+		req.Header.Set("Content-Type", "application/json")
+	}
+	req.Header.Set("Accept", "application/json")
+	if c.token != "" {
+		req.Header.Set("Authorization", "Bearer "+c.token)
+	}
+	if trusted {
+		req.Header.Set("X-Agentico-Client", "local")
+	}
+	resp, err := c.client.Do(req)
+	if err != nil {
+		return fmt.Errorf("send request: %w", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return decodeAPIError(resp, method, path)
+	}
+	if out == nil {
+		return nil
+	}
+	if err := json.NewDecoder(resp.Body).Decode(out); err != nil {
+		return fmt.Errorf("decode response: %w", err)
+	}
+	return nil
+}
+
+func decodeAPIError(resp *http.Response, method, path string) error {
+	apiErr := &apiError{Status: resp.StatusCode, Method: method, Path: path}
+	var errResp server.ErrorResponse
+	if err := json.NewDecoder(resp.Body).Decode(&errResp); err == nil && errResp.Error.Code != "" {
+		body := errResp.Error
+		apiErr.Code = body.Code
+		apiErr.Class = string(body.Class)
+		apiErr.Title = body.Title
+		apiErr.Summary = body.Summary
+		apiErr.Remediation = body.Remediation
+		apiErr.Context = body.Context
+		apiErr.Diagnostics = body.Diagnostics
+	}
+	if apiErr.Title == "" {
+		apiErr.Title = http.StatusText(resp.StatusCode)
+	}
+	return apiErr
+}
+
+func (c *Client) endpoint(path string, query url.Values) string {
+	u := c.baseURL + path
+	if len(query) > 0 {
+		u += "?" + query.Encode()
+	}
+	return u
+}
+
+func transcriptValues(query CursorQuery) url.Values {
+	values := url.Values{}
+	if query.Cursor > 0 {
+		values.Set("offset", strconv.Itoa(query.Cursor))
+	}
+	if query.Limit > 0 {
+		values.Set("limit", strconv.Itoa(query.Limit))
+	}
+	return values
+}
+
+func featureActionPath(featureID, action string) string {
+	return "/api/v1/features/" + pathSegment(featureID) + "/actions/" + pathSegment(action)
+}
+
+func pathSegment(s string) string {
+	return url.PathEscape(s)
+}
+
+func isLoopbackBaseURL(raw string) bool {
+	u, err := url.Parse(raw)
+	if err != nil || u.Scheme != "http" || u.Host == "" {
+		return false
+	}
+	host := u.Hostname()
+	if host == "localhost" {
+		return true
+	}
+	ip := net.ParseIP(host)
+	return ip != nil && ip.IsLoopback()
+}

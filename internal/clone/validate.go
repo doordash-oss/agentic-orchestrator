@@ -31,16 +31,16 @@ const (
 	ValidationDestinationInvalid  = "destination_invalid"
 	ValidationDestinationTooLong  = "destination_too_long"
 	ValidationDestinationReserved = "destination_reserved_name"
-	ValidationKeyInvalid          = "idempotency_key_invalid"
+	validationKeyInvalid          = "idempotency_key_invalid"
 )
 
-// ValidationError is a bounded, redacted input-validation failure.
-type ValidationError struct {
+// validationError is a bounded, redacted input-validation failure.
+type validationError struct {
 	Kind   string
 	Detail string
 }
 
-func (e *ValidationError) Error() string {
+func (e *validationError) Error() string {
 	if e == nil {
 		return "clone validation error"
 	}
@@ -50,9 +50,9 @@ func (e *ValidationError) Error() string {
 	return fmt.Sprintf("clone validation error: %s (%s)", e.Kind, e.Detail)
 }
 
-// RedactRemote masks userinfo secrets and drops query/fragment content so a
+// redactRemote masks userinfo secrets and drops query/fragment content so a
 // rejected remote can be named in diagnostics without echoing credentials.
-func RedactRemote(raw string) string {
+func redactRemote(raw string) string {
 	redacted := raw
 	if i := strings.IndexAny(redacted, "?#"); i >= 0 {
 		redacted = redacted[:i] + "[redacted-query]"
@@ -82,32 +82,32 @@ func hasControlOrSpace(s string) bool {
 	return false
 }
 
-// ValidateCloneRemote validates a user-submitted clone remote. Accepted
+// validateCloneRemote validates a user-submitted clone remote. Accepted
 // forms: http(s):// URLs, ssh:// URLs (optionally with user, port), and
 // SCP-style [[user@]host:]path... including single-segment ssh-config host
 // aliases. Rejected: local paths, file/bundle and helper transports
 // (file://, git://, ext::, anything with '::'), option-like inputs,
 // controls, passwords and token-bearing queries/fragments. This validator
 // is deliberately independent of the publishing-oriented remote parser.
-func ValidateCloneRemote(raw string) error {
+func validateCloneRemote(raw string) error {
 	if raw == "" {
-		return &ValidationError{Kind: ValidationRemoteInvalid, Detail: "remote is required"}
+		return &validationError{Kind: ValidationRemoteInvalid, Detail: "remote is required"}
 	}
-	if len(raw) > MaxRemoteURLLength {
-		return &ValidationError{Kind: ValidationRemoteTooLong}
+	if len(raw) > maxRemoteURLLength {
+		return &validationError{Kind: ValidationRemoteTooLong}
 	}
 	if strings.HasPrefix(raw, "-") {
-		return &ValidationError{Kind: ValidationRemoteOptionLike}
+		return &validationError{Kind: ValidationRemoteOptionLike}
 	}
 	if hasControlOrSpace(raw) {
-		return &ValidationError{Kind: ValidationRemoteInvalid, Detail: "control or space characters"}
+		return &validationError{Kind: ValidationRemoteInvalid, Detail: "control or space characters"}
 	}
 	lower := strings.ToLower(raw)
 	if strings.Contains(raw, "::") {
-		return &ValidationError{Kind: ValidationRemoteTransport, Detail: "helper transport syntax"}
+		return &validationError{Kind: ValidationRemoteTransport, Detail: "helper transport syntax"}
 	}
 	if i := strings.IndexAny(raw, "?#"); i >= 0 {
-		return &ValidationError{Kind: ValidationRemoteCredentials, Detail: "query or fragment"}
+		return &validationError{Kind: ValidationRemoteCredentials, Detail: "query or fragment"}
 	}
 	switch {
 	case strings.HasPrefix(lower, "http://"), strings.HasPrefix(lower, "https://"):
@@ -117,9 +117,9 @@ func ValidateCloneRemote(raw string) error {
 	case strings.HasPrefix(lower, "file://"), strings.HasPrefix(lower, "git://"),
 		strings.HasPrefix(lower, "bundle://"), strings.HasPrefix(lower, "ftp://"),
 		strings.HasPrefix(lower, "rsync://"):
-		return &ValidationError{Kind: ValidationRemoteTransport}
+		return &validationError{Kind: ValidationRemoteTransport}
 	case strings.Contains(lower, "://"):
-		return &ValidationError{Kind: ValidationRemoteTransport, Detail: "unsupported scheme"}
+		return &validationError{Kind: ValidationRemoteTransport, Detail: "unsupported scheme"}
 	default:
 		return validateSCPRemote(raw)
 	}
@@ -129,18 +129,18 @@ func ValidateCloneRemote(raw string) error {
 func validateHTTPRemote(raw string) error {
 	u, err := url.Parse(raw)
 	if err != nil {
-		return &ValidationError{Kind: ValidationRemoteInvalid, Detail: "malformed URL"}
+		return &validationError{Kind: ValidationRemoteInvalid, Detail: "malformed URL"}
 	}
 	if u.User != nil {
 		if _, hasPassword := u.User.Password(); hasPassword || u.User.Username() != "" {
-			return &ValidationError{Kind: ValidationRemoteCredentials, Detail: "embedded credentials"}
+			return &validationError{Kind: ValidationRemoteCredentials, Detail: "embedded credentials"}
 		}
 	}
 	if u.Hostname() == "" {
-		return &ValidationError{Kind: ValidationRemoteInvalid, Detail: "missing host"}
+		return &validationError{Kind: ValidationRemoteInvalid, Detail: "missing host"}
 	}
 	if u.Path == "" || strings.Trim(u.Path, "/") == "" {
-		return &ValidationError{Kind: ValidationRemoteInvalid, Detail: "missing repository path"}
+		return &validationError{Kind: ValidationRemoteInvalid, Detail: "missing repository path"}
 	}
 	return nil
 }
@@ -149,23 +149,23 @@ func validateHTTPRemote(raw string) error {
 func validateSSHURLRemote(raw string) error {
 	u, err := url.Parse(raw)
 	if err != nil {
-		return &ValidationError{Kind: ValidationRemoteInvalid, Detail: "malformed URL"}
+		return &validationError{Kind: ValidationRemoteInvalid, Detail: "malformed URL"}
 	}
 	if u.User != nil {
 		if _, hasPassword := u.User.Password(); hasPassword {
-			return &ValidationError{Kind: ValidationRemoteCredentials, Detail: "embedded password"}
+			return &validationError{Kind: ValidationRemoteCredentials, Detail: "embedded password"}
 		}
 	}
 	if u.Hostname() == "" {
-		return &ValidationError{Kind: ValidationRemoteInvalid, Detail: "missing host"}
+		return &validationError{Kind: ValidationRemoteInvalid, Detail: "missing host"}
 	}
 	if u.Port() != "" {
 		if !isNumericPort(u.Port()) {
-			return &ValidationError{Kind: ValidationRemoteInvalid, Detail: "invalid port"}
+			return &validationError{Kind: ValidationRemoteInvalid, Detail: "invalid port"}
 		}
 	}
 	if strings.Trim(u.Path, "/") == "" {
-		return &ValidationError{Kind: ValidationRemoteInvalid, Detail: "missing repository path"}
+		return &validationError{Kind: ValidationRemoteInvalid, Detail: "missing repository path"}
 	}
 	return nil
 }
@@ -180,10 +180,10 @@ func validateSCPRemote(raw string) error {
 	if at := strings.Index(raw, "@"); at >= 0 {
 		user := raw[:at]
 		if colon := strings.Index(user, ":"); colon >= 0 {
-			return &ValidationError{Kind: ValidationRemoteCredentials, Detail: "embedded password"}
+			return &validationError{Kind: ValidationRemoteCredentials, Detail: "embedded password"}
 		}
 		if user == "" {
-			return &ValidationError{Kind: ValidationRemoteInvalid, Detail: "missing user before @"}
+			return &validationError{Kind: ValidationRemoteInvalid, Detail: "missing user before @"}
 		}
 	}
 	rest := raw
@@ -195,16 +195,16 @@ func validateSCPRemote(raw string) error {
 		pathPart = rest[colon+1:]
 	} else {
 		// No colon at all: a bare local path, not a remote.
-		return &ValidationError{Kind: ValidationRemoteInvalid, Detail: "local path"}
+		return &validationError{Kind: ValidationRemoteInvalid, Detail: "local path"}
 	}
 	if hostPart == "" {
-		return &ValidationError{Kind: ValidationRemoteInvalid, Detail: "missing host"}
+		return &validationError{Kind: ValidationRemoteInvalid, Detail: "missing host"}
 	}
 	if strings.ContainsAny(hostPart, "/\\") {
-		return &ValidationError{Kind: ValidationRemoteInvalid, Detail: "malformed host"}
+		return &validationError{Kind: ValidationRemoteInvalid, Detail: "malformed host"}
 	}
 	if pathPart == "" || strings.Trim(pathPart, "/") == "" {
-		return &ValidationError{Kind: ValidationRemoteInvalid, Detail: "missing repository path"}
+		return &validationError{Kind: ValidationRemoteInvalid, Detail: "missing repository path"}
 	}
 	return nil
 }
@@ -232,77 +232,53 @@ var windowsReservedNames = map[string]bool{
 	"lpt6": true, "lpt7": true, "lpt8": true, "lpt9": true,
 }
 
-// ValidateDestination validates the requested destination folder name: it
+// validateDestination validates the requested destination folder name: it
 // must be exactly one non-hidden child name with no separators, traversal,
 // controls, option-like shapes, or destination-platform-invalid names.
-func ValidateDestination(name string) error {
+func validateDestination(name string) error {
 	if name == "" {
-		return &ValidationError{Kind: ValidationDestinationInvalid, Detail: "destination is required"}
+		return &validationError{Kind: ValidationDestinationInvalid, Detail: "destination is required"}
 	}
-	if len(name) > MaxDestinationLength {
-		return &ValidationError{Kind: ValidationDestinationTooLong}
+	if len(name) > maxDestinationLength {
+		return &validationError{Kind: ValidationDestinationTooLong}
 	}
 	if strings.HasPrefix(name, ".") {
-		return &ValidationError{Kind: ValidationDestinationInvalid, Detail: "hidden names are not allowed"}
+		return &validationError{Kind: ValidationDestinationInvalid, Detail: "hidden names are not allowed"}
 	}
 	if strings.HasPrefix(name, "-") {
-		return &ValidationError{Kind: ValidationDestinationInvalid, Detail: "option-like names are not allowed"}
+		return &validationError{Kind: ValidationDestinationInvalid, Detail: "option-like names are not allowed"}
 	}
 	if strings.ContainsAny(name, "/\\") {
-		return &ValidationError{Kind: ValidationDestinationInvalid, Detail: "path separators are not allowed"}
+		return &validationError{Kind: ValidationDestinationInvalid, Detail: "path separators are not allowed"}
 	}
 	if name == "." || name == ".." || strings.Contains(name, "..") {
-		return &ValidationError{Kind: ValidationDestinationInvalid, Detail: "traversal names are not allowed"}
+		return &validationError{Kind: ValidationDestinationInvalid, Detail: "traversal names are not allowed"}
 	}
 	if hasControlOrSpace(name) {
-		return &ValidationError{Kind: ValidationDestinationInvalid, Detail: "control or space characters"}
+		return &validationError{Kind: ValidationDestinationInvalid, Detail: "control or space characters"}
 	}
 	if name != strings.TrimRight(name, ". ") {
-		return &ValidationError{Kind: ValidationDestinationInvalid, Detail: "trailing dot or space"}
+		return &validationError{Kind: ValidationDestinationInvalid, Detail: "trailing dot or space"}
 	}
 	if windowsReservedNames[strings.ToLower(name)] {
-		return &ValidationError{Kind: ValidationDestinationReserved}
+		return &validationError{Kind: ValidationDestinationReserved}
 	}
 	return nil
 }
 
-// ValidateIdempotencyKey bounds the client-supplied idempotency key. Keys
+// validateIdempotencyKey bounds the client-supplied idempotency key. Keys
 // are opaque tokens: printable ASCII only, no whitespace.
-func ValidateIdempotencyKey(key string) error {
+func validateIdempotencyKey(key string) error {
 	if key == "" {
-		return &ValidationError{Kind: ValidationKeyInvalid, Detail: "idempotency key is required"}
+		return &validationError{Kind: validationKeyInvalid, Detail: "idempotency key is required"}
 	}
-	if len(key) > MaxIdempotencyLength {
-		return &ValidationError{Kind: ValidationKeyInvalid, Detail: "idempotency key is too long"}
+	if len(key) > maxIdempotencyLength {
+		return &validationError{Kind: validationKeyInvalid, Detail: "idempotency key is too long"}
 	}
 	for _, r := range key {
 		if r < 0x21 || r > 0x7e {
-			return &ValidationError{Kind: ValidationKeyInvalid, Detail: "idempotency key must be printable ASCII"}
+			return &validationError{Kind: validationKeyInvalid, Detail: "idempotency key must be printable ASCII"}
 		}
 	}
 	return nil
-}
-
-// SuggestDestination derives a default folder name from a validated remote:
-// the last path segment with a terminal ".git" stripped. It never fabricates
-// uniqueness; the server still rejects existing destinations.
-func SuggestDestination(raw string) string {
-	trimmed := strings.TrimRight(strings.TrimSpace(raw), "/")
-	if i := strings.IndexAny(trimmed, "?#"); i >= 0 {
-		trimmed = trimmed[:i]
-	}
-	if segs := strings.Split(trimmed, "/"); len(segs) > 0 {
-		trimmed = segs[len(segs)-1]
-	}
-	if at := strings.Index(trimmed, ":"); at >= 0 {
-		trimmed = trimmed[at+1:]
-		if segs := strings.Split(trimmed, "/"); len(segs) > 0 {
-			trimmed = segs[len(segs)-1]
-		}
-	}
-	trimmed = strings.TrimSuffix(trimmed, ".git")
-	if len(trimmed) > MaxDestinationLength {
-		trimmed = trimmed[:MaxDestinationLength]
-	}
-	return trimmed
 }

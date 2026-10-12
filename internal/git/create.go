@@ -75,7 +75,7 @@ func CreateRepository(ctx context.Context, dir string) error {
 	// The identity, signing, hooks and template are explicit so the synthetic
 	// commit is unaffected by a user's global Git configuration.
 	if out, err := runCreateGit(ctx, dir,
-		"-c", "user.name="+AgenticoName,
+		"-c", "user.name="+agenticoName,
 		"-c", "user.email="+agenticoCommitIdentity(),
 		"-c", "commit.gpgsign=false",
 		"-c", "core.hooksPath=/dev/null",

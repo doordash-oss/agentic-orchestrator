@@ -16,6 +16,7 @@ package testutil
 
 import (
 	"bufio"
+	"context"
 	"encoding/json"
 	"os"
 	"path/filepath"
@@ -184,7 +185,6 @@ func (p *FakeCodexProvider) InstallHint() string           { return "" }
 func (p *FakeCodexProvider) VersionInfo() (string, error)  { return "codex-cli 0.0.0-fake", nil }
 func (p *FakeCodexProvider) MinVersion() [3]int            { return [3]int{} }
 func (p *FakeCodexProvider) EnvVarsToExclude() []string    { return nil }
-func (p *FakeCodexProvider) SupportsSessionResume() bool   { return true }
 func (p *FakeCodexProvider) ModelCatalog() []llm.ModelInfo { return fakeCodexCatalog() }
 func (p *FakeCodexProvider) AvailableModels() []string {
 	return []string{FakeCodexModel, FakeCodexSecondModel}
@@ -193,8 +193,51 @@ func (p *FakeCodexProvider) MatchesModel(model string) bool {
 	return strings.EqualFold(model, FakeCodexModel) || strings.EqualFold(model, "gpt-fake") ||
 		strings.EqualFold(model, FakeCodexSecondModel) || strings.EqualFold(model, "gpt-fake-next")
 }
-func (p *FakeCodexProvider) ComputeCost(string, int64, int64) float64 { return 0 }
-func (p *FakeCodexProvider) ContextWindowForModel(string) int         { return 200000 }
+func (p *FakeCodexProvider) ContextWindowForModel(string) int { return 200000 }
+
+// SupportsNativeToollessReview attests the same audited boundary as the real
+// Codex provider the fake wraps.
+func (p *FakeCodexProvider) SupportsNativeToollessReview() bool {
+	return p.inner.SupportsNativeToollessReview()
+}
+
+// AskingQuestionsClause returns an empty clause: the fake pins the pre-fold
+// prompt behavior (no provider-specific asking section) so suites that render
+// prompts against it stay byte-identical.
+func (p *FakeCodexProvider) AskingQuestionsClause() string { return "" }
+
+// CheckReadiness reports the fake as always ready, matching the readiness
+// behavior its suites relied on before the capability became mandatory.
+func (p *FakeCodexProvider) CheckReadiness(context.Context) llm.ProviderReadiness {
+	return llm.ProviderReadiness{Ready: true}
+}
+
+// ReviewPreferenceBand is the real Codex ranking over the fake catalog.
+func (p *FakeCodexProvider) ReviewPreferenceBand(model llm.ModelInfo) (int, bool) {
+	return p.inner.ReviewPreferenceBand(model)
+}
+
+// DiscoverModelCatalog returns the fake catalog without launching anything.
+func (p *FakeCodexProvider) DiscoverModelCatalog(context.Context) ([]llm.ModelInfo, error) {
+	return p.ModelCatalog(), nil
+}
+
+// DiscoverModelCatalogWithProgress streams the fake catalog to report before
+// returning it.
+func (p *FakeCodexProvider) DiscoverModelCatalogWithProgress(ctx context.Context, report llm.ModelDiscoveryReporter) ([]llm.ModelInfo, error) {
+	models, err := p.DiscoverModelCatalog(ctx)
+	if err == nil && report != nil {
+		for _, model := range models {
+			report(model)
+		}
+	}
+	return models, err
+}
+
+// SetModelCatalog delegates to the wrapped real provider's catalog store.
+func (p *FakeCodexProvider) SetModelCatalog(models []llm.ModelInfo) {
+	p.inner.SetModelCatalog(models)
+}
 
 // BuildCommand is the real Codex command with the fake's environment added.
 func (p *FakeCodexProvider) BuildCommand(opts llm.CommandBuildOpts) ([]string, []string, error) {

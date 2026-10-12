@@ -38,13 +38,13 @@ var cloneStartCodes = []Code{
 // user has an explicit Retry cleanup affordance; authentication, trust and
 // prompt failures need server-side credential setup.
 var cloneOutcomeCodes = []Code{
-	CloneTimeout,
-	CloneAuthenticationFailed,
-	CloneTrustFailed,
-	ClonePromptUnsupported,
-	ClonePublicationUnsupported,
-	CloneDestinationConflict,
-	CloneExecutionFailed,
+	cloneTimeout,
+	cloneAuthenticationFailed,
+	cloneTrustFailed,
+	clonePromptUnsupported,
+	clonePublicationUnsupported,
+	cloneDestinationConflict,
+	cloneExecutionFailed,
 	CloneCleanupPending,
 }
 
@@ -68,10 +68,10 @@ func TestCloneStartCodesContract(t *testing.T) {
 
 func TestCloneOutcomeCodesContract(t *testing.T) {
 	needsAction := map[Code]bool{
-		CloneAuthenticationFailed:   true,
-		CloneTrustFailed:            true,
-		ClonePromptUnsupported:      true,
-		ClonePublicationUnsupported: true,
+		cloneAuthenticationFailed:   true,
+		cloneTrustFailed:            true,
+		clonePromptUnsupported:      true,
+		clonePublicationUnsupported: true,
 		CloneCleanupPending:         true,
 	}
 	for _, code := range cloneOutcomeCodes {
@@ -93,7 +93,7 @@ func TestCloneOutcomeCodesContract(t *testing.T) {
 }
 
 func TestCloneDestinationParamsRenderWithoutEchoingRemote(t *testing.T) {
-	rendered := New(CloneDestinationExists, WithParams(CloneDestinationParams{Destination: "widget"}))
+	rendered := New(CloneDestinationExists, WithParams(cloneDestinationParams{Destination: "widget"}))
 	if rendered.Title == "" || rendered.Summary == "" {
 		t.Fatalf("render incomplete: %#v", rendered)
 	}

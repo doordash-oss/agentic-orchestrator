@@ -24,9 +24,9 @@ import (
 type MutationKind string
 
 const (
-	MutationSaved   MutationKind = "saved"
+	mutationSaved   MutationKind = "saved"
 	MutationDeleted MutationKind = "deleted"
-	MutationRewound MutationKind = "rewound"
+	mutationRewound MutationKind = "rewound"
 )
 
 // MutationSnapshot is an immutable view captured at the persistence boundary.

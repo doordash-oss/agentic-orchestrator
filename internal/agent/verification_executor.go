@@ -34,45 +34,46 @@ import (
 	_ "image/png"
 
 	"github.com/doordash-oss/agentic-orchestrator/internal/feature"
+	"github.com/doordash-oss/agentic-orchestrator/internal/permission"
 	"github.com/doordash-oss/agentic-orchestrator/internal/ports"
 	"gopkg.in/yaml.v3"
 )
 
 const (
-	VerificationClassificationPassed            = "passed"
-	VerificationClassificationRegression        = "regression"
-	VerificationClassificationInherited         = "inherited_failure"
-	VerificationClassificationUnclassified      = "unclassified_failure"
-	VerificationClassificationMissingCapability = "missing_capability"
-	VerificationClassificationContractError     = "contract_error"
+	verificationClassificationPassed            = "passed"
+	verificationClassificationRegression        = "regression"
+	verificationClassificationInherited         = "inherited_failure"
+	verificationClassificationUnclassified      = "unclassified_failure"
+	verificationClassificationMissingCapability = "missing_capability"
+	verificationClassificationContractError     = "contract_error"
 	// EnvironmentLimited marks host limitations (sandbox write denials,
 	// profile-managed tools missing from PATH) that neither the implementer
 	// nor the planner can repair; they route to the user gate as blocked.
-	VerificationClassificationEnvironmentLimited = "environment_limited"
+	verificationClassificationEnvironmentLimited = "environment_limited"
 	// Flaky marks a candidate failure that did not reproduce on the
 	// confirmation re-run after the baseline passed.
-	VerificationClassificationFlaky = "flaky_failure"
+	verificationClassificationFlaky = "flaky_failure"
 )
 
-// VerificationExecutionOutcome is the deterministic portion of the
+// verificationExecutionOutcome is the deterministic portion of the
 // implementation report. BlockedItems require a user/environment decision;
 // RegressionItems remain reviewer input and do not automatically consume a
 // second implementer iteration.
-type VerificationExecutionOutcome struct {
-	Report          *VerificationReport
+type verificationExecutionOutcome struct {
+	Report          *verificationReport
 	BlockedItems    []string
 	RegressionItems []string
 	InheritedItems  []string
-	ContractErrors  []VerificationContractError
+	ContractErrors  []verificationContractError
 	// CapabilityEnv carries values exported by passing built-in probes (for
 	// example the browser storage-state path) for the implementer session.
 	CapabilityEnv []string
 }
 
-// VerificationContractError is a planner-authored command defect. It is kept
+// verificationContractError is a planner-authored command defect. It is kept
 // separate from capability blocks so users are never asked to waive a command
 // that did not execute meaningfully.
-type VerificationContractError struct {
+type verificationContractError struct {
 	ItemID     string
 	Repo       string
 	Cwd        string
@@ -96,6 +97,9 @@ type verificationRunRecord struct {
 	StdoutPath     string    `yaml:"stdout_path"`
 	StderrPath     string    `yaml:"stderr_path"`
 	BaselineRunID  string    `yaml:"baseline_run_id,omitempty"`
+	// SandboxUnavailable is the probe reason when this run executed
+	// unsandboxed because the verification sandbox could not be applied.
+	SandboxUnavailable string `yaml:"sandbox_unavailable,omitempty"`
 }
 
 type capturedVerificationRun struct {
@@ -104,40 +108,40 @@ type capturedVerificationRun struct {
 	stderr string
 }
 
-// VerificationProgress receives high-level execution updates: the item's
+// verificationProgress receives high-level execution updates: the item's
 // human-readable name and a state ("running", then the final report status).
 // It exists purely for user-facing progress; classification never depends on it.
-type VerificationProgress func(name, state string)
+type verificationProgress func(name, state string)
 
 type verificationProgressKey struct{}
 
-// WithVerificationProgress attaches a progress callback for
+// withVerificationProgress attaches a progress callback for
 // ExecuteTestingContract to invoke as contract items start and finish.
-func WithVerificationProgress(ctx context.Context, fn VerificationProgress) context.Context {
+func withVerificationProgress(ctx context.Context, fn verificationProgress) context.Context {
 	return context.WithValue(ctx, verificationProgressKey{}, fn)
 }
 
-func verificationProgressFromContext(ctx context.Context) VerificationProgress {
-	if fn, ok := ctx.Value(verificationProgressKey{}).(VerificationProgress); ok && fn != nil {
+func verificationProgressFromContext(ctx context.Context) verificationProgress {
+	if fn, ok := ctx.Value(verificationProgressKey{}).(verificationProgress); ok && fn != nil {
 		return fn
 	}
 	return func(string, string) {}
 }
 
-// ExecuteTestingContract runs only explicit contract run declarations. It
+// executeTestingContract runs only explicit contract run declarations. It
 // never guesses a project command from prose and never infers an auth problem
 // from arbitrary stderr: authorization is a block only when a declared
 // capability probe fails.
-func ExecuteTestingContract(
+func executeTestingContract(
 	ctx context.Context,
 	runner ports.CommandRunner,
 	contract *TestingContract,
-	report *VerificationReport,
+	report *verificationReport,
 	contractPath string,
 	iterationDir string,
 	workspaceDir string,
 	repos []feature.FeatureRepo,
-) (*VerificationExecutionOutcome, error) {
+) (*verificationExecutionOutcome, error) {
 	if contract == nil {
 		return nil, errors.New("executing testing contract: contract is nil")
 	}
@@ -145,10 +149,10 @@ func ExecuteTestingContract(
 		return nil, errors.New("executing testing contract: command runner is required for harness-owned commands")
 	}
 	if report == nil {
-		stub := BuildContractVerificationReportStub(contract, contractPath)
+		stub := buildContractVerificationReportStub(contract, contractPath)
 		report = &stub
 	}
-	out := &VerificationExecutionOutcome{Report: report}
+	out := &verificationExecutionOutcome{Report: report}
 	report.ContractPath = strings.TrimSpace(contractPath)
 	report.ContractRevision = contract.Revision
 	grantRoots := loadSandboxGrantRoots(contractPath)
@@ -156,6 +160,11 @@ func ExecuteTestingContract(
 	if unsandboxedItems == nil {
 		unsandboxedItems = make(map[string]bool)
 	}
+	// An unusable sandbox (nested macOS sandbox-exec) runs every command
+	// unsandboxed directly: no sandboxed attempt, no environment
+	// differential, and no persisted disposition, since the condition is the
+	// host's rather than the command's.
+	sandboxUnavailableReason, sandboxUnavailable := verificationSandboxUnavailable(runner)
 	emitProgress := verificationProgressFromContext(ctx)
 	// The item currently marked "running" gets its final report status
 	// emitted when the next item starts (or after the loop): every outcome
@@ -192,9 +201,9 @@ func ExecuteTestingContract(
 			report.Results[idx] = waivedContractResult(item)
 			continue
 		}
-		if item.Owner == TestingContractOwnerAgent {
+		if item.Owner == testingContractOwnerAgent {
 			result := finalizeAgentOwnedEvidence(item, iterationDir)
-			if result.Status != VerificationStatusPassed && capabilityProbesApply(item) {
+			if result.Status != verificationStatusPassed && capabilityProbesApply(item) {
 				// Missing agent evidence behind an unavailable capability is
 				// an environment block the user resolves, not an implementer
 				// defect. Probes run without a repo cwd: agent-owned items
@@ -261,8 +270,11 @@ func ExecuteTestingContract(
 		}
 		itemEnv = append(itemEnv, probe.env...)
 
-		runSandboxed := !unsandboxedItems[item.ID]
+		runSandboxed := !unsandboxedItems[item.ID] && !sandboxUnavailable
 		candidate, candidateErr := captureVerificationCommand(ctx, runner, item.ID, "candidate", item.Run.Shell, cwd, item.Run.Timeout, writableRoots, runSandboxed, itemEnv)
+		if sandboxUnavailable {
+			candidate.record.SandboxUnavailable = sandboxUnavailableReason
+		}
 		// Sandbox self-expansion: an OS write denial on a grantable path is a
 		// harness limitation, not a finding. Grant the minimal root, retry,
 		// and persist so later runs (and baselines) start with it. Protected
@@ -293,22 +305,24 @@ func ExecuteTestingContract(
 			candidate, candidateErr = captureVerificationCommand(ctx, runner, item.ID, "candidate", item.Run.Shell, cwd, item.Run.Timeout, writableRoots, runSandboxed, itemEnv)
 		}
 		if candidateErr == nil {
-			candidate.record.Classification = VerificationClassificationPassed
+			candidate.record.Classification = verificationClassificationPassed
 			if err := persistVerificationRun(contractPath, item.ID, &candidate); err != nil {
 				return nil, err
 			}
 			note := ""
 			if len(grantedThisItem) > 0 {
 				note = "passed after sandbox write grants: " + strings.Join(grantedThisItem, ", ")
+			} else if sandboxUnavailable {
+				note = "executed unsandboxed: verification sandbox unavailable (" + sandboxUnavailableReason + ")"
 			} else if !runSandboxed {
 				note = "executed unsandboxed per recorded environment disposition"
 			}
-			report.Results[idx] = machineContractResult(item, VerificationStatusPassed, candidate, note)
+			report.Results[idx] = machineContractResult(item, verificationStatusPassed, candidate, note)
 			continue
 		}
 		if repo != nil {
 			if defect, ok := repoScopedVerificationFailure(item.Run.Shell, repo.Name, cwd, candidate); ok {
-				candidate.record.Classification = VerificationClassificationContractError
+				candidate.record.Classification = verificationClassificationContractError
 				if err := persistVerificationRun(contractPath, item.ID, &candidate); err != nil {
 					return nil, err
 				}
@@ -344,35 +358,40 @@ func ExecuteTestingContract(
 			if escalatedErr == nil {
 				confirm, confirmErr := captureVerificationCommand(ctx, runner, item.ID, "confirmation", item.Run.Shell, cwd, item.Run.Timeout, writableRoots, true, itemEnv)
 				if confirmErr == nil {
-					candidate.record.Classification = VerificationClassificationFlaky
-					escalated.record.Classification = VerificationClassificationPassed
-					confirm.record.Classification = VerificationClassificationPassed
+					candidate.record.Classification = verificationClassificationFlaky
+					escalated.record.Classification = verificationClassificationPassed
+					confirm.record.Classification = verificationClassificationPassed
 					for _, run := range []*capturedVerificationRun{&candidate, &escalated, &confirm} {
 						if err := persistVerificationRun(contractPath, item.ID, run); err != nil {
 							return nil, err
 						}
 					}
-					report.Results[idx] = machineContractResult(item, VerificationStatusPassed, confirm,
+					report.Results[idx] = machineContractResult(item, verificationStatusPassed, confirm,
 						"passed on confirmation re-run; the initial failure did not reproduce")
 					continue
 				}
-				candidate.record.Classification = VerificationClassificationEnvironmentLimited
-				confirm.record.Classification = VerificationClassificationEnvironmentLimited
-				escalated.record.Classification = VerificationClassificationPassed
+				candidate.record.Classification = verificationClassificationEnvironmentLimited
+				confirm.record.Classification = verificationClassificationEnvironmentLimited
+				escalated.record.Classification = verificationClassificationPassed
 				for _, run := range []*capturedVerificationRun{&candidate, &confirm, &escalated} {
 					if err := persistVerificationRun(contractPath, item.ID, run); err != nil {
 						return nil, err
 					}
 				}
+				reason, note := "command fails under the verification sandbox and passes unsandboxed",
+					"passed unsandboxed; sandboxed execution is environment-limited (disposition recorded)"
+				if nestedSandboxDenied(candidate) {
+					reason = "nested sandbox-exec is not permitted (the harness already runs inside a sandbox); command passes unsandboxed"
+					note = "passed unsandboxed; nested sandbox-exec is not permitted in this environment (disposition recorded)"
+				}
 				if err := recordUnsandboxedDisposition(contractPath, sandboxUnsandboxedDisposition{
 					ItemID: item.ID,
-					Reason: "command fails under the verification sandbox and passes unsandboxed",
+					Reason: reason,
 				}); err != nil {
 					return nil, err
 				}
 				unsandboxedItems[item.ID] = true
-				report.Results[idx] = machineContractResult(item, VerificationStatusPassed, escalated,
-					"passed unsandboxed; sandboxed execution is environment-limited (disposition recorded)")
+				report.Results[idx] = machineContractResult(item, verificationStatusPassed, escalated, note)
 				continue
 			}
 			escalated.record.Classification = "unsandboxed_failure"
@@ -383,8 +402,8 @@ func ExecuteTestingContract(
 		}
 		candidateContractReason := verificationRuntimeContractError(candidateErr, candidate)
 
-		classification := VerificationClassificationUnclassified
-		status := VerificationStatusFailed
+		classification := verificationClassificationUnclassified
+		status := verificationStatusFailed
 		note := classification
 		var baseline *capturedVerificationRun
 		baselineAttempted := false
@@ -397,7 +416,7 @@ func ExecuteTestingContract(
 					baseline = baseRun
 					baselineContractReason := verificationRuntimeContractError(baseErr, *baseRun)
 					if baseErr != nil && sameVerificationFailure(candidate, *baseRun) && candidateContractReason != "" && baselineContractReason != "" {
-						candidate.record.Classification = VerificationClassificationContractError
+						candidate.record.Classification = verificationClassificationContractError
 						candidate.record.BaselineRunID = baseRun.record.RunID
 						if err := persistVerificationRun(contractPath, item.ID, &candidate); err != nil {
 							return nil, err
@@ -408,10 +427,10 @@ func ExecuteTestingContract(
 						continue
 					}
 					if baseErr != nil && sameVerificationFailure(candidate, *baseRun) && repoLocalExecutableSetupFailure(candidate) {
-						note = VerificationClassificationUnclassified + ": repository-scoped executable is unavailable"
+						note = verificationClassificationUnclassified + ": repository-scoped executable is unavailable"
 					} else if baseErr != nil && sameVerificationFailure(candidate, *baseRun) {
-						classification = VerificationClassificationInherited
-						status = VerificationStatusInheritedFailure
+						classification = verificationClassificationInherited
+						status = verificationStatusInheritedFailure
 						out.InheritedItems = append(out.InheritedItems, item.ID)
 					} else if baseErr == nil {
 						// The baseline passed: confirm the failure once before
@@ -423,25 +442,25 @@ func ExecuteTestingContract(
 							confirmation, confirmationErr := captureVerificationCommand(ctx, runner, item.ID, "confirmation", item.Run.Shell, cwd, item.Run.Timeout, writableRoots, runSandboxed, itemEnv)
 							confirmation.record.BaselineRunID = baseRun.record.RunID
 							if confirmationErr == nil {
-								candidate.record.Classification = VerificationClassificationFlaky
+								candidate.record.Classification = verificationClassificationFlaky
 								candidate.record.BaselineRunID = baseRun.record.RunID
 								if err := persistVerificationRun(contractPath, item.ID, &candidate); err != nil {
 									return nil, err
 								}
-								confirmation.record.Classification = VerificationClassificationPassed
+								confirmation.record.Classification = verificationClassificationPassed
 								if err := persistVerificationRun(contractPath, item.ID, &confirmation); err != nil {
 									return nil, err
 								}
-								report.Results[idx] = machineContractResult(item, VerificationStatusPassed, confirmation,
+								report.Results[idx] = machineContractResult(item, verificationStatusPassed, confirmation,
 									"passed on confirmation re-run; the initial failure did not reproduce")
 								continue
 							}
-							confirmation.record.Classification = VerificationClassificationRegression
+							confirmation.record.Classification = verificationClassificationRegression
 							if err := persistVerificationRun(contractPath, item.ID, &confirmation); err != nil {
 								return nil, err
 							}
 						}
-						classification = VerificationClassificationRegression
+						classification = verificationClassificationRegression
 						out.RegressionItems = append(out.RegressionItems, item.ID)
 					}
 				} else if baseErr != nil {
@@ -449,8 +468,8 @@ func ExecuteTestingContract(
 				}
 			}
 		}
-		if classification == VerificationClassificationUnclassified && !baselineAttempted && candidateContractReason != "" {
-			candidate.record.Classification = VerificationClassificationContractError
+		if classification == verificationClassificationUnclassified && !baselineAttempted && candidateContractReason != "" {
+			candidate.record.Classification = verificationClassificationContractError
 			if err := persistVerificationRun(contractPath, item.ID, &candidate); err != nil {
 				return nil, err
 			}
@@ -458,7 +477,7 @@ func ExecuteTestingContract(
 				"Correct the executable command or declare its prerequisite as an explicit capability probe.")
 			continue
 		}
-		if classification != VerificationClassificationUnclassified {
+		if classification != verificationClassificationUnclassified {
 			note = classification
 		}
 		candidate.record.Classification = classification
@@ -478,40 +497,40 @@ func ExecuteTestingContract(
 	return out, nil
 }
 
-// ReconstructVerificationOutcome rebuilds the routing outcome from a
+// reconstructVerificationOutcome rebuilds the routing outcome from a
 // previously persisted report, so a stop/restart resume can reuse results
 // already on disk instead of re-executing every contract command.
-func ReconstructVerificationOutcome(report *VerificationReport) *VerificationExecutionOutcome {
-	out := &VerificationExecutionOutcome{Report: report}
+func reconstructVerificationOutcome(report *verificationReport) *verificationExecutionOutcome {
+	out := &verificationExecutionOutcome{Report: report}
 	for _, result := range report.Results {
 		switch result.Status {
-		case VerificationStatusBlocked:
+		case verificationStatusBlocked:
 			out.BlockedItems = append(out.BlockedItems, result.ItemID)
-		case VerificationStatusInheritedFailure:
+		case verificationStatusInheritedFailure:
 			out.InheritedItems = append(out.InheritedItems, result.ItemID)
 		}
 		switch result.Notes {
-		case VerificationClassificationRegression:
+		case verificationClassificationRegression:
 			out.RegressionItems = append(out.RegressionItems, result.ItemID)
-		case VerificationClassificationContractError:
-			out.ContractErrors = append(out.ContractErrors, VerificationContractError{ItemID: result.ItemID, Reason: result.Evidence})
+		case verificationClassificationContractError:
+			out.ContractErrors = append(out.ContractErrors, verificationContractError{ItemID: result.ItemID, Reason: result.Evidence})
 		}
 	}
 	return out
 }
 
-func finalizeAgentOwnedEvidence(item TestingContractItem, iterationDir string) VerificationCheckResult {
+func finalizeAgentOwnedEvidence(item TestingContractItem, iterationDir string) verificationCheckResult {
 	result := contractResultStub(item)
 	rel := strings.TrimSpace(item.ExpectedEvidence.Path)
 	if rel == "" {
-		result.Status = VerificationStatusFailed
+		result.Status = verificationStatusFailed
 		result.Evidence = "agent-owned evidence item has no path"
 		result.EvidenceData.Summary = result.Evidence
 		return result
 	}
 	path, err := evidencePathUnderIteration(iterationDir, rel)
 	if err != nil {
-		result.Status = VerificationStatusFailed
+		result.Status = verificationStatusFailed
 		result.Evidence = err.Error()
 		result.EvidenceData.Summary = result.Evidence
 		return result
@@ -519,13 +538,13 @@ func finalizeAgentOwnedEvidence(item TestingContractItem, iterationDir string) V
 	result.EvidenceData.Primary = rel
 	data, err := os.ReadFile(path)
 	if err != nil {
-		result.Status = VerificationStatusFailed
+		result.Status = verificationStatusFailed
 		result.Evidence = fmt.Sprintf("required agent-owned evidence is missing at %s", rel)
 		result.EvidenceData.Summary = result.Evidence
 		return result
 	}
 	if len(bytes.TrimSpace(data)) == 0 {
-		result.Status = VerificationStatusFailed
+		result.Status = verificationStatusFailed
 		result.Evidence = fmt.Sprintf("required agent-owned evidence is empty at %s", rel)
 		result.EvidenceData.Summary = result.Evidence
 		return result
@@ -533,7 +552,7 @@ func finalizeAgentOwnedEvidence(item TestingContractItem, iterationDir string) V
 	if item.Source == testingContractVisualSource || item.ExpectedEvidence.Kind == testingContractVisualKind {
 		cfg, _, decodeErr := image.DecodeConfig(bytes.NewReader(data))
 		if decodeErr != nil {
-			result.Status = VerificationStatusFailed
+			result.Status = verificationStatusFailed
 			result.Evidence = fmt.Sprintf("required visual evidence at %s is not a decodable image: %v", rel, decodeErr)
 			result.EvidenceData.Summary = result.Evidence
 			return result
@@ -542,14 +561,14 @@ func finalizeAgentOwnedEvidence(item TestingContractItem, iterationDir string) V
 		if w > 0 && h > 0 &&
 			!(cfg.Width == w && cfg.Height == h) &&
 			!(cfg.Width == 2*w && cfg.Height == 2*h) {
-			result.Status = VerificationStatusFailed
+			result.Status = verificationStatusFailed
 			result.Evidence = fmt.Sprintf("visual evidence at %s is %dx%d but the contract requires %dx%d (or %dx%d at 2x)",
 				rel, cfg.Width, cfg.Height, w, h, 2*w, 2*h)
 			result.EvidenceData.Summary = result.Evidence
 			return result
 		}
 	}
-	result.Status = VerificationStatusPassed
+	result.Status = verificationStatusPassed
 	result.Evidence = fmt.Sprintf("agent-owned evidence captured at %s", rel)
 	result.EvidenceData.Summary = result.Evidence
 	sum := sha256.Sum256(data)
@@ -557,17 +576,17 @@ func finalizeAgentOwnedEvidence(item TestingContractItem, iterationDir string) V
 	return result
 }
 
-func ValidateRequiredAgentOwnedEvidence(contract *TestingContract, iterationDir string) []ProtocolViolation {
+func validateRequiredAgentOwnedEvidence(contract *TestingContract, iterationDir string) []ProtocolViolation {
 	if contract == nil {
 		return nil
 	}
 	var violations []ProtocolViolation
 	for _, item := range contract.Items {
-		if item.Owner != TestingContractOwnerAgent || !item.Policy.Required || IsTestingContractItemWaived(item) {
+		if item.Owner != testingContractOwnerAgent || !item.Policy.Required || IsTestingContractItemWaived(item) {
 			continue
 		}
 		result := finalizeAgentOwnedEvidence(item, iterationDir)
-		if result.Status == VerificationStatusPassed {
+		if result.Status == verificationStatusPassed {
 			continue
 		}
 		artifact := strings.TrimSpace(item.ExpectedEvidence.Path)
@@ -583,28 +602,44 @@ func ValidateRequiredAgentOwnedEvidence(contract *TestingContract, iterationDir 
 	return violations
 }
 
-// PreflightAgentEvidence is the read-only, in-session equivalent of the
-// file-backed checks the report-integrity gate runs during completion commit. It
-// lets the implementer confirm — before signaling SUCCESS — that every
-// required agent-owned capture is present, well-formed, correctly sized, and
-// not a byte-identical copy of another contracted row. Catching those here
-// costs seconds; catching them at the post-handoff gate costs a whole
+// PreflightDuplicateEvidenceCaptures is the read-only duplicate-digest pass
+// of the former standalone evidence preflight, kept for the implementer
+// branch of the artifact preflight (`validate-artifacts --phase implement
+// --role implementer`): it resolves the testing contract beside the
+// iteration directory and rejects two or more passed agent-owned captures
+// that share one SHA-256 — catching a copy-pasted capture here costs
+// seconds; catching it at the post-handoff integrity gate costs a whole
 // iteration (a fresh session plus a consecutive-failure increment).
-func PreflightAgentEvidence(contract *TestingContract, iterationDir string) []ProtocolViolation {
-	if contract == nil {
-		return nil
+func PreflightDuplicateEvidenceCaptures(iterationDir string) ([]ProtocolViolation, error) {
+	contractPath := ""
+	for _, candidate := range implementerTestingContractPathCandidates(iterationDir) {
+		if _, err := os.Stat(candidate); err == nil {
+			contractPath = candidate
+			break
+		} else if !errors.Is(err, os.ErrNotExist) {
+			return nil, fmt.Errorf("checking testing contract for duplicate-capture preflight: %w", err)
+		}
 	}
-	violations := ValidateRequiredAgentOwnedEvidence(contract, iterationDir)
+	if strings.TrimSpace(contractPath) == "" {
+		return nil, nil
+	}
+	contract, err := ReadTestingContract(contractPath)
+	if err != nil {
+		return nil, fmt.Errorf("reading testing contract for duplicate-capture preflight: %w", err)
+	}
+	if contract == nil {
+		return nil, nil
+	}
 	digestRows := make(map[string][]string)
 	for _, item := range contract.Items {
-		if item.Owner != TestingContractOwnerAgent || !item.Policy.Required || IsTestingContractItemWaived(item) {
+		if item.Owner != testingContractOwnerAgent || !item.Policy.Required || IsTestingContractItemWaived(item) {
 			continue
 		}
 		if _, ok := evidenceFileRootForContractItem(item); !ok {
 			continue
 		}
 		result := finalizeAgentOwnedEvidence(item, iterationDir)
-		if result.Status != VerificationStatusPassed || result.EvidenceData.Sha256 == "" {
+		if result.Status != verificationStatusPassed || result.EvidenceData.Sha256 == "" {
 			continue
 		}
 		name := strings.TrimSpace(item.Name)
@@ -613,6 +648,7 @@ func PreflightAgentEvidence(contract *TestingContract, iterationDir string) []Pr
 		}
 		digestRows[result.EvidenceData.Sha256] = append(digestRows[result.EvidenceData.Sha256], name)
 	}
+	var violations []ProtocolViolation
 	for _, names := range digestRows {
 		if len(names) < 2 {
 			continue
@@ -623,7 +659,7 @@ func PreflightAgentEvidence(contract *TestingContract, iterationDir string) []Pr
 			Reason:   "these captures are byte-identical, so they cannot each depict their own contracted surface — recapture each distinctly",
 		})
 	}
-	return violations
+	return violations, nil
 }
 
 func evidencePathUnderIteration(iterationDir, rel string) (string, error) {
@@ -634,30 +670,30 @@ func evidencePathUnderIteration(iterationDir, rel string) (string, error) {
 	return filepath.Join(iterationDir, cleanRel), nil
 }
 
-func contractResultStub(item TestingContractItem) VerificationCheckResult {
-	return VerificationCheckResult{ItemID: item.ID, Name: item.Name, Requirement: item.Command, Command: item.Command, Mode: verificationModeForContractItem(item), Status: VerificationStatusNotRun}
+func contractResultStub(item TestingContractItem) verificationCheckResult {
+	return verificationCheckResult{ItemID: item.ID, Name: item.Name, Requirement: item.Command, Command: item.Command, Mode: verificationModeForContractItem(item), Status: verificationStatusNotRun}
 }
 
-func waivedContractResult(item TestingContractItem) VerificationCheckResult {
+func waivedContractResult(item TestingContractItem) verificationCheckResult {
 	reason := strings.TrimSpace(item.Disposition.Reason)
-	return VerificationCheckResult{
+	return verificationCheckResult{
 		ItemID: item.ID, Name: item.Name, Requirement: item.Command, Command: item.Command,
-		Mode: verificationModeForContractItem(item), Status: VerificationStatusWaived,
-		Evidence: reason, EvidenceData: VerificationEvidence{Summary: "user-authorized waiver: " + reason}, Notes: reason,
+		Mode: verificationModeForContractItem(item), Status: verificationStatusWaived,
+		Evidence: reason, EvidenceData: verificationEvidence{Summary: "user-authorized waiver: " + reason}, Notes: reason,
 	}
 }
 
-func machineContractResult(item TestingContractItem, status VerificationRunStatus, run capturedVerificationRun, note string) VerificationCheckResult {
+func machineContractResult(item TestingContractItem, status verificationRunStatus, run capturedVerificationRun, note string) verificationCheckResult {
 	summary := fmt.Sprintf("harness run %s: exit %d (%s)", run.record.RunID, run.record.ExitCode, run.record.Classification)
-	return VerificationCheckResult{
+	return verificationCheckResult{
 		ItemID: item.ID, Name: item.Name, Requirement: item.Command, Command: item.Command,
 		Mode: verificationModeForContractItem(item), Status: status, Evidence: summary,
-		EvidenceData: VerificationEvidence{
+		EvidenceData: verificationEvidence{
 			ExitCode: &run.record.ExitCode, Summary: summary, Primary: run.record.StdoutPath,
 			Attachments: []string{run.record.StderrPath, filepath.Join(filepath.Dir(run.record.StdoutPath), "run.yaml")},
 		},
 		Notes: note, BlockedReason: func() string {
-			if status == VerificationStatusBlocked {
+			if status == verificationStatusBlocked {
 				return note
 			}
 			return ""
@@ -667,43 +703,43 @@ func machineContractResult(item TestingContractItem, status VerificationRunStatu
 
 // recordEnvironmentLimitedBlock persists a run blocked by a host environment
 // limitation and routes the item to the user gate.
-func recordEnvironmentLimitedBlock(out *VerificationExecutionOutcome, report *VerificationReport, resultIndex int, item TestingContractItem, contractPath string, run *capturedVerificationRun, note string) error {
-	run.record.Classification = VerificationClassificationEnvironmentLimited
+func recordEnvironmentLimitedBlock(out *verificationExecutionOutcome, report *verificationReport, resultIndex int, item TestingContractItem, contractPath string, run *capturedVerificationRun, note string) error {
+	run.record.Classification = verificationClassificationEnvironmentLimited
 	if err := persistVerificationRun(contractPath, item.ID, run); err != nil {
 		return err
 	}
-	report.Results[resultIndex] = machineContractResult(item, VerificationStatusBlocked, *run, note)
+	report.Results[resultIndex] = machineContractResult(item, verificationStatusBlocked, *run, note)
 	out.BlockedItems = append(out.BlockedItems, item.ID)
 	return nil
 }
 
-func recordVerificationContractError(out *VerificationExecutionOutcome, report *VerificationReport, resultIndex int, item TestingContractItem, cwd, reason, suggestion string) {
-	contractErr := VerificationContractError{
+func recordVerificationContractError(out *verificationExecutionOutcome, report *verificationReport, resultIndex int, item TestingContractItem, cwd, reason, suggestion string) {
+	contractErr := verificationContractError{
 		ItemID: item.ID, Repo: strings.TrimSpace(item.Repo), Cwd: strings.TrimSpace(cwd),
 		Reason: strings.TrimSpace(reason), Suggestion: strings.TrimSpace(suggestion),
 	}
 	out.ContractErrors = append(out.ContractErrors, contractErr)
 	result := contractResultStub(item)
-	result.Status = VerificationStatusFailed
-	result.Notes = VerificationClassificationContractError
+	result.Status = verificationStatusFailed
+	result.Notes = verificationClassificationContractError
 	result.Evidence = contractErr.Reason
 	result.EvidenceData.Summary = contractErr.Reason
 	report.Results[resultIndex] = result
 }
 
-func recordVerificationRunContractError(out *VerificationExecutionOutcome, report *VerificationReport, resultIndex int, item TestingContractItem, run capturedVerificationRun, reason, suggestion string) {
+func recordVerificationRunContractError(out *verificationExecutionOutcome, report *verificationReport, resultIndex int, item TestingContractItem, run capturedVerificationRun, reason, suggestion string) {
 	recordVerificationContractError(out, report, resultIndex, item, run.record.Cwd, reason, suggestion)
-	result := machineContractResult(item, VerificationStatusFailed, run, VerificationClassificationContractError)
-	result.Notes = VerificationClassificationContractError
+	result := machineContractResult(item, verificationStatusFailed, run, verificationClassificationContractError)
+	result.Notes = verificationClassificationContractError
 	result.EvidenceData.Summary += ": " + strings.TrimSpace(reason)
 	report.Results[resultIndex] = result
 }
 
-// VerificationContractPlanRevisionFeedback renders all command defects in one
+// verificationContractPlanRevisionFeedback renders all command defects in one
 // revision request so the planner repairs the contract once and the harness can
 // resume the already-completed implementation iteration.
-func VerificationContractPlanRevisionFeedback(contractErrors []VerificationContractError) string {
-	errs := append([]VerificationContractError(nil), contractErrors...)
+func verificationContractPlanRevisionFeedback(contractErrors []verificationContractError) string {
+	errs := append([]verificationContractError(nil), contractErrors...)
 	sort.Slice(errs, func(i, j int) bool { return errs[i].ItemID < errs[j].ItemID })
 	var b strings.Builder
 	b.WriteString("## Verification Contract Errors\n\n")
@@ -727,7 +763,7 @@ func VerificationContractPlanRevisionFeedback(contractErrors []VerificationContr
 
 func verificationItemWorkDir(item TestingContractItem, workspaceDir string, repos []feature.FeatureRepo) (*feature.FeatureRepo, string, error) {
 	name := strings.TrimSpace(item.Repo)
-	if name == TestingContractCrossRepoTag {
+	if name == testingContractCrossRepoTag {
 		if strings.TrimSpace(workspaceDir) == "" {
 			return nil, "", fmt.Errorf("verification item %s: cross-repo command has no workspace directory", item.ID)
 		}
@@ -756,7 +792,7 @@ func verificationItemWorkDir(item TestingContractItem, workspaceDir string, repo
 // may mutate. Cross-repo items span every repo worktree in scope; repo items
 // get their own worktree only.
 func itemWritableWorkRoots(item TestingContractItem, workDir string, repos []feature.FeatureRepo) []string {
-	if strings.TrimSpace(item.Repo) != TestingContractCrossRepoTag {
+	if strings.TrimSpace(item.Repo) != testingContractCrossRepoTag {
 		return []string{workDir}
 	}
 	roots := []string{workDir}
@@ -892,7 +928,7 @@ func preflightVerificationShell(ctx context.Context, runner ports.CommandRunner,
 	if !errors.As(err, &exitCoder) {
 		return "", fmt.Errorf("shell syntax checker failed to start: %w", err)
 	}
-	detail := strings.TrimSpace(redactVerificationOutput(stderr.String()))
+	detail := permission.RedactTelemetryText(stderr.String())
 	if detail == "" {
 		detail = err.Error()
 	}
@@ -931,7 +967,7 @@ func captureVerificationCommand(ctx context.Context, runner ports.CommandRunner,
 	}
 	run := capturedVerificationRun{
 		record: verificationRunRecord{ItemID: itemID, Kind: kind, Command: command, Cwd: cwd, StartedAt: started, Duration: time.Since(started).String(), ExitCode: exitCode, Sandboxed: sandboxed},
-		stdout: redactVerificationOutput(stdout.String()), stderr: redactVerificationOutput(stderr.String()),
+		stdout: permission.RedactTelemetryText(stdout.String()), stderr: permission.RedactTelemetryText(stderr.String()),
 	}
 	return run, err
 }
@@ -954,6 +990,17 @@ func verificationItemEnv(item TestingContractItem, iterationDir string) ([]strin
 	}
 	dir := filepath.Join(iterationDir, root, safeEvidenceComponent(item.ID))
 	return []string{"AGENTICO_EVIDENCE_DIR=" + dir}, dir
+}
+
+// verificationSandboxUnavailable reports whether verification commands this
+// runner executes would be wrapped in a sandbox that cannot be applied. Only
+// the host exec runner is ever wrapped (see sandboxVerificationArgv).
+func verificationSandboxUnavailable(runner ports.CommandRunner) (string, bool) {
+	if _, ok := runner.(*execCommandRunner); !ok {
+		return "", false
+	}
+	status := SandboxAvailability()
+	return status.Reason, status.Unavailable
 }
 
 // sandboxVerificationArgv wraps a planner-authored command in the platform
@@ -998,18 +1045,6 @@ func verificationWritableRoots(workRoots ...string) []string {
 		}
 	}
 	return roots
-}
-
-var verificationSecretPatterns = []*regexp.Regexp{
-	regexp.MustCompile(`(?i)(authorization:\s*bearer\s+)\S+`),
-	regexp.MustCompile(`(?i)((?:api[_-]?key|token|password|secret)\s*[:=]\s*)\S+`),
-}
-
-func redactVerificationOutput(value string) string {
-	for _, pattern := range verificationSecretPatterns {
-		value = pattern.ReplaceAllString(value, `${1}[REDACTED]`)
-	}
-	return value
 }
 
 func commandExitCode(err error) int {
@@ -1131,6 +1166,15 @@ func envManagedToolNotFound(run capturedVerificationRun) (string, bool) {
 		}
 	}
 	return "", false
+}
+
+// nestedSandboxDenied reports a sandboxed run that never started because
+// sandbox-exec could not apply its profile: macOS refuses to nest seatbelt
+// sandboxes and sandbox-exec exits 71 with "sandbox_apply: Operation not
+// permitted" when the harness itself already runs inside one.
+func nestedSandboxDenied(run capturedVerificationRun) bool {
+	return run.record.Sandboxed && run.record.ExitCode == 71 &&
+		outputContainsAny(run.stderr, "sandbox_apply: operation not permitted")
 }
 
 func outputContainsAny(output string, values ...string) bool {
@@ -1340,7 +1384,7 @@ func capabilityProbesApply(item TestingContractItem) bool {
 	if len(item.Capabilities) == 0 {
 		return false
 	}
-	if item.Owner == TestingContractOwnerAgent && item.Policy.AllowSubstitution {
+	if item.Owner == testingContractOwnerAgent && item.Policy.AllowSubstitution {
 		return false
 	}
 	return true
@@ -1359,7 +1403,7 @@ type capabilityProbeOutcome struct {
 // order and stops at the first failure. Shell probes execute through the
 // runner in cwd; registry probes run in-process. Failures are recorded on the
 // report and outcome exactly as the inline executor did.
-func probeItemCapabilities(ctx context.Context, runner ports.CommandRunner, contractPath string, out *VerificationExecutionOutcome, report *VerificationReport, idx int, item TestingContractItem, cwd string, writableRoots []string) (capabilityProbeOutcome, error) {
+func probeItemCapabilities(ctx context.Context, runner ports.CommandRunner, contractPath string, out *verificationExecutionOutcome, report *verificationReport, idx int, item TestingContractItem, cwd string, writableRoots []string) (capabilityProbeOutcome, error) {
 	var outcome capabilityProbeOutcome
 	for _, capability := range item.Capabilities {
 		name := strings.TrimSpace(capability.Name)
@@ -1381,7 +1425,7 @@ func probeItemCapabilities(ctx context.Context, runner ports.CommandRunner, cont
 				run.stdout = "capability available"
 			} else {
 				run.record.ExitCode = 1
-				run.record.Classification = VerificationClassificationMissingCapability
+				run.record.Classification = verificationClassificationMissingCapability
 				run.stderr = result.Reason
 			}
 			if strings.TrimSpace(contractPath) != "" {
@@ -1390,7 +1434,7 @@ func probeItemCapabilities(ctx context.Context, runner ports.CommandRunner, cont
 				}
 			}
 			if !result.Available {
-				report.Results[idx] = machineContractResult(item, VerificationStatusBlocked, run,
+				report.Results[idx] = machineContractResult(item, verificationStatusBlocked, run,
 					fmt.Sprintf("missing declared capability %q: %s", name, result.Reason))
 				out.BlockedItems = append(out.BlockedItems, item.ID)
 				outcome.blocked = true
@@ -1426,7 +1470,7 @@ func probeItemCapabilities(ctx context.Context, runner ports.CommandRunner, cont
 		if runErr == nil {
 			run.record.Classification = "capability_available"
 		} else {
-			run.record.Classification = VerificationClassificationMissingCapability
+			run.record.Classification = verificationClassificationMissingCapability
 		}
 		if strings.TrimSpace(contractPath) != "" {
 			if persistErr := persistVerificationRun(contractPath, item.ID, &run); persistErr != nil {
@@ -1437,7 +1481,7 @@ func probeItemCapabilities(ctx context.Context, runner ports.CommandRunner, cont
 			if name == "" {
 				name = probe
 			}
-			report.Results[idx] = machineContractResult(item, VerificationStatusBlocked, run,
+			report.Results[idx] = machineContractResult(item, verificationStatusBlocked, run,
 				fmt.Sprintf("missing declared capability %q", name))
 			out.BlockedItems = append(out.BlockedItems, item.ID)
 			outcome.blocked = true
@@ -1447,25 +1491,25 @@ func probeItemCapabilities(ctx context.Context, runner ports.CommandRunner, cont
 	return outcome, nil
 }
 
-// ProbeTestingContractCapabilities runs only the capability probes of every
+// probeTestingContractCapabilities runs only the capability probes of every
 // required, non-waived item before an implementation iteration starts. It
 // lets the loop open the user gate up front instead of after the implementer
 // has spent an iteration discovering the environment cannot produce the
 // evidence. The returned outcome carries BlockedItems, ContractErrors, and a
 // report holding one result per probed item.
-func ProbeTestingContractCapabilities(
+func probeTestingContractCapabilities(
 	ctx context.Context,
 	runner ports.CommandRunner,
 	contract *TestingContract,
 	contractPath string,
 	workspaceDir string,
 	repos []feature.FeatureRepo,
-) (*VerificationExecutionOutcome, error) {
+) (*verificationExecutionOutcome, error) {
 	if contract == nil {
 		return nil, errors.New("probing testing contract capabilities: contract is nil")
 	}
-	report := BuildContractVerificationReportStub(contract, contractPath)
-	out := &VerificationExecutionOutcome{Report: &report}
+	report := buildContractVerificationReportStub(contract, contractPath)
+	out := &verificationExecutionOutcome{Report: &report}
 	for idx, item := range contract.Items {
 		if ctxErr := ctx.Err(); ctxErr != nil {
 			return nil, fmt.Errorf("probing testing contract capabilities: %w", ctxErr)
@@ -1475,7 +1519,7 @@ func ProbeTestingContractCapabilities(
 		}
 		cwd := ""
 		var writableRoots []string
-		if item.Owner == TestingContractOwnerHarness && item.Run != nil && strings.TrimSpace(item.Run.Shell) != "" {
+		if item.Owner == testingContractOwnerHarness && item.Run != nil && strings.TrimSpace(item.Run.Shell) != "" {
 			_, workDir, workDirErr := verificationItemWorkDir(item, workspaceDir, repos)
 			if workDirErr != nil {
 				recordVerificationContractError(out, &report, idx, item, "", workDirErr.Error(), "Tag the item with one repository from the feature scope.")

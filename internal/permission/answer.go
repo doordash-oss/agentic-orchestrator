@@ -21,9 +21,9 @@ import (
 
 const (
 	DecisionAllow         = "allow"
-	DecisionAllowOnce     = "allow_once"
-	DecisionAllowRemember = "allow_remember"
-	DecisionDeny          = "deny"
+	decisionAllowOnce     = "allow_once"
+	decisionAllowRemember = "allow_remember"
+	decisionDeny          = "deny"
 )
 
 const (
@@ -39,7 +39,7 @@ var (
 	errMissingRememberScope   = errors.New("remember_scope is required for allow_remember")
 )
 
-type AnswerFunc func(requestID string, allow bool, reason string) error
+type answerFunc func(requestID string, allow bool, reason string) error
 
 type AnswerRequest struct {
 	RequestID        string
@@ -53,7 +53,7 @@ type AnswerRequest struct {
 	RememberScopeSet bool
 }
 
-type AnswerResult struct {
+type answerResult struct {
 	Decision       string
 	Pattern        string
 	Scope          string
@@ -73,33 +73,33 @@ func NewAnswerService(cache *Cache, audit *AuditSink) *AnswerService {
 	return &AnswerService{cache: cache, audit: audit}
 }
 
-func (s *AnswerService) Answer(req AnswerRequest, answer AnswerFunc) (AnswerResult, error) {
-	result := AnswerResult{Decision: req.Decision, Pattern: req.RememberPattern, Scope: req.RememberScope}
+func (s *AnswerService) Answer(req AnswerRequest, answer answerFunc) (answerResult, error) {
+	result := answerResult{Decision: req.Decision, Pattern: req.RememberPattern, Scope: req.RememberScope}
 	if answer == nil {
 		return result, errMissingAnswerCallback
 	}
 
 	switch req.Decision {
-	case DecisionAllowOnce:
+	case decisionAllowOnce:
 		if err := answer(req.RequestID, true, ""); err != nil {
 			return result, fmt.Errorf("answer permission: %w", err)
 		}
 		result.Answered = true
 		return result, nil
-	case DecisionDeny:
+	case decisionDeny:
 		if err := answer(req.RequestID, false, "denied by user"); err != nil {
 			return result, fmt.Errorf("answer permission: %w", err)
 		}
 		result.Answered = true
 		return result, nil
-	case DecisionAllowRemember:
+	case decisionAllowRemember:
 		return s.answerRemember(req, answer, result)
 	default:
 		return result, fmt.Errorf("unknown permission decision %q", req.Decision)
 	}
 }
 
-func (s *AnswerService) answerRemember(req AnswerRequest, answer AnswerFunc, result AnswerResult) (AnswerResult, error) {
+func (s *AnswerService) answerRemember(req AnswerRequest, answer answerFunc, result answerResult) (answerResult, error) {
 	if s == nil || s.cache == nil || s.cache.StoreRef() == nil {
 		return result, errMissingPermissionCache
 	}
@@ -110,7 +110,7 @@ func (s *AnswerService) answerRemember(req AnswerRequest, answer AnswerFunc, res
 		return result, errMissingRememberScope
 	}
 
-	remember, err := s.cache.RememberAllowPattern(req.RememberPattern, req.RememberScope)
+	remember, err := s.cache.rememberAllowPattern(req.RememberPattern, req.RememberScope)
 	result.Pattern = remember.Pattern
 	result.Scope = remember.Scope
 	result.Persisted = remember.Persisted
@@ -132,11 +132,11 @@ func (s *AnswerService) answerRemember(req AnswerRequest, answer AnswerFunc, res
 	return result, nil
 }
 
-func (s *AnswerService) appendRememberAudit(req AnswerRequest, result AnswerResult, auditResult string, cause error) AnswerResult {
+func (s *AnswerService) appendRememberAudit(req AnswerRequest, result answerResult, auditResult string, cause error) answerResult {
 	if s == nil || s.audit == nil {
 		return result
 	}
-	event := RememberAuditEvent{
+	event := rememberAuditEvent{
 		SessionID:    req.SessionID,
 		RequestID:    req.RequestID,
 		FeatureID:    req.FeatureID,
@@ -152,7 +152,7 @@ func (s *AnswerService) appendRememberAudit(req AnswerRequest, result AnswerResu
 	if cause != nil {
 		event.Error = cause.Error()
 	}
-	audit, err := s.audit.Append(event)
+	audit, err := s.audit.append(event)
 	if err != nil {
 		result.AuditWarning = err.Error()
 		return result

@@ -31,20 +31,20 @@ import (
 // Failure classification codes carried on terminal records. The server maps
 // these onto canonical error codes.
 const (
-	FailureTimeout                = "clone_timeout"
-	FailureAuthentication         = "clone_authentication_failed"
-	FailureTrust                  = "clone_trust_failed"
-	FailureExecution              = "clone_execution_failed"
-	FailurePromptUnsupported      = "clone_prompt_unsupported"
-	FailurePublicationUnsupported = "clone_publication_unsupported"
-	FailureDestinationConflict    = "clone_destination_conflict"
-	FailureCancelled              = "clone_cancelled"
-	FailureInterrupted            = "clone_interrupted"
-	FailureCleanupPending         = "clone_cleanup_pending"
+	failureTimeout                = "clone_timeout"
+	failureAuthentication         = "clone_authentication_failed"
+	failureTrust                  = "clone_trust_failed"
+	failureExecution              = "clone_execution_failed"
+	failurePromptUnsupported      = "clone_prompt_unsupported"
+	failurePublicationUnsupported = "clone_publication_unsupported"
+	failureDestinationConflict    = "clone_destination_conflict"
+	failureCancelled              = "clone_cancelled"
+	failureInterrupted            = "clone_interrupted"
+	failureCleanupPending         = "clone_cleanup_pending"
 )
 
-// RunSpec describes one bounded git clone execution.
-type RunSpec struct {
+// runSpec describes one bounded git clone execution.
+type runSpec struct {
 	Remote   string
 	Staging  string
 	Deadline time.Duration
@@ -56,31 +56,31 @@ type RunSpec struct {
 	OnStage func(stage, progress string)
 }
 
-// RunResult is the bounded outcome of one execution.
-type RunResult struct {
+// runResult is the bounded outcome of one execution.
+type runResult struct {
 	ExitCode   int
 	Err        error
 	TimedOut   bool
 	OutputTail string // redacted, bounded diagnostic tail
 }
 
-// RunHandle is a live spawned clone process tree.
-type RunHandle interface {
+// runHandle is a live spawned clone process tree.
+type runHandle interface {
 	Pid() int
 	Pgid() int
 	StartIdentity() string
 	// Wait blocks until the process tree exits and pipes are drained
 	// within their bound. Safe to call once.
-	Wait() RunResult
+	Wait() runResult
 	// Terminate stops the whole process tree (SIGTERM, bounded grace,
 	// SIGKILL to the group) and reaps it. Idempotent.
 	Terminate()
 }
 
-// Runner spawns clone executions. The real runner shells out to git with an
+// runner spawns clone executions. The real runner shells out to git with an
 // argument vector; tests inject deterministic fake runners.
-type Runner interface {
-	Start(spec RunSpec) (RunHandle, error)
+type runner interface {
+	Start(spec runSpec) (runHandle, error)
 }
 
 // realRunner spawns git over an argument vector, never a shell.
@@ -88,8 +88,8 @@ type realRunner struct {
 	gitBin string
 }
 
-// NewRealRunner returns a Runner that executes the git binary directly.
-func NewRealRunner(gitBin string) Runner {
+// newRealRunner returns a runner that executes the git binary directly.
+func newRealRunner(gitBin string) runner {
 	if strings.TrimSpace(gitBin) == "" {
 		gitBin = "git"
 	}
@@ -127,7 +127,7 @@ type realHandle struct {
 	// done is closed exactly once by await after result is set, so any
 	// number of Wait/Terminate callers can observe completion safely.
 	done       chan struct{}
-	result     RunResult
+	result     runResult
 	pid        int
 	pgid       int
 	identity   string
@@ -140,10 +140,10 @@ type realHandle struct {
 	line []byte
 }
 
-func (r *realRunner) Start(spec RunSpec) (RunHandle, error) {
+func (r *realRunner) Start(spec runSpec) (runHandle, error) {
 	deadline := spec.Deadline
 	if deadline <= 0 {
-		deadline = DefaultDeadline
+		deadline = defaultDeadline
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), deadline)
 	cmd := exec.CommandContext(ctx, r.gitBin, "clone", "--progress", spec.Remote, spec.Staging)
@@ -212,7 +212,7 @@ func (h *realHandle) ingest(line string) {
 		return
 	}
 	if h.progressFn != nil && progressPattern.MatchString(clean) {
-		h.progressFn(StageTransferring, boundProgress(clean))
+		h.progressFn(stageTransferring, boundProgress(clean))
 	}
 	h.tailMu.Lock()
 	if len(h.tail) >= 8 {
@@ -236,8 +236,8 @@ func stripControls(s string) string {
 }
 
 func boundProgress(s string) string {
-	if len(s) > MaxProgressLength {
-		s = s[:MaxProgressLength]
+	if len(s) > maxProgressLength {
+		s = s[:maxProgressLength]
 	}
 	return s
 }
@@ -258,8 +258,8 @@ func RedactDiagnostics(s string) string {
 	s = tokenPattern.ReplaceAllString(s, "$1=[redacted]")
 	s = bearerPattern.ReplaceAllString(s, "bearer [redacted]")
 	s = longSecretPattern.ReplaceAllString(s, "[redacted]")
-	if len(s) > MaxDiagnosticsLength {
-		s = s[:MaxDiagnosticsLength]
+	if len(s) > maxDiagnosticsLength {
+		s = s[:maxDiagnosticsLength]
 	}
 	return s
 }
@@ -268,7 +268,7 @@ func (h *realHandle) await(ctx context.Context) {
 	waitErr := h.cmd.Wait()
 	h.flushLine()
 	h.cancel()
-	result := RunResult{Err: waitErr, OutputTail: h.tailText()}
+	result := runResult{Err: waitErr, OutputTail: h.tailText()}
 	if ctx.Err() != nil && errors.Is(ctx.Err(), context.DeadlineExceeded) {
 		result.TimedOut = true
 	}
@@ -293,7 +293,7 @@ func (h *realHandle) Pid() int              { return h.pid }
 func (h *realHandle) Pgid() int             { return h.pgid }
 func (h *realHandle) StartIdentity() string { return h.identity }
 
-func (h *realHandle) Wait() RunResult {
+func (h *realHandle) Wait() runResult {
 	<-h.done
 	return h.result
 }
@@ -314,10 +314,10 @@ func (h *realHandle) Terminate() {
 	})
 }
 
-// ClassifyFailure maps a bounded, redacted run outcome onto a failure code.
-func ClassifyFailure(res RunResult) string {
+// classifyFailure maps a bounded, redacted run outcome onto a failure code.
+func classifyFailure(res runResult) string {
 	if res.TimedOut {
-		return FailureTimeout
+		return failureTimeout
 	}
 	tail := strings.ToLower(res.OutputTail)
 	switch {
@@ -326,55 +326,48 @@ func ClassifyFailure(res RunResult) string {
 		strings.Contains(tail, "permission denied"),
 		strings.Contains(tail, "fatal: could not authenticate"),
 		strings.Contains(tail, "access denied"):
-		return FailureAuthentication
+		return failureAuthentication
 	case strings.Contains(tail, "host key verification failed"),
 		strings.Contains(tail, "host key for"),
 		strings.Contains(tail, "identity file"),
 		strings.Contains(tail, "no such identity"):
-		return FailureTrust
+		return failureTrust
 	case strings.Contains(tail, "terminal prompts disabled") && !promptDisabledAskpass():
-		return FailurePromptUnsupported
+		return failurePromptUnsupported
 	case strings.Contains(tail, "timed out"), strings.Contains(tail, "connection timed out"),
 		strings.Contains(tail, "operation timed out"):
-		return FailureTimeout
+		return failureTimeout
 	default:
-		return FailureExecution
+		return failureExecution
 	}
 }
 
-// IsProcessAlive reports whether a process (by pid) currently exists.
-func IsProcessAlive(pid int) bool {
+// isProcessAlive reports whether a process (by pid) currently exists.
+func isProcessAlive(pid int) bool {
 	if pid <= 0 {
 		return false
 	}
 	return syscall.Kill(pid, 0) == nil
 }
 
-// GroupAlive reports whether any process in the group exists.
-func GroupAlive(pgid int) bool {
+// groupAlive reports whether any process in the group exists.
+func groupAlive(pgid int) bool {
 	if pgid <= 0 {
 		return false
 	}
 	return syscall.Kill(-pgid, 0) == nil
 }
 
-// VerifyProcessIdentity re-reads the current process start identity for pid
+// verifyProcessIdentity re-reads the current process start identity for pid
 // and reports whether it matches the recorded identity. PID, path, or
 // marker alone is never sufficient proof; a mismatch or unreadable
 // identity means PID reuse or uncertainty, and callers must refuse to
 // signal or delete based on the pid alone.
-func VerifyProcessIdentity(pid int, recorded string) bool {
+func verifyProcessIdentity(pid int, recorded string) bool {
 	if pid <= 0 || recorded == "" {
 		return false
 	}
 	return processStartIdentity(pid) == recorded
-}
-
-// redactRemoteForRecord prepares the remote for durable storage. The
-// validator has already rejected password- and token-bearing remotes, so
-// this is defense in depth.
-func redactRemoteForRecord(remote string) string {
-	return RedactDiagnostics(remote)
 }
 
 var _ = bytes.MinRead

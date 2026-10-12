@@ -42,7 +42,7 @@ const REBASE_STATUS_LABELS: Record<string, string> = {
   interrupted: 'Interrupted',
 };
 
-export interface RepositoryInstrumentProps {
+interface RepositoryInstrumentProps {
   repos: RepoStatusView[];
   onOpenPullRequest(url: string): void;
   /**

@@ -73,8 +73,8 @@ type Store struct {
 	// on atomic file commits and take no lock at all.
 	mu sync.RWMutex
 
-	// testSaveInterceptor is a test-only hook consulted by saveUnlocked to
-	// inject failures. The concrete wiring lives in export_test.go.
+	// testSaveInterceptor is consulted before each feature write so tests can
+	// inject failures or block a write at a transaction boundary.
 	testSaveInterceptor func(f *Feature) error
 	mutationObserver    MutationObserver
 }
@@ -92,11 +92,11 @@ type RelationshipChildren struct {
 // versions plus the retired chat session state older releases left behind
 // and upload staging. They are not feature records and must not participate
 // in feature or relationship scans.
-// ErrLegacySchemaVersion marks a record persisted by an older release with an
+// errLegacySchemaVersion marks a record persisted by an older release with an
 // explicit lower schema version. Legacy records predate child relationships,
 // so relationship scans may skip them; every other read path still refuses
 // the record.
-var ErrLegacySchemaVersion = errors.New("legacy feature schema version")
+var errLegacySchemaVersion = errors.New("legacy feature schema version")
 
 func isLegacyProviderBookkeepingDir(name string) bool {
 	switch name {
@@ -111,6 +111,16 @@ func NewStore(baseDir string) *Store {
 	return &Store{BaseDir: baseDir}
 }
 
+// SetSaveInterceptor installs a callback consulted before each feature save.
+// Tests use it to fail or block a write; pass nil to remove the callback.
+// The callback runs while the store write lock is held and must not call back
+// into the store.
+func (s *Store) SetSaveInterceptor(interceptor func(*Feature) error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.testSaveInterceptor = interceptor
+}
+
 func (s *Store) Save(f *Feature) error {
 	s.mu.Lock()
 	var before *MutationSnapshot
@@ -122,7 +132,7 @@ func (s *Store) Save(f *Feature) error {
 	after := mutationSnapshot(f)
 	s.mu.Unlock()
 	if err == nil && (before == nil || !mutationSnapshotsEqual(before, after)) {
-		s.notifyMutation(Mutation{Kind: MutationSaved, Before: before, After: after, At: time.Now()})
+		s.notifyMutation(Mutation{Kind: mutationSaved, Before: before, After: after, At: time.Now()})
 	}
 	return err
 }
@@ -151,17 +161,17 @@ func (s *Store) Modify(id string, fn func(f *Feature) error) error {
 	after := mutationSnapshot(f)
 	s.mu.Unlock()
 	if err == nil && !mutationSnapshotsEqual(before, after) {
-		s.notifyMutation(Mutation{Kind: MutationSaved, Before: before, After: after, At: time.Now()})
+		s.notifyMutation(Mutation{Kind: mutationSaved, Before: before, After: after, At: time.Now()})
 	}
 	return err
 }
 
-// RelationshipGuardFunc evaluates whether a mutation is allowed given the
+// relationshipGuardFunc evaluates whether a mutation is allowed given the
 // loaded feature and its active child (nil when the feature is a child or no
 // active child exists). Return an error to reject the mutation. The feature
 // and activeChild are loaded under the store mutex; do not call other Store
 // methods from within.
-type RelationshipGuardFunc func(f *Feature, activeChild *Feature) error
+type relationshipGuardFunc func(f *Feature, activeChild *Feature) error
 
 // ModifyGuarded atomically loads a feature, runs the relationship guard
 // function under the store mutex (using the same activeChildOfUnlocked scan
@@ -172,7 +182,7 @@ type RelationshipGuardFunc func(f *Feature, activeChild *Feature) error
 // between the guard check and the mutation.
 func (s *Store) ModifyGuarded(
 	id string,
-	guard RelationshipGuardFunc,
+	guard relationshipGuardFunc,
 	fn func(f *Feature) error,
 ) error {
 	s.mu.Lock()
@@ -213,7 +223,7 @@ func (s *Store) ModifyGuarded(
 	after := mutationSnapshot(f)
 	s.mu.Unlock()
 	if err == nil && !mutationSnapshotsEqual(before, after) {
-		s.notifyMutation(Mutation{Kind: MutationSaved, Before: before, After: after, At: time.Now()})
+		s.notifyMutation(Mutation{Kind: mutationSaved, Before: before, After: after, At: time.Now()})
 	}
 	return err
 }
@@ -236,17 +246,17 @@ func (s *Store) CloseChild(childID, outcome string, closedAt time.Time) error {
 	defer s.mu.Unlock()
 
 	if outcome != ChildCloseOutcomeCompleted && outcome != ChildCloseOutcomeDiscarded {
-		return &ChildRelationshipError{ChildID: childID, Reason: fmt.Sprintf("unknown close outcome %q", outcome)}
+		return &childRelationshipError{ChildID: childID, Reason: fmt.Sprintf("unknown close outcome %q", outcome)}
 	}
 	if closedAt.IsZero() {
-		return &ChildRelationshipError{ChildID: childID, Reason: fmt.Sprintf("%s child has no valid close timestamp", outcome)}
+		return &childRelationshipError{ChildID: childID, Reason: fmt.Sprintf("%s child has no valid close timestamp", outcome)}
 	}
 	child, err := s.loadUnlocked(childID)
 	if err != nil {
 		return err
 	}
 	if !child.IsChild() {
-		return &ChildRelationshipError{ChildID: childID, Reason: "feature is not a child"}
+		return &childRelationshipError{ChildID: childID, Reason: "feature is not a child"}
 	}
 	if err := validateChildRelationship(child); err != nil {
 		return err
@@ -332,7 +342,7 @@ func (s *Store) AllRelationshipChildren() (map[string]*RelationshipChildren, err
 		}
 		child, exists, err := s.loadFeatureForScan(entry.Name())
 		if err != nil {
-			if errors.Is(err, ErrLegacySchemaVersion) {
+			if errors.Is(err, errLegacySchemaVersion) {
 				// Legacy records predate child relationships; one stale
 				// record must not fail every relationship read.
 				log.Printf("feature store: skipping legacy record %q during relationship scan: %v", entry.Name(), err)
@@ -356,7 +366,7 @@ func (s *Store) AllRelationshipChildren() (map[string]*RelationshipChildren, err
 		}
 		if child.IsActiveChild() {
 			if children.Active != nil {
-				return nil, &ChildRelationshipError{
+				return nil, &childRelationshipError{
 					ChildID: child.ID,
 					Reason:  fmt.Sprintf("parent %s has multiple active children %s and %s", child.Parent.ParentID, children.Active.ID, child.ID),
 				}
@@ -391,7 +401,7 @@ func (s *Store) validatedRelationshipChildrenUnlocked(parentID string) (*Relatio
 		}
 		child, exists, err := s.loadFeatureForScan(entry.Name())
 		if err != nil {
-			if errors.Is(err, ErrLegacySchemaVersion) {
+			if errors.Is(err, errLegacySchemaVersion) {
 				// Legacy records predate child relationships; one stale
 				// record must not fail every relationship read.
 				log.Printf("feature store: skipping legacy record %q during relationship scan: %v", entry.Name(), err)
@@ -410,7 +420,7 @@ func (s *Store) validatedRelationshipChildrenUnlocked(parentID string) (*Relatio
 		}
 		if child.IsActiveChild() {
 			if result.Active != nil {
-				return nil, &ChildRelationshipError{
+				return nil, &childRelationshipError{
 					ChildID: child.ID,
 					Reason:  fmt.Sprintf("parent %s has multiple active children %s and %s", parentID, result.Active.ID, child.ID),
 				}
@@ -429,14 +439,14 @@ func validateChildRelationship(child *Feature) error {
 	switch outcome {
 	case "":
 		if closedAt != nil {
-			return &ChildRelationshipError{ChildID: child.ID, Reason: "active child has a close timestamp"}
+			return &childRelationshipError{ChildID: child.ID, Reason: "active child has a close timestamp"}
 		}
 	case ChildCloseOutcomeCompleted, ChildCloseOutcomeDiscarded:
 		if closedAt == nil || closedAt.IsZero() {
-			return &ChildRelationshipError{ChildID: child.ID, Reason: fmt.Sprintf("%s child has no valid close timestamp", outcome)}
+			return &childRelationshipError{ChildID: child.ID, Reason: fmt.Sprintf("%s child has no valid close timestamp", outcome)}
 		}
 	default:
-		return &ChildRelationshipError{ChildID: child.ID, Reason: fmt.Sprintf("unknown close outcome %q", outcome)}
+		return &childRelationshipError{ChildID: child.ID, Reason: fmt.Sprintf("unknown close outcome %q", outcome)}
 	}
 	return nil
 }
@@ -562,7 +572,7 @@ func (s *Store) saveRunUnlocked(featureID string, r *Run) error {
 // RunDir returns the absolute directory for a specific run of a feature.
 // Pure path assembly — no mutex required. Exposed for callers inside
 // internal/feature/ that need to address a specific run number (e.g., the
-// carry-forward helpers in carry_forward.go). Not added to ports.FeatureStore
+// carry-forward helpers in carry_forward.go).
 // because no call-site outside internal/feature/ needs it.
 func (s *Store) RunDir(featureID string, runNumber int) string {
 	return s.runDirUnlocked(featureID, runNumber)
@@ -607,7 +617,7 @@ func (s *Store) loadUnlocked(id string) (*Feature, error) {
 		}
 		if anchor.SchemaVersion != SchemaVersionCurrent {
 			if anchor.SchemaVersion > 0 && anchor.SchemaVersion < SchemaVersionCurrent {
-				return nil, fmt.Errorf("feature schema version %d, expected %d: %w", anchor.SchemaVersion, SchemaVersionCurrent, ErrLegacySchemaVersion)
+				return nil, fmt.Errorf("feature schema version %d, expected %d: %w", anchor.SchemaVersion, SchemaVersionCurrent, errLegacySchemaVersion)
 			}
 			return nil, fmt.Errorf("feature schema version %d, expected %d", anchor.SchemaVersion, SchemaVersionCurrent)
 		}
@@ -745,25 +755,6 @@ func RemoveAllResilient(dir string) error {
 	return os.RemoveAll(dir)
 }
 
-// CreateRun writes a fresh run.yaml for a new run. RunNumber must be set.
-// Fails if the run file already exists. Atomic temp-file+rename.
-func (s *Store) CreateRun(featureID string, r *Run) error {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-
-	if r == nil {
-		return fmt.Errorf("nil run")
-	}
-	if r.RunNumber <= 0 {
-		return fmt.Errorf("invalid run number %d", r.RunNumber)
-	}
-	path := filepath.Join(s.runDirUnlocked(featureID, r.RunNumber), "run.yaml")
-	if _, err := os.Stat(path); err == nil {
-		return fmt.Errorf("run %d already exists for feature %s", r.RunNumber, featureID)
-	}
-	return s.saveRunUnlocked(featureID, r)
-}
-
 // LoadRun reads a specific run's run.yaml.
 func (s *Store) LoadRun(featureID string, runNumber int) (*Run, error) {
 	return s.loadRunUnlocked(featureID, runNumber)
@@ -797,21 +788,6 @@ func (s *Store) ListRuns(featureID string) ([]int, error) {
 	}
 	sort.Ints(runNumbers)
 	return runNumbers, nil
-}
-
-// SaveRun writes a run.yaml. Panics if r.IsSealed() — a sealed run is
-// immutable by contract. Atomic temp-file+rename.
-func (s *Store) SaveRun(featureID string, r *Run) error {
-	if r == nil {
-		return fmt.Errorf("nil run")
-	}
-	if r.IsSealed() {
-		panic(fmt.Sprintf("feature.Store.SaveRun: run %d of feature %s is sealed; sealed runs are immutable", r.RunNumber, featureID))
-	}
-	s.mu.Lock()
-	defer s.mu.Unlock()
-
-	return s.saveRunUnlocked(featureID, r)
 }
 
 // SealAndForkRun atomically seals the active run and forks a fresh one under
@@ -856,7 +832,7 @@ func (s *Store) SealAndForkRun(
 	defer func() {
 		s.mu.Unlock()
 		if retErr == nil && after != nil {
-			s.notifyMutation(Mutation{Kind: MutationRewound, Before: before, After: after, At: time.Now()})
+			s.notifyMutation(Mutation{Kind: mutationRewound, Before: before, After: after, At: time.Now()})
 		}
 	}()
 
@@ -1145,9 +1121,9 @@ func (s *Store) CreateChildLocked(
 	if err := s.saveUnlocked(parent); err != nil {
 		return nil, fmt.Errorf("clearing child intent on parent: %w", err)
 	}
-	notifications = append(notifications, Mutation{Kind: MutationSaved, After: mutationSnapshot(child), At: time.Now()})
+	notifications = append(notifications, Mutation{Kind: mutationSaved, After: mutationSnapshot(child), At: time.Now()})
 	if parentAfter := mutationSnapshot(parent); !mutationSnapshotsEqual(parentBefore, parentAfter) {
-		notifications = append(notifications, Mutation{Kind: MutationSaved, Before: parentBefore, After: parentAfter, At: time.Now()})
+		notifications = append(notifications, Mutation{Kind: mutationSaved, Before: parentBefore, After: parentAfter, At: time.Now()})
 	}
 	return child, nil
 }
@@ -1270,7 +1246,7 @@ func (s *Store) ReconcilePendingChildCreations() ([]string, error) {
 			continue
 		}
 		if childSnapshot != nil {
-			notifications = append(notifications, Mutation{Kind: MutationSaved, After: childSnapshot, At: time.Now()})
+			notifications = append(notifications, Mutation{Kind: mutationSaved, After: childSnapshot, At: time.Now()})
 		}
 		reconciled = append(reconciled, parent.ID)
 	}
@@ -1333,3 +1309,6 @@ func parseRunDirName(name string) (int, bool) {
 	}
 	return n, true
 }
+
+// BaseDirectory returns the store root used for durable feature state.
+func (s *Store) BaseDirectory() string { return s.BaseDir }

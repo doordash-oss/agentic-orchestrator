@@ -18,8 +18,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"time"
-
-	"github.com/doordash-oss/agentic-orchestrator/internal/llm/askuser"
 )
 
 // SDKMessage is the envelope for all JSON messages from LLM CLI tools.
@@ -216,7 +214,7 @@ type SystemInitMessage struct {
 	SessionID      string          `json:"session_id"`
 	Model          string          `json:"model"`
 	Tools          []string        `json:"tools,omitempty"`
-	MCPServers     []MCPServerInfo `json:"mcp_servers,omitempty"`
+	MCPServers     []mcpServerInfo `json:"mcp_servers,omitempty"`
 	PermissionMode string          `json:"permissionMode,omitempty"`
 	// ResumeOutcome reports how a resumed launch started: ResumeOutcomeResumed,
 	// ResumeOutcomeFallback, or empty for a fresh session. Providers that
@@ -233,8 +231,8 @@ const (
 	ResumeOutcomeFallback = "fallback"
 )
 
-// MCPServerInfo describes an MCP server connected to the session.
-type MCPServerInfo struct {
+// mcpServerInfo describes an MCP server connected to the session.
+type mcpServerInfo struct {
 	Name   string `json:"name"`
 	Status string `json:"status,omitempty"`
 }
@@ -400,22 +398,6 @@ type ResultMessage struct {
 // IsSuccess returns true if the result indicates successful completion.
 func (r *ResultMessage) IsSuccess() bool { return r.Subtype == "success" && !r.IsError }
 
-// IsClientSideResult returns true if the result was resolved by the CLI
-// without model interaction (e.g. "Unknown skill: X"). These have
-// IsSuccess() true but zero output tokens and non-empty result text.
-func (r *ResultMessage) IsClientSideResult() bool {
-	if !r.IsSuccess() || r.Result == "" {
-		return false
-	}
-	if r.Usage != nil && r.Usage.OutputTokens == 0 {
-		return true
-	}
-	return false
-}
-
-// IsMaxTurns returns true if the session hit the max turns limit.
-func (r *ResultMessage) IsMaxTurns() bool { return r.Subtype == "max_turns" }
-
 // IsTurnTruncated reports whether the provider ended this turn before a
 // deliberate root outcome could be produced.
 func (r *ResultMessage) IsTurnTruncated() bool {
@@ -476,145 +458,6 @@ type ControlRequest struct {
 	AgentID string `json:"agent_id,omitempty"`
 }
 
-// ControlResponse is the wire format for responding to control_request messages.
-type ControlResponse struct {
-	Type     string               `json:"type"`
-	Response ControlResponseInner `json:"response"`
-}
-
-// ControlResponseInner is the inner payload of a control response.
-type ControlResponseInner struct {
-	Subtype   string         `json:"subtype"`
-	RequestID string         `json:"request_id"`
-	Response  map[string]any `json:"response"`
-}
-
-// NewAllowResponse creates a control_response that allows a tool use.
-func NewAllowResponse(requestID string, originalInput ...json.RawMessage) ControlResponse {
-	resp := map[string]any{"behavior": "allow"}
-	if len(originalInput) > 0 && len(originalInput[0]) > 0 {
-		var inputVal any
-		if err := json.Unmarshal(originalInput[0], &inputVal); err == nil {
-			resp["updatedInput"] = inputVal
-		}
-	}
-	return ControlResponse{
-		Type: "control_response",
-		Response: ControlResponseInner{
-			Subtype:   "success",
-			RequestID: requestID,
-			Response:  resp,
-		},
-	}
-}
-
-// NewDenyResponse creates a control_response that denies a tool use.
-func NewDenyResponse(requestID string, reason string) ControlResponse {
-	return ControlResponse{
-		Type: "control_response",
-		Response: ControlResponseInner{
-			Subtype:   "success",
-			RequestID: requestID,
-			Response:  map[string]any{"behavior": "deny", "message": reason},
-		},
-	}
-}
-
-// NewAskUserResponse creates a control_response that allows an AskUserQuestion
-// tool use and supplies the user's answers keyed by question text. The bundle
-// is sent as the SDK's updatedInput.questions array.
-func NewAskUserResponse(requestID string, bundle askuser.Bundle, answers map[string]string) ControlResponse {
-	questions := bundle.Questions
-	if questions == nil {
-		questions = []askuser.Question{}
-	}
-	return ControlResponse{
-		Type: "control_response",
-		Response: ControlResponseInner{
-			Subtype:   "success",
-			RequestID: requestID,
-			Response: map[string]any{
-				"behavior": "allow",
-				"updatedInput": map[string]any{
-					"questions": questions,
-					"answers":   answers,
-				},
-			},
-		},
-	}
-}
-
-// InitializeRequestMessage is the handshake sent to the CLI to activate the
-// control_request protocol.
-type InitializeRequestMessage struct {
-	Type      string                `json:"type"`
-	RequestID string                `json:"request_id"`
-	Request   InitializeRequestBody `json:"request"`
-}
-
-// InitializeRequestBody is the inner payload of the initialize handshake.
-type InitializeRequestBody struct {
-	Subtype string                         `json:"subtype"`
-	Hooks   map[string][]InitializeHookRef `json:"hooks"`
-}
-
-// InitializeHookRef references hook callbacks by ID.
-type InitializeHookRef struct {
-	HookCallbackIDs []string `json:"hookCallbackIds"`
-}
-
-// NewInitializeRequest creates the SDK initialize handshake message.
-func NewInitializeRequest() InitializeRequestMessage {
-	return InitializeRequestMessage{
-		Type:      "control_request",
-		RequestID: "agentic-init-1",
-		Request: InitializeRequestBody{
-			Subtype: "initialize",
-			Hooks: map[string][]InitializeHookRef{
-				"PreToolUse": {
-					{HookCallbackIDs: []string{"agentic-hook-1"}},
-				},
-			},
-		},
-	}
-}
-
-// NewHookContinueResponse creates a control_response that tells the CLI
-// to continue with the tool execution (used for PreToolUse hook callbacks).
-func NewHookContinueResponse(requestID string) ControlResponse {
-	return ControlResponse{
-		Type: "control_response",
-		Response: ControlResponseInner{
-			Subtype:   "success",
-			RequestID: requestID,
-			Response:  map[string]any{"continue": true},
-		},
-	}
-}
-
-// UserInputMessage is sent to stdin to deliver a user message.
-type UserInputMessage struct {
-	Type    string           `json:"type"`
-	Message UserInputContent `json:"message"`
-}
-
-// UserInputContent is the inner content of a user input message.
-type UserInputContent struct {
-	Role    string `json:"role"`
-	Content string `json:"content"`
-}
-
-// NewUserInput creates a UserInputMessage for sending text to the session.
-func NewUserInput(text string) UserInputMessage {
-	return UserInputMessage{
-		Type: "user",
-		Message: UserInputContent{
-			Role:    "user",
-			Content: text,
-		},
-	}
-}
-
 // StatusMessage is a status update during execution.
 type StatusMessage struct {
 	Type      string `json:"type"`
@@ -628,7 +471,13 @@ type ToolProgressMessage struct {
 	Type      string `json:"type"`
 	ToolUseID string `json:"tool_use_id,omitempty"`
 	ToolName  string `json:"tool_name,omitempty"`
-	Data      string `json:"data,omitempty"`
+	// Data is provider-shaped detail and may carry raw tool output (Codex
+	// streams command output here), so it is never shown to clients.
+	Data string `json:"data,omitempty"`
+	// Summary is one human-readable line naming what the tool acts on (a
+	// title, path, pattern, or command), never its output. Providers set it
+	// when they know it; transcripts show it beside the tool name.
+	Summary   string `json:"summary,omitempty"`
 	SessionID string `json:"session_id,omitempty"`
 	// TimeoutMS is the tool invocation's declared execution timeout in
 	// milliseconds, when the provider reports one; 0 means unknown.

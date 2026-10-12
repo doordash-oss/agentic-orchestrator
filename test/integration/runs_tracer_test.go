@@ -104,37 +104,37 @@ func TestRunsLayout_CreateInquireDesignRewindInquireAgain(t *testing.T) {
 	// step 2's fixtures after rewind.
 	run1Dir := filepath.Join(stateDir, f.ID, "runs", "run-001")
 
-	if err := mgr.StartInquire(f.ID); err != nil {
+	if err := mgr.StartPhase(f.ID, feature.PhaseInquire); err != nil {
 		t.Fatalf("StartInquire: %v", err)
 	}
-	if err := mgr.CompleteInquire(f.ID); err != nil {
+	if err := mgr.Transition(f.ID, feature.StatusInquireReady); err != nil {
 		t.Fatalf("CompleteInquire: %v", err)
 	}
-	if f, err = mgr.Get(f.ID); err != nil {
+	if f, err = mgr.Store.Load(f.ID); err != nil {
 		t.Fatalf("Get after inquire: %v", err)
 	}
 	writePhaseMarker(t, stateDir, f, "inquire", "r1-inquire")
 	assertUnderActiveRun(t, stateDir, f, "inquire", "routing.marker")
 
-	if err := mgr.StartResearch(f.ID); err != nil {
+	if err := mgr.StartPhase(f.ID, feature.PhaseResearch); err != nil {
 		t.Fatalf("StartResearch: %v", err)
 	}
-	if err := mgr.CompleteResearch(f.ID); err != nil {
+	if err := mgr.Transition(f.ID, feature.StatusDesignReady); err != nil {
 		t.Fatalf("CompleteResearch: %v", err)
 	}
-	if f, err = mgr.Get(f.ID); err != nil {
+	if f, err = mgr.Store.Load(f.ID); err != nil {
 		t.Fatalf("Get after research: %v", err)
 	}
 	writePhaseMarker(t, stateDir, f, "research", "r1-research")
 	assertUnderActiveRun(t, stateDir, f, "research", "routing.marker")
 
-	if err := mgr.StartDesign(f.ID); err != nil {
+	if err := mgr.StartPhase(f.ID, feature.PhaseDesign); err != nil {
 		t.Fatalf("StartDesign: %v", err)
 	}
-	if err := mgr.CompleteDesign(f.ID); err != nil {
+	if err := mgr.Transition(f.ID, feature.StatusPlanReady); err != nil {
 		t.Fatalf("CompleteDesign: %v", err)
 	}
-	if f, err = mgr.Get(f.ID); err != nil {
+	if f, err = mgr.Store.Load(f.ID); err != nil {
 		t.Fatalf("Get after design: %v", err)
 	}
 	writePhaseMarker(t, stateDir, f, "design", "r1-design")
@@ -147,9 +147,6 @@ func TestRunsLayout_CreateInquireDesignRewindInquireAgain(t *testing.T) {
 	}
 	if got := agent.PhasePlanDir(stateDir, f, 1); !underRun1(got, run1Dir) {
 		t.Errorf("PhasePlanDir(..., 1) = %q, want under %q", got, run1Dir)
-	}
-	if got := agent.PhaseImplementDir(stateDir, f, 1); !underRun1(got, run1Dir) {
-		t.Errorf("PhaseImplementDir(..., 1) = %q, want under %q", got, run1Dir)
 	}
 	if got := agent.RoadmapDir(stateDir, f); !underRun1(got, run1Dir) {
 		t.Errorf("RoadmapDir = %q, want under %q", got, run1Dir)
@@ -171,8 +168,8 @@ func TestRunsLayout_CreateInquireDesignRewindInquireAgain(t *testing.T) {
 		return nil
 	})
 
-	if _, _, err := mgr.RewindToPhase(f.ID, feature.PhaseInquire); err != nil {
-		t.Fatalf("RewindToPhase(Inquire): %v", err)
+	if _, _, err := mgr.RewindWithRequest(f.ID, feature.RewindRequest{TargetPhase: feature.PhaseInquire}); err != nil {
+		t.Fatalf("RewindWithRequest(Inquire): %v", err)
 	}
 
 	// Post-seal: run-001 is sealed and its artifacts are preserved.
@@ -226,7 +223,7 @@ func TestRunsLayout_CreateInquireDesignRewindInquireAgain(t *testing.T) {
 	}
 
 	// Feature state reflects the new active run.
-	reloaded, err := mgr.Get(f.ID)
+	reloaded, err := mgr.Store.Load(f.ID)
 	if err != nil {
 		t.Fatalf("Get: %v", err)
 	}
@@ -264,13 +261,13 @@ func TestRunsLayout_CreateInquireDesignRewindInquireAgain(t *testing.T) {
 		return nil
 	})
 
-	if err := mgr.StartInquire(f.ID); err != nil {
+	if err := mgr.StartPhase(f.ID, feature.PhaseInquire); err != nil {
 		t.Fatalf("StartInquire (run-002): %v", err)
 	}
-	if err := mgr.CompleteInquire(f.ID); err != nil {
+	if err := mgr.Transition(f.ID, feature.StatusInquireReady); err != nil {
 		t.Fatalf("CompleteInquire (run-002): %v", err)
 	}
-	reloaded, err = mgr.Get(f.ID)
+	reloaded, err = mgr.Store.Load(f.ID)
 	if err != nil {
 		t.Fatalf("Get after run-002 inquire: %v", err)
 	}

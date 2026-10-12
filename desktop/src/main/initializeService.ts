@@ -38,10 +38,11 @@ import {
 import type { ApiRequestInit } from './gateway/runtimeGateway';
 import { serverRequest, type ServerTransport } from './serverClient';
 import { fencedServerRequest, type ServerIdentitySource } from './serverFence';
+import { defined } from '../shared/defined';
 
 const INITIALIZE_PATH = '/api/v1/workspace/repositories/initialize';
 
-export interface InitializeServiceDeps {
+interface InitializeServiceDeps {
   transport: ServerTransport;
   /** Captures the current server identity for request fencing. */
   identity?: ServerIdentitySource;
@@ -77,7 +78,7 @@ export class InitializeService {
           inode: validated.identity.inode,
           birth_time: validated.identity.birthTime,
         },
-        ...(validated.path !== undefined ? { path: validated.path } : {}),
+        ...defined('path', validated.path),
         consent: true,
       },
     });
@@ -105,7 +106,7 @@ export class InitializeService {
 }
 
 /** Maps the snake_case server DTO onto the renderer-facing camelCase shape. */
-export function toInitializeRepositoryResult(
+function toInitializeRepositoryResult(
   dto: InitializeRepositoryResponse,
 ): InitializeRepositoryResult {
   const result: InitializeRepositoryResult = {

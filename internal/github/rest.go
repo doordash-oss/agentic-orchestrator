@@ -44,7 +44,7 @@ type PRComment struct {
 }
 
 // ListPRReviewComments returns all inline review comments on a PR.
-func (c *Client) ListPRReviewComments(owner, repo string, number int) ([]PRComment, error) {
+func (c *client) ListPRReviewComments(owner, repo string, number int) ([]PRComment, error) {
 	return getPaginated[PRComment](c, fmt.Sprintf("repos/%s/%s/pulls/%d/comments", owner, repo, number))
 }
 
@@ -53,7 +53,7 @@ var linkNextPattern = regexp.MustCompile(`<([^>]+)>;\s*rel="next"`)
 // getPaginated GETs path, following Link rel="next" headers until
 // exhausted. GitHub emits absolute next URLs; go-gh's RESTClient accepts
 // scheme-prefixed request paths verbatim, so they are passed through.
-func getPaginated[T any](c *Client, path string) ([]T, error) {
+func getPaginated[T any](c *client, path string) ([]T, error) {
 	separator := "?"
 	if strings.Contains(path, "?") {
 		separator = "&"
@@ -80,8 +80,8 @@ func getPaginated[T any](c *Client, path string) ([]T, error) {
 	return all, nil
 }
 
-// PRReview is a submitted PR review (its top-level body, not inline comments).
-type PRReview struct {
+// prReview is a submitted PR review (its top-level body, not inline comments).
+type prReview struct {
 	ID   int    `json:"id"`
 	Body string `json:"body"`
 	User struct {
@@ -92,17 +92,17 @@ type PRReview struct {
 }
 
 // ListIssueComments returns all conversation comments on a PR.
-func (c *Client) ListIssueComments(owner, repo string, number int) ([]PRComment, error) {
+func (c *client) ListIssueComments(owner, repo string, number int) ([]PRComment, error) {
 	return getPaginated[PRComment](c, fmt.Sprintf("repos/%s/%s/issues/%d/comments", owner, repo, number))
 }
 
 // ListPRReviews returns all submitted reviews on a PR.
-func (c *Client) ListPRReviews(owner, repo string, number int) ([]PRReview, error) {
-	return getPaginated[PRReview](c, fmt.Sprintf("repos/%s/%s/pulls/%d/reviews", owner, repo, number))
+func (c *client) ListPRReviews(owner, repo string, number int) ([]prReview, error) {
+	return getPaginated[prReview](c, fmt.Sprintf("repos/%s/%s/pulls/%d/reviews", owner, repo, number))
 }
 
-// PRInfo is the subset of pull-request details the orchestrator consumes.
-type PRInfo struct {
+// prInfo is the subset of pull-request details the orchestrator consumes.
+type prInfo struct {
 	Body    string
 	BaseRef string
 	URL     string
@@ -114,7 +114,7 @@ type PRInfo struct {
 
 // GetPR returns body, base branch, canonical URL, and open/closed/merged
 // state of a PR.
-func (c *Client) GetPR(owner, repo string, number int) (PRInfo, error) {
+func (c *client) GetPR(owner, repo string, number int) (prInfo, error) {
 	var raw struct {
 		Body string `json:"body"`
 		Base struct {
@@ -125,9 +125,9 @@ func (c *Client) GetPR(owner, repo string, number int) (PRInfo, error) {
 		MergedAt *string `json:"merged_at"`
 	}
 	if err := c.rest.Get(fmt.Sprintf("repos/%s/%s/pulls/%d", owner, repo, number), &raw); err != nil {
-		return PRInfo{}, err
+		return prInfo{}, err
 	}
-	return PRInfo{
+	return prInfo{
 		Body:    raw.Body,
 		BaseRef: raw.Base.Ref,
 		URL:     raw.HTMLURL,
@@ -146,7 +146,7 @@ type CreatePRParams struct {
 // targets the repository's default branch. If GitHub answers 422 with
 // "already exists", the existing open PR's URL is returned instead
 // (the branch push that preceded the call already updated it).
-func (c *Client) CreatePR(p CreatePRParams) (string, error) {
+func (c *client) CreatePR(p CreatePRParams) (string, error) {
 	base := p.Base
 	if base == "" {
 		var repoInfo struct {
@@ -185,7 +185,7 @@ func (c *Client) CreatePR(p CreatePRParams) (string, error) {
 	return "", fmt.Errorf("creating PR: %w", err)
 }
 
-func (c *Client) patchPR(owner, repo string, number int, fields map[string]any) error {
+func (c *client) patchPR(owner, repo string, number int, fields map[string]any) error {
 	payload, err := json.Marshal(fields)
 	if err != nil {
 		return err
@@ -194,16 +194,16 @@ func (c *Client) patchPR(owner, repo string, number int, fields map[string]any) 
 }
 
 // UpdatePRBody replaces a PR's description.
-func (c *Client) UpdatePRBody(owner, repo string, number int, body string) error {
+func (c *client) UpdatePRBody(owner, repo string, number int, body string) error {
 	return c.patchPR(owner, repo, number, map[string]any{"body": body})
 }
 
 // ClosePR closes a PR without merging.
-func (c *Client) ClosePR(owner, repo string, number int) error {
+func (c *client) ClosePR(owner, repo string, number int) error {
 	return c.patchPR(owner, repo, number, map[string]any{"state": "closed"})
 }
 
-func (c *Client) postComment(path, body string) error {
+func (c *client) postComment(path, body string) error {
 	payload, err := json.Marshal(map[string]any{"body": body})
 	if err != nil {
 		return err
@@ -212,11 +212,11 @@ func (c *Client) postComment(path, body string) error {
 }
 
 // ReplyToReviewComment replies in-thread to an inline review comment.
-func (c *Client) ReplyToReviewComment(owner, repo string, number, commentID int, body string) error {
+func (c *client) ReplyToReviewComment(owner, repo string, number, commentID int, body string) error {
 	return c.postComment(fmt.Sprintf("repos/%s/%s/pulls/%d/comments/%d/replies", owner, repo, number, commentID), body)
 }
 
 // CreateIssueComment posts a top-level conversation comment on a PR.
-func (c *Client) CreateIssueComment(owner, repo string, number int, body string) error {
+func (c *client) CreateIssueComment(owner, repo string, number int, body string) error {
 	return c.postComment(fmt.Sprintf("repos/%s/%s/issues/%d/comments", owner, repo, number), body)
 }

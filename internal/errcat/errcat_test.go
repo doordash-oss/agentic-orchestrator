@@ -29,7 +29,7 @@ var zeroParams = []Params{
 	WorkspaceRootParams{},
 	ReadinessParams{},
 	RelatedFeatureParams{},
-	PublishRepoParams{},
+	publishRepoParams{},
 	SubjectParams{},
 	PathParams{},
 	UsageParams{},
@@ -38,27 +38,28 @@ var zeroParams = []Params{
 	ViolationParams{},
 	ProviderUnavailableParams{},
 	ProviderIssueParams{},
-	RunFailureParams{},
+	runFailureParams{},
 	IntegrationRepoParams{},
-	SetupFailureParams{},
+	setupFailureParams{},
 	EffortDriftParams{},
+	ProviderEndpointParams{},
 	FeatureLoadFailedParams{},
 	WarningRepoParams{},
 	OrphanSessionParams{},
 	ChatContextParams{},
-	CloneDestinationParams{},
+	cloneDestinationParams{},
 	RuntimeDirParams{},
 }
 
 func TestCatalogEntriesAreValid(t *testing.T) {
-	codes := Codes()
+	codes := CatalogCodes()
 	if len(codes) < 50 {
 		t.Fatalf("catalog has %d codes; the seeded server inventory needs at least 50", len(codes))
 	}
 	for _, code := range codes {
 		entry, ok := Lookup(code)
 		if !ok {
-			t.Fatalf("%s: listed by Codes but missing from catalog", code)
+			t.Fatalf("%s: listed by CatalogCodes but missing from catalog", code)
 		}
 		if !entry.Class.Valid() {
 			t.Errorf("%s: invalid class %q", code, entry.Class)
@@ -76,7 +77,7 @@ func TestCatalogEntriesAreValid(t *testing.T) {
 		}
 		for _, block := range entry.Blocks {
 			switch block {
-			case BlockRepositories, BlockPhase, BlockCommand, BlockSetupTask:
+			case blockRepositories, blockPhase, blockCommand, blockSetupTask:
 			default:
 				t.Errorf("%s: undeclared context block %q", code, block)
 			}
@@ -91,7 +92,7 @@ func TestCatalogEntriesAreValid(t *testing.T) {
 }
 
 func TestEveryCodeRendersWithZeroValueParameters(t *testing.T) {
-	for _, code := range Codes() {
+	for _, code := range CatalogCodes() {
 		rendered := New(code)
 		if rendered.Title == "" || rendered.Summary == "" {
 			t.Errorf("%s: zero-option render has empty title or summary", code)
@@ -110,7 +111,7 @@ func TestNewDropsUndeclaredContextBlocks(t *testing.T) {
 		BadRequest,
 		WithRepositories(CodeRepository{Name: "web", DirtyFiles: []string{"a.go"}}),
 		WithPhase(CodePhase{Name: "implement"}),
-		WithCommand(CodeCommand{ExitCode: 1}),
+		withCommand(CodeCommand{ExitCode: 1}),
 	)
 	if rendered.Context != nil {
 		t.Fatalf("bad_request declares no context blocks; got %#v", rendered.Context)
@@ -155,7 +156,7 @@ var terminalRunFailureCodes = []Code{
 	IterationBudgetExhausted,
 	SafetyRailTripped,
 	SessionCrashed,
-	ArtifactMissing,
+	artifactMissing,
 	InfrastructureFailure,
 	WorktreeSetupFailed,
 	SetupAssetCopyFailed,
@@ -181,7 +182,9 @@ func TestTerminalRunFailureActionReferences(t *testing.T) {
 		if !ok {
 			t.Fatalf("%s: missing from catalog", code)
 		}
-		want := []string{"restart"}
+		// A failed phase enables retry and restart; retry is the primary
+		// remediation, so the envelope must reference both, retry first.
+		want := []string{"retry", "restart"}
 		if IsSetupFailure(code) {
 			want = []string{"setup"}
 		}
@@ -201,7 +204,7 @@ func TestAuthoredClasses(t *testing.T) {
 		code Code
 		want Class
 	}{
-		{RebaseAlreadyUpToDate, ClassWarning},
+		{RebaseAlreadyUpToDate, classWarning},
 		{LocalSourceStale, ClassNeedsAction},
 		{ParentWorktreesDirty, ClassNeedsAction},
 		{ActiveChildExists, ClassNeedsAction},
@@ -215,7 +218,7 @@ func TestAuthoredClasses(t *testing.T) {
 		{RequestTooLarge, ClassBlocking},
 		{Unavailable, ClassBlocking},
 		{ChatContextInvalid, ClassBlocking},
-		{ChatContextNotFound, ClassWarning},
+		{ChatContextNotFound, classWarning},
 	}
 	for _, tc := range cases {
 		entry, ok := Lookup(tc.code)
@@ -271,7 +274,7 @@ func TestSummaryTemplatesInterpolateParams(t *testing.T) {
 		t.Fatalf("not_found subject summary is %q", rendered.Summary)
 	}
 
-	rendered = New(PublishRemoteDiverged, WithParams(PublishRepoParams{Repo: "web", Branch: "main", RemoteOnlyCommits: 2}))
+	rendered = New(PublishRemoteDiverged, WithParams(publishRepoParams{Repo: "web", Branch: "main", RemoteOnlyCommits: 2}))
 	if !strings.Contains(rendered.Summary, `"web"`) || !strings.Contains(rendered.Summary, "2 remote commits") {
 		t.Fatalf("publish_remote_diverged summary does not name repo and count: %q", rendered.Summary)
 	}
@@ -358,13 +361,13 @@ func TestSupervisorCodesPinShape(t *testing.T) {
 		{SupervisorSettingsLocked, ClassNeedsAction},
 		{SupervisorSettingsInvalid, ClassBlocking},
 		{SettingsRequired, ClassNeedsAction},
-		{TurnActive, ClassWarning},
+		{TurnActive, classWarning},
 		{SupervisorLaunchFailed, ClassBlocking},
 		{ChangePending, ClassNeedsAction},
 		{StaleGeneration, ClassNeedsAction},
-		{PendingChangeNotFound, ClassWarning},
+		{PendingChangeNotFound, classWarning},
 		{ClientMessageConflict, ClassBlocking},
-		{CursorOutOfRange, ClassWarning},
+		{CursorOutOfRange, classWarning},
 		{SupervisorHistoryIncomplete, ClassBlocking},
 	}
 	for _, tc := range cases {

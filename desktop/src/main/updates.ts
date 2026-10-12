@@ -31,6 +31,7 @@ import type { UpdateInstallNowRequest, UpdatePackageFormat, UpdateState } from '
 import { buildCanonicalError, redactText } from '../shared/errors';
 import type { DiagnosticsService } from './diagnostics';
 import { supervisorActivitySentence } from './quitCoordinator';
+import { defined } from '../shared/defined';
 
 const REPO_API = 'https://api.github.com/repos/doordash-oss/agentic-orchestrator/releases';
 const RELEASE_NOTES = 'https://github.com/doordash-oss/agentic-orchestrator/releases';
@@ -80,7 +81,7 @@ export interface VerifiedUpdatePackage {
   targetVersion: string;
 }
 
-export interface UpdateCoordinatorOptions {
+interface UpdateCoordinatorOptions {
   currentVersion: string;
   isPackaged: boolean;
   platform?: NodeJS.Platform;
@@ -819,7 +820,7 @@ export class UpdateCoordinator {
       ...(guidanceHint !== undefined && guidanceHint !== ''
         ? { remediationHint: guidanceHint }
         : {}),
-      ...(underlyingText !== undefined ? { diagnostics: underlyingText } : {}),
+      ...defined('diagnostics', underlyingText),
     });
     this.state = {
       ...this.state,

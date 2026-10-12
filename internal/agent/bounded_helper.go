@@ -51,17 +51,18 @@ func isHelperInfrastructureError(err error) bool {
 }
 
 const (
-	BoundedHelperStatusCompleted          = "completed"
-	BoundedHelperStatusTimedOut           = "timed_out"
-	BoundedHelperStatusAskedUser          = "asked_user"
-	BoundedHelperStatusPermissionRequired = "permission_required"
-	BoundedHelperStatusFailed             = "failed"
-	BoundedHelperStatusEmptyOutput        = "empty_output"
+	boundedHelperStatusCompleted          = "completed"
+	boundedHelperStatusTimedOut           = "timed_out"
+	boundedHelperStatusAskedUser          = "asked_user"
+	boundedHelperStatusPermissionRequired = "permission_required"
+	boundedHelperStatusFailed             = "failed"
+	boundedHelperStatusEmptyOutput        = "empty_output"
 	BoundedHelperStatusProtocolViolation  = "protocol_violation"
+	boundedHelperStatusInterrupted        = "interrupted"
 )
 
-// BoundedHelperConfig configures a single-turn interactive helper run.
-type BoundedHelperConfig struct {
+// boundedHelperConfig configures a single-turn interactive helper run.
+type boundedHelperConfig struct {
 	SessionID      string
 	FeatureID      string
 	Phase          feature.Phase
@@ -93,8 +94,8 @@ type BoundedHelperConfig struct {
 	ParentSpanCtx observe.SpanContext
 }
 
-// BoundedHelperResult captures the output and terminal state of a bounded helper run.
-type BoundedHelperResult struct {
+// boundedHelperResult captures the output and terminal state of a bounded helper run.
+type boundedHelperResult struct {
 	Output string
 	Status string
 	Result *llm.ResultMessage
@@ -108,15 +109,15 @@ var boundedHelperDisallowedTools = []string{"ScheduleWakeup"}
 
 // boundedHelperEffortLevel returns the effort level to pass to BuildSessionOpts:
 // the resolved effective effort when set, otherwise the pipeline-driven level.
-func boundedHelperEffortLevel(cfg BoundedHelperConfig) llm.EffortLevel {
+func boundedHelperEffortLevel(cfg boundedHelperConfig) llm.EffortLevel {
 	if cfg.EffectiveEffort != "" {
 		return cfg.EffectiveEffort
 	}
 	return cfg.EffortLevel
 }
 
-// RunBoundedHelper runs a single-turn interactive helper session.
-func (pr *PhaseRunner) RunBoundedHelper(ctx context.Context, cfg BoundedHelperConfig) (*BoundedHelperResult, error) {
+// runBoundedHelper runs a single-turn interactive helper session.
+func (pr *PhaseRunner) runBoundedHelper(ctx context.Context, cfg boundedHelperConfig) (*boundedHelperResult, error) {
 	if cfg.SessionID == "" {
 		return nil, fmt.Errorf("running bounded helper: missing session id")
 	}
@@ -204,9 +205,12 @@ type boundedHelperRunConfig struct {
 	contractPhase feature.Phase
 	contractRole  Role
 	parentSpanCtx observe.SpanContext
+	// onRetry, when set, is told about each failed attempt that will be
+	// retried, so live surfaces can show the helper as retrying.
+	onRetry func(nextAttempt int, err error)
 }
 
-func (pr *PhaseRunner) runBoundedHelperSession(ctx context.Context, cfg boundedHelperRunConfig) (*BoundedHelperResult, error) {
+func (pr *PhaseRunner) runBoundedHelperSession(ctx context.Context, cfg boundedHelperRunConfig) (*boundedHelperResult, error) {
 	label := cfg.label
 	if label == "" {
 		label = "bounded helper"
@@ -231,23 +235,56 @@ func (pr *PhaseRunner) runBoundedHelperSession(ctx context.Context, cfg boundedH
 	for sessionAttempt := 1; ; sessionAttempt++ {
 		cfg.sessionID = retrySessionID(baseSessionID, sessionAttempt)
 		if sessionAttempt > 1 && cfg.completionDir != "" {
-			RemoveCompletionReceipt(cfg.completionDir)
+			removeCompletionReceipt(cfg.completionDir)
 		}
 		result, err, retryable := pr.runBoundedHelperSessionOnce(ctx, cfg, label)
 		if retryable && sessionAttempt < retryableInfrastructureSessionMaxAttempts {
+			// A stop between attempts must never relaunch the helper.
+			if pr.helperInterrupted(ctx, cfg.featureID) {
+				if result != nil {
+					result.Status = boundedHelperStatusInterrupted
+				}
+				return result, fmt.Errorf("running %s: %w", label, errHelperInterrupted)
+			}
+			if cfg.onRetry != nil {
+				cfg.onRetry(sessionAttempt+1, err)
+			}
 			continue
 		}
 		return result, err
 	}
 }
 
-func (pr *PhaseRunner) runBoundedHelperSessionOnce(ctx context.Context, cfg boundedHelperRunConfig, label string) (*BoundedHelperResult, error, bool) {
+// helperInterrupted reports whether the helper's run was cancelled or its
+// feature was stopped. Deadline expiry is a timeout, not an interruption.
+func (pr *PhaseRunner) helperInterrupted(ctx context.Context, featureID string) bool {
+	if errors.Is(ctx.Err(), context.Canceled) {
+		return true
+	}
+	return featureID != "" && isFeatureInterrupted(pr.FeatureStore, featureID)
+}
+
+func (pr *PhaseRunner) runBoundedHelperSessionOnce(ctx context.Context, cfg boundedHelperRunConfig, label string) (*boundedHelperResult, error, bool) {
 	if cfg.sessOpts != nil {
 		archiveExistingLog(cfg.sessOpts.LogPath)
 	}
 	sess, err := pr.SessionManager.StartSession(cfg.sessionID, cfg.featureID, cfg.phase, cfg.command, cfg.workDir, cfg.env, cfg.sessOpts)
 	if err != nil {
-		return nil, fmt.Errorf("running %s: starting session: %w", label, err), false
+		err = fmt.Errorf("running %s: starting session: %w", label, err)
+		switch classifyStartSessionError(err) {
+		case providerFailureHard:
+			// The provider CLI cannot boot or its endpoint is unreachable:
+			// fail fast instead of relaunching into the same failure.
+			return nil, newProviderUnavailableError("", err), false
+		case providerFailureTransient:
+			// A handshake timeout is a provider slow to boot; retry it like a
+			// session that started and failed.
+			if pr.helperInterrupted(ctx, cfg.featureID) {
+				return nil, fmt.Errorf("running %s: %w", label, errHelperInterrupted), false
+			}
+			return nil, err, true
+		}
+		return nil, err, false
 	}
 
 	sessionCtx := observe.SpanContext{}
@@ -276,15 +313,22 @@ func (pr *PhaseRunner) runBoundedHelperSessionOnce(ctx context.Context, cfg boun
 		pr.installSubagentProgressTracker(sess, sessionCtx, observerPhase, cfg.sessionID)
 	}
 
+	// endedInterrupted records that the session was stopped by an interrupt
+	// so session.ended reports "interrupted", not "ok" or "error".
+	endedInterrupted := false
 	defer func() {
-		cost := ExtractSessionCost(sess)
-		_ = accumulateSessionCostToFeature(pr.FeatureStore, cfg.featureID, observerPhase, cost, SessionCostMetadata{
+		cost := extractSessionCost(sess)
+		_ = accumulateSessionCostToFeature(pr.FeatureStore, cfg.featureID, observerPhase, cost, sessionCostMetadata{
 			SessionID:     cfg.sessionID,
 			ObserverPhase: observerPhase,
 			RepoName:      cfg.repoName,
 		})
 		if pr.Observer != nil {
-			pr.Observer.SessionEnded(sessionCtx, observerPhase, cfg.sessionID, cfg.repoName, toSessionUsage(cost, sess), time.Since(sessionStart), sessionErrFromStatus(sess))
+			endErr := sessionErrFromStatus(sess)
+			if endedInterrupted {
+				endErr = errHelperInterrupted
+			}
+			pr.Observer.SessionEnded(sessionCtx, observerPhase, cfg.sessionID, cfg.repoName, toSessionUsage(cost, sess), time.Since(sessionStart), endErr)
 		}
 		_ = sess.Stop()
 		sess.Wait()
@@ -305,16 +349,31 @@ func (pr *PhaseRunner) runBoundedHelperSessionOnce(ctx context.Context, cfg boun
 	// can answer, the final report must restore these instead of degrading
 	// to a generic missing-outcome violation.
 	var pendingCommitViolations []ProtocolViolation
-	finish := func(result *BoundedHelperResult, err error) (*BoundedHelperResult, error, bool) {
+	finish := func(result *boundedHelperResult, err error) (*boundedHelperResult, error, bool) {
 		if err != nil && len(pendingCommitViolations) > 0 &&
 			isMissingOutcomeViolationError(err) {
 			result.Status = BoundedHelperStatusProtocolViolation
 			err = newProtocolViolationError(cfg.contractRole, cfg.completionDir, pendingCommitViolations)
 		}
-		retryable := err != nil &&
-			result != nil &&
-			result.Status == BoundedHelperStatusFailed &&
-			(isRetryableInfrastructureSessionFailure(sess, ExtractSessionCost(sess), time.Since(sessionStart)) ||
+		if err == nil {
+			return result, nil, false
+		}
+		// A stopped feature kills its sessions with the same footprint as an
+		// infrastructure failure; record it as interrupted, never retry it.
+		if pr.helperInterrupted(ctx, cfg.featureID) {
+			endedInterrupted = true
+			if result != nil {
+				result.Status = boundedHelperStatusInterrupted
+			}
+			return result, fmt.Errorf("running %s: %w", label, errHelperInterrupted), false
+		}
+		if result != nil && result.Status == boundedHelperStatusFailed &&
+			classifyProviderFailure(providerFailureText(sess, result, err)) == providerFailureHard {
+			return result, newProviderUnavailableError(providerFailureDetail(sess, result), err), false
+		}
+		retryable := result != nil &&
+			result.Status == boundedHelperStatusFailed &&
+			(isRetryableInfrastructureSessionFailure(sess, extractSessionCost(sess), time.Since(sessionStart)) ||
 				errors.Is(err, errHelperReturnedErrorResult) ||
 				errors.Is(err, errHelperEndedWithoutResult) ||
 				isRetryableProviderNetworkFailure(result.Output, err))
@@ -345,10 +404,10 @@ func (pr *PhaseRunner) runBoundedHelperSessionOnce(ctx context.Context, cfg boun
 				return violations, err
 			})
 			if err != nil {
-				return finish(boundedHelperSnapshot(cfg.responsePath, sess, BoundedHelperStatusFailed), err)
+				return finish(boundedHelperSnapshot(cfg.responsePath, sess, boundedHelperStatusFailed), err)
 			}
 			if resolution.Accepted {
-				return finish(boundedHelperSnapshot(cfg.responsePath, sess, BoundedHelperStatusCompleted), nil)
+				return finish(boundedHelperSnapshot(cfg.responsePath, sess, boundedHelperStatusCompleted), nil)
 			}
 			if resolution.Deferred {
 				continue
@@ -360,7 +419,7 @@ func (pr *PhaseRunner) runBoundedHelperSessionOnce(ctx context.Context, cfg boun
 			}
 
 		case <-ctx.Done():
-			result := boundedHelperSnapshot(cfg.responsePath, sess, BoundedHelperStatusTimedOut)
+			result := boundedHelperSnapshot(cfg.responsePath, sess, boundedHelperStatusTimedOut)
 			return finish(result, fmt.Errorf("running %s: %w", label, ctx.Err()))
 
 		case <-bgTicker.C:
@@ -416,10 +475,10 @@ func (pr *PhaseRunner) runBoundedHelperSessionOnce(ctx context.Context, cfg boun
 				continue
 			}
 			if msg.ControlRequest.Request.ToolName == "AskUserQuestion" {
-				result := boundedHelperSnapshot(cfg.responsePath, sess, BoundedHelperStatusAskedUser)
+				result := boundedHelperSnapshot(cfg.responsePath, sess, boundedHelperStatusAskedUser)
 				return finish(result, fmt.Errorf("running %s: helper asked for user input", label))
 			}
-			result := boundedHelperSnapshot(cfg.responsePath, sess, BoundedHelperStatusPermissionRequired)
+			result := boundedHelperSnapshot(cfg.responsePath, sess, boundedHelperStatusPermissionRequired)
 			return finish(result, fmt.Errorf("running %s: helper requested tool permission for %s", label, msg.ControlRequest.Request.ToolName))
 
 		case <-statusCh:
@@ -501,11 +560,10 @@ func isRetryableProviderNetworkFailure(output string, err error) bool {
 		return false
 	}
 	text := strings.ToLower(output + " " + err.Error())
+	// Connection-refused / host-not-found style failures are hard and are
+	// classified by classifyProviderFailure before this check runs.
 	for _, marker := range []string{
-		"unable to connect to api",
-		"enotfound",
 		"econnreset",
-		"econnrefused",
 		"eai_again",
 		"etimedout",
 	} {
@@ -551,25 +609,25 @@ func boundedHelperTurnDisposition(sess ports.SessionView, completionProtocol boo
 	})
 }
 
-func finalizeBoundedHelperResult(responsePath string, sess ports.SessionHandle, label string, requireOutput bool, completionDir string, contractPhase feature.Phase, contractRole Role) (*BoundedHelperResult, error) {
+func finalizeBoundedHelperResult(responsePath string, sess ports.SessionHandle, label string, requireOutput bool, completionDir string, contractPhase feature.Phase, contractRole Role) (*boundedHelperResult, error) {
 	if sess.HasPendingAskUserQuestion() {
-		result := boundedHelperSnapshot(responsePath, sess, BoundedHelperStatusAskedUser)
+		result := boundedHelperSnapshot(responsePath, sess, boundedHelperStatusAskedUser)
 		return result, fmt.Errorf("running %s: helper asked for user input", label)
 	}
 	if req := sess.LastControlRequest(); req != nil {
-		status := BoundedHelperStatusPermissionRequired
+		status := boundedHelperStatusPermissionRequired
 		errText := fmt.Sprintf("running %s: helper requested tool permission for %s", label, req.Request.ToolName)
 		if req.Request.ToolName == "AskUserQuestion" {
-			status = BoundedHelperStatusAskedUser
+			status = boundedHelperStatusAskedUser
 			errText = fmt.Sprintf("running %s: helper asked for user input", label)
 		}
 		result := boundedHelperSnapshot(responsePath, sess, status)
 		return result, fmt.Errorf("%s", errText)
 	}
 
-	result := boundedHelperSnapshot(responsePath, sess, BoundedHelperStatusCompleted)
+	result := boundedHelperSnapshot(responsePath, sess, boundedHelperStatusCompleted)
 	if result.Result == nil {
-		result.Status = BoundedHelperStatusFailed
+		result.Status = boundedHelperStatusFailed
 		return result, fmt.Errorf("running %s: %w", label, errHelperEndedWithoutResult)
 	}
 
@@ -585,7 +643,7 @@ func finalizeBoundedHelperResult(responsePath string, sess ports.SessionHandle, 
 				Intent:      rootCompletionIntent(sess),
 			})
 			if err != nil {
-				result.Status = BoundedHelperStatusFailed
+				result.Status = boundedHelperStatusFailed
 				return result, fmt.Errorf("running %s: committing helper outcome: %w", label, err)
 			}
 			if len(violations) != 0 {
@@ -594,21 +652,21 @@ func finalizeBoundedHelperResult(responsePath string, sess ports.SessionHandle, 
 			}
 		}
 		if requireOutput && strings.TrimSpace(result.Output) == "" {
-			result.Status = BoundedHelperStatusEmptyOutput
+			result.Status = boundedHelperStatusEmptyOutput
 			return result, fmt.Errorf("running %s: helper completed without output", label)
 		}
 		return result, nil
 	case llm.TurnAwaitingUser:
-		result.Status = BoundedHelperStatusAskedUser
+		result.Status = boundedHelperStatusAskedUser
 		return result, fmt.Errorf("running %s: helper asked for user input", label)
 	case llm.TurnErrored:
-		result.Status = BoundedHelperStatusFailed
+		result.Status = boundedHelperStatusFailed
 		return result, fmt.Errorf("running %s: %w", label, errHelperReturnedErrorResult)
 	case llm.TurnRefused:
-		result.Status = BoundedHelperStatusFailed
+		result.Status = boundedHelperStatusFailed
 		return result, fmt.Errorf("running %s: helper refused the request", label)
 	case llm.TurnTruncated:
-		result.Status = BoundedHelperStatusFailed
+		result.Status = boundedHelperStatusFailed
 		return result, fmt.Errorf("running %s: helper turn ended before completion", label)
 	case llm.TurnProtocolViolation:
 		result.Status = BoundedHelperStatusProtocolViolation
@@ -623,7 +681,7 @@ func finalizeBoundedHelperResult(responsePath string, sess ports.SessionHandle, 
 			Reason:   "provider session exited while delegated tasks were still running",
 		}})
 	default:
-		result.Status = BoundedHelperStatusFailed
+		result.Status = boundedHelperStatusFailed
 		return result, fmt.Errorf("running %s: helper ended in an unknown state", label)
 	}
 }
@@ -644,8 +702,8 @@ func archiveExistingLog(path string) {
 	_ = os.Rename(path, fmt.Sprintf("%s.%d.bak", path, time.Now().UnixNano()))
 }
 
-func boundedHelperSnapshot(responsePath string, sess ports.SessionHandle, status string) *BoundedHelperResult {
-	return &BoundedHelperResult{
+func boundedHelperSnapshot(responsePath string, sess ports.SessionHandle, status string) *boundedHelperResult {
+	return &boundedHelperResult{
 		Output: strings.TrimSpace(readSessionOutput(responsePath, sess)),
 		Status: status,
 		Result: sess.Cost(),

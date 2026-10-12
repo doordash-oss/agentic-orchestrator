@@ -18,7 +18,7 @@ import type { ReactNode } from 'react';
 import type { RailHold, RailSegment, TrioEntry } from './phaseRail';
 import { formatWaitingDuration } from './phaseRail';
 
-export interface PhaseRailTrackProps {
+interface PhaseRailTrackProps {
   segments: readonly RailSegment[];
   /** Accessible name for the labelled group; callers scope it to their surface. */
   label?: string;
@@ -83,7 +83,7 @@ function heldTooltip(hold: RailHold): string {
   return duration === null ? 'Held for your answer' : `Held ${duration} for your answer`;
 }
 
-export interface PhaseRailProps {
+interface PhaseRailProps {
   segments: readonly RailSegment[];
   trio: readonly TrioEntry[];
   hold: RailHold | null;

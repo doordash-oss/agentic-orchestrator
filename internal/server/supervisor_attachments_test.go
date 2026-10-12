@@ -32,7 +32,7 @@ import (
 	"github.com/doordash-oss/agentic-orchestrator/internal/supervisor"
 )
 
-// stagingSupervisor is a SupervisorService double that runs the handler's
+// stagingSupervisor is a supervisorService double that runs the handler's
 // attachment staging into dir the way the coordinator does: a committed
 // client message id deduplicates without staging, a scripted error rolls
 // the staging back, and success commits it.
@@ -95,7 +95,7 @@ func newAttachmentFixture(t *testing.T) *attachmentFixture {
 		DisableHostValidation: true,
 		Supervisor:            svc,
 	})
-	return &attachmentFixture{t: t, stateDir: stateDir, dir: svc.dir, svc: svc, handler: api.routes()}
+	return &attachmentFixture{t: t, stateDir: stateDir, dir: svc.dir, svc: svc, handler: api}
 }
 
 func (f *attachmentFixture) stage(kind, name string, body []byte) string {

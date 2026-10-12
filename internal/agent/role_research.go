@@ -27,7 +27,7 @@ var researcherRoleSpec = roleSpec{
 	Role:      RoleResearcher,
 	SkillName: "research-codebase",
 	OutputRoots: []outputRootSpec{
-		singleShotPhaseDirOutputRoot("Research phase artifact directory."),
+		iterationOutputRoot("phase_dir", "Research phase artifact directory."),
 	},
 	Artifacts: []roleArtifactSpec{
 		phaseMarkdownRoleArtifact("research markdown artifact", validatePhaseMarkdownArtifact),

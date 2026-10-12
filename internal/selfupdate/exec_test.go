@@ -21,7 +21,20 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+
+	"golang.org/x/sys/unix"
 )
+
+// fdIsCLOEXEC reads the close-on-exec state directly, mirroring the
+// production F_SETFD calls under test.
+func fdIsCLOEXEC(t *testing.T, fd int) bool {
+	t.Helper()
+	flags, err := unix.FcntlInt(uintptr(fd), unix.F_GETFD, 0)
+	if err != nil {
+		t.Fatalf("inspect fd %d flags: %v", fd, err)
+	}
+	return flags&unix.FD_CLOEXEC != 0
+}
 
 func TestHandoffEncodeParseRoundTrip(t *testing.T) {
 	t.Parallel()
@@ -48,15 +61,15 @@ func TestHandoffEncodeParseRoundTrip(t *testing.T) {
 		ReceiptPath:   "/runtime/bin/.agentico-selfupdate/receipt.json",
 		AuthTokenPath: "/runtime/token-path",
 	}
-	got, err := ParseHandoff(EncodeHandoff(m))
+	got, err := parseHandoff(EncodeHandoff(m))
 	if err != nil {
-		t.Fatalf("ParseHandoff: %v", err)
+		t.Fatalf("parseHandoff: %v", err)
 	}
 	if !reflect.DeepEqual(got, m) {
 		t.Fatalf("round trip mismatch:\ngot  %+v\nwant %+v", got, m)
 	}
-	if _, err := ParseHandoff("{not json"); err == nil {
-		t.Fatal("ParseHandoff accepted garbage")
+	if _, err := parseHandoff("{not json"); err == nil {
+		t.Fatal("parseHandoff accepted garbage")
 	}
 }
 
@@ -93,21 +106,20 @@ func TestCLOEXECToggle(t *testing.T) {
 	defer f.Close()
 	fd := int(f.Fd())
 
-	ok, err := IsCLOEXEC(fd)
-	if err != nil || !ok {
-		t.Fatalf("IsCLOEXEC(default) = (%v, %v), want (true, nil)", ok, err)
+	if !fdIsCLOEXEC(t, fd) {
+		t.Fatal("fd must be close-on-exec by default")
 	}
-	if err := ClearCLOEXEC(fd); err != nil {
-		t.Fatalf("ClearCLOEXEC: %v", err)
+	if err := clearCLOEXEC(fd); err != nil {
+		t.Fatalf("clearCLOEXEC: %v", err)
 	}
-	if ok, _ := IsCLOEXEC(fd); ok {
-		t.Fatal("IsCLOEXEC after ClearCLOEXEC = true, want false")
+	if fdIsCLOEXEC(t, fd) {
+		t.Fatal("fd still close-on-exec after clearCLOEXEC")
 	}
-	if err := SetCLOEXEC(fd); err != nil {
-		t.Fatalf("SetCLOEXEC: %v", err)
+	if err := setCLOEXEC(fd); err != nil {
+		t.Fatalf("setCLOEXEC: %v", err)
 	}
-	if ok, _ := IsCLOEXEC(fd); !ok {
-		t.Fatal("IsCLOEXEC after SetCLOEXEC = false, want true")
+	if !fdIsCLOEXEC(t, fd) {
+		t.Fatal("fd not close-on-exec after setCLOEXEC")
 	}
 
 	closed, err := os.Create(filepath.Join(t.TempDir(), "closed"))
@@ -118,8 +130,8 @@ func TestCLOEXECToggle(t *testing.T) {
 	if err := closed.Close(); err != nil {
 		t.Fatalf("close: %v", err)
 	}
-	if _, err := IsCLOEXEC(closedFD); err == nil {
-		t.Fatal("IsCLOEXEC on closed fd: expected error")
+	if _, err := unix.FcntlInt(uintptr(closedFD), unix.F_GETFD, 0); err == nil {
+		t.Fatal("F_GETFD on closed fd: expected error")
 	}
 }
 
@@ -131,8 +143,8 @@ func TestExecReplaceErrorRestoresCLOEXEC(t *testing.T) {
 	defer f.Close()
 	fd := int(f.Fd())
 
-	if err := ClearCLOEXEC(fd); err != nil {
-		t.Fatalf("ClearCLOEXEC: %v", err)
+	if err := clearCLOEXEC(fd); err != nil {
+		t.Fatalf("clearCLOEXEC: %v", err)
 	}
 	stale := HandoffEnvVar + "={\"schema_version\":1,\"transaction_id\":\"old\"}"
 	env := []string{"PATH=/usr/bin", stale, "HOME=/home"}
@@ -147,9 +159,8 @@ func TestExecReplaceErrorRestoresCLOEXEC(t *testing.T) {
 	if !errors.Is(err, execErr) {
 		t.Fatalf("ExecReplace error = %v, want %v", err, execErr)
 	}
-	ok, cerr := IsCLOEXEC(fd)
-	if cerr != nil || !ok {
-		t.Fatalf("IsCLOEXEC after failed exec = (%v, %v), want (true, nil)", ok, cerr)
+	if !fdIsCLOEXEC(t, fd) {
+		t.Fatalf("fd not close-on-exec after failed exec")
 	}
 	if gotPath != "/installed" {
 		t.Fatalf("exec path = %q", gotPath)
@@ -199,12 +210,12 @@ func newHandoffFixture(t *testing.T, commit bool) *handoffFixture {
 			t.Fatalf("Commit: %v", err)
 		}
 	}
-	newExec, err := CaptureExecutableAt(f.installedPath)
+	newExec, err := captureExecutableAt(f.installedPath)
 	if err != nil {
 		t.Fatalf("recapture installed: %v", err)
 	}
-	if err := ClearCLOEXEC(lease.FD()); err != nil {
-		t.Fatalf("ClearCLOEXEC: %v", err)
+	if err := clearCLOEXEC(lease.FD()); err != nil {
+		t.Fatalf("clearCLOEXEC: %v", err)
 	}
 	// The handoff digest is the digest the receipt recorded for the target
 	// image, independent of whether this fixture committed.
@@ -239,11 +250,11 @@ func TestAdoptHandoffHappyPath(t *testing.T) {
 	// object must not close it again.
 	defer func() { _ = adopted.Close() }()
 
-	if ok, err := IsCLOEXEC(adopted.FD()); err != nil || !ok {
-		t.Fatalf("IsCLOEXEC after adoption = (%v, %v), want (true, nil)", ok, err)
+	if !fdIsCLOEXEC(t, adopted.FD()) {
+		t.Fatal("adopted lease fd must be close-on-exec after adoption")
 	}
 	if receipt.TransactionID != h.metadata.TransactionID ||
-		receipt.Phase != PhaseReplacementComplete ||
+		receipt.Phase != phaseReplacementComplete ||
 		receipt.Outcome != OutcomePending {
 		t.Fatalf("adopted receipt = %s/%s", receipt.Phase, receipt.Outcome)
 	}
@@ -255,14 +266,14 @@ func TestAdoptHandoffHappyPath(t *testing.T) {
 	if rec.ExecutableIno != h.newExec.ID.Ino {
 		t.Fatalf("record inode = %d, want new installed inode %d", rec.ExecutableIno, h.newExec.ID.Ino)
 	}
-	diskRec, err := ReadOwnershipRecord(h.f.exec.Path)
+	diskRec, err := readOwnershipRecord(h.f.exec.Path)
 	if err != nil || diskRec != rec {
 		t.Fatalf("on-disk record = %+v (%v), want %+v", diskRec, err, rec)
 	}
 
 	// The adopted lease still holds the flock: a second acquirer contends.
-	if _, err := AcquireLease(h.newExec, rec); !IsLeaseHeld(err) {
-		t.Fatalf("AcquireLease during adoption = %v, want LeaseHeldError", err)
+	if _, err := AcquireLease(h.newExec, rec); !isLeaseHeld(err) {
+		t.Fatalf("AcquireLease during adoption = %v, want leaseHeldError", err)
 	}
 
 	if err := adopted.Close(); err != nil {
@@ -295,9 +306,9 @@ func TestAdoptHandoffFailureMatrix(t *testing.T) {
 			h.newExec.Digest = h.metadata.NewDigest
 		}},
 		{"wrong outcome", true, func(t *testing.T, h *handoffFixture) {
-			r, err := ReadReceipt(ReceiptPath(h.f.exec.Path))
+			r, err := readReceipt(ReceiptPath(h.f.exec.Path))
 			if err != nil {
-				t.Fatalf("ReadReceipt: %v", err)
+				t.Fatalf("readReceipt: %v", err)
 			}
 			r.Outcome = OutcomeConfirmed
 			if err := writeReceiptAtomic(ReceiptPath(h.f.exec.Path), r, r.UpdatedAt); err != nil {
@@ -333,7 +344,7 @@ func TestAdoptHandoffFailureMatrix(t *testing.T) {
 				_ = lease.Close()
 				t.Fatal("AdoptHandoff unexpectedly succeeded")
 			}
-			if IsLeaseHeld(err) {
+			if isLeaseHeld(err) {
 				t.Fatalf("AdoptHandoff returned lease contention: %v", err)
 			}
 		})
@@ -350,7 +361,7 @@ func TestParseRecoveryGuardEnv(t *testing.T) {
 		Bind:          BindEndpoint{Host: "127.0.0.1", Port: 54321},
 		AuthTokenPath: "/runtime/token-path",
 	}
-	env := []string{"PATH=/usr/bin", RecoveryGuardEnvVar + "=" + EncodeRecoveryGuard(g), "HOME=/home"}
+	env := []string{"PATH=/usr/bin", RecoveryGuardEnvVar + "=" + encodeRecoveryGuard(g), "HOME=/home"}
 
 	got, present, err := ParseRecoveryGuardEnv(env)
 	if err != nil || !present || !reflect.DeepEqual(got, g) {
@@ -388,13 +399,13 @@ func TestBuildRecoveryEnvDropsStaleEntriesAndAppendsOneGuard(t *testing.T) {
 	env := []string{
 		"PATH=/usr/bin",
 		HandoffEnvVar + "=" + EncodeHandoff(HandoffMetadata{SchemaVersion: 1}),
-		RecoveryGuardEnvVar + "=" + EncodeRecoveryGuard(stale),
+		RecoveryGuardEnvVar + "=" + encodeRecoveryGuard(stale),
 		"HOME=/home",
 		RecoveryGuardEnvVar + "=garbage",
 	}
 
 	out := BuildRecoveryEnv(env, g)
-	want := []string{"PATH=/usr/bin", "HOME=/home", RecoveryGuardEnvVar + "=" + EncodeRecoveryGuard(g)}
+	want := []string{"PATH=/usr/bin", "HOME=/home", RecoveryGuardEnvVar + "=" + encodeRecoveryGuard(g)}
 	if !reflect.DeepEqual(out, want) {
 		t.Fatalf("BuildRecoveryEnv = %v, want %v", out, want)
 	}

@@ -32,7 +32,7 @@ export const WIZARD_STEPS = ['providers', 'models', 'ready'] as const;
 export type WizardStepId = (typeof WIZARD_STEPS)[number];
 
 /** The mandatory gates, in wizard order. */
-export type WizardGateId = Exclude<WizardStepId, 'ready'>;
+type WizardGateId = Exclude<WizardStepId, 'ready'>;
 
 const GATE_ORDER: readonly WizardGateId[] = ['providers', 'models'];
 
@@ -55,7 +55,7 @@ const ISSUE_STEP: Partial<Record<ReadinessIssueCode, WizardStepId | null>> = {
 const stepForIssueCode = (code: string): WizardStepId | null =>
   ISSUE_STEP[code as ReadinessIssueCode] ?? null;
 
-export interface WizardState {
+interface WizardState {
   steps: readonly WizardStepId[];
   /** The first unsatisfied gate, or 'ready' when all gates pass. */
   activeStep: WizardStepId;
@@ -114,7 +114,7 @@ export function deriveWizardState(snapshot: RuntimeReadinessSnapshot): WizardSta
  * outstanding (`partial`), carrying a banner and an on-demand wizard sheet;
  * `complete` is the shell as it has always been.
  */
-export type ReadinessGateMode = 'wizard' | 'partial' | 'complete';
+type ReadinessGateMode = 'wizard' | 'partial' | 'complete';
 
 export function readinessGateMode(snapshot: RuntimeReadinessSnapshot): ReadinessGateMode {
   const derived = deriveWizardState(snapshot);

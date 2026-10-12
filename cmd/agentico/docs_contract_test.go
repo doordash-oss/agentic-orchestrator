@@ -46,10 +46,6 @@ func TestUserFacingDocsDescribeLaunchSurface(t *testing.T) {
 			"--dangerously-skip-permissions",
 			"--help",
 			"--version",
-			// The update surface must advertise the installed subcommand
-			// and its check-only flag alongside the retained launch flags.
-			"agentico update",
-			"--check",
 		} {
 			if !strings.Contains(text, want) {
 				t.Fatalf("%s missing retained launch guidance %q", rel, want)
@@ -57,6 +53,15 @@ func TestUserFacingDocsDescribeLaunchSurface(t *testing.T) {
 		}
 		if !strings.Contains(text, "agentico server") {
 			t.Fatalf("%s missing server launch guidance", rel)
+		}
+		// The removed `agentico update` subcommand must stay removed from
+		// user-facing docs: no usage line, flag row, or update section may
+		// advertise it.
+		if strings.Contains(text, "agentico update") {
+			t.Fatalf("%s still mentions the removed `agentico update` subcommand", rel)
+		}
+		if strings.Contains(text, "--check") {
+			t.Fatalf("%s still mentions the removed update-only --check flag", rel)
 		}
 	}
 }

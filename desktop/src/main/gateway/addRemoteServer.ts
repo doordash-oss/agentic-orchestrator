@@ -42,7 +42,7 @@ import type {
   ServersPrefs,
 } from '../../shared/ipc';
 import { parseConnectionString, serverKeyForBaseUrl } from '../connectionString';
-import { ProbeHealthSchema } from './attachProfiles';
+import { probeAuthExemptHealth } from './attachProfiles';
 import { evaluateCompatibility } from './compatibility';
 import type { RegistryScan } from './registry';
 import type { SaveResult as TokenSaveResult } from './remoteTokenStore';
@@ -64,7 +64,10 @@ const STATE_BASENAME = 'features';
 
 export interface AddRemoteServerDeps {
   /** Bounded JSON request; throws on network failure. GET when no method. */
-  fetchJson(url: string, options: { token?: string; timeoutMs: number }): Promise<HttpResult>;
+  fetchJson(
+    url: string,
+    options: { token?: string; timeoutMs: number; maxResponseBytes?: number },
+  ): Promise<HttpResult>;
   /** Live registry scan: candidates are KNOWN LOCAL servers. */
   scanRegistry(): RegistryScan;
   /** Reads the persisted known-servers view (local entries drive the guard). */
@@ -140,19 +143,16 @@ export async function addRemoteServer(
 
   // (b) Auth-exempt health probe: compatibility is decided before any
   // credential is presented.
-  let health: HttpResult;
-  try {
-    health = await deps.fetchJson(`${baseUrl}/api/v1/health`, { timeoutMs: probeMs });
-  } catch {
+  const health = await probeAuthExemptHealth(deps.fetchJson, baseUrl, probeMs);
+  if (health.kind === 'unreachable') {
     deps.log(`add-remote-server failed: ${E_REMOTE_UNREACHABLE} (health probe)`);
     fail(E_REMOTE_UNREACHABLE);
   }
-  if (health.status !== 200) {
+  if (health.kind === 'bad-status') {
     deps.log(`add-remote-server failed: ${E_REMOTE_UNREACHABLE} (health status)`);
     fail(E_REMOTE_UNREACHABLE);
   }
-  const probe = ProbeHealthSchema.safeParse(health.body);
-  if (!probe.success || probe.data.status !== 'ok') {
+  if (health.kind === 'bad-payload') {
     deps.log(`add-remote-server failed: ${E_REMOTE_INCOMPATIBLE} (unusable health payload)`);
     failIncompatible(
       buildCanonicalError('E_REMOTE_INCOMPATIBLE', {
@@ -160,7 +160,8 @@ export async function addRemoteServer(
       }),
     );
   }
-  const verdict = evaluateCompatibility(probe.data.compatibility);
+  const probe = health.probe;
+  const verdict = evaluateCompatibility(probe.compatibility);
   if (!verdict.compatible) {
     const error = buildCanonicalError('E_REMOTE_INCOMPATIBLE', { params: verdict });
     deps.log(`add-remote-server failed: ${E_REMOTE_INCOMPATIBLE} (${error.summary})`);
@@ -169,7 +170,7 @@ export async function addRemoteServer(
 
   // (c) Paste-duplication guard: a remote alias for a known LOCAL server is
   // not an error — steer the user to the existing entry. Nothing persisted.
-  const stateDir = probe.data.runtime?.state_dir;
+  const stateDir = probe.runtime?.state_dir;
   if (stateDir !== undefined && stateDir !== '') {
     const duplicate = findLocalDuplicate(stateDir, deps);
     if (duplicate !== null) {
@@ -180,22 +181,15 @@ export async function addRemoteServer(
 
   // (d) One authenticated readiness call with the pasted token.
   deps.registerSecret(parsed.token);
-  let readiness: HttpResult;
-  try {
-    readiness = await deps.fetchJson(`${baseUrl}/api/v1/readiness/runtime`, {
+  const readiness: HttpResult = await deps
+    .fetchJson(`${baseUrl}/api/v1/readiness/runtime`, {
       token: parsed.token,
       timeoutMs: probeMs,
+    })
+    .catch(() => {
+      deps.log(`add-remote-server failed: ${E_REMOTE_UNREACHABLE} (readiness probe)`);
+      fail(E_REMOTE_UNREACHABLE);
     });
-    if (readiness.status === 404) {
-      readiness = await deps.fetchJson(`${baseUrl}/api/v1/readiness`, {
-        token: parsed.token,
-        timeoutMs: probeMs,
-      });
-    }
-  } catch {
-    deps.log(`add-remote-server failed: ${E_REMOTE_UNREACHABLE} (readiness probe)`);
-    fail(E_REMOTE_UNREACHABLE);
-  }
   if (readiness.status === 401 || readiness.status === 403) {
     deps.log(`add-remote-server failed: ${E_REMOTE_AUTH_REJECTED}`);
     fail(E_REMOTE_AUTH_REJECTED);
@@ -212,7 +206,7 @@ export async function addRemoteServer(
   // reporting it as its name, must never land in settings.json.
   const serverKey = serverKeyForBaseUrl(baseUrl);
   const name = stripSecrets(
-    parsed.name !== undefined ? parsed.name : (probe.data.name ?? fallbackName(baseUrl)),
+    parsed.name !== undefined ? parsed.name : (probe.name ?? fallbackName(baseUrl)),
     [parsed.token],
   ).slice(0, 64);
   const saved = deps.remoteTokens.save(serverKey, parsed.token);

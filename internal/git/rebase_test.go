@@ -36,8 +36,8 @@ func TestRemoteUpToDateGuards(t *testing.T) {
 	}
 
 	result := PullRebase(repo, "feature/test")
-	if result.Outcome != PullRebaseSuccess {
-		t.Errorf("PullRebase() outcome = %d, want %d (err: %v)", result.Outcome, PullRebaseSuccess, result.Err)
+	if result.Outcome != pullRebaseSuccess {
+		t.Errorf("PullRebase() outcome = %d, want %d (err: %v)", result.Outcome, pullRebaseSuccess, result.Err)
 	}
 	if result.Err != nil {
 		t.Errorf("PullRebase() error = %v, want nil", result.Err)
@@ -68,71 +68,6 @@ func TestIsBehindRemote_Behind(t *testing.T) {
 
 	if !IsBehindRemote(repo, "main") {
 		t.Error("expected behind remote after new remote commit")
-	}
-}
-
-func TestRebase_LinearHistory(t *testing.T) {
-	if testing.Short() {
-		t.Skip("covered by TestFastRebaseRepresentatives in short mode")
-	}
-	t.Parallel()
-
-	repo := testutil.InitGitRepo(t)
-
-	testutil.CreateBranch(t, repo, "feature/test")
-	testutil.CommitFile(t, repo, "feature.txt", "feat\n", "feature commit")
-
-	runGit(t, repo, "checkout", "main")
-	testutil.CommitFile(t, repo, "base.txt", "base\n", "base commit")
-	runGit(t, repo, "update-ref", "refs/remotes/origin/main", "main")
-	runGit(t, repo, "checkout", "feature/test")
-
-	if err := Rebase(repo, "main"); err != nil {
-		t.Fatalf("Rebase: %v", err)
-	}
-
-	// After rebase, should no longer be behind
-	if IsBehindRemote(repo, "main") {
-		t.Error("expected not behind after rebase")
-	}
-}
-
-func TestRebase_ConflictAborts(t *testing.T) {
-	if testing.Short() {
-		t.Skip("covered by TestFastRebaseRepresentatives in short mode")
-	}
-	t.Parallel()
-
-	repo := testutil.InitGitRepo(t)
-
-	testutil.CreateBranch(t, repo, "feature/test")
-	testutil.CommitFile(t, repo, "conflict.txt", "feature version\n", "feature change")
-
-	runGit(t, repo, "checkout", "main")
-	testutil.CommitFile(t, repo, "conflict.txt", "main version\n", "main change")
-	runGit(t, repo, "update-ref", "refs/remotes/origin/main", "main")
-	runGit(t, repo, "checkout", "feature/test")
-
-	err := Rebase(repo, "main")
-	if err == nil {
-		t.Fatal("expected rebase to fail with conflicts")
-	}
-	if RebaseInProgress(repo) {
-		t.Fatal("expected rebase to be aborted")
-	}
-
-	// Verify rebase was aborted (no .git/rebase-merge dir)
-	branch := CurrentBranch(repo)
-	if branch != "feature/test" {
-		t.Errorf("expected branch feature/test after abort, got %s", branch)
-	}
-	statusCmd := exec.Command("git", "-C", repo, "status", "--porcelain")
-	statusOut, err := statusCmd.Output()
-	if err != nil {
-		t.Fatalf("git status failed: %v", err)
-	}
-	if strings.TrimSpace(string(statusOut)) != "" {
-		t.Errorf("expected clean worktree after conflict abort, got: %s", string(statusOut))
 	}
 }
 
@@ -237,8 +172,8 @@ func TestPullRebase_BehindRemote(t *testing.T) {
 
 	// PullRebase should succeed
 	result := PullRebase(repo, "feature/test")
-	if result.Outcome != PullRebaseSuccess {
-		t.Errorf("expected PullRebaseSuccess, got %d (err: %v)", result.Outcome, result.Err)
+	if result.Outcome != pullRebaseSuccess {
+		t.Errorf("expected pullRebaseSuccess, got %d (err: %v)", result.Outcome, result.Err)
 	}
 
 	// Verify both commits are present
@@ -282,8 +217,8 @@ func TestPullRebase_SingleBranchClone(t *testing.T) {
 	testutil.CommitFile(t, repo, "local-change.txt", "local work\n", "local commit")
 
 	result := PullRebase(repo, "feature/test")
-	if result.Outcome != PullRebaseSuccess {
-		t.Fatalf("expected PullRebaseSuccess, got %d (err: %v)", result.Outcome, result.Err)
+	if result.Outcome != pullRebaseSuccess {
+		t.Fatalf("expected pullRebaseSuccess, got %d (err: %v)", result.Outcome, result.Err)
 	}
 	out, _ := exec.Command("git", "-C", repo, "log", "--oneline").Output()
 	if !strings.Contains(string(out), "remote commit") {
@@ -351,8 +286,8 @@ func TestPullRebase_RemoteBranchAbsent(t *testing.T) {
 
 	// PullRebase should succeed (no-op, remote branch doesn't exist)
 	result := PullRebase(repo, "feature/new-feature")
-	if result.Outcome != PullRebaseSuccess {
-		t.Errorf("expected PullRebaseSuccess, got %d (err: %v)", result.Outcome, result.Err)
+	if result.Outcome != pullRebaseSuccess {
+		t.Errorf("expected pullRebaseSuccess, got %d (err: %v)", result.Outcome, result.Err)
 	}
 	if result.Err != nil {
 		t.Errorf("expected nil error, got %v", result.Err)
@@ -401,8 +336,8 @@ func TestPullRebase_FirstPublishNoRemoteBranch(t *testing.T) {
 	countBefore := len(strings.Split(strings.TrimSpace(string(out)), "\n"))
 
 	result := PullRebase(repo, "feature/first-publish")
-	if result.Outcome != PullRebaseSuccess {
-		t.Errorf("expected PullRebaseSuccess, got %d (err: %v)", result.Outcome, result.Err)
+	if result.Outcome != pullRebaseSuccess {
+		t.Errorf("expected pullRebaseSuccess, got %d (err: %v)", result.Outcome, result.Err)
 	}
 
 	// Verify local commits are untouched

@@ -31,7 +31,7 @@ func TestEmitter(t *testing.T) {
 			t.Fatal(err)
 		}
 
-		emitter := NewEmitter(stateDir)
+		emitter := newEmitter(stateDir)
 		evt := Event{
 			Timestamp: time.Now(),
 			TraceID:   "trace1",
@@ -42,7 +42,7 @@ func TestEmitter(t *testing.T) {
 			FeatureID: featureID,
 		}
 
-		if err := emitter.Emit(evt); err != nil {
+		if err := emitter.emit(evt); err != nil {
 			t.Fatalf("Emit failed: %v", err)
 		}
 
@@ -68,7 +68,7 @@ func TestEmitter(t *testing.T) {
 			t.Fatal(err)
 		}
 
-		emitter := NewEmitter(stateDir)
+		emitter := newEmitter(stateDir)
 		for i := 0; i < 3; i++ {
 			evt := Event{
 				Timestamp: time.Now(),
@@ -78,7 +78,7 @@ func TestEmitter(t *testing.T) {
 				FeatureID: featureID,
 				Iteration: i,
 			}
-			if err := emitter.Emit(evt); err != nil {
+			if err := emitter.emit(evt); err != nil {
 				t.Fatalf("Emit %d failed: %v", i, err)
 			}
 		}
@@ -112,10 +112,10 @@ func TestEmitter(t *testing.T) {
 			}
 		}
 
-		emitter := NewEmitter(stateDir)
+		emitter := newEmitter(stateDir)
 
-		emitter.Emit(Event{FeatureID: "aaa", EventType: "test", Timestamp: time.Now()})
-		emitter.Emit(Event{FeatureID: "bbb", EventType: "test", Timestamp: time.Now()})
+		emitter.emit(Event{FeatureID: "aaa", EventType: "test", Timestamp: time.Now()})
+		emitter.emit(Event{FeatureID: "bbb", EventType: "test", Timestamp: time.Now()})
 
 		if _, err := os.Stat(filepath.Join(stateDir, "aaa", "events.jsonl")); err != nil {
 			t.Errorf("expected aaa/events.jsonl to exist: %v", err)
@@ -132,8 +132,8 @@ func TestEmitter(t *testing.T) {
 		stateDir := t.TempDir()
 		featureID := "deleted_feature"
 
-		emitter := NewEmitter(stateDir)
-		err := emitter.Emit(Event{
+		emitter := newEmitter(stateDir)
+		err := emitter.emit(Event{
 			Timestamp: time.Now(),
 			EventType: "phase.failed",
 			FeatureID: featureID,

@@ -50,7 +50,7 @@ func TestPublishFailureCodesAreNeedsActionPublishRetry(t *testing.T) {
 		if len(entry.Actions) != 1 || entry.Actions[0] != "publish" {
 			t.Errorf("%s: actions = %#v; want [publish]", code, entry.Actions)
 		}
-		if len(entry.Blocks) != 1 || entry.Blocks[0] != BlockRepositories {
+		if len(entry.Blocks) != 1 || entry.Blocks[0] != blockRepositories {
 			t.Errorf("%s: blocks = %#v; want exactly the repositories block", code, entry.Blocks)
 		}
 		if strings.TrimSpace(entry.Summary) == "" {
@@ -66,9 +66,9 @@ func TestIsPublishFailureReturnsTrueForExactlyThePublishCodes(t *testing.T) {
 	for _, code := range allPublishFailureCodes {
 		want[code] = true
 	}
-	for _, code := range Codes() {
-		if got := IsPublishFailure(code); got != want[code] {
-			t.Errorf("IsPublishFailure(%s) = %v; want %v", code, got, want[code])
+	for _, code := range CatalogCodes() {
+		if got := isPublishFailure(code); got != want[code] {
+			t.Errorf("isPublishFailure(%s) = %v; want %v", code, got, want[code])
 		}
 	}
 }

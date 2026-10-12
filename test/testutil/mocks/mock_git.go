@@ -18,11 +18,16 @@ import (
 	"github.com/doordash-oss/agentic-orchestrator/internal/git"
 )
 
+// MockCall records a single invocation on a mock operation.
+type MockCall struct {
+	Method string
+	Args   []any
+}
+
 // MockRemoteOps is the small test substitute for orchestrator-owned remote
 // operations.
 type MockRemoteOps struct {
 	PushFn                func(worktreePath, branch string) error
-	ForcePushFn           func(worktreePath, branch string) error
 	PushRewrittenBranchFn func(worktreePath, branch string) error
 	PullRebaseFn          func(worktreePath, branch string) error
 	CreatePRFn            func(repoPath, branch, title, body, baseBranch string, draft bool) (string, error)
@@ -38,14 +43,6 @@ func (m *MockRemoteOps) Push(worktreePath, branch string) error {
 	m.Calls = append(m.Calls, MockCall{Method: "Push", Args: []any{worktreePath, branch}})
 	if m.PushFn != nil {
 		return m.PushFn(worktreePath, branch)
-	}
-	return m.DefaultError
-}
-
-func (m *MockRemoteOps) ForcePush(worktreePath, branch string) error {
-	m.Calls = append(m.Calls, MockCall{Method: "ForcePush", Args: []any{worktreePath, branch}})
-	if m.ForcePushFn != nil {
-		return m.ForcePushFn(worktreePath, branch)
 	}
 	return m.DefaultError
 }

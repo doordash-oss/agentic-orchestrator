@@ -32,8 +32,8 @@ const (
 	CommentTypeReviewBody = "review_body"
 )
 
-// ReviewComment is a GitHub PR comment (inline review or issue conversation).
-type ReviewComment struct {
+// reviewComment is a GitHub PR comment (inline review or issue conversation).
+type reviewComment struct {
 	ID   int    `json:"id"`
 	Path string `json:"path"`
 	Line int    `json:"line"`
@@ -52,9 +52,9 @@ type ReviewComment struct {
 // githubBotUserType is the REST user type GitHub assigns to app accounts.
 const githubBotUserType = "Bot"
 
-// ParsePRURL extracts owner, repo, and PR number from a GitHub PR URL.
+// parsePRURL extracts owner, repo, and PR number from a GitHub PR URL.
 // Expected format: https://github.com/owner/repo/pull/123
-func ParsePRURL(prURL string) (owner, repo string, number int, err error) {
+func parsePRURL(prURL string) (owner, repo string, number int, err error) {
 	parts := strings.Split(strings.TrimRight(prURL, "/"), "/")
 	for i, p := range parts {
 		if p == "pull" && i+1 < len(parts) && i >= 2 {
@@ -82,8 +82,8 @@ func prURLHost(prURL string) string {
 // replies to inline comments so each returned item represents one
 // addressable feedback thread or top-level PR comment. repoPath is
 // retained for signature stability; the API needs only the PR URL.
-func FetchPRComments(_ string, prURL string) ([]ReviewComment, error) {
-	owner, repo, number, err := ParsePRURL(prURL)
+func FetchPRComments(_ string, prURL string) ([]reviewComment, error) {
+	owner, repo, number, err := parsePRURL(prURL)
 	if err != nil {
 		return nil, err
 	}
@@ -99,7 +99,7 @@ func FetchPRComments(_ string, prURL string) ([]ReviewComment, error) {
 	// Resolved threads are finished feedback. When the thread map is
 	// unavailable every top-level comment is kept.
 	unresolved, threadErr := client.ReviewThreadMap(owner, repo, number)
-	var result []ReviewComment
+	var result []reviewComment
 	for _, c := range inline {
 		if c.InReplyTo != 0 {
 			continue
@@ -134,19 +134,19 @@ func FetchPRComments(_ string, prURL string) ([]ReviewComment, error) {
 		if body == "" || review.User.Type == githubBotUserType {
 			continue
 		}
-		comment := ReviewComment{ID: review.ID, Body: body, CreatedAt: review.SubmittedAt, Type: CommentTypeReviewBody}
+		comment := reviewComment{ID: review.ID, Body: body, CreatedAt: review.SubmittedAt, Type: CommentTypeReviewBody}
 		comment.User.Login = review.User.Login
 		comment.User.Type = review.User.Type
 		result = append(result, comment)
 	}
 
-	SortReviewCommentsChronologically(result)
+	sortReviewCommentsChronologically(result)
 	return result, nil
 }
 
 // apiComment converts a REST comment into the orchestrator's type.
-func apiComment(c githubapi.PRComment, commentType string) ReviewComment {
-	comment := ReviewComment{
+func apiComment(c githubapi.PRComment, commentType string) reviewComment {
+	comment := reviewComment{
 		ID: c.ID, Path: c.Path, Line: c.Line, Body: c.Body,
 		CreatedAt: c.CreatedAt, DiffHunk: c.DiffHunk, InReplyTo: c.InReplyTo,
 		Type: commentType,
@@ -156,10 +156,10 @@ func apiComment(c githubapi.PRComment, commentType string) ReviewComment {
 	return comment
 }
 
-// SortReviewCommentsChronologically orders comments by their GitHub creation
+// sortReviewCommentsChronologically orders comments by their GitHub creation
 // time in ascending order. Comments without a parseable timestamp are placed
 // after dated comments, with ID as a deterministic tie-breaker.
-func SortReviewCommentsChronologically(comments []ReviewComment) {
+func sortReviewCommentsChronologically(comments []reviewComment) {
 	sort.SliceStable(comments, func(i, j int) bool {
 		ti, iok := parseReviewCommentCreatedAt(comments[i].CreatedAt)
 		tj, jok := parseReviewCommentCreatedAt(comments[j].CreatedAt)
@@ -190,8 +190,8 @@ func parseReviewCommentCreatedAt(value string) (time.Time, bool) {
 
 // ReplyToPRComment posts a reply to a specific review comment.
 func ReplyToPRComment(_ string, prURL string, commentID int, body string) error {
-	body = InjectPRSignature(body)
-	owner, repo, number, err := ParsePRURL(prURL)
+	body = injectPRSignature(body)
+	owner, repo, number, err := parsePRURL(prURL)
 	if err != nil {
 		return err
 	}
@@ -207,8 +207,8 @@ func ReplyToPRComment(_ string, prURL string, commentID int, body string) error 
 
 // ReplyToIssueComment posts a top-level conversation comment on a PR.
 func ReplyToIssueComment(_ string, prURL, body string) error {
-	body = InjectPRSignature(body)
-	owner, repo, number, err := ParsePRURL(prURL)
+	body = injectPRSignature(body)
+	owner, repo, number, err := parsePRURL(prURL)
 	if err != nil {
 		return err
 	}
@@ -225,7 +225,7 @@ func ReplyToIssueComment(_ string, prURL, body string) error {
 // FetchReviewThreadMap returns comment database ID → unresolved thread
 // node ID for the PR. repoPath is retained for signature stability.
 func FetchReviewThreadMap(_ string, prURL string) (map[int]string, error) {
-	owner, repo, number, err := ParsePRURL(prURL)
+	owner, repo, number, err := parsePRURL(prURL)
 	if err != nil {
 		return nil, err
 	}
@@ -245,14 +245,4 @@ func ResolveReviewThread(_ string, threadNodeID string) error {
 		return err
 	}
 	return client.ResolveReviewThread(threadNodeID)
-}
-
-// LatestCommitSHA returns the short SHA of HEAD in the given directory.
-func LatestCommitSHA(worktreePath string) (string, error) {
-	cmd := readGitCmd(worktreePath, "rev-parse", "--short", "HEAD")
-	out, err := cmd.CombinedOutput()
-	if err != nil {
-		return "", fmt.Errorf("getting HEAD SHA: %s: %w", strings.TrimSpace(string(out)), err)
-	}
-	return strings.TrimSpace(string(out)), nil
 }

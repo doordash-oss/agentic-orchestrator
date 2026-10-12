@@ -18,12 +18,8 @@ import type { ServerUpdateState } from './ipc';
 
 const INSTALLING = new Set(['downloading', 'verified', 'scheduled', 'draining', 'restarting']);
 
-export function serverUpdateActive(state: ServerUpdateState | null): boolean {
+function serverUpdateActive(state: ServerUpdateState | null): boolean {
   return state !== null && INSTALLING.has(state.status);
-}
-
-export function serverUpdateAvailable(state: ServerUpdateState | null): boolean {
-  return state !== null && state.status === 'available';
 }
 
 export function serverUpdateStatusLabel(state: ServerUpdateState | null): string {
@@ -66,8 +62,6 @@ export function serverUpdateSummary(state: ServerUpdateState | null): string {
   switch (state.status) {
     case 'disabled':
       return 'Updates are turned off by this server’s startup policy.';
-    case 'unsupported':
-      return state.remediation ?? 'This server cannot update itself in place.';
     case 'idle':
       return 'No release check has run yet.';
     case 'checking':
@@ -109,7 +103,7 @@ export function serverUpdatePolicyLabel(state: ServerUpdateState | null): string
   }
 }
 
-export interface ServerUpdateVerbs {
+interface ServerUpdateVerbs {
   check: boolean;
   installWhenIdle: boolean;
   installNow: boolean;
@@ -126,7 +120,7 @@ export function serverUpdateVerbs(state: ServerUpdateState | null): ServerUpdate
     installNowStopsWork: false,
     cancel: false,
   };
-  if (state === null || state.status === 'disabled' || state.status === 'unsupported') return none;
+  if (state === null || state.status === 'disabled') return none;
   const busy =
     state.status === 'checking' || state.status === 'draining' || state.status === 'restarting';
   const available = state.status === 'available' || state.status === 'failed';

@@ -19,11 +19,9 @@ import (
 	"context"
 	"fmt"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"sort"
 	"strings"
-	"sync"
 
 	"github.com/doordash-oss/agentic-orchestrator/internal/agentdef"
 	"github.com/doordash-oss/agentic-orchestrator/internal/llm"
@@ -36,18 +34,23 @@ const defaultBinary = "codex"
 
 // Provider implements llm.LLMProvider for the Codex CLI (app-server mode).
 type Provider struct {
-	mu      sync.RWMutex
-	catalog []llm.ModelInfo
-	runner  clirun.CommandRunner
+	// Catalog holds the discovered model catalog and the curated
+	// offline fallback; its promoted methods are the provider's catalog
+	// surface.
+	llm.Catalog
+	runner clirun.CommandRunner
 	// binary overrides the CLI executable name; empty means defaultBinary.
 	binary string
 }
 
 // NewProvider returns a Codex provider that launches binary instead of the
-// codex executable on PATH; empty means the default. Tests use it to drive
-// the real adapter against a stand-in app-server.
+// codex executable on PATH; empty means the default. The embedded catalog is
+// bound to the resolved CLI name and the curated default entries. Tests use
+// it to drive the real adapter against a stand-in app-server.
 func NewProvider(binary string) *Provider {
-	return &Provider{binary: binary}
+	p := &Provider{binary: binary}
+	p.Catalog = llm.NewCatalog(p.cliBinary(), defaultModelInfos)
+	return p
 }
 
 func (p *Provider) Name() string { return "codex" }
@@ -57,10 +60,6 @@ func (p *Provider) Name() string { return "codex" }
 // contract. Ordinary Codex sessions do not activate this boundary.
 func (p *Provider) SupportsNativeToollessReview() bool { return true }
 
-// SupportsSessionResume reports that a persisted thread can be resumed via
-// ProtocolOpts.ResumeSessionID (the thread/resume handshake).
-func (p *Provider) SupportsSessionResume() bool { return true }
-
 // cliBinary returns the configured CLI executable name, falling back to the
 // provider default when no override is set.
 func (p *Provider) cliBinary() string {
@@ -68,46 +67,6 @@ func (p *Provider) cliBinary() string {
 		return p.binary
 	}
 	return defaultBinary
-}
-
-func (p *Provider) MatchesModel(model string) bool {
-	p.mu.RLock()
-	cat := p.catalog
-	p.mu.RUnlock()
-	if len(cat) == 0 {
-		cat = p.defaultModelInfos()
-	}
-	m := strings.ToLower(model)
-	for _, entry := range cat {
-		if strings.EqualFold(entry.ID, m) {
-			return true
-		}
-		for _, alias := range entry.Aliases {
-			if strings.EqualFold(alias, m) {
-				return true
-			}
-		}
-	}
-	return false
-}
-
-func (p *Provider) DetectCLI() bool {
-	_, err := exec.LookPath(p.cliBinary())
-	return err == nil
-}
-
-func (p *Provider) AvailableModels() []string {
-	p.mu.RLock()
-	cat := p.catalog
-	p.mu.RUnlock()
-	if len(cat) == 0 {
-		cat = p.defaultModelInfos()
-	}
-	ids := make([]string, len(cat))
-	for i, m := range cat {
-		ids[i] = m.ID
-	}
-	return ids
 }
 
 func (p *Provider) BuildCommand(opts llm.CommandBuildOpts) ([]string, []string, error) {
@@ -179,12 +138,8 @@ var nativeToollessConfigOverrides = []string{
 }
 
 func nativeToollessReviewRequested(opts llm.CommandBuildOpts) (bool, error) {
-	requested := opts.ZeroTools || opts.NoSessionPersistence || opts.NoCustomization
-	if !requested {
+	if !opts.NativeToollessReview {
 		return false, nil
-	}
-	if !opts.ZeroTools || !opts.NoSessionPersistence || !opts.NoCustomization {
-		return false, fmt.Errorf("Codex native tool-less review requires zero tools, no session persistence, and no customization")
 	}
 	if strings.TrimSpace(opts.StateDir) == "" {
 		return false, fmt.Errorf("Codex native tool-less review requires an ephemeral provider state directory")
@@ -237,45 +192,15 @@ Use kind free_form with an empty options array only for an inherently unconstrai
 Apply this contract on every turn of an interview, including after repository exploration and previous answers. A request to confirm scope or proceed is also a question and must use ask_user. A tool answer clarifies that decision within the phase's existing scope; it does not grant unrelated implementation permission.`
 }
 
-func (p *Provider) ComputeCost(model string, inputTokens, outputTokens int64) float64 {
-	return computeCost(model, int(inputTokens), 0, 0, int(outputTokens))
-}
-
-func (p *Provider) ContextWindowForModel(model string) int {
-	p.mu.RLock()
-	cat := p.catalog
-	p.mu.RUnlock()
-	if len(cat) == 0 {
-		cat = p.defaultModelInfos()
-	}
-	for _, entry := range cat {
-		if strings.EqualFold(entry.ID, model) {
-			if entry.ContextWindow > 0 {
-				return entry.ContextWindow
-			}
-		}
-		for _, alias := range entry.Aliases {
-			if strings.EqualFold(alias, model) {
-				if entry.ContextWindow > 0 {
-					return entry.ContextWindow
-				}
-			}
-		}
-	}
-	return 0
-}
-
+// contextWindowOverrideForModel resolves a window-suffixed selection to its
+// catalog entry's window by canonical ID only (aliases are not accepted) and
+// returns the window even when it is zero: a zero window here means "matched
+// entry with no advertised window", which is distinct from no match.
 func (p *Provider) contextWindowOverrideForModel(model string) int {
 	if strings.TrimSpace(model) == "" || model == llm.StripModelContextWindow(model) {
 		return 0
 	}
-	p.mu.RLock()
-	cat := p.catalog
-	p.mu.RUnlock()
-	if len(cat) == 0 {
-		cat = p.defaultModelInfos()
-	}
-	for _, entry := range cat {
+	for _, entry := range p.ModelCatalog() {
 		if strings.EqualFold(entry.ID, model) {
 			return entry.ContextWindow
 		}
@@ -293,11 +218,11 @@ func (p *Provider) InstallHint() string {
 
 func (p *Provider) VersionInfo() (string, error) {
 	bin := p.cliBinary()
-	out, err := exec.Command(bin, "--version").CombinedOutput()
+	out, err := clirun.VersionProbe(p.runner, bin)
 	if err != nil {
 		return "", fmt.Errorf("failed to run '%s --version': %w", bin, err)
 	}
-	return strings.TrimSpace(string(out)), nil
+	return out, nil
 }
 
 // MinVersion is the app-server baseline verified by the structured contract
@@ -363,26 +288,6 @@ func (p *Provider) CheckReadiness(ctx context.Context) llm.ProviderReadiness {
 	}
 }
 
-// SetModelCatalog sets the discovered model catalog.
-func (p *Provider) SetModelCatalog(models []llm.ModelInfo) {
-	p.mu.Lock()
-	p.catalog = models
-	p.mu.Unlock()
-}
-
-// ModelCatalog returns the current catalog. Falls back to the hardcoded
-// defaults when nothing has been set, so callers (desktop app, registry) always see
-// a populated catalog without an explicit seeding step.
-func (p *Provider) ModelCatalog() []llm.ModelInfo {
-	p.mu.RLock()
-	cat := p.catalog
-	p.mu.RUnlock()
-	if len(cat) == 0 {
-		return p.defaultModelInfos()
-	}
-	return cat
-}
-
 // RecommendedModels nominates the balanced Codex model as the default for
 // every role. Provider-local family knowledge stays out of shared selection
 // code; configured model_recommendations override these nominations.
@@ -414,29 +319,6 @@ func reviewModelMatchesHint(model llm.ModelInfo, hint string) bool {
 	return false
 }
 
-// CLIVersion returns the installed Codex CLI version.
-func (p *Provider) CLIVersion() (string, error) {
-	runner := p.runner
-	if runner == nil {
-		runner = clirun.DefaultRunner()
-	}
-	bin := p.cliBinary()
-	out, err := runner(context.Background(), bin, []string{"--version"}, nil)
-	if err != nil {
-		return "", fmt.Errorf("running %s --version: %w", bin, err)
-	}
-	return clirun.ParseVersionOutput(out)
-}
-
-// OutputPricePerMToken returns the output price per million tokens for a model.
-func (p *Provider) OutputPricePerMToken(model string) float64 {
-	r, ok := lookupRate(model)
-	if !ok {
-		return 0
-	}
-	return r.outputPerMToken
-}
-
 // defaultModelInfos returns Agentic's curated Codex/OpenAI model catalog.
 //
 // Runtime startup refreshes these values with `codex debug models`, which
@@ -451,7 +333,7 @@ func (p *Provider) OutputPricePerMToken(model string) float64 {
 //   - https://developers.openai.com/api/docs/models/gpt-5.4-mini
 //   - https://developers.openai.com/api/docs/models/gpt-5.3-codex
 //   - https://developers.openai.com/api/docs/models/gpt-5.2
-func (p *Provider) defaultModelInfos() []llm.ModelInfo {
+func defaultModelInfos() []llm.ModelInfo {
 	return []llm.ModelInfo{
 		{ID: "gpt-6-astra[272K]", DisplayName: "GPT-6 Astra (272K)", ContextWindow: 272_000, Aliases: []string{"gpt-6-astra"}, Category: "capable",
 			EffortCapabilities: []llm.EffortLevel{llm.EffortLow, llm.EffortMedium, llm.EffortHigh, llm.EffortXHigh, llm.EffortMax, llm.EffortUltra}},

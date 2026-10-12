@@ -36,8 +36,8 @@ func TestRestartPhase_NeedUserInputGate_AbandonsGate(t *testing.T) {
 		PendingNeedUserInputPath: "/tmp/feat-restart-nui/need-user-input.yaml",
 		HelpQueue:                []feature.HelpRequest{{Question: "stale", Pending: true}},
 	}
-	fs := newFeatureStore(f)
-	o := orchestrator.New(orchestrator.Deps{Lifecycle: lifecycleForFeature(f), Store: fs}, orchestrator.Hooks{})
+	fs, lc := newStoredFeatureFixture(t, f)
+	o := orchestrator.New(orchestrator.Deps{Manager: lc, Store: fs}, orchestrator.Hooks{})
 
 	outcome, err := o.RestartPhase(f.ID, 0, 0)
 	if err != nil {
@@ -46,6 +46,7 @@ func TestRestartPhase_NeedUserInputGate_AbandonsGate(t *testing.T) {
 	if outcome.Action != orchestrator.RestartDispatchPhase || outcome.Phase != feature.PhaseImplement {
 		t.Errorf("outcome = %+v, want dispatch of PhaseImplement", outcome)
 	}
+	f = loadStoredFeature(t, fs, f.ID)
 	if f.Status != feature.StatusInterrupted {
 		t.Errorf("Status = %v, want StatusInterrupted", f.Status)
 	}
@@ -69,13 +70,14 @@ func TestStartFeature_OpenNeedUserInputGate_Refused(t *testing.T) {
 		CurrentIteration:         4,
 		PendingNeedUserInputPath: "/tmp/feat-start-nui/need-user-input.yaml",
 	}
-	lc := lifecycleForFeature(f)
-	o := orchestrator.New(orchestrator.Deps{Lifecycle: lc, Store: newFeatureStore(f)}, orchestrator.Hooks{})
+	fs, lc := newStoredFeatureFixture(t, f)
+	o := orchestrator.New(orchestrator.Deps{Manager: lc, Store: fs}, orchestrator.Hooks{})
 
 	err := o.StartFeature(f.ID)
 	if !errors.Is(err, feature.ErrNeedUserInputGateOpen) {
 		t.Fatalf("StartFeature() error = %v, want ErrNeedUserInputGateOpen", err)
 	}
+	f = loadStoredFeature(t, fs, f.ID)
 	if f.Status != feature.StatusNeedUserInput {
 		t.Errorf("Status = %v, want StatusNeedUserInput (gate must stay closed)", f.Status)
 	}
@@ -85,7 +87,6 @@ func TestStartFeature_OpenNeedUserInputGate_Refused(t *testing.T) {
 	if f.CurrentIteration != 4 {
 		t.Errorf("CurrentIteration = %d, want 4 (no iteration reset)", f.CurrentIteration)
 	}
-	refuteLifecycleCall(t, lc, "StartImplementation")
 }
 
 // TestStartFeature_FinalizingPhase_Refused covers the synchronous end-of-phase
@@ -99,16 +100,16 @@ func TestStartFeature_FinalizingPhase_Refused(t *testing.T) {
 		CurrentPhaseStatus: feature.PhaseStatusFinalizing,
 		Pipeline:           feature.PipelineLarge,
 	}
-	lc := lifecycleForFeature(f)
-	o := orchestrator.New(orchestrator.Deps{Lifecycle: lc, Store: newFeatureStore(f)}, orchestrator.Hooks{})
+	fs, lc := newStoredFeatureFixture(t, f)
+	o := orchestrator.New(orchestrator.Deps{Manager: lc, Store: fs}, orchestrator.Hooks{})
 
 	if err := o.StartFeature(f.ID); !errors.Is(err, feature.ErrPhaseFinalizing) {
 		t.Fatalf("StartFeature() error = %v, want ErrPhaseFinalizing", err)
 	}
+	f = loadStoredFeature(t, fs, f.ID)
 	if f.Status != feature.StatusReviewPassed {
 		t.Errorf("Status = %v, want StatusReviewPassed", f.Status)
 	}
-	refuteLifecycleCall(t, lc, "StartImplementation")
 }
 
 // TestInterruptAllRunning_ClearsStaleFinalizingMarker covers a crash inside the
@@ -122,14 +123,13 @@ func TestInterruptAllRunning_ClearsStaleFinalizingMarker(t *testing.T) {
 		CurrentPhaseStatus: feature.PhaseStatusFinalizing,
 		Pipeline:           feature.PipelineLarge,
 	}
-	o := orchestrator.New(orchestrator.Deps{
-		Lifecycle: lifecycleForFeature(f),
-		Store:     newFeatureStore(f),
-	}, orchestrator.Hooks{})
+	fs, lc := newStoredFeatureFixture(t, f)
+	o := orchestrator.New(orchestrator.Deps{Manager: lc, Store: fs}, orchestrator.Hooks{})
 
 	if err := o.InterruptAllRunning(); err != nil {
 		t.Fatalf("InterruptAllRunning() error = %v", err)
 	}
+	f = loadStoredFeature(t, fs, f.ID)
 	if f.IsFinalizingPhase() {
 		t.Errorf("CurrentPhaseStatus = %q, want stale finalizing marker cleared", f.CurrentPhaseStatus)
 	}

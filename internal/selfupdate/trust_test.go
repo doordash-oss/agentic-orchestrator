@@ -70,7 +70,7 @@ func desktopReleasePublicKeyDER(t *testing.T) []byte {
 
 func TestProductionReleasePublicKeyMatchesDesktopEmbedding(t *testing.T) {
 	t.Parallel()
-	key, err := ProductionReleasePublicKey()
+	key, err := productionReleasePublicKey()
 	if err != nil {
 		t.Fatalf("production embedding failed to decode: %v", err)
 	}
@@ -90,11 +90,11 @@ func TestProductionReleasePublicKeyMatchesDesktopEmbedding(t *testing.T) {
 
 func TestProductionAndFixtureTrustRootsAreDistinct(t *testing.T) {
 	t.Parallel()
-	prod, err := ProductionReleasePublicKey()
+	prod, err := productionReleasePublicKey()
 	if err != nil {
 		t.Fatal(err)
 	}
-	fixture, err := FixtureReleasePublicKey()
+	fixture, err := fixtureReleasePublicKey()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -147,11 +147,11 @@ func trustVectors(t *testing.T) (payload, signature []byte) {
 func TestSharedFixtureVectorVerifies(t *testing.T) {
 	t.Parallel()
 	payload, signature := trustVectors(t)
-	key, err := FixtureReleasePublicKey()
+	key, err := fixtureReleasePublicKey()
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := VerifyReleaseSignature(payload, string(signature), key); err != nil {
+	if err := verifyReleaseSignature(payload, string(signature), key); err != nil {
 		t.Fatalf("shared fixture vector must verify with the fixture trust root: %v", err)
 	}
 }
@@ -159,28 +159,28 @@ func TestSharedFixtureVectorVerifies(t *testing.T) {
 func TestSharedFixtureVectorRejectsMutatedBytes(t *testing.T) {
 	t.Parallel()
 	payload, signature := trustVectors(t)
-	key, err := FixtureReleasePublicKey()
+	key, err := fixtureReleasePublicKey()
 	if err != nil {
 		t.Fatal(err)
 	}
 	// Changing payload bytes must fail verification.
 	mutatedPayload := append([]byte{}, payload...)
 	mutatedPayload[0] ^= 0x01
-	if err := VerifyReleaseSignature(mutatedPayload, string(signature), key); err == nil {
+	if err := verifyReleaseSignature(mutatedPayload, string(signature), key); err == nil {
 		t.Fatal("mutated payload bytes must fail signature verification")
 	}
 	// Changing signature bytes must fail verification.
 	mutatedSig := append([]byte{}, signature...)
 	mutatedSig[len(mutatedSig)-3] ^= 0x01
-	if err := VerifyReleaseSignature(payload, string(mutatedSig), key); err == nil {
+	if err := verifyReleaseSignature(payload, string(mutatedSig), key); err == nil {
 		t.Fatal("mutated signature bytes must fail verification")
 	}
 	// The production trust root must never verify fixture-signed bytes.
-	prod, err := ProductionReleasePublicKey()
+	prod, err := productionReleasePublicKey()
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := VerifyReleaseSignature(payload, string(signature), prod); err == nil {
+	if err := verifyReleaseSignature(payload, string(signature), prod); err == nil {
 		t.Fatal("fixture signature must not verify under the production trust root")
 	}
 }
@@ -188,7 +188,7 @@ func TestSharedFixtureVectorRejectsMutatedBytes(t *testing.T) {
 func TestParseReleaseSignatureFormat(t *testing.T) {
 	t.Parallel()
 	_, signature := trustVectors(t)
-	sig, err := ParseReleaseSignature(string(signature))
+	sig, err := parseReleaseSignature(string(signature))
 	if err != nil {
 		t.Fatalf("committed vector signature must parse: %v", err)
 	}
@@ -199,16 +199,16 @@ func TestParseReleaseSignatureFormat(t *testing.T) {
 		name string
 		in   string
 	}{
-		{"wrong prefix", "ssh-ed25519:" + strings.TrimPrefix(string(signature), SignaturePrefix)},
-		{"no prefix", strings.TrimSpace(strings.TrimPrefix(string(signature), SignaturePrefix))},
+		{"wrong prefix", "ssh-ed25519:" + strings.TrimPrefix(string(signature), signaturePrefix)},
+		{"no prefix", strings.TrimSpace(strings.TrimPrefix(string(signature), signaturePrefix))},
 		{"empty", ""},
-		{"prefix only", SignaturePrefix},
-		{"not base64", SignaturePrefix + "!!!!"},
-		{"short", SignaturePrefix + base64.StdEncoding.EncodeToString([]byte("short"))},
+		{"prefix only", signaturePrefix},
+		{"not base64", signaturePrefix + "!!!!"},
+		{"short", signaturePrefix + base64.StdEncoding.EncodeToString([]byte("short"))},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			if _, err := ParseReleaseSignature(tc.in); err == nil {
+			if _, err := parseReleaseSignature(tc.in); err == nil {
 				t.Fatalf("expected malformed signature %q to fail", tc.in)
 			}
 		})
@@ -216,7 +216,7 @@ func TestParseReleaseSignatureFormat(t *testing.T) {
 	// Surrounding whitespace (a trailing newline in a stored .sig file) is
 	// tolerated, exactly like the desktop parser trims the text.
 	padded := "\n" + strings.TrimSpace(string(signature)) + "\n"
-	if _, err := ParseReleaseSignature(padded); err != nil {
+	if _, err := parseReleaseSignature(padded); err != nil {
 		t.Fatalf("whitespace-padded signature must parse: %v", err)
 	}
 }
@@ -232,11 +232,11 @@ func TestVerifyReleaseSignatureNeverTransformsPayload(t *testing.T) {
 	}
 	payload := []byte("agentico payload \n")
 	sig := ed25519.Sign(priv, payload)
-	text := SignaturePrefix + base64.StdEncoding.EncodeToString(sig)
-	if err := VerifyReleaseSignature(payload, text, pub); err != nil {
+	text := signaturePrefix + base64.StdEncoding.EncodeToString(sig)
+	if err := verifyReleaseSignature(payload, text, pub); err != nil {
 		t.Fatalf("exact payload bytes must verify: %v", err)
 	}
-	if err := VerifyReleaseSignature(bytes.TrimRight(payload, "\n "), text, pub); err == nil {
+	if err := verifyReleaseSignature(bytes.TrimRight(payload, "\n "), text, pub); err == nil {
 		t.Fatal("trimmed payload bytes must not verify against the original signature")
 	}
 }

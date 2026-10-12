@@ -18,7 +18,7 @@ import { useEffect, useRef } from 'react';
 import { useCompletionAction, ResultBox, type CompletionAction } from './completionShared';
 import type { CompletionPreflightResult } from '../../../../shared/ipc';
 
-export interface CleanupConfirmProps {
+interface CleanupConfirmProps {
   featureId: string;
   preflight: CompletionPreflightResult;
   dispatchAction: (

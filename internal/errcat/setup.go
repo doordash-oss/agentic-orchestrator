@@ -42,22 +42,22 @@ func IsSetupFailure(code Code) bool {
 	return setupFailureCodes[code]
 }
 
-// SetupFailureParams carries the setup-task label and repository names a
+// setupFailureParams carries the setup-task label and repository names a
 // setup-failure summary interpolates. RenderRecord derives them from a
 // stored record's context blocks: a run-level record names the owning task,
 // a task-level record names the repositories. The static (or, for the
 // worktree code, repository-based) summary applies when neither is present.
-type SetupFailureParams struct {
+type setupFailureParams struct {
 	TaskLabel    string
 	Repositories []string
 }
 
-func (SetupFailureParams) params() {}
+func (setupFailureParams) params() {}
 
 // setupTaskLabelSummary renders the owning-task sentence when the params
 // name the setup task, and "" otherwise.
 func setupTaskLabelSummary(p Params) string {
-	params, ok := p.(SetupFailureParams)
+	params, ok := p.(setupFailureParams)
 	if !ok {
 		return ""
 	}

@@ -92,7 +92,7 @@ func TestWriteFeatureSummaryFromEvents(t *testing.T) {
 	f.Close()
 
 	// Build input with metadata-driven phase timings and costs
-	input := FeatureSummaryInput{
+	input := featureSummaryInput{
 		FeatureID:  featureID,
 		FeatureDir: featureDir,
 		Name:       "test-feature",
@@ -116,7 +116,7 @@ func TestWriteFeatureSummaryFromEvents(t *testing.T) {
 		t.Fatalf("reading observe-summary.yaml: %v", err)
 	}
 
-	var summary SummaryArtifact
+	var summary summaryArtifact
 	if err := yaml.Unmarshal(data, &summary); err != nil {
 		t.Fatalf("unmarshaling summary YAML: %v", err)
 	}
@@ -273,7 +273,7 @@ func TestWriteFeatureSummaryMultiRepo(t *testing.T) {
 	}
 	f.Close()
 
-	input := FeatureSummaryInput{
+	input := featureSummaryInput{
 		FeatureID:  featureID,
 		FeatureDir: featureDir,
 		Name:       "multi-repo-feature",
@@ -300,7 +300,7 @@ func TestWriteFeatureSummaryMultiRepo(t *testing.T) {
 		t.Fatalf("reading observe-summary.yaml: %v", err)
 	}
 
-	var summary SummaryArtifact
+	var summary summaryArtifact
 	if err := yaml.Unmarshal(data, &summary); err != nil {
 		t.Fatalf("unmarshaling summary YAML: %v", err)
 	}
@@ -359,7 +359,7 @@ func TestWriteFeatureSummaryFallsBackWithoutEvents(t *testing.T) {
 
 	// Do NOT create events.jsonl
 
-	input := FeatureSummaryInput{
+	input := featureSummaryInput{
 		FeatureID:  featureID,
 		FeatureDir: featureDir,
 		Name:       "no-events-feature",
@@ -387,7 +387,7 @@ func TestWriteFeatureSummaryFallsBackWithoutEvents(t *testing.T) {
 		t.Fatalf("reading observe-summary.yaml: %v", err)
 	}
 
-	var summary SummaryArtifact
+	var summary summaryArtifact
 	if err := yaml.Unmarshal(data, &summary); err != nil {
 		t.Fatalf("unmarshaling summary YAML: %v", err)
 	}
@@ -503,7 +503,7 @@ func TestWriteFeatureSummaryAfterRewindPrefersFeatureMetadata(t *testing.T) {
 	f.Close()
 
 	// Metadata has the correct post-rewind values
-	input := FeatureSummaryInput{
+	input := featureSummaryInput{
 		FeatureID:  featureID,
 		FeatureDir: featureDir,
 		Name:       "rewind-feature",
@@ -526,7 +526,7 @@ func TestWriteFeatureSummaryAfterRewindPrefersFeatureMetadata(t *testing.T) {
 		t.Fatalf("reading observe-summary.yaml: %v", err)
 	}
 
-	var summary SummaryArtifact
+	var summary summaryArtifact
 	if err := yaml.Unmarshal(data, &summary); err != nil {
 		t.Fatalf("unmarshaling summary YAML: %v", err)
 	}
@@ -617,7 +617,7 @@ func TestWriteFeatureSummarySkipsMalformedEventLines(t *testing.T) {
 	}
 	f.Close()
 
-	input := FeatureSummaryInput{
+	input := featureSummaryInput{
 		FeatureID:  featureID,
 		FeatureDir: featureDir,
 		Name:       "malformed-events-feature",
@@ -640,7 +640,7 @@ func TestWriteFeatureSummarySkipsMalformedEventLines(t *testing.T) {
 		t.Fatalf("reading observe-summary.yaml: %v", err)
 	}
 
-	var summary SummaryArtifact
+	var summary summaryArtifact
 	if err := yaml.Unmarshal(data, &summary); err != nil {
 		t.Fatalf("unmarshaling summary YAML: %v", err)
 	}
@@ -766,7 +766,7 @@ func TestEmit_PreMigrationEventsTreatedAsUnknownRun(t *testing.T) {
 		t.Fatalf("writing events.jsonl: %v", err)
 	}
 
-	input := FeatureSummaryInput{
+	input := featureSummaryInput{
 		FeatureID:  featureID,
 		FeatureDir: featureDir,
 		Name:       "pre-migration-feature",
@@ -787,7 +787,7 @@ func TestEmit_PreMigrationEventsTreatedAsUnknownRun(t *testing.T) {
 	if err != nil {
 		t.Fatalf("reading summary: %v", err)
 	}
-	var summary SummaryArtifact
+	var summary summaryArtifact
 	if err := yaml.Unmarshal(data, &summary); err != nil {
 		t.Fatalf("unmarshaling summary: %v", err)
 	}
@@ -824,7 +824,7 @@ func TestWriteFeatureSummary_EnumeratesSealedRuns(t *testing.T) {
 	// Active run (no sealed_at) — must NOT appear in SealedRuns.
 	seedSealedRunYAML(t, featureDir, 2, nil, feature.SealReason(""), nil, nil, nil)
 
-	input := FeatureSummaryInput{
+	input := featureSummaryInput{
 		FeatureID:  featureID,
 		FeatureDir: featureDir,
 		Name:       "enum-sealed",
@@ -845,7 +845,7 @@ func TestWriteFeatureSummary_EnumeratesSealedRuns(t *testing.T) {
 	if err != nil {
 		t.Fatalf("reading summary: %v", err)
 	}
-	var summary SummaryArtifact
+	var summary summaryArtifact
 	if err := yaml.Unmarshal(data, &summary); err != nil {
 		t.Fatalf("unmarshaling summary: %v", err)
 	}
@@ -900,7 +900,7 @@ func TestWriteFeatureSummary_SealedPartialRewindIncludesRoadmapPhase(t *testing.
 		2)
 	seedSealedRunYAML(t, featureDir, 2, nil, feature.SealReason(""), nil, nil, nil)
 
-	input := FeatureSummaryInput{
+	input := featureSummaryInput{
 		FeatureID:  featureID,
 		FeatureDir: featureDir,
 		Name:       "partial-rewind-summary",
@@ -918,7 +918,7 @@ func TestWriteFeatureSummary_SealedPartialRewindIncludesRoadmapPhase(t *testing.
 	if err != nil {
 		t.Fatalf("reading summary: %v", err)
 	}
-	var summary SummaryArtifact
+	var summary summaryArtifact
 	if err := yaml.Unmarshal(data, &summary); err != nil {
 		t.Fatalf("unmarshaling summary: %v", err)
 	}
@@ -948,7 +948,7 @@ func TestWriteFeatureSummary_NonImplementRewindOmitsRoadmapPhase(t *testing.T) {
 		map[string]float64{"plan": 0.1},
 		2)
 
-	input := FeatureSummaryInput{
+	input := featureSummaryInput{
 		FeatureID:  featureID,
 		FeatureDir: featureDir,
 		Name:       "plan-rewind-summary",
@@ -963,7 +963,7 @@ func TestWriteFeatureSummary_NonImplementRewindOmitsRoadmapPhase(t *testing.T) {
 	if err != nil {
 		t.Fatalf("reading summary: %v", err)
 	}
-	var summary SummaryArtifact
+	var summary summaryArtifact
 	if err := yaml.Unmarshal(data, &summary); err != nil {
 		t.Fatalf("unmarshaling summary: %v", err)
 	}
@@ -998,7 +998,7 @@ func TestWriteFeatureSummary_MultipleRewindsAccumulate(t *testing.T) {
 		map[string]float64{"inquire": 0.15})
 	seedSealedRunYAML(t, featureDir, 3, nil, feature.SealReason(""), nil, nil, nil)
 
-	input := FeatureSummaryInput{
+	input := featureSummaryInput{
 		FeatureID:  featureID,
 		FeatureDir: featureDir,
 		Name:       "multi-rewind",
@@ -1016,7 +1016,7 @@ func TestWriteFeatureSummary_MultipleRewindsAccumulate(t *testing.T) {
 	if err != nil {
 		t.Fatalf("reading summary: %v", err)
 	}
-	var summary SummaryArtifact
+	var summary summaryArtifact
 	if err := yaml.Unmarshal(data, &summary); err != nil {
 		t.Fatalf("unmarshaling summary: %v", err)
 	}
@@ -1042,7 +1042,7 @@ func TestWriteFeatureSummary_NoRunsDir_EmptySealedRuns(t *testing.T) {
 	featureDir := t.TempDir()
 	featureID := "no_runs_dir_feat"
 
-	input := FeatureSummaryInput{
+	input := featureSummaryInput{
 		FeatureID:  featureID,
 		FeatureDir: featureDir,
 		Name:       "no-runs",
@@ -1063,7 +1063,7 @@ func TestWriteFeatureSummary_NoRunsDir_EmptySealedRuns(t *testing.T) {
 	if err != nil {
 		t.Fatalf("reading summary: %v", err)
 	}
-	var summary SummaryArtifact
+	var summary summaryArtifact
 	if err := yaml.Unmarshal(data, &summary); err != nil {
 		t.Fatalf("unmarshaling summary: %v", err)
 	}
@@ -1124,7 +1124,7 @@ func TestWriteFeatureSummary_FiltersEventsByActiveRun(t *testing.T) {
 			map[string]time.Duration{"implement": 60 * time.Second},
 			map[string]float64{"implement": 1.0})
 
-		input := FeatureSummaryInput{
+		input := featureSummaryInput{
 			FeatureID:  featureID,
 			FeatureDir: featureDir,
 			Name:       "filter-run2",
@@ -1145,7 +1145,7 @@ func TestWriteFeatureSummary_FiltersEventsByActiveRun(t *testing.T) {
 		if err != nil {
 			t.Fatalf("reading summary: %v", err)
 		}
-		var summary SummaryArtifact
+		var summary summaryArtifact
 		if err := yaml.Unmarshal(data, &summary); err != nil {
 			t.Fatalf("unmarshaling summary: %v", err)
 		}
@@ -1195,7 +1195,7 @@ func TestWriteFeatureSummary_FiltersEventsByActiveRun(t *testing.T) {
 		if err := os.WriteFile(eventsPath, []byte(raw), 0644); err != nil {
 			t.Fatalf("writing events.jsonl: %v", err)
 		}
-		input := FeatureSummaryInput{
+		input := featureSummaryInput{
 			FeatureID:  featureID,
 			FeatureDir: featureDir,
 			Name:       "never-rewound",
@@ -1209,7 +1209,7 @@ func TestWriteFeatureSummary_FiltersEventsByActiveRun(t *testing.T) {
 		if err != nil {
 			t.Fatalf("reading summary: %v", err)
 		}
-		var summary SummaryArtifact
+		var summary summaryArtifact
 		if err := yaml.Unmarshal(data, &summary); err != nil {
 			t.Fatalf("unmarshaling summary: %v", err)
 		}
@@ -1231,7 +1231,7 @@ func TestWriteFeatureSummary_FiltersEventsByActiveRun(t *testing.T) {
 		if err := os.WriteFile(eventsPath, []byte(raw), 0644); err != nil {
 			t.Fatalf("writing events.jsonl: %v", err)
 		}
-		input := FeatureSummaryInput{
+		input := featureSummaryInput{
 			FeatureID:  featureID,
 			FeatureDir: featureDir,
 			Name:       "zero-run",
@@ -1245,7 +1245,7 @@ func TestWriteFeatureSummary_FiltersEventsByActiveRun(t *testing.T) {
 		if err != nil {
 			t.Fatalf("reading summary: %v", err)
 		}
-		var summary SummaryArtifact
+		var summary summaryArtifact
 		if err := yaml.Unmarshal(data, &summary); err != nil {
 			t.Fatalf("unmarshaling summary: %v", err)
 		}
@@ -1276,7 +1276,7 @@ func TestWriteFeatureSummary_FailedFeatureCarriesErrorCodeAndClass(t *testing.T)
 	if err != nil {
 		t.Fatalf("reading observe-summary.yaml: %v", err)
 	}
-	var summary SummaryArtifact
+	var summary summaryArtifact
 	if err := yaml.Unmarshal(data, &summary); err != nil {
 		t.Fatalf("unmarshaling summary YAML: %v", err)
 	}
@@ -1323,7 +1323,7 @@ func TestWriteFeatureSummary_HealthyFeatureOmitsErrorKeys(t *testing.T) {
 	if err != nil {
 		t.Fatalf("reading observe-summary.yaml: %v", err)
 	}
-	var summary SummaryArtifact
+	var summary summaryArtifact
 	if err := yaml.Unmarshal(data, &summary); err != nil {
 		t.Fatalf("unmarshaling summary YAML: %v", err)
 	}

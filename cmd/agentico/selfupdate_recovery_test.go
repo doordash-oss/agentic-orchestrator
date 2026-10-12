@@ -127,11 +127,7 @@ func captureStderrFn(fn func()) string {
 // abandoned-staging reconciliation still runs under the binary lease.
 func TestReconcileSettledStateNoReceiptIsSilent(t *testing.T) {
 	dir := t.TempDir()
-	installedPath := writeHooksTestExecutable(t, dir, "agentico", "installed-v1")
-	exec, err := selfupdate.CaptureExecutableAt(installedPath)
-	if err != nil {
-		t.Fatalf("capture installed executable: %v", err)
-	}
+	exec := captureFixtureExecutable(t, dir)
 	runtimeDir := t.TempDir()
 	stateDir := filepath.Join(runtimeDir, "features")
 

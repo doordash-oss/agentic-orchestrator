@@ -24,8 +24,8 @@ import { describe, expect, it, vi } from 'vitest';
 import { registerIpcHandlers, type IpcServices } from '../../src/main/ipcHandlers';
 import type { TrustedSender } from '../../src/main/security';
 import { SetupService } from '../../src/main/setup';
+import { IPC_CHANNELS } from '../../src/shared/ipcChannels';
 import {
-  IPC_CHANNELS,
   defaultSettings,
   type DiagnosticsSnapshot,
   type ReadinessSnapshot,
@@ -146,8 +146,8 @@ function makeServices(overrides: Partial<IpcServices> = {}): IpcServices {
     getSettings: vi.fn(() => defaultSettings()),
     updateSettings: vi.fn(() => defaultSettings()),
     openSettingsWindow: vi.fn(() => ({ opened: true })),
-    getTheme: vi.fn(() => ({ preference: 'system' as const, resolved: 'dark' as const })),
-    setTheme: vi.fn((preference) => ({ preference, resolved: 'dark' as const })),
+    getThemePreference: vi.fn(() => ({ preference: 'system' as const, resolved: 'dark' as const })),
+    setThemePreference: vi.fn((preference) => ({ preference, resolved: 'dark' as const })),
     getRuntimeReadiness: vi.fn(() => Promise.resolve(snapshot())),
     refreshRuntimeReadiness: vi.fn(() => Promise.resolve(snapshot())),
     getReadiness: vi.fn(() => Promise.resolve(snapshot())),
@@ -339,12 +339,12 @@ interface Envelope {
 
 describe('setup IPC surface: sender validation', () => {
   const setupChannels = [
-    IPC_CHANNELS.readinessGet,
-    IPC_CHANNELS.readinessRefresh,
-    IPC_CHANNELS.workspacePickDirectory,
-    IPC_CHANNELS.workspaceAddRoot,
-    IPC_CHANNELS.workspaceInitRepository,
-    IPC_CHANNELS.repositoriesList,
+    IPC_CHANNELS.getReadiness,
+    IPC_CHANNELS.refreshReadiness,
+    IPC_CHANNELS.pickWorkspaceDirectory,
+    IPC_CHANNELS.addWorkspaceRoot,
+    IPC_CHANNELS.initRepository,
+    IPC_CHANNELS.listRepositories,
   ];
 
   it('rejects spoofed senders on every setup channel without invoking services', async () => {
@@ -370,7 +370,7 @@ describe('setup IPC surface: consent gating', () => {
       { path: '/work/repo' },
       { path: '/work/repo', consent: true, extra: 'field' },
     ]) {
-      const result = (await handlers.get(IPC_CHANNELS.workspaceInitRepository)!(
+      const result = (await handlers.get(IPC_CHANNELS.initRepository)!(
         goodEvent,
         request,
       )) as Envelope;
@@ -382,7 +382,7 @@ describe('setup IPC surface: consent gating', () => {
 
   it('passes a well-formed consenting request through to the service', async () => {
     const { handlers, services } = register();
-    const result = (await handlers.get(IPC_CHANNELS.workspaceInitRepository)!(goodEvent, {
+    const result = (await handlers.get(IPC_CHANNELS.initRepository)!(goodEvent, {
       path: '/work/repo',
       consent: true,
     })) as Envelope;
@@ -520,7 +520,7 @@ describe('setup IPC surface: path validation', () => {
   it('rejects relative, traversal-decoy, and NUL paths before the service runs', async () => {
     const { handlers, services } = register();
     for (const bad of ['relative/path', '', '/nul\0path', 42, null, { path: '/x' }]) {
-      const result = (await handlers.get(IPC_CHANNELS.workspaceAddRoot)!(
+      const result = (await handlers.get(IPC_CHANNELS.addWorkspaceRoot)!(
         goodEvent,
         bad,
       )) as Envelope;
@@ -535,7 +535,7 @@ describe('setup IPC surface: path validation', () => {
         pickWorkspaceDirectory: vi.fn(() => Promise.resolve({ path: '/work/space' })),
       }),
     );
-    const result = (await handlers.get(IPC_CHANNELS.workspacePickDirectory)!(
+    const result = (await handlers.get(IPC_CHANNELS.pickWorkspaceDirectory)!(
       goodEvent,
     )) as Envelope;
     expect(result.ok).toBe(true);
@@ -548,7 +548,7 @@ describe('setup IPC surface: path validation', () => {
         pickWorkspaceDirectory: vi.fn(() => Promise.resolve({ path: 'relative/dir' })),
       }),
     );
-    const result = (await handlers.get(IPC_CHANNELS.workspacePickDirectory)!(
+    const result = (await handlers.get(IPC_CHANNELS.pickWorkspaceDirectory)!(
       goodEvent,
     )) as Envelope;
     expect(result.ok).toBe(false);
@@ -565,7 +565,7 @@ describe('setup IPC surface: no token or raw payload leakage', () => {
         ),
       }),
     );
-    const result = (await handlers.get(IPC_CHANNELS.readinessGet)!(goodEvent)) as Envelope;
+    const result = (await handlers.get(IPC_CHANNELS.getReadiness)!(goodEvent)) as Envelope;
     expect(result.ok).toBe(false);
     expect(result.error?.code).toBe('E_SCHEMA_MISMATCH');
     expect(JSON.stringify(result)).not.toContain('tok-leak-42');
@@ -579,7 +579,7 @@ describe('setup IPC surface: no token or raw payload leakage', () => {
         ),
       }),
     );
-    const result = (await handlers.get(IPC_CHANNELS.readinessRefresh)!(goodEvent)) as Envelope;
+    const result = (await handlers.get(IPC_CHANNELS.refreshReadiness)!(goodEvent)) as Envelope;
     expect(result.ok).toBe(false);
     const raw = JSON.stringify(result);
     expect(raw).not.toContain('/Users/someone');

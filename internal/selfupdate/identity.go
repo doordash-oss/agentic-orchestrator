@@ -24,10 +24,10 @@ import (
 	"syscall"
 )
 
-// FileIdentity is the inode-level identity of a file. Dev/Ino/Size survive
+// fileIdentity is the inode-level identity of a file. Dev/Ino/Size survive
 // renames within one filesystem and change when the path is replaced with a
 // different inode, which is the replacement signal this package relies on.
-type FileIdentity struct {
+type fileIdentity struct {
 	Dev  uint64
 	Ino  uint64
 	Mode uint32 // permission bits only (info.Mode().Perm())
@@ -37,14 +37,14 @@ type FileIdentity struct {
 }
 
 // SameFile compares device, inode and size; permission changes do not replace a file.
-func (id FileIdentity) SameFile(other FileIdentity) bool {
+func (id fileIdentity) sameFile(other fileIdentity) bool {
 	return id.Dev == other.Dev && id.Ino == other.Ino && id.Size == other.Size
 }
 
 // identityFromInfo extracts inode identity plus permission and ownership bits
 // from a FileInfo. Non-stat backends yield zero UID/GID/Dev/Ino.
-func identityFromInfo(info os.FileInfo) FileIdentity {
-	id := FileIdentity{
+func identityFromInfo(info os.FileInfo) fileIdentity {
+	id := fileIdentity{
 		Mode: uint32(info.Mode().Perm()),
 		Size: info.Size(),
 	}
@@ -57,16 +57,16 @@ func identityFromInfo(info os.FileInfo) FileIdentity {
 	return id
 }
 
-// StatFile returns the inode identity of path. It refuses anything that is
+// statFile returns the inode identity of path. It refuses anything that is
 // not a regular file so directories, symlinks, and devices can never be
 // mistaken for an installed executable.
-func StatFile(path string) (FileIdentity, error) {
+func statFile(path string) (fileIdentity, error) {
 	info, err := os.Stat(path)
 	if err != nil {
-		return FileIdentity{}, fmt.Errorf("stat %s: %w", path, err)
+		return fileIdentity{}, fmt.Errorf("stat %s: %w", path, err)
 	}
 	if !info.Mode().IsRegular() {
-		return FileIdentity{}, fmt.Errorf("stat %s: not a regular file", path)
+		return fileIdentity{}, fmt.Errorf("stat %s: not a regular file", path)
 	}
 	return identityFromInfo(info), nil
 }
@@ -89,7 +89,7 @@ func DigestFile(path string) (string, error) {
 // canonical so it remains the stable lease key across inode replacement.
 type Executable struct {
 	Path   string
-	ID     FileIdentity
+	ID     fileIdentity
 	Digest string
 }
 
@@ -99,18 +99,18 @@ func CaptureExecutable() (Executable, error) {
 	if err != nil {
 		return Executable{}, fmt.Errorf("resolve running executable: %w", err)
 	}
-	return CaptureExecutableAt(path)
+	return captureExecutableAt(path)
 }
 
-// CaptureExecutableAt canonicalizes path (symlinks resolved) and captures its
+// captureExecutableAt canonicalizes path (symlinks resolved) and captures its
 // identity and digest. Later verification compares against this snapshot
 // instead of rediscovering a potentially replaced executable.
-func CaptureExecutableAt(path string) (Executable, error) {
+func captureExecutableAt(path string) (Executable, error) {
 	canonical, err := filepath.EvalSymlinks(path)
 	if err != nil {
 		return Executable{}, fmt.Errorf("canonicalize %s: %w", path, err)
 	}
-	id, err := StatFile(canonical)
+	id, err := statFile(canonical)
 	if err != nil {
 		return Executable{}, err
 	}
@@ -124,10 +124,10 @@ func CaptureExecutableAt(path string) (Executable, error) {
 // PathStillMatches reports whether the file at e.Path is still the exact
 // inode captured in e.ID. Mode is deliberately excluded: chmod alone does not
 // invalidate an executable identity.
-func (e Executable) PathStillMatches() (bool, error) {
-	id, err := StatFile(e.Path)
+func (e Executable) pathStillMatches() (bool, error) {
+	id, err := statFile(e.Path)
 	if err != nil {
 		return false, err
 	}
-	return id.SameFile(e.ID), nil
+	return id.sameFile(e.ID), nil
 }

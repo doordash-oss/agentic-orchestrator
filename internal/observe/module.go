@@ -22,8 +22,8 @@ import (
 	"go.uber.org/fx"
 )
 
-// Params holds fx-injected parameters for the observe module.
-type Params struct {
+// params holds fx-injected parameters for the observe module.
+type params struct {
 	fx.In
 	Config    *config.Config
 	StateDir  string `name:"stateDir"`
@@ -33,10 +33,10 @@ type Params struct {
 
 // Module provides the Observer via fx.
 var Module = fx.Module("observe",
-	fx.Provide(func(p Params) *Observer {
+	fx.Provide(func(p params) *Observer {
 		obs := p.Config.Observability
-		o := New(obs.Events, p.StateDir, obs.OTelEnabled, obs.OTelEndpoint, obs.OTelInsecure, obs.OTelServiceName,
-			WithMetrics(MetricsConfig{
+		o := newObserver(obs.Events, p.StateDir, obs.OTelEnabled, obs.OTelEndpoint, obs.OTelInsecure, obs.OTelServiceName,
+			withMetrics(metricsConfig{
 				Disabled:    obs.OTelMetricsDisabled,
 				Endpoint:    obs.OTelMetricsEndpoint,
 				Temporality: obs.OTelMetricsTemporality,
@@ -47,7 +47,7 @@ var Module = fx.Module("observe",
 				o.initializeActive(features)
 			}
 		}
-		p.Lifecycle.Append(fx.Hook{OnStop: func(context.Context) error { return o.Shutdown() }})
+		p.Lifecycle.Append(fx.Hook{OnStop: func(context.Context) error { return o.shutdown() }})
 		return o
 	}),
 )

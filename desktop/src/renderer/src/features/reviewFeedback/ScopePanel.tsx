@@ -33,7 +33,7 @@ export interface ScopeLedgerEntry {
   total: number;
 }
 
-export interface ScopePanelProps {
+interface ScopePanelProps {
   ledger: ScopeLedgerEntry[];
   scope: string;
   onScope(scope: string): void;

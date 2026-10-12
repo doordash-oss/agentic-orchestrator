@@ -221,10 +221,10 @@ func TestUpdateSourceFromOriginStaleLocalTipRefusesWithFreshComparison(t *testin
 	if err != nil {
 		t.Fatalf("update: %v", err)
 	}
-	if outcome.Result != SourceUpdateStale || outcome.Reason != SourceUpdateReasonLocalTipChanged {
+	if outcome.Result != SourceUpdateStale || outcome.Reason != sourceUpdateReasonLocalTipChanged {
 		t.Fatalf("result = %q reason = %q; want stale local_tip_changed", outcome.Result, outcome.Reason)
 	}
-	if outcome.Comparison == nil || outcome.Comparison.Status != OriginCheckDiverged {
+	if outcome.Comparison == nil || outcome.Comparison.Status != originCheckDiverged {
 		t.Fatalf("fresh comparison = %#v; want diverged against the competing tip", outcome.Comparison)
 	}
 	if got := gitUpdateSHA(t, fx.repo, "refs/heads/main"); got != competingTip {
@@ -242,7 +242,7 @@ func TestUpdateSourceFromOriginStaleOriginTipRefusesWithFreshComparison(t *testi
 	if err != nil {
 		t.Fatalf("update: %v", err)
 	}
-	if outcome.Result != SourceUpdateStale || outcome.Reason != SourceUpdateReasonOriginTipChanged {
+	if outcome.Result != SourceUpdateStale || outcome.Reason != sourceUpdateReasonOriginTipChanged {
 		t.Fatalf("result = %q reason = %q; want stale origin_tip_changed", outcome.Result, outcome.Reason)
 	}
 	if outcome.Comparison == nil || outcome.Comparison.Status != OriginCheckBehind || outcome.Comparison.BehindCount != 3 {
@@ -262,7 +262,7 @@ func TestUpdateSourceFromOriginDeletedOriginBranchRefuses(t *testing.T) {
 	if err != nil {
 		t.Fatalf("update: %v", err)
 	}
-	if outcome.Result != SourceUpdateStale || outcome.Reason != SourceUpdateReasonOriginBranchMissing {
+	if outcome.Result != SourceUpdateStale || outcome.Reason != sourceUpdateReasonOriginBranchMissing {
 		t.Fatalf("result = %q reason = %q; want stale origin_branch_missing", outcome.Result, outcome.Reason)
 	}
 	if !outcome.RemoteBranchMissing || outcome.Comparison != nil {
@@ -285,10 +285,10 @@ func TestUpdateSourceFromOriginAheadAndDivergedRefuseWithoutRewinding(t *testing
 	if err != nil {
 		t.Fatalf("update: %v", err)
 	}
-	if outcome.Result != SourceUpdateStale || outcome.Reason != SourceUpdateReasonNotFastForward {
+	if outcome.Result != SourceUpdateStale || outcome.Reason != sourceUpdateReasonNotFastForward {
 		t.Fatalf("result = %q reason = %q; want stale not_fast_forward", outcome.Result, outcome.Reason)
 	}
-	if outcome.Comparison == nil || outcome.Comparison.Status != OriginCheckDiverged {
+	if outcome.Comparison == nil || outcome.Comparison.Status != originCheckDiverged {
 		t.Fatalf("comparison = %#v; want diverged", outcome.Comparison)
 	}
 	hasUpdateBlocker(t, outcome.Blockers, UpdateBlockerLocalNotBehind)
@@ -308,13 +308,13 @@ func TestUpdateSourceFromOriginLinkedWorktreeOccupancyRefusesWithGuidance(t *tes
 	if err != nil {
 		t.Fatalf("update: %v", err)
 	}
-	if outcome.Result != SourceUpdateStale || outcome.Reason != SourceUpdateReasonBranchCheckedOut {
+	if outcome.Result != SourceUpdateStale || outcome.Reason != sourceUpdateReasonBranchCheckedOut {
 		t.Fatalf("result = %q reason = %q; want stale branch_checked_out", outcome.Result, outcome.Reason)
 	}
 	if len(outcome.CheckoutHolders) != 1 || !sameCheckoutPath(outcome.CheckoutHolders[0], linked) {
 		t.Fatalf("holders = %v; want the linked worktree %s", outcome.CheckoutHolders, linked)
 	}
-	hasUpdateBlocker(t, outcome.Blockers, UpdateBlockerBranchCheckedOutInWorktree)
+	hasUpdateBlocker(t, outcome.Blockers, updateBlockerBranchCheckedOutInWorktree)
 	if got := gitUpdateSHA(t, fx.repo, "refs/heads/main"); got != expected.ExpectedLocalSHA {
 		t.Fatalf("refs/heads/main = %s; want the displayed tip preserved", got)
 	}
@@ -386,7 +386,7 @@ func TestUpdateSourceFromOriginCheckoutSwitchRefuses(t *testing.T) {
 	if err != nil {
 		t.Fatalf("update: %v", err)
 	}
-	if outcome.Result != SourceUpdateStale || outcome.Reason != SourceUpdateReasonCheckoutChanged {
+	if outcome.Result != SourceUpdateStale || outcome.Reason != sourceUpdateReasonCheckoutChanged {
 		t.Fatalf("result = %q reason = %q; want stale checkout_changed", outcome.Result, outcome.Reason)
 	}
 	if got := gitUpdateSHA(t, fx.repo, "refs/heads/main"); got != expected.ExpectedLocalSHA {
@@ -405,10 +405,10 @@ func TestUpdateSourceFromOriginChangedMappingRefuses(t *testing.T) {
 	if err != nil {
 		t.Fatalf("update: %v", err)
 	}
-	if outcome.Result != SourceUpdateStale || outcome.Reason != SourceUpdateReasonMappingChanged {
+	if outcome.Result != SourceUpdateStale || outcome.Reason != sourceUpdateReasonMappingChanged {
 		t.Fatalf("result = %q reason = %q; want stale mapping_changed", outcome.Result, outcome.Reason)
 	}
-	if outcome.Plan.Status != OriginCheckOtherUpstream {
+	if outcome.Plan.Status != originCheckOtherUpstream {
 		t.Fatalf("fresh plan status = %q; want other_upstream", outcome.Plan.Status)
 	}
 	if got := gitUpdateSHA(t, fx.repo, "refs/heads/main"); got != expected.ExpectedLocalSHA {
@@ -426,10 +426,10 @@ func TestUpdateSourceFromOriginDetachedSourceRefuses(t *testing.T) {
 	if err != nil {
 		t.Fatalf("update: %v", err)
 	}
-	if outcome.Result != SourceUpdateStale || outcome.Reason != SourceUpdateReasonSourceChanged {
+	if outcome.Result != SourceUpdateStale || outcome.Reason != sourceUpdateReasonSourceChanged {
 		t.Fatalf("result = %q reason = %q; want stale source_changed", outcome.Result, outcome.Reason)
 	}
-	if outcome.Plan.Status != OriginCheckDetached {
+	if outcome.Plan.Status != originCheckDetached {
 		t.Fatalf("fresh plan status = %q; want detached", outcome.Plan.Status)
 	}
 }
@@ -495,7 +495,7 @@ func TestUpdateSourceFromOriginRefChangeBeforeCASRefuses(t *testing.T) {
 	if err != nil {
 		t.Fatalf("update: %v", err)
 	}
-	if outcome.Result != SourceUpdateStale || outcome.Reason != SourceUpdateReasonLocalTipChanged {
+	if outcome.Result != SourceUpdateStale || outcome.Reason != sourceUpdateReasonLocalTipChanged {
 		t.Fatalf("result = %q reason = %q; want stale local_tip_changed", outcome.Result, outcome.Reason)
 	}
 }
@@ -503,12 +503,12 @@ func TestUpdateSourceFromOriginRefChangeBeforeCASRefuses(t *testing.T) {
 // racingRefRunner moves the ref after the final revalidation but before Git's
 // expected-old-value check runs, so only Git's own CAS can refuse it.
 type racingRefRunner struct {
-	inner SourceUpdateRefRunner
+	inner sourceUpdateRefRunner
 	race  func()
 	once  bool
 }
 
-func (r *racingRefRunner) Run(ctx context.Context, repoPath, stdin string, args []string, diagnosticLimit int) BranchProbeCommandResult {
+func (r *racingRefRunner) Run(ctx context.Context, repoPath, stdin string, args []string, diagnosticLimit int) branchProbeCommandResult {
 	if !r.once {
 		r.once = true
 		r.race()
@@ -520,7 +520,7 @@ func TestUpdateSourceFromOriginCASOldValueCheckRefusesCompetingRef(t *testing.T)
 	fx := newUpdateFixture(t)
 	expected := fx.expectation(t)
 	options := SourceUpdateOptions{UpdateRefRunner: &racingRefRunner{
-		inner: ExecSourceUpdateRefRunner{},
+		inner: execSourceUpdateRefRunner{},
 		race: func() {
 			runGitUpdateTest(t, fx.repo, "update-ref", "refs/heads/main", expected.ExpectedOriginSHA)
 		},
@@ -530,7 +530,7 @@ func TestUpdateSourceFromOriginCASOldValueCheckRefusesCompetingRef(t *testing.T)
 	if err != nil {
 		t.Fatalf("update: %v", err)
 	}
-	if outcome.Result != SourceUpdateStale || outcome.Reason != SourceUpdateReasonLocalTipChanged {
+	if outcome.Result != SourceUpdateStale || outcome.Reason != sourceUpdateReasonLocalTipChanged {
 		t.Fatalf("result = %q reason = %q; want the CAS mismatch as stale local_tip_changed", outcome.Result, outcome.Reason)
 	}
 	if got := gitUpdateSHA(t, fx.repo, "refs/heads/main"); got != expected.ExpectedOriginSHA {
@@ -553,10 +553,10 @@ func TestUpdateSourceFromOriginMembershipRaceBeforeCASRefuses(t *testing.T) {
 	if err != nil {
 		t.Fatalf("update: %v", err)
 	}
-	if outcome.Result != SourceUpdateStale || outcome.Reason != SourceUpdateReasonBranchCheckedOut {
+	if outcome.Result != SourceUpdateStale || outcome.Reason != sourceUpdateReasonBranchCheckedOut {
 		t.Fatalf("result = %q reason = %q; want stale branch_checked_out from the pre-CAS recheck", outcome.Result, outcome.Reason)
 	}
-	hasUpdateBlocker(t, outcome.Blockers, UpdateBlockerBranchCheckedOutInWorktree)
+	hasUpdateBlocker(t, outcome.Blockers, updateBlockerBranchCheckedOutInWorktree)
 	if got := gitUpdateSHA(t, fx.repo, "refs/heads/main"); got != expected.ExpectedLocalSHA {
 		t.Fatalf("refs/heads/main = %s; want the displayed tip preserved", got)
 	}
@@ -579,7 +579,7 @@ func TestUpdateSourceFromOriginRespectsExistingRefLocks(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 700*time.Millisecond)
 	defer cancel()
 	outcome, err := UpdateSourceFromOrigin(ctx, fx.repo, expected, SourceUpdateOptions{})
-	if err == nil || !errors.Is(err, ErrSourceUpdateUnavailable) {
+	if err == nil || !errors.Is(err, errSourceUpdateUnavailable) {
 		t.Fatalf("err = %v outcome = %#v; want unavailability under lock contention", err, outcome)
 	}
 	if _, statErr := os.Stat(lockPath); statErr != nil {
@@ -594,19 +594,19 @@ func TestUpdateSourceFromOriginDeadlineExpiresDuringFetch(t *testing.T) {
 	fx := newUpdateFixture(t)
 	expected := fx.expectation(t)
 	options := SourceUpdateOptions{OriginCheckOptions: OriginCheckOptions{
-		Runner: BranchProbeRunnerFunc(func(ctx context.Context, repoPath string, args []string, diagnosticLimit int) BranchProbeCommandResult {
+		Runner: branchProbeRunnerFunc(func(ctx context.Context, repoPath string, args []string, diagnosticLimit int) branchProbeCommandResult {
 			if len(args) > 0 && args[0] == "ls-remote" {
 				<-ctx.Done()
-				return BranchProbeCommandResult{ExitCode: -1, Err: ctx.Err(), Diagnostics: "hanging origin probe"}
+				return branchProbeCommandResult{ExitCode: -1, Err: ctx.Err(), Diagnostics: "hanging origin probe"}
 			}
-			return ExecBranchProbeRunner{}.Run(ctx, repoPath, args, diagnosticLimit)
+			return execBranchProbeRunner{}.Run(ctx, repoPath, args, diagnosticLimit)
 		}),
 	}}
 
 	ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
 	defer cancel()
 	outcome, err := UpdateSourceFromOrigin(ctx, fx.repo, expected, options)
-	if err == nil || !errors.Is(err, ErrSourceUpdateUnavailable) {
+	if err == nil || !errors.Is(err, errSourceUpdateUnavailable) {
 		t.Fatalf("err = %v outcome = %#v; want unavailability on deadline expiry", err, outcome)
 	}
 	if got := gitUpdateSHA(t, fx.repo, "refs/heads/main"); got != expected.ExpectedLocalSHA {
@@ -620,7 +620,7 @@ func TestUpdateSourceFromOriginMalformedExpectationFailsClosed(t *testing.T) {
 	expected.ExpectedOriginSHA = "short"
 
 	outcome, err := UpdateSourceFromOrigin(context.Background(), fx.repo, expected, SourceUpdateOptions{})
-	if err == nil || !errors.Is(err, ErrSourceUpdateUnavailable) {
+	if err == nil || !errors.Is(err, errSourceUpdateUnavailable) {
 		t.Fatalf("err = %v outcome = %#v; want unavailability for a malformed expectation", err, outcome)
 	}
 	if got := gitUpdateSHA(t, fx.repo, "refs/heads/main"); got != expected.ExpectedLocalSHA {
@@ -632,16 +632,16 @@ func TestUpdateSourceFromOriginFailedMembershipProbeFailsClosed(t *testing.T) {
 	fx := newUpdateFixture(t)
 	expected := fx.expectation(t)
 	options := SourceUpdateOptions{OriginCheckOptions: OriginCheckOptions{
-		Runner: BranchProbeRunnerFunc(func(ctx context.Context, repoPath string, args []string, diagnosticLimit int) BranchProbeCommandResult {
+		Runner: branchProbeRunnerFunc(func(ctx context.Context, repoPath string, args []string, diagnosticLimit int) branchProbeCommandResult {
 			if len(args) >= 2 && args[0] == "worktree" && args[1] == "list" {
-				return BranchProbeCommandResult{ExitCode: 128, Diagnostics: "worktree inspection failed"}
+				return branchProbeCommandResult{ExitCode: 128, Diagnostics: "worktree inspection failed"}
 			}
-			return ExecBranchProbeRunner{}.Run(ctx, repoPath, args, diagnosticLimit)
+			return execBranchProbeRunner{}.Run(ctx, repoPath, args, diagnosticLimit)
 		}),
 	}}
 
 	outcome, err := UpdateSourceFromOrigin(context.Background(), fx.repo, expected, options)
-	if err == nil || !errors.Is(err, ErrSourceUpdateUnavailable) {
+	if err == nil || !errors.Is(err, errSourceUpdateUnavailable) {
 		t.Fatalf("err = %v outcome = %#v; want unavailability when absence cannot be established", err, outcome)
 	}
 	if got := gitUpdateSHA(t, fx.repo, "refs/heads/main"); got != expected.ExpectedLocalSHA {

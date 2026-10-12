@@ -309,7 +309,7 @@ func writeImplArtifacts(artifactDir, state, stateNote string) string {
 	//
 	// Important: verification-report.yaml is written ONLY if it doesn't
 	// already exist on disk. The harness pre-seeds a contract-backed stub
-	// when a testing contract is bound (WriteVerificationReportStubFromContract),
+	// when a testing contract is bound (BuildContractVerificationReportStub),
 	// and tests that assert against that v2 report would lose it if the
 	// helper overwrote with the v1 minimal placeholder. Tests that DO
 	// want a custom report should write it before this helper runs.
@@ -535,7 +535,7 @@ done`, artifactBase, body, body)
 // WriteValidatorApproved returns a shell snippet that writes a minimal APPROVED
 // validation-<axis>-feedback.md to attemptDir. axis is the lowercase axis name
 // the harness uses to compute the path (architecture, scope, structural,
-// grounding, security, performance, testing).
+// security, performance, testing).
 func WriteValidatorApproved(attemptDir, axis string) string {
 	return writeValidatorFeedback(attemptDir, axis, StructuredReviewFeedback("", "", "APPROVED"))
 }

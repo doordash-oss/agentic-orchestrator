@@ -125,6 +125,7 @@ import {
 } from './featureRefreshScheduler';
 import { registerFeatureCommandExecutor } from './featureCommands';
 import type { FeatureCommandId } from '../../../shared/commands';
+import { defined } from '../../../shared/defined';
 
 type CockpitState = LoadState<
   { phase: 'missing'; error: CanonicalError } | { phase: 'loaded'; snapshot: FeatureSnapshot }
@@ -132,7 +133,7 @@ type CockpitState = LoadState<
 
 const FOCUSED_COMPLETION_SETTLE_MS = 500;
 
-export interface FeatureCockpitProps {
+interface FeatureCockpitProps {
   featureId: string;
   /** Immediate, non-durable warnings returned by this feature's creation. */
   creationWarnings?: readonly CanonicalError[];
@@ -360,19 +361,13 @@ function CockpitActionBar({
       title={statusOverride?.title}
       onClick={onStatusClick}
     >
-      <code
-        data-status={status}
-        {...(statusOverride === undefined ? {} : { 'data-tone': statusOverride.tone })}
-      >
+      <code data-status={status} {...defined('data-tone', statusOverride?.tone)}>
         {statusOverride?.label ?? displayStatusLabel(status)}
       </code>
     </button>
   ) : (
     <p className="cockpit__phase-status" role="status" aria-label="Current feature status">
-      <code
-        data-status={status}
-        {...(statusOverride === undefined ? {} : { 'data-tone': statusOverride.tone })}
-      >
+      <code data-status={status} {...defined('data-tone', statusOverride?.tone)}>
         {statusOverride?.label ?? displayStatusLabel(status)}
       </code>
     </p>
@@ -389,7 +384,7 @@ function CockpitActionBar({
           className={PRIMARY_CLASS[action.variant]}
           disabled={action.disabled === true}
           onClick={action.onClick}
-          {...(action.ariaLabel !== undefined ? { 'aria-label': action.ariaLabel } : {})}
+          {...defined('aria-label', action.ariaLabel)}
         >
           {action.busy === true ? `${action.busyLabel ?? action.label}…` : action.label}
         </button>
@@ -424,7 +419,7 @@ function CockpitActionBar({
                   closeMenu();
                   action.onClick();
                 }}
-                {...(action.ariaLabel !== undefined ? { 'aria-label': action.ariaLabel } : {})}
+                {...defined('aria-label', action.ariaLabel)}
               >
                 {action.label}
               </button>
@@ -1173,7 +1168,7 @@ export function FeatureCockpit({
       window.agentico.dispatchFeatureAction({
         featureId: id,
         action,
-        ...(body === undefined ? {} : { body }),
+        ...defined('body', body),
       } as FeatureActionRequest),
     [],
   );
@@ -1861,7 +1856,7 @@ export function FeatureCockpit({
   // against the feature's action catalog: the card's own primary button and
   // its disabled-reason text come from the server's enabled state.
   const resolveFailureAction = (actionId: string): ErrorSurfaceAction | undefined => {
-    const label = actionId === 'setup' ? 'Retry setup' : 'Restart';
+    const label = actionId === 'setup' ? 'Retry setup' : actionId === 'retry' ? 'Retry' : 'Restart';
     return catalogErrorAction(snapshot, actionId, label);
   };
 
@@ -1872,6 +1867,10 @@ export function FeatureCockpit({
     }
     if (actionId === 'restart') {
       restart();
+      return;
+    }
+    if (actionId === 'retry') {
+      retry();
     }
   };
 
@@ -2443,7 +2442,7 @@ export function FeatureCockpit({
                 window.agentico.getRepositoryDiff({
                   featureId: id,
                   repo,
-                  ...(filePath === undefined ? {} : { filePath }),
+                  ...defined('filePath', filePath),
                 })
               }
               openExternal={(url) => window.agentico.openExternal({ url })}
@@ -2789,7 +2788,7 @@ export function FeatureCockpit({
                         window.agentico.getRepositoryDiff({
                           featureId: id,
                           repo,
-                          ...(filePath === undefined ? {} : { filePath }),
+                          ...defined('filePath', filePath),
                         })
                       }
                       openExternal={(url) => window.agentico.openExternal({ url })}

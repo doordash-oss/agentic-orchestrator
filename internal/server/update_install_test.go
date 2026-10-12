@@ -33,7 +33,7 @@ import (
 	"github.com/doordash-oss/agentic-orchestrator/internal/workadmission"
 )
 
-// fakeInstallAdmission is the deterministic InstallAdmission seam: it can
+// fakeInstallAdmission is the deterministic installAdmission seam: it can
 // park WaitForIdle on a gate, close atomically when quiet, refuse or admit
 // the stopping closure by held category, and report a one-shot busy
 // detection while closed (work that raced in under the update lock).
@@ -364,7 +364,7 @@ func (t *fakeInstallTransaction) setCancelFailures(n int) {
 }
 
 func newInstallFakes() (*fakeReleaseStager, *fakeInstallLifecycle, *fakeInstallAdmission, *fakeInstallTransaction) {
-	stager := &fakeReleaseStager{contract: &selfupdate.ServerContract{APIVersion: 2, SchemaVersion: 4, MinClientSchema: 1}}
+	stager := &fakeReleaseStager{contract: &selfupdate.ServerContract{APIVersion: 2, SchemaVersion: CompatibilitySchemaVersion, MinClientSchema: 1}}
 	tx := &fakeInstallTransaction{id: "tx-install"}
 	lifecycle := &fakeInstallLifecycle{lockAcquired: true, tx: tx}
 	admission := &fakeInstallAdmission{closeQuiet: true}
@@ -387,7 +387,7 @@ func newInstallAPIFixture(t *testing.T, opts UpdateOptions) *installAPIFixture {
 	return newInstallAPIFixtureWithBoundary(t, opts, nil, nil)
 }
 
-func newInstallAPIFixtureWithBoundary(t *testing.T, opts UpdateOptions, boundary *workadmission.Coordinator, features FeatureLister) *installAPIFixture {
+func newInstallAPIFixtureWithBoundary(t *testing.T, opts UpdateOptions, boundary *workadmission.Coordinator, features featureLister) *installAPIFixture {
 	t.Helper()
 	stager, lifecycle, admission, tx := newInstallFakes()
 	feed := &fakeUpdateFeed{selection: selfupdate.ReleaseSelection{Version: "2.0.0", TagName: "v2.0.0"}}
@@ -484,7 +484,7 @@ func TestUpdateInstallRouteRequiresBearer(t *testing.T) {
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("X-Agentico-Client", trustedClientHeaderValue)
 	w := httptest.NewRecorder()
-	fixture.handler.routes().ServeHTTP(w, req)
+	fixture.handler.ServeHTTP(w, req)
 	if w.Result().StatusCode != http.StatusUnauthorized {
 		t.Fatalf("unauthenticated status = %d, want 401", w.Code)
 	}
@@ -494,7 +494,7 @@ func TestUpdateInstallRouteRequiresBearer(t *testing.T) {
 	w = httptest.NewRecorder()
 	req = authorizedUpdateRequest(http.MethodPost, apiPathUpdateInstall, []byte(`{"consent":true,"when":"idle"}`))
 	req.Header.Set("Content-Type", "application/json")
-	fixture.handler.routes().ServeHTTP(w, req)
+	fixture.handler.ServeHTTP(w, req)
 	if w.Result().StatusCode != http.StatusForbidden {
 		t.Fatalf("untrusted status = %d, want 403", w.Code)
 	}
@@ -506,7 +506,7 @@ func TestUpdateInstallPostRequestValidation(t *testing.T) {
 	fixture.discoverLatest(t)
 	post := func(body string) *httptest.ResponseRecorder {
 		w := httptest.NewRecorder()
-		fixture.handler.routes().ServeHTTP(w, trustedInstallRequest(http.MethodPost, []byte(body)))
+		fixture.handler.ServeHTTP(w, trustedInstallRequest(http.MethodPost, []byte(body)))
 		return w
 	}
 	tests := []struct {
@@ -545,7 +545,7 @@ func TestUpdateInstallPostRefusedDisabledPolicy(t *testing.T) {
 	fixture := newInstallAPIFixture(t, opts)
 
 	w := httptest.NewRecorder()
-	fixture.handler.routes().ServeHTTP(w, trustedInstallRequest(http.MethodPost, []byte(`{"consent":true,"when":"idle"}`)))
+	fixture.handler.ServeHTTP(w, trustedInstallRequest(http.MethodPost, []byte(`{"consent":true,"when":"idle"}`)))
 	resp := w.Result()
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusForbidden {
@@ -562,14 +562,14 @@ func TestUpdateInstallPostRefusedUnsupportedInstall(t *testing.T) {
 	opts := eligibleUpdateOptions()
 	opts.Eligibility = selfupdate.Eligibility{
 		Supported:   false,
-		Install:     selfupdate.InstallAppBundle,
-		Reason:      selfupdate.UnsupportedBundled,
+		Install:     "app_bundle",
+		Reason:      "bundled",
 		Remediation: "install a standalone binary",
 	}
 	fixture := newInstallAPIFixture(t, opts)
 
 	w := httptest.NewRecorder()
-	fixture.handler.routes().ServeHTTP(w, trustedInstallRequest(http.MethodPost, []byte(`{"consent":true,"when":"idle"}`)))
+	fixture.handler.ServeHTTP(w, trustedInstallRequest(http.MethodPost, []byte(`{"consent":true,"when":"idle"}`)))
 	resp := w.Result()
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusConflict {
@@ -598,7 +598,7 @@ func TestUpdateInstallPostFeedUnavailable(t *testing.T) {
 	})
 
 	w := httptest.NewRecorder()
-	handler.routes().ServeHTTP(w, trustedInstallRequest(http.MethodPost, []byte(`{"consent":true,"when":"idle"}`)))
+	handler.ServeHTTP(w, trustedInstallRequest(http.MethodPost, []byte(`{"consent":true,"when":"idle"}`)))
 	resp := w.Result()
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusServiceUnavailable {
@@ -616,7 +616,7 @@ func TestUpdateInstallPostTargetRefusals(t *testing.T) {
 		t.Parallel()
 		fixture := newInstallAPIFixture(t, eligibleUpdateOptions())
 		w := httptest.NewRecorder()
-		fixture.handler.routes().ServeHTTP(w, trustedInstallRequest(http.MethodPost, []byte(`{"consent":true,"when":"idle"}`)))
+		fixture.handler.ServeHTTP(w, trustedInstallRequest(http.MethodPost, []byte(`{"consent":true,"when":"idle"}`)))
 		resp := w.Result()
 		defer resp.Body.Close()
 		if resp.StatusCode != http.StatusConflict {
@@ -636,7 +636,7 @@ func TestUpdateInstallPostTargetRefusals(t *testing.T) {
 		fixture := newInstallAPIFixture(t, eligibleUpdateOptions())
 		fixture.discoverLatest(t)
 		w := httptest.NewRecorder()
-		fixture.handler.routes().ServeHTTP(w, trustedInstallRequest(http.MethodPost, []byte(`{"consent":true,"when":"idle","version":"1.5.0"}`)))
+		fixture.handler.ServeHTTP(w, trustedInstallRequest(http.MethodPost, []byte(`{"consent":true,"when":"idle","version":"1.5.0"}`)))
 		resp := w.Result()
 		defer resp.Body.Close()
 		if resp.StatusCode != http.StatusConflict {
@@ -656,7 +656,7 @@ func TestUpdateInstallPostTargetRefusals(t *testing.T) {
 		fixture.feed.mu.Unlock()
 		fixture.discoverLatest(t)
 		w := httptest.NewRecorder()
-		fixture.handler.routes().ServeHTTP(w, trustedInstallRequest(http.MethodPost, []byte(`{"consent":true,"when":"idle"}`)))
+		fixture.handler.ServeHTTP(w, trustedInstallRequest(http.MethodPost, []byte(`{"consent":true,"when":"idle"}`)))
 		resp := w.Result()
 		defer resp.Body.Close()
 		if resp.StatusCode != http.StatusConflict {
@@ -678,9 +678,17 @@ func TestUpdateInstallPostTargetRefusals(t *testing.T) {
 		if err := writeFileTest(binary, "#!/bin/sh\n", 0o755); err != nil {
 			t.Fatal(err)
 		}
-		if err := selfupdate.SuppressTarget(binary, selfupdate.SuppressedTarget{
-			Version: "2.0.0", TransactionID: strings.Repeat("a", 32), SuppressedAt: time.Now(),
-		}); err != nil {
+		// A rolled-back receipt settles through the exported reconciliation
+		// the recovery path itself calls, which suppresses the exact target.
+		rolledBack := selfupdate.Receipt{
+			TransactionID: strings.Repeat("a", 32),
+			Outcome:       selfupdate.OutcomeRolledBack,
+			FromVersion:   "1.0.0",
+			ToVersion:     "2.0.0",
+			UpdatedAt:     time.Now(),
+			Error:         "target failed",
+		}
+		if err := selfupdate.ReconcileSuppression(binary, rolledBack); err != nil {
 			t.Fatal(err)
 		}
 		opts := eligibleUpdateOptions()
@@ -688,7 +696,7 @@ func TestUpdateInstallPostTargetRefusals(t *testing.T) {
 		fixture := newInstallAPIFixture(t, opts)
 		fixture.discoverLatest(t)
 		w := httptest.NewRecorder()
-		fixture.handler.routes().ServeHTTP(w, trustedInstallRequest(http.MethodPost, []byte(`{"consent":true,"when":"idle"}`)))
+		fixture.handler.ServeHTTP(w, trustedInstallRequest(http.MethodPost, []byte(`{"consent":true,"when":"idle"}`)))
 		resp := w.Result()
 		defer resp.Body.Close()
 		if resp.StatusCode != http.StatusConflict {
@@ -710,7 +718,7 @@ func TestUpdateInstallPostAcceptedIdleSnapshot(t *testing.T) {
 	fixture.discoverLatest(t)
 
 	w := httptest.NewRecorder()
-	fixture.handler.routes().ServeHTTP(w, trustedInstallRequest(http.MethodPost, []byte(`{"consent":true,"when":"idle"}`)))
+	fixture.handler.ServeHTTP(w, trustedInstallRequest(http.MethodPost, []byte(`{"consent":true,"when":"idle"}`)))
 	resp := w.Result()
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusAccepted {
@@ -755,7 +763,7 @@ func TestUpdateInstallPostAcceptedIdleSnapshot(t *testing.T) {
 	// Cancellation settles the parked operation and returns the snapshot to
 	// availability.
 	w = httptest.NewRecorder()
-	fixture.handler.routes().ServeHTTP(w, trustedInstallRequest(http.MethodDelete, []byte(`{}`)))
+	fixture.handler.ServeHTTP(w, trustedInstallRequest(http.MethodDelete, []byte(`{}`)))
 	resp = w.Result()
 	resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
@@ -765,7 +773,7 @@ func TestUpdateInstallPostAcceptedIdleSnapshot(t *testing.T) {
 		t.Fatalf("cleanup calls = %d, want 1", got)
 	}
 	w = httptest.NewRecorder()
-	fixture.handler.routes().ServeHTTP(w, authorizedUpdateRequest(http.MethodGet, apiPathUpdate, nil))
+	fixture.handler.ServeHTTP(w, authorizedUpdateRequest(http.MethodGet, apiPathUpdate, nil))
 	snapshot = decodeUpdateSnapshot(t, w.Result())
 	if snapshot.Status != UpdateSnapshotStatusAvailable {
 		t.Fatalf("post-cancel status = %q, want available", snapshot.Status)
@@ -780,7 +788,7 @@ func TestUpdateInstallPostCoalescesEquivalentRequests(t *testing.T) {
 
 	post := func(body string) *httptest.ResponseRecorder {
 		w := httptest.NewRecorder()
-		fixture.handler.routes().ServeHTTP(w, trustedInstallRequest(http.MethodPost, []byte(body)))
+		fixture.handler.ServeHTTP(w, trustedInstallRequest(http.MethodPost, []byte(body)))
 		return w
 	}
 
@@ -835,7 +843,7 @@ func TestUpdateInstallPostCoalescesEquivalentRequests(t *testing.T) {
 	}
 
 	w = httptest.NewRecorder()
-	fixture.handler.routes().ServeHTTP(w, trustedInstallRequest(http.MethodDelete, []byte(`{}`)))
+	fixture.handler.ServeHTTP(w, trustedInstallRequest(http.MethodDelete, []byte(`{}`)))
 	if w.Result().StatusCode != http.StatusOK {
 		t.Fatalf("cancel status = %d, want 200", w.Code)
 	}
@@ -852,7 +860,7 @@ func TestUpdateInstallPostNowBlockedByActiveWork(t *testing.T) {
 	fixture.discoverLatest(t)
 
 	w := httptest.NewRecorder()
-	fixture.handler.routes().ServeHTTP(w, trustedInstallRequest(http.MethodPost, []byte(`{"consent":true,"when":"now"}`)))
+	fixture.handler.ServeHTTP(w, trustedInstallRequest(http.MethodPost, []byte(`{"consent":true,"when":"now"}`)))
 	resp := w.Result()
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusConflict {
@@ -886,7 +894,7 @@ func TestUpdateInstallPostNowBlockedByActiveWork(t *testing.T) {
 		t.Fatal("detection failure must block an immediate install")
 	}
 	w = httptest.NewRecorder()
-	failingFixture.handler.routes().ServeHTTP(w, trustedInstallRequest(http.MethodPost, []byte(`{"consent":true,"when":"now"}`)))
+	failingFixture.handler.ServeHTTP(w, trustedInstallRequest(http.MethodPost, []byte(`{"consent":true,"when":"now"}`)))
 	resp = w.Result()
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusConflict {
@@ -903,7 +911,7 @@ func TestUpdateInstallDeleteWithoutOperation(t *testing.T) {
 	fixture.discoverLatest(t)
 	for range 2 {
 		w := httptest.NewRecorder()
-		fixture.handler.routes().ServeHTTP(w, trustedInstallRequest(http.MethodDelete, []byte(`{}`)))
+		fixture.handler.ServeHTTP(w, trustedInstallRequest(http.MethodDelete, []byte(`{}`)))
 		resp := w.Result()
 		resp.Body.Close()
 		if resp.StatusCode != http.StatusOK {
@@ -919,7 +927,7 @@ func TestUpdateInstallMutationNeverNotModified(t *testing.T) {
 	fixture.discoverLatest(t)
 
 	w := httptest.NewRecorder()
-	fixture.handler.routes().ServeHTTP(w, authorizedUpdateRequest(http.MethodGet, apiPathUpdate, nil))
+	fixture.handler.ServeHTTP(w, authorizedUpdateRequest(http.MethodGet, apiPathUpdate, nil))
 	first := w.Result()
 	revision := strings.Trim(first.Header.Get("ETag"), `"`)
 	first.Body.Close()
@@ -929,7 +937,7 @@ func TestUpdateInstallMutationNeverNotModified(t *testing.T) {
 	req := trustedInstallRequest(http.MethodPost, []byte(`{"consent":true,"when":"idle"}`))
 	req.Header.Set("If-None-Match", `"`+revision+`"`)
 	w = httptest.NewRecorder()
-	fixture.handler.routes().ServeHTTP(w, req)
+	fixture.handler.ServeHTTP(w, req)
 	resp := w.Result()
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusAccepted {
@@ -943,7 +951,7 @@ func TestUpdateInstallMutationNeverNotModified(t *testing.T) {
 	req = trustedInstallRequest(http.MethodDelete, []byte(`{}`))
 	req.Header.Set("If-None-Match", `"`+revision+`"`)
 	w = httptest.NewRecorder()
-	fixture.handler.routes().ServeHTTP(w, req)
+	fixture.handler.ServeHTTP(w, req)
 	resp = w.Result()
 	resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
@@ -972,7 +980,7 @@ func TestUpdateInstallEventEmittedOnVisibleTransitions(t *testing.T) {
 	}
 
 	w := httptest.NewRecorder()
-	fixture.handler.routes().ServeHTTP(w, trustedInstallRequest(http.MethodPost, []byte(`{"consent":true,"when":"idle"}`)))
+	fixture.handler.ServeHTTP(w, trustedInstallRequest(http.MethodPost, []byte(`{"consent":true,"when":"idle"}`)))
 	resp := w.Result()
 	resp.Body.Close()
 	if resp.StatusCode != http.StatusAccepted {
@@ -1013,12 +1021,12 @@ func TestUpdateInstallWorkerTransitionsToScheduled(t *testing.T) {
 
 	// The staged candidate is verified and its contract published while the
 	// operation waits for idle.
-	snapshot := coordinator.Snapshot()
+	snapshot := coordinator.snapshot()
 	if snapshot.Signature != Verified {
 		t.Fatalf("signature = %q, want verified after staging", snapshot.Signature)
 	}
 	if snapshot.TargetContract == nil || snapshot.TargetContract.APIVersion != "2" ||
-		snapshot.TargetContract.SchemaVersion != 4 || snapshot.TargetContract.MinClientSchema != 1 {
+		snapshot.TargetContract.SchemaVersion != CompatibilitySchemaVersion || snapshot.TargetContract.MinClientSchema != 1 {
 		t.Fatalf("target_contract = %+v, want the stager's verified contract", snapshot.TargetContract)
 	}
 	if snapshot.TargetVersion == nil || *snapshot.TargetVersion != "2.0.0" {
@@ -1105,7 +1113,7 @@ func TestUpdateInstallIdleFlowDrainsAndReplaces(t *testing.T) {
 
 	close(replaceBlock)
 	waitInstallCond(t, 5*time.Second, func() bool { return installOpCleared(coordinator) }, "operation never settled")
-	snapshot := coordinator.Snapshot()
+	snapshot := coordinator.snapshot()
 	if snapshot.Status != UpdateSnapshotStatusFailed {
 		t.Fatalf("status = %q, want failed after a returned replacement", snapshot.Status)
 	}
@@ -1170,7 +1178,7 @@ func TestUpdateInstallCancelDuringStaging(t *testing.T) {
 	fixture.discoverLatest(t)
 
 	w := httptest.NewRecorder()
-	fixture.handler.routes().ServeHTTP(w, trustedInstallRequest(http.MethodPost, []byte(`{"consent":true,"when":"idle"}`)))
+	fixture.handler.ServeHTTP(w, trustedInstallRequest(http.MethodPost, []byte(`{"consent":true,"when":"idle"}`)))
 	resp := w.Result()
 	resp.Body.Close()
 	if resp.StatusCode != http.StatusAccepted {
@@ -1180,7 +1188,7 @@ func TestUpdateInstallCancelDuringStaging(t *testing.T) {
 	// Cancellation interrupts the parked stager, settles its owned cleanup,
 	// and waits for the worker before answering.
 	w = httptest.NewRecorder()
-	fixture.handler.routes().ServeHTTP(w, trustedInstallRequest(http.MethodDelete, []byte(`{}`)))
+	fixture.handler.ServeHTTP(w, trustedInstallRequest(http.MethodDelete, []byte(`{}`)))
 	resp = w.Result()
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
@@ -1202,7 +1210,7 @@ func TestUpdateInstallCancelDuringStaging(t *testing.T) {
 
 	// A second cancellation is idempotent.
 	w = httptest.NewRecorder()
-	fixture.handler.routes().ServeHTTP(w, trustedInstallRequest(http.MethodDelete, []byte(`{}`)))
+	fixture.handler.ServeHTTP(w, trustedInstallRequest(http.MethodDelete, []byte(`{}`)))
 	resp = w.Result()
 	resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
@@ -1221,7 +1229,7 @@ func TestUpdateInstallCancelAfterDrainRefused(t *testing.T) {
 	fixture.discoverLatest(t)
 
 	w := httptest.NewRecorder()
-	fixture.handler.routes().ServeHTTP(w, trustedInstallRequest(http.MethodPost, []byte(`{"consent":true,"when":"idle"}`)))
+	fixture.handler.ServeHTTP(w, trustedInstallRequest(http.MethodPost, []byte(`{"consent":true,"when":"idle"}`)))
 	resp := w.Result()
 	resp.Body.Close()
 	if resp.StatusCode != http.StatusAccepted {
@@ -1230,7 +1238,7 @@ func TestUpdateInstallCancelAfterDrainRefused(t *testing.T) {
 	waitInstallCond(t, 5*time.Second, func() bool { return installDrainEntered(fixture.handler.updates) }, "drain never entered")
 
 	w = httptest.NewRecorder()
-	fixture.handler.routes().ServeHTTP(w, trustedInstallRequest(http.MethodDelete, []byte(`{}`)))
+	fixture.handler.ServeHTTP(w, trustedInstallRequest(http.MethodDelete, []byte(`{}`)))
 	resp = w.Result()
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusConflict {
@@ -1248,7 +1256,7 @@ func TestUpdateInstallCancelAfterDrainRefused(t *testing.T) {
 	// it settles the truthful failure.
 	close(replaceBlock)
 	waitInstallCond(t, 5*time.Second, func() bool { return installOpCleared(fixture.handler.updates) }, "operation never settled")
-	snapshot := fixture.handler.updates.Snapshot()
+	snapshot := fixture.handler.updates.snapshot()
 	if snapshot.Error == nil || snapshot.Error.Code != string(errcat.UpdateInstallFailed) {
 		t.Fatalf("error = %+v, want update_install_failed after the returned replacement", snapshot.Error)
 	}
@@ -1271,7 +1279,7 @@ func TestUpdateInstallStagerFailureClassification(t *testing.T) {
 			fixture.discoverLatest(t)
 
 			w := httptest.NewRecorder()
-			fixture.handler.routes().ServeHTTP(w, trustedInstallRequest(http.MethodPost, []byte(`{"consent":true,"when":"idle"}`)))
+			fixture.handler.ServeHTTP(w, trustedInstallRequest(http.MethodPost, []byte(`{"consent":true,"when":"idle"}`)))
 			resp := w.Result()
 			resp.Body.Close()
 			if resp.StatusCode != http.StatusAccepted {
@@ -1280,7 +1288,7 @@ func TestUpdateInstallStagerFailureClassification(t *testing.T) {
 			waitInstallCond(t, 5*time.Second, func() bool { return installOpCleared(fixture.handler.updates) }, "failed operation never settled")
 
 			w = httptest.NewRecorder()
-			fixture.handler.routes().ServeHTTP(w, authorizedUpdateRequest(http.MethodGet, apiPathUpdate, nil))
+			fixture.handler.ServeHTTP(w, authorizedUpdateRequest(http.MethodGet, apiPathUpdate, nil))
 			snapshot := decodeUpdateSnapshot(t, w.Result())
 			if snapshot.Status != UpdateSnapshotStatusFailed {
 				t.Fatalf("status = %q, want failed", snapshot.Status)
@@ -1302,7 +1310,7 @@ func TestUpdateInstallStagerFailureClassification(t *testing.T) {
 			// accepted again.
 			fixture.stager.setFailStage("")
 			w = httptest.NewRecorder()
-			fixture.handler.routes().ServeHTTP(w, trustedInstallRequest(http.MethodPost, []byte(`{"consent":true,"when":"idle"}`)))
+			fixture.handler.ServeHTTP(w, trustedInstallRequest(http.MethodPost, []byte(`{"consent":true,"when":"idle"}`)))
 			resp = w.Result()
 			resp.Body.Close()
 			if resp.StatusCode != http.StatusAccepted {
@@ -1324,7 +1332,7 @@ func TestUpdateInstallCleanupFailureRetainedAndRetried(t *testing.T) {
 	fixture.lifecycle.setBeginBlock(beginBlock)
 
 	w := httptest.NewRecorder()
-	fixture.handler.routes().ServeHTTP(w, trustedInstallRequest(http.MethodPost, []byte(`{"consent":true,"when":"now"}`)))
+	fixture.handler.ServeHTTP(w, trustedInstallRequest(http.MethodPost, []byte(`{"consent":true,"when":"now"}`)))
 	resp := w.Result()
 	resp.Body.Close()
 	if resp.StatusCode != http.StatusAccepted {
@@ -1337,7 +1345,7 @@ func TestUpdateInstallCleanupFailureRetainedAndRetried(t *testing.T) {
 	deleteDone := make(chan *httptest.ResponseRecorder, 1)
 	go func() {
 		dw := httptest.NewRecorder()
-		fixture.handler.routes().ServeHTTP(dw, trustedInstallRequest(http.MethodDelete, []byte(`{}`)))
+		fixture.handler.ServeHTTP(dw, trustedInstallRequest(http.MethodDelete, []byte(`{}`)))
 		deleteDone <- dw
 	}()
 	waitInstallCond(t, 5*time.Second, func() bool { return installCancelling(fixture.handler.updates) }, "cancellation never started")
@@ -1362,7 +1370,7 @@ func TestUpdateInstallCleanupFailureRetainedAndRetried(t *testing.T) {
 
 	// A new install is refused while the failed cleanup holds the machinery.
 	w = httptest.NewRecorder()
-	fixture.handler.routes().ServeHTTP(w, trustedInstallRequest(http.MethodPost, []byte(`{"consent":true,"when":"now"}`)))
+	fixture.handler.ServeHTTP(w, trustedInstallRequest(http.MethodPost, []byte(`{"consent":true,"when":"now"}`)))
 	resp = w.Result()
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusConflict {
@@ -1387,7 +1395,7 @@ func TestUpdateInstallCleanupFailureRetainedAndRetried(t *testing.T) {
 	}
 	before := countEvents()
 	w = httptest.NewRecorder()
-	fixture.handler.routes().ServeHTTP(w, trustedInstallRequest(http.MethodDelete, []byte(`{}`)))
+	fixture.handler.ServeHTTP(w, trustedInstallRequest(http.MethodDelete, []byte(`{}`)))
 	resp = w.Result()
 	resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
@@ -1484,7 +1492,7 @@ func TestUpdateInstallCheckDuringOperationKeepsTargetPinned(t *testing.T) {
 	feed.selection = selfupdate.ReleaseSelection{Version: "3.0.0", TagName: "v3.0.0"}
 	feed.mu.Unlock()
 	coordinator.performCheck(context.Background(), "explicit")
-	snapshot := coordinator.Snapshot()
+	snapshot := coordinator.snapshot()
 	if snapshot.Status != UpdateSnapshotStatusScheduled {
 		t.Fatalf("status = %q, want the operation's scheduled status", snapshot.Status)
 	}
@@ -1507,7 +1515,7 @@ func TestUpdateInstallCancelAcceptedDuringBeginNeverReplaces(t *testing.T) {
 	fixture.lifecycle.setBeginBlock(beginBlock)
 
 	w := httptest.NewRecorder()
-	fixture.handler.routes().ServeHTTP(w, trustedInstallRequest(http.MethodPost, []byte(`{"consent":true,"when":"now"}`)))
+	fixture.handler.ServeHTTP(w, trustedInstallRequest(http.MethodPost, []byte(`{"consent":true,"when":"now"}`)))
 	resp := w.Result()
 	resp.Body.Close()
 	if resp.StatusCode != http.StatusAccepted {
@@ -1518,7 +1526,7 @@ func TestUpdateInstallCancelAcceptedDuringBeginNeverReplaces(t *testing.T) {
 	deleteDone := make(chan *httptest.ResponseRecorder, 1)
 	go func() {
 		dw := httptest.NewRecorder()
-		fixture.handler.routes().ServeHTTP(dw, trustedInstallRequest(http.MethodDelete, []byte(`{}`)))
+		fixture.handler.ServeHTTP(dw, trustedInstallRequest(http.MethodDelete, []byte(`{}`)))
 		deleteDone <- dw
 	}()
 	waitInstallCond(t, 5*time.Second, func() bool { return installCancelling(fixture.handler.updates) }, "cancellation never started")
@@ -1559,7 +1567,7 @@ func TestUpdateInstallCancelPublishesInvalidation(t *testing.T) {
 	if _, refusal := c.cancelInstall(context.Background()); refusal != nil {
 		t.Fatal(refusal)
 	}
-	if got := c.Snapshot().Status; got != UpdateSnapshotStatus(updateStatusAvailable) {
+	if got := c.snapshot().Status; got != UpdateSnapshotStatus(updateStatusAvailable) {
 		t.Fatalf("status = %s", got)
 	}
 	if recorder.eventCount() != before+1 {

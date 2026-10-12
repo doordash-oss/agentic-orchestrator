@@ -991,7 +991,7 @@ function writeLicenseInventory(inventory) {
   return report;
 }
 
-export function runReleaseAudit() {
+function runReleaseAudit() {
   const failures = [];
   const warnings = [];
   const toolResults = [];

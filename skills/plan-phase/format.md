@@ -72,6 +72,8 @@ Or "None - can start immediately" if no blockers.
 
 Each bullet must contain the **complete executable command** in backticks, in `description: command` order (description first, command last). The contract extractor reads only the bullet line, so don't reference a command name and put the real invocation in a fenced block elsewhere.
 
+Write each command byte-for-byte as it would be typed in a shell. If you author the plan through a string literal (a JSON payload, a JavaScript or Python string, a patch embedded in code), unescape it so the file holds the shell form: a regex newline in `python3 -c 'import re; re.findall(r"[^\n]*", s)'` is one backslash, never `\\n`. The artifact preflight warns on doubled backslashes in these commands.
+
 In a multi-repo phase, every bullet begins with `[repo: <name>]`, using a repository assigned to a phase task. A single-repo phase may omit the annotation. The harness executes each command from that repository root, so paths are repo-relative (`README.md`, `./internal/...`): never add `cd <repo>` or prefix a path with the repository name.
 
 The harness automatically records each command's exit code, stdout, stderr, working directory, duration, and run metadata. Do not request a second manual or behavioral transcript of the same command.

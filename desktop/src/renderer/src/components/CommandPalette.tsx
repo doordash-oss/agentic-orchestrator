@@ -33,6 +33,7 @@ import { displayPhaseLabel, displayStatusLabel } from '../features/featureView';
 import { DEFAULT_RUNTIME_ID } from '../../../shared/ipc';
 import type { AppRouteEvent, FeatureSummaryView, RoutedRequest } from '../../../shared/ipc';
 import { useConnectionState } from '../hooks';
+import { defined } from '../../../shared/defined';
 
 /**
  * The palette lists two kinds of row: the command catalogue, grouped by its own
@@ -442,7 +443,7 @@ function featureEntry(
   return {
     ...command,
     disabled: !state.enabled,
-    ...(state.reason === undefined ? {} : { disabledReason: state.reason }),
+    ...defined('disabledReason', state.reason),
     run: () => {
       if (activeFeatureId === null) return;
       runFeatureCommand(id, { featureId: activeFeatureId });

@@ -17,6 +17,8 @@ package e2e
 import (
 	"bufio"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -619,11 +621,73 @@ func (p *driverProcess) waitStderr(t *testing.T, text string) {
 	waitUntil(t, 10*time.Second, "stderr containing "+text, func() bool { return p.stderrContains(text) })
 }
 
+// selfupdateLeaseDir builds the frozen on-disk self-update lease directory
+// next to the executable.
+func selfupdateLeaseDir(execPath string) string {
+	return filepath.Join(filepath.Dir(execPath), ".agentico-selfupdate")
+}
+
+// selfupdateLeaseKey derives the per-executable lease key: the first 16 hex
+// characters of the sha256 of the executable path.
+func selfupdateLeaseKey(execPath string) string {
+	sum := sha256.Sum256([]byte(execPath))
+	return hex.EncodeToString(sum[:])[:16]
+}
+
+func selfupdateLeaseLockPath(execPath string) string {
+	return filepath.Join(selfupdateLeaseDir(execPath), "lease-"+selfupdateLeaseKey(execPath)+".lock")
+}
+
+func selfupdateOwnershipRecordPath(execPath string) string {
+	return filepath.Join(selfupdateLeaseDir(execPath), "owner-"+selfupdateLeaseKey(execPath)+".json")
+}
+
+// readSelfupdateReceipt decodes the frozen on-disk receipt JSON into the
+// exported receipt shape.
+func readSelfupdateReceipt(path string) (selfupdate.Receipt, error) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return selfupdate.Receipt{}, err
+	}
+	var r selfupdate.Receipt
+	if err := json.Unmarshal(data, &r); err != nil {
+		return selfupdate.Receipt{}, err
+	}
+	return r, nil
+}
+
+// suppressionStateMirror decodes the frozen on-disk suppression store.
+type suppressionStateMirror struct {
+	Targets []struct {
+		Version       string    `json:"version"`
+		TransactionID string    `json:"transaction_id"`
+		SuppressedAt  time.Time `json:"suppressed_at"`
+	} `json:"targets"`
+}
+
+// readSelfupdateSuppression decodes the per-executable suppression store at
+// its frozen on-disk location; a missing store is empty.
+func readSelfupdateSuppression(execPath string) (suppressionStateMirror, error) {
+	var st suppressionStateMirror
+	path := filepath.Join(selfupdateLeaseDir(execPath), "suppression-"+selfupdateLeaseKey(execPath)+".json")
+	data, err := os.ReadFile(path)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return st, nil
+		}
+		return st, err
+	}
+	if err := json.Unmarshal(data, &st); err != nil {
+		return st, err
+	}
+	return st, nil
+}
+
 func (j *selfupdateJourney) waitForReceipt(timeout time.Duration, description string, match func(selfupdate.Receipt) bool) selfupdate.Receipt {
 	j.t.Helper()
 	var receipt selfupdate.Receipt
 	waitUntil(j.t, timeout, description+" at "+j.receiptPath(), func() bool {
-		r, err := selfupdate.ReadReceipt(j.receiptPath())
+		r, err := readSelfupdateReceipt(j.receiptPath())
 		if err != nil || !match(r) {
 			return false
 		}
@@ -638,20 +702,20 @@ func (j *selfupdateJourney) waitReceipt(timeout time.Duration) selfupdate.Receip
 	return j.waitForReceipt(timeout, "receipt", func(selfupdate.Receipt) bool { return true })
 }
 
-func (j *selfupdateJourney) waitReceiptOutcome(want selfupdate.Outcome, timeout time.Duration) selfupdate.Receipt {
+func (j *selfupdateJourney) waitReceiptOutcome(want string, timeout time.Duration) selfupdate.Receipt {
 	j.t.Helper()
-	return j.waitForReceipt(timeout, "receipt outcome "+string(want), func(r selfupdate.Receipt) bool { return r.Outcome == want })
+	return j.waitForReceipt(timeout, "receipt outcome "+want, func(r selfupdate.Receipt) bool { return string(r.Outcome) == want })
 }
 
-func (j *selfupdateJourney) waitReceiptResolution(want selfupdate.Resolution, timeout time.Duration) selfupdate.Receipt {
+func (j *selfupdateJourney) waitReceiptResolution(want string, timeout time.Duration) selfupdate.Receipt {
 	j.t.Helper()
-	return j.waitForReceipt(timeout, "receipt resolution "+string(want), func(r selfupdate.Receipt) bool { return r.Resolution == want })
+	return j.waitForReceipt(timeout, "receipt resolution "+want, func(r selfupdate.Receipt) bool { return string(r.Resolution) == want })
 }
 
 // waitReceiptRolledBack polls until the receipt is durably rolled back.
 func (j *selfupdateJourney) waitReceiptRolledBack(timeout time.Duration) selfupdate.Receipt {
 	j.t.Helper()
-	return j.waitReceiptOutcome(selfupdate.OutcomeRolledBack, timeout)
+	return j.waitReceiptOutcome(string(selfupdate.OutcomeRolledBack), timeout)
 }
 
 // requireSuppressedTarget asserts the exact failed target version of a
@@ -691,12 +755,12 @@ func requireNoSuppression(t *testing.T, j *selfupdateJourney, target string) {
 	} else if lookup.Suppressed {
 		t.Fatalf("version %s is suppressed; an installation failure must never suppress its target", target)
 	}
-	targets, err := selfupdate.SuppressedVersions(j.installPath)
+	state, err := readSelfupdateSuppression(j.installPath)
 	if err != nil {
 		t.Fatalf("read suppression store: %v", err)
 	}
-	if len(targets) != 0 {
-		t.Fatalf("suppression store = %+v; want empty", targets)
+	if len(state.Targets) != 0 {
+		t.Fatalf("suppression store = %+v; want empty", state.Targets)
 	}
 }
 
@@ -907,9 +971,9 @@ func TestSelfUpdateJourneyFixedPort(t *testing.T) {
 		t.Fatalf("post-exec authenticated features status = %d; want 200", code)
 	}
 
-	receipt := j.waitReceiptOutcome(selfupdate.OutcomeConfirmed, 20*time.Second)
-	if receipt.Phase != selfupdate.PhaseReplacementComplete {
-		t.Fatalf("receipt phase = %q; want %q", receipt.Phase, selfupdate.PhaseReplacementComplete)
+	receipt := j.waitReceiptOutcome(string(selfupdate.OutcomeConfirmed), 20*time.Second)
+	if receipt.Phase != "replacement-complete" {
+		t.Fatalf("receipt phase = %q; want %q", receipt.Phase, "replacement-complete")
 	}
 	if receipt.FromVersion != selfupdateVersionLower || receipt.ToVersion != selfupdateVersionHigher {
 		t.Fatalf("receipt versions = %q -> %q; want %q -> %q", receipt.FromVersion, receipt.ToVersion, selfupdateVersionLower, selfupdateVersionHigher)
@@ -917,11 +981,11 @@ func TestSelfUpdateJourneyFixedPort(t *testing.T) {
 	if receipt.Bind.Port != port {
 		t.Fatalf("receipt bind port = %d; want %d", receipt.Bind.Port, port)
 	}
-	j.waitPathGone(filepath.Join(selfupdate.LeaseDir(j.installPath), "tx-"+receipt.TransactionID), "transaction dir", 10*time.Second)
-	if _, err := os.Stat(selfupdate.LeasePath(j.installPath)); err != nil {
+	j.waitPathGone(filepath.Join(selfupdateLeaseDir(j.installPath), "tx-"+receipt.TransactionID), "transaction dir", 10*time.Second)
+	if _, err := os.Stat(selfupdateLeaseLockPath(j.installPath)); err != nil {
 		t.Fatalf("lease file must never be unlinked: %v", err)
 	}
-	if _, err := os.Stat(selfupdate.OwnershipRecordPath(j.installPath)); err != nil {
+	if _, err := os.Stat(selfupdateOwnershipRecordPath(j.installPath)); err != nil {
 		t.Fatalf("ownership record must never be unlinked: %v", err)
 	}
 	if got := j.installDigest(); got != j.bins.higherDigest {
@@ -989,9 +1053,9 @@ func TestSelfUpdateJourneyDefaultEphemeral(t *testing.T) {
 	if disc2.BaseURL != baseURL {
 		t.Fatalf("discovery base_url moved ports: %q -> %q", baseURL, disc2.BaseURL)
 	}
-	receipt := j.waitReceiptOutcome(selfupdate.OutcomeConfirmed, 20*time.Second)
-	if receipt.Phase != selfupdate.PhaseReplacementComplete {
-		t.Fatalf("receipt phase = %q; want %q", receipt.Phase, selfupdate.PhaseReplacementComplete)
+	receipt := j.waitReceiptOutcome(string(selfupdate.OutcomeConfirmed), 20*time.Second)
+	if receipt.Phase != "replacement-complete" {
+		t.Fatalf("receipt phase = %q; want %q", receipt.Phase, "replacement-complete")
 	}
 	if receipt.Bind.Port != port {
 		t.Fatalf("receipt bind port = %d; want originally assigned port %d", receipt.Bind.Port, port)
@@ -1067,8 +1131,8 @@ func TestSelfUpdateJourneyFailureInjection(t *testing.T) {
 
 		j.trigger()
 
-		r := j.waitReceiptResolution(selfupdate.ResolutionAbandonedPreReplacement, 20*time.Second)
-		if r.Outcome != selfupdate.OutcomePending || r.Phase != selfupdate.PhaseBackupReady {
+		r := j.waitReceiptResolution("abandoned_pre_replacement", 20*time.Second)
+		if r.Outcome != selfupdate.OutcomePending || r.Phase != "backup-ready" {
 			t.Fatalf("receipt = %q/%q; want pending/backup-ready", r.Outcome, r.Phase)
 		}
 		if !r.InstallFailed {
@@ -1118,12 +1182,12 @@ func TestSelfUpdateJourneyFailureInjection(t *testing.T) {
 			// The durable restart settlement is the unambiguous marker: wait for
 			// it before any live-server assertion (the old server may still be
 			// serving when the journey begins).
-			r := j.waitReceiptResolution(selfupdate.ResolutionAbandonedPreReplacement, 45*time.Second)
+			r := j.waitReceiptResolution("abandoned_pre_replacement", 45*time.Second)
 			post := j.waitHealthy(p, baseURL, selfupdateVersionLower, 30*time.Second)
 			if pre.Owner.PID != p.pid() || post.Owner.PID != p.pid() {
 				t.Fatalf("owner pid moved across the restart: pre=%d post=%d pid=%d", pre.Owner.PID, post.Owner.PID, p.pid())
 			}
-			if r.Outcome != selfupdate.OutcomePending || r.Phase != selfupdate.PhaseBackupReady {
+			if r.Outcome != selfupdate.OutcomePending || r.Phase != "backup-ready" {
 				t.Fatalf("receipt = %q/%q; want pending/backup-ready", r.Outcome, r.Phase)
 			}
 			if r.RecoveryKind != selfupdate.RecoveryKindRestart || r.RecoveryAttemptID == "" {
@@ -1268,8 +1332,8 @@ func TestSelfUpdateJourneyFailureInjection(t *testing.T) {
 func assertRestoredService(t *testing.T, j *selfupdateJourney, p *driverProcess, baseURL string, wantExecCrossings int) {
 	t.Helper()
 	r := j.waitReceiptRolledBack(45 * time.Second)
-	if r.Phase != selfupdate.PhaseRollbackAttempted {
-		t.Fatalf("receipt phase = %q; want %q", r.Phase, selfupdate.PhaseRollbackAttempted)
+	if r.Phase != "rollback-attempted" {
+		t.Fatalf("receipt phase = %q; want %q", r.Phase, "rollback-attempted")
 	}
 	if r.RecoveryKind != selfupdate.RecoveryKindRestore || r.RecoveryAttemptID == "" {
 		t.Fatalf("receipt recovery = %q/%q; want restore kind with attempt id", r.RecoveryKind, r.RecoveryAttemptID)
@@ -1349,7 +1413,7 @@ func TestSelfUpdateProductionBoundary(t *testing.T) {
 		if _, err := os.Stat(j.receiptPath()); !os.IsNotExist(err) {
 			t.Fatalf("invalid handoff env produced a receipt at %s (err = %v)", j.receiptPath(), err)
 		}
-		if entries, err := os.ReadDir(selfupdate.LeaseDir(j.installPath)); err == nil {
+		if entries, err := os.ReadDir(selfupdateLeaseDir(j.installPath)); err == nil {
 			for _, e := range entries {
 				if strings.HasPrefix(e.Name(), "tx-") {
 					t.Fatalf("lease dir carries transaction residue %s", e.Name())

@@ -18,7 +18,7 @@ import type { FeatureSnapshot, RunDetailView } from '../../../shared/ipc';
 import { displayStatusLabel, featureBranch, formatDuration } from './featureView';
 import { sentenceCase } from './aftercareReceipt';
 
-export interface AftercareFactsProps {
+interface AftercareFactsProps {
   snapshot: FeatureSnapshot;
   run: RunDetailView | null;
   pendingFact?: { label: string; value: string };

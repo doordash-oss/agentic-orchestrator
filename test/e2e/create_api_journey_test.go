@@ -307,10 +307,10 @@ func TestCreateRestartJourney(t *testing.T) {
 		cfg.WorkspaceRoots = []string{root}
 		ctx, cancel := context.WithCancel(context.Background())
 		srv, err := server.Start(ctx, server.Options{
-			Runtime:   server.RuntimeIdentity{RuntimeDir: tmp, StateDir: stateDir, Config: filepath.Join(tmp, "config.yaml")},
-			AuthToken: "test-token",
-			Config:    cfg,
-			Mutations: &cloneJourneyMutations{},
+			HandlerOptions: server.HandlerOptions{
+				Runtime:   server.RuntimeIdentity{RuntimeDir: tmp, StateDir: stateDir, Config: filepath.Join(tmp, "config.yaml")},
+				AuthToken: "test-token", Config: cfg, Mutations: &cloneJourneyMutations{},
+			},
 		})
 		if err != nil {
 			t.Fatalf("server.Start: %v", err)

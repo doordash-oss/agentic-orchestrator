@@ -27,6 +27,7 @@ import (
 	"github.com/doordash-oss/agentic-orchestrator/internal/config"
 	"github.com/doordash-oss/agentic-orchestrator/internal/errcat"
 	"github.com/doordash-oss/agentic-orchestrator/internal/feature"
+	gitadapter "github.com/doordash-oss/agentic-orchestrator/internal/git"
 	"github.com/doordash-oss/agentic-orchestrator/internal/llm"
 	"github.com/doordash-oss/agentic-orchestrator/internal/orchestrator"
 	"github.com/doordash-oss/agentic-orchestrator/internal/ports"
@@ -81,14 +82,14 @@ func TestMutationTargetSuccessResponsesNameFeatureAndResult(t *testing.T) {
 				return filepath.Join(runtimeDir, "worktrees", featureSlug, repoName), nil
 			}
 			manager.Worktrees = worktrees
-			target := mutationTarget{orch: orchestrator.New(orchestrator.Deps{Lifecycle: manager, Store: store}, orchestrator.Hooks{})}
+			target := newMutationTarget(Deps{Orchestrator: orchestrator.New(orchestrator.Deps{Manager: manager, Store: store}, orchestrator.Hooks{})})
 			f, err := manager.Create("response shape setup", "desc", []string{testRepoAName}, cfg.Defaults.Models, "", "", nil, feature.CreateOptions{
 				QueueSetup: true, Pipeline: feature.PipelineMedium,
 			})
 			if err != nil {
 				t.Fatalf("Create feature: %v", err)
 			}
-			resp, err := target.SetupFeature(f.ID)
+			resp, err := target.RunFeatureLifecycle(f.ID, serverruntime.FeatureActionSetup, serverruntime.GuardedFeatureActionRequest{})
 			target.orch.WaitForCycles()
 			if err != nil {
 				t.Fatalf("SetupFeature() error = %v", err)
@@ -97,8 +98,8 @@ func TestMutationTargetSuccessResponsesNameFeatureAndResult(t *testing.T) {
 		}},
 		{"StartFeature", resultStarted, func(t *testing.T) (string, string, string) {
 			store, manager, f := newMutationTestFeature(t, "response shape start", feature.CreateOptions{Pipeline: feature.PipelineLarge}, feature.StatusCreated, 0)
-			target := mutationTarget{orch: orchestrator.New(orchestrator.Deps{Lifecycle: manager, Store: store}, orchestrator.Hooks{})}
-			resp, err := target.StartFeature(f.ID)
+			target := newMutationTarget(Deps{Orchestrator: orchestrator.New(orchestrator.Deps{Manager: manager, Store: store}, orchestrator.Hooks{})})
+			resp, err := target.RunFeatureLifecycle(f.ID, serverruntime.FeatureActionStart, serverruntime.GuardedFeatureActionRequest{})
 			if err != nil {
 				t.Fatalf("StartFeature() error = %v", err)
 			}
@@ -106,11 +107,11 @@ func TestMutationTargetSuccessResponsesNameFeatureAndResult(t *testing.T) {
 		}},
 		{"StopFeature", resultStopped, func(t *testing.T) (string, string, string) {
 			store, manager, f := newMutationTestFeature(t, "response shape stop", feature.CreateOptions{Pipeline: feature.PipelineLarge}, feature.StatusCreated, 0)
-			target := mutationTarget{orch: orchestrator.New(orchestrator.Deps{Lifecycle: manager, Store: store}, orchestrator.Hooks{})}
-			if _, err := target.StartFeature(f.ID); err != nil {
+			target := newMutationTarget(Deps{Orchestrator: orchestrator.New(orchestrator.Deps{Manager: manager, Store: store}, orchestrator.Hooks{})})
+			if _, err := target.RunFeatureLifecycle(f.ID, serverruntime.FeatureActionStart, serverruntime.GuardedFeatureActionRequest{}); err != nil {
 				t.Fatalf("StartFeature() error = %v", err)
 			}
-			resp, err := target.StopFeature(f.ID)
+			resp, err := target.RunFeatureLifecycle(f.ID, serverruntime.FeatureActionPauseStop, serverruntime.GuardedFeatureActionRequest{})
 			if err != nil {
 				t.Fatalf("StopFeature() error = %v", err)
 			}
@@ -164,7 +165,7 @@ func TestMutationTargetSuccessResponsesNameFeatureAndResult(t *testing.T) {
 				ff.Status = feature.StatusNeedUserInput
 				ff.PendingNeedUserInputPath = gatePath
 			})
-			resp, err := target.ResumeNeedUserInput(f.ID)
+			resp, err := target.RunFeatureLifecycle(f.ID, serverruntime.FeatureActionNeedUserInput, serverruntime.GuardedFeatureActionRequest{})
 			if err != nil {
 				t.Fatalf("ResumeNeedUserInput() error = %v", err)
 			}
@@ -186,7 +187,7 @@ func TestMutationTargetSuccessResponsesNameFeatureAndResult(t *testing.T) {
 			if err := store.Save(f); err != nil {
 				t.Fatalf("Save feature: %v", err)
 			}
-			target := mutationTarget{orch: newStoreOrchestrator(store)}
+			target := newMutationTarget(Deps{Orchestrator: newStoreOrchestrator(store)})
 			resp, err := target.DraftNeedUserInputAnswers(f.ID, serverruntime.NeedUserInputDraftRequest{
 				Answers: map[string]string{"1": "Postgres."},
 			})
@@ -215,7 +216,7 @@ func TestMutationTargetSuccessResponsesNameFeatureAndResult(t *testing.T) {
 			}); err != nil {
 				t.Fatalf("WriteTestingContract() error = %v", err)
 			}
-			target := mutationTarget{orch: newStoreOrchestrator(store)}
+			target := newMutationTarget(Deps{Orchestrator: newStoreOrchestrator(store)})
 			resp, err := target.WaiveTestingContractItems(f.ID, serverruntime.TestingContractWaiveRequest{
 				ItemIDs: []string{"visual_1"}, Reason: "the VM lacks a signed-in session",
 			})
@@ -227,7 +228,7 @@ func TestMutationTargetSuccessResponsesNameFeatureAndResult(t *testing.T) {
 		{"AnswerPermission", resultAnswered, func(t *testing.T) (string, string, string) {
 			sess := newResponseShapePermissionSession()
 			sessions := &mutationTargetSessionManager{sessions: []ports.SessionView{sess}}
-			target := mutationTarget{orch: mutationTargetOrchestrator(sessions), sessions: sessions}
+			target := newMutationTarget(Deps{Orchestrator: mutationTargetOrchestrator(sessions), Sessions: sessions})
 			resp, err := target.AnswerPermission(serverruntime.PermissionAnswerRequest{
 				RequestID: testPermRequestID, SessionID: testSessionPermissionID, Decision: "allow_once",
 			})
@@ -240,7 +241,7 @@ func TestMutationTargetSuccessResponsesNameFeatureAndResult(t *testing.T) {
 			sess := &responseShapeRetryReviewSession{mutationTargetSessionView: newResponseShapePermissionSession()}
 			sess.pending[0].AutomaticReview = &llm.AutomaticReviewStatus{Outcome: "deferred"}
 			sessions := &mutationTargetSessionManager{sessions: []ports.SessionView{sess}}
-			target := mutationTarget{orch: mutationTargetOrchestrator(sessions), sessions: sessions}
+			target := newMutationTarget(Deps{Orchestrator: mutationTargetOrchestrator(sessions), Sessions: sessions})
 			resp, err := target.AnswerPermission(serverruntime.PermissionAnswerRequest{
 				RequestID: testPermRequestID, SessionID: testSessionPermissionID, Decision: "retry_auto_review",
 			})
@@ -253,18 +254,17 @@ func TestMutationTargetSuccessResponsesNameFeatureAndResult(t *testing.T) {
 			return "", "", resp.Result
 		}},
 		{"AnswerAskUser", resultAnswered, func(t *testing.T) (string, string, string) {
-			sess := &mutationTargetSessionView{
-				id: testSessionAskID, featureID: "feat-ask", phase: feature.PhaseInquire, status: ports.SessionWaitingHelp, active: true,
-				pending: []*llm.ControlRequestMessage{{
-					Type: wireTypeControlRequest, RequestID: testAskRequestID,
-					Request: llm.ControlRequest{
-						Subtype: wireSubtypeCanUseTool, ToolName: toolNameAskUserQuestion,
-						Input: json.RawMessage(`{"questions":[{"question":"Which DB?"}]}`),
-					},
-				}},
-			}
+			sess := newMutationTargetSessionView(testSessionAskID, "feat-ask", feature.PhaseInquire)
+			sess.StatusVal = ports.SessionWaitingHelp
+			sess.pending = []*llm.ControlRequestMessage{{
+				Type: wireTypeControlRequest, RequestID: testAskRequestID,
+				Request: llm.ControlRequest{
+					Subtype: wireSubtypeCanUseTool, ToolName: toolNameAskUserQuestion,
+					Input: json.RawMessage(`{"questions":[{"question":"Which DB?"}]}`),
+				},
+			}}
 			sessions := &mutationTargetSessionManager{sessions: []ports.SessionView{sess}}
-			target := mutationTarget{orch: mutationTargetOrchestrator(sessions), sessions: sessions}
+			target := newMutationTarget(Deps{Orchestrator: mutationTargetOrchestrator(sessions), Sessions: sessions})
 			resp, err := target.AnswerAskUser(serverruntime.AskUserAnswerRequest{
 				RequestID: testAskRequestID, SessionID: testSessionAskID, Answers: textReplies(map[string]string{"1": "Postgres"}),
 			})
@@ -274,11 +274,10 @@ func TestMutationTargetSuccessResponsesNameFeatureAndResult(t *testing.T) {
 			return "", "", resp.Result
 		}},
 		{"SendHelp", resultSent, func(t *testing.T) (string, string, string) {
-			sess := &mutationTargetSessionView{
-				id: testSessionHelpID, featureID: testFeatureHelpID, phase: feature.PhaseImplement, status: ports.SessionWaitingHelp, active: true,
-			}
+			sess := newMutationTargetSessionView(testSessionHelpID, testFeatureHelpID, feature.PhaseImplement)
+			sess.StatusVal = ports.SessionWaitingHelp
 			sessions := &mutationTargetSessionManager{sessions: []ports.SessionView{sess}}
-			target := mutationTarget{orch: mutationTargetOrchestrator(sessions), sessions: sessions}
+			target := newMutationTarget(Deps{Orchestrator: mutationTargetOrchestrator(sessions), Sessions: sessions})
 			resp, err := target.SendHelp(serverruntime.HelpAnswerRequest{
 				FeatureID: testFeatureHelpID, SessionID: testSessionHelpID, Message: "Use the existing migration path.",
 			})
@@ -306,7 +305,7 @@ func TestMutationTargetSuccessResponsesNameFeatureAndResult(t *testing.T) {
 			return "", "", resp.Result
 		}},
 		{"ExecuteRecovery", resultRecovered, func(t *testing.T) (string, string, string) {
-			target := mutationTarget{orch: orchestrator.New(orchestrator.Deps{Recovery: responseShapeRecoveryOperator{}}, orchestrator.Hooks{})}
+			target := newMutationTarget(Deps{Orchestrator: orchestrator.New(orchestrator.Deps{Recovery: responseShapeRecoveryOperator{}}, orchestrator.Hooks{})})
 			resp, err := target.ExecuteRecovery(context.Background(), nil, nil)
 			if err != nil {
 				t.Fatalf("ExecuteRecovery() error = %v", err)
@@ -315,10 +314,10 @@ func TestMutationTargetSuccessResponsesNameFeatureAndResult(t *testing.T) {
 		}},
 		{"GeneratePublishDescription", resultGenerated, func(t *testing.T) (string, string, string) {
 			_, manager, store, f := newPublishActionTarget(t)
-			target := mutationTarget{orch: orchestrator.New(orchestrator.Deps{
-				Lifecycle: manager, Store: store,
+			target := newMutationTarget(Deps{Orchestrator: orchestrator.New(orchestrator.Deps{
+				Manager: manager, Store: store,
 				PhaseRunner: newResponseShapeDescriptionRunner(t, "TITLE: Generated title\nBODY:\nGenerated body"),
-			}, orchestrator.Hooks{})}
+			}, orchestrator.Hooks{})})
 			resp, err := target.GeneratePublishDescription(f.ID, serverruntime.PublishDescriptionRequest{Repos: []string{testRepoAName}})
 			if err != nil {
 				t.Fatalf("GeneratePublishDescription() error = %v", err)
@@ -339,7 +338,7 @@ func TestMutationTargetSuccessResponsesNameFeatureAndResult(t *testing.T) {
 		}},
 		{"MergeFeature", resultMerged, func(t *testing.T) (string, string, string) {
 			target, featureID := newResponseShapeLocalMergeTarget(t)
-			resp, err := target.MergeFeature(featureID, serverruntime.GuardedFeatureActionRequest{})
+			resp, err := target.RunFeatureLifecycle(featureID, serverruntime.FeatureActionMerge, serverruntime.GuardedFeatureActionRequest{})
 			if err != nil {
 				t.Fatalf("MergeFeature() error = %v", err)
 			}
@@ -353,7 +352,7 @@ func TestMutationTargetSuccessResponsesNameFeatureAndResult(t *testing.T) {
 			}); err != nil {
 				t.Fatalf("prepare feature: %v", err)
 			}
-			target := mutationTarget{orch: orchestrator.New(orchestrator.Deps{Lifecycle: manager, Store: store}, orchestrator.Hooks{})}
+			target := newMutationTarget(Deps{Orchestrator: orchestrator.New(orchestrator.Deps{Manager: manager, Store: store}, orchestrator.Hooks{})})
 			resp, err := target.RewindFeature(f.ID, serverruntime.RewindFeatureRequest{TargetPhase: phaseNameImplement})
 			if err != nil {
 				t.Fatalf("RewindFeature() error = %v", err)
@@ -372,7 +371,7 @@ func TestMutationTargetSuccessResponsesNameFeatureAndResult(t *testing.T) {
 					},
 				}
 			})
-			resp, err := target.RetryFeature(f.ID)
+			resp, err := target.RunFeatureLifecycle(f.ID, serverruntime.FeatureActionRetry, serverruntime.GuardedFeatureActionRequest{})
 			if err != nil {
 				t.Fatalf("RetryFeature() error = %v", err)
 			}
@@ -387,30 +386,37 @@ func TestMutationTargetSuccessResponsesNameFeatureAndResult(t *testing.T) {
 			if resp.ParentID != parentID {
 				t.Fatalf("RebaseFeature() parent = %q; want %q", resp.ParentID, parentID)
 			}
-			return resp.FeatureID, responseShapeRebaseChildID, resp.Result
+			if resp.FeatureID == "" {
+				t.Fatal("rebase child ID is empty")
+			}
+			return resp.FeatureID, resp.FeatureID, resp.Result
 		}},
 		{"RefactorFeature", resultCreated, func(t *testing.T) (string, string, string) {
-			creator := &fakeRefactorChildCreator{child: &feature.Feature{ID: "child-refactor-shape"}}
-			target, _ := newChildLaunchTarget(t, childCreatorLifecycle{refactor: creator})
-			resp, err := target.RefactorFeature("parent-1", serverruntime.RefactorFeatureRequest{Name: "Rework auth"})
+			target, store, parent := newChildLaunchTarget(t)
+			resp, err := target.RefactorFeature(parent.ID, serverruntime.RefactorFeatureRequest{Name: "Rework auth"})
 			if err != nil {
 				t.Fatalf("RefactorFeature() error = %v", err)
 			}
-			return resp.FeatureID, "child-refactor-shape", resp.Result
+			if child, err := store.Load(resp.FeatureID); err != nil || child.Parent == nil || child.Parent.ParentID != parent.ID {
+				t.Fatalf("stored refactor child = %+v, %v", child, err)
+			}
+			return resp.FeatureID, resp.FeatureID, resp.Result
 		}},
 		{"ReviewFeedbackFeature", resultCreated, func(t *testing.T) (string, string, string) {
-			creator := &fakeReviewFeedbackChildCreator{child: &feature.Feature{ID: "child-review-shape"}}
-			target, _ := newChildLaunchTarget(t, childCreatorLifecycle{review: creator})
-			resp, err := target.ReviewFeedbackFeature("parent-1", serverruntime.ReviewFeedbackFeatureRequest{ExpectedRevision: 1})
+			target, store, parent, revision := newReviewFeedbackLaunchTarget(t, nil)
+			resp, err := target.ReviewFeedbackFeature(parent.ID, serverruntime.ReviewFeedbackFeatureRequest{ExpectedRevision: int(revision)})
 			if err != nil {
 				t.Fatalf("ReviewFeedbackFeature() error = %v", err)
 			}
-			return resp.FeatureID, "child-review-shape", resp.Result
+			if child, err := store.Load(resp.FeatureID); err != nil || child.Parent == nil || child.Parent.ParentID != parent.ID {
+				t.Fatalf("stored feedback child = %+v, %v", child, err)
+			}
+			return resp.FeatureID, resp.FeatureID, resp.Result
 		}},
 		{"MarkDone", resultDone, func(t *testing.T) (string, string, string) {
 			store, manager, f := newMutationTestFeature(t, "response shape done", feature.CreateOptions{}, feature.StatusPublished, feature.PhasePublish)
-			target := mutationTarget{orch: orchestrator.New(orchestrator.Deps{Lifecycle: manager, Store: store}, orchestrator.Hooks{})}
-			resp, err := target.MarkDone(f.ID, serverruntime.GuardedFeatureActionRequest{})
+			target := newMutationTarget(Deps{Orchestrator: orchestrator.New(orchestrator.Deps{Manager: manager, Store: store}, orchestrator.Hooks{})})
+			resp, err := target.RunFeatureLifecycle(f.ID, serverruntime.FeatureActionMarkDone, serverruntime.GuardedFeatureActionRequest{})
 			if err != nil {
 				t.Fatalf("MarkDone() error = %v", err)
 			}
@@ -426,7 +432,7 @@ func TestMutationTargetSuccessResponsesNameFeatureAndResult(t *testing.T) {
 		}},
 		{"DiscardChild", resultDiscarded, func(t *testing.T) (string, string, string) {
 			target, childID := newResponseShapeDiscardTarget(t)
-			resp, err := target.DiscardChild(childID)
+			resp, err := target.RunFeatureLifecycle(childID, serverruntime.FeatureActionDiscard, serverruntime.GuardedFeatureActionRequest{})
 			if err != nil {
 				t.Fatalf("DiscardChild() error = %v", err)
 			}
@@ -448,7 +454,7 @@ func TestMutationTargetSuccessResponsesNameFeatureAndResult(t *testing.T) {
 // newResponseShapeImplementTarget creates a feature parked in the implement
 // phase with a plan artifact, applies mutate, and returns a target whose
 // orchestrator dispatches implementation to a no-op runner.
-func newResponseShapeImplementTarget(t *testing.T, name string, mutate func(*feature.Feature)) (mutationTarget, *feature.Feature) {
+func newResponseShapeImplementTarget(t *testing.T, name string, mutate func(*feature.Feature)) (*mutationTarget, *feature.Feature) {
 	t.Helper()
 	runtimeDir := t.TempDir()
 	cfg := config.NewDefault()
@@ -471,27 +477,26 @@ func newResponseShapeImplementTarget(t *testing.T, name string, mutate func(*fea
 	}); err != nil {
 		t.Fatalf("prepare feature: %v", err)
 	}
-	orch := orchestrator.New(orchestrator.Deps{Lifecycle: manager, Store: store}, orchestrator.Hooks{})
+	orch := orchestrator.New(orchestrator.Deps{Manager: manager, Store: store}, orchestrator.Hooks{})
 	orch.SetRunMultiRepoImplFn(func(*feature.Feature, string, ...agent.KBInfo) (chan *agent.OrchestratorResult, error) {
 		ch := make(chan *agent.OrchestratorResult)
 		close(ch)
 		return ch, nil
 	})
-	return mutationTarget{orch: orch}, f
+	return newMutationTarget(Deps{Orchestrator: orch}), f
 }
 
 func newResponseShapePermissionSession() *mutationTargetSessionView {
-	return &mutationTargetSessionView{
-		id: testSessionPermissionID, featureID: testFeaturePermissionID, phase: feature.PhaseImplement,
-		status: ports.SessionWaitingPermission, active: true,
-		pending: []*llm.ControlRequestMessage{{
-			Type: wireTypeControlRequest, RequestID: testPermRequestID,
-			Request: llm.ControlRequest{
-				Subtype: wireSubtypeCanUseTool, ToolName: toolNameBash,
-				Input: json.RawMessage(`{"command":"go test ./cmd/agentico"}`),
-			},
-		}},
-	}
+	sess := newMutationTargetSessionView(testSessionPermissionID, testFeaturePermissionID, feature.PhaseImplement)
+	sess.StatusVal = ports.SessionWaitingPermission
+	sess.pending = []*llm.ControlRequestMessage{{
+		Type: wireTypeControlRequest, RequestID: testPermRequestID,
+		Request: llm.ControlRequest{
+			Subtype: wireSubtypeCanUseTool, ToolName: toolNameBash,
+			Input: json.RawMessage(`{"command":"go test ./cmd/agentico"}`),
+		},
+	}}
+	return sess
 }
 
 // responseShapeRetryReviewSession adds the automatic-review retry capability
@@ -506,7 +511,7 @@ func (s *responseShapeRetryReviewSession) RetryAutomaticReview(requestID string)
 	return nil
 }
 
-func newResponseShapeRuntimeConfigTarget(t *testing.T) mutationTarget {
+func newResponseShapeRuntimeConfigTarget(t *testing.T) *mutationTarget {
 	t.Helper()
 	configPath := filepath.Join(t.TempDir(), "config.yaml")
 	cfg := config.NewDefault()
@@ -514,7 +519,7 @@ func newResponseShapeRuntimeConfigTarget(t *testing.T) mutationTarget {
 	if err := config.Save(configPath, cfg); err != nil {
 		t.Fatalf("Save config: %v", err)
 	}
-	return mutationTarget{cfg: cfg, configPath: configPath}
+	return newMutationTarget(Deps{Config: cfg, ConfigPath: configPath})
 }
 
 // responseShapeRecoveryOperator is a recovery operator whose execution
@@ -539,7 +544,6 @@ func (s *responseShapeDescriptionSession) SetStatus(ports.SessionStatus)        
 func (s *responseShapeDescriptionSession) SetLogFile(*os.File)                            {}
 func (s *responseShapeDescriptionSession) AddCleanupFunc(func())                          {}
 func (s *responseShapeDescriptionSession) SetHasUnansweredQuestion(bool)                  {}
-func (s *responseShapeDescriptionSession) CloseStdin()                                    {}
 func (s *responseShapeDescriptionSession) SetOnToolAllowed(func(string, json.RawMessage)) {}
 func (s *responseShapeDescriptionSession) SetOnFileRead(func(llm.FileReadEvent))          {}
 func (s *responseShapeDescriptionSession) SetOnSubagentEvent(func(llm.SDKMessage))        {}
@@ -573,7 +577,7 @@ func runResponseShapeGit(t *testing.T, dir string, args ...string) {
 
 // newResponseShapeLocalMergeTarget builds a non-publishable published
 // feature whose branch carries one commit ahead of main.
-func newResponseShapeLocalMergeTarget(t *testing.T) (mutationTarget, string) {
+func newResponseShapeLocalMergeTarget(t *testing.T) (*mutationTarget, string) {
 	t.Helper()
 	runtimeDir := t.TempDir()
 	repoPath := filepath.Join(runtimeDir, testRepoAName)
@@ -599,36 +603,13 @@ func newResponseShapeLocalMergeTarget(t *testing.T) (mutationTarget, string) {
 	if err := store.Save(f); err != nil {
 		t.Fatalf("Save feature: %v", err)
 	}
-	return mutationTarget{orch: newStoreOrchestrator(store)}, f.ID
-}
-
-const responseShapeRebaseChildID = "child-rebase-shape"
-
-// responseShapeRebaseLifecycle creates the rebase child the orchestrator's
-// child launch asks for.
-type responseShapeRebaseLifecycle struct {
-	*mocks.MockFeatureLifecycle
-}
-
-func (responseShapeRebaseLifecycle) CreateRefactorChild(string, feature.RefactorChildSpec) (*feature.Feature, error) {
-	return nil, os.ErrInvalid
-}
-
-func (responseShapeRebaseLifecycle) LaunchReviewFeedbackChildFromDraft(string, int64, *bool) (*feature.ReviewFeedbackLaunchResult, error) {
-	return nil, os.ErrInvalid
-}
-
-func (responseShapeRebaseLifecycle) CreateRebaseChild(parentID string, _ feature.RebaseChildSpec) (*feature.Feature, error) {
-	return &feature.Feature{
-		ID:     responseShapeRebaseChildID,
-		Parent: &feature.ChildRelationship{ParentID: parentID, Kind: feature.ChildKindRebase},
-	}, nil
+	return newMutationTarget(Deps{Orchestrator: newStoreOrchestrator(store)}), f.ID
 }
 
 // newResponseShapeRebaseTarget builds a published, non-publishable parent
 // whose clean worktree sits one commit behind its local base branch, so the
 // rebase preflight finds work and launches a child.
-func newResponseShapeRebaseTarget(t *testing.T) (mutationTarget, string) {
+func newResponseShapeRebaseTarget(t *testing.T) (*mutationTarget, string) {
 	t.Helper()
 	runtimeDir := t.TempDir()
 	repoPath := filepath.Join(runtimeDir, testRepoAName)
@@ -650,15 +631,13 @@ func newResponseShapeRebaseTarget(t *testing.T) (mutationTarget, string) {
 	if err := store.Save(parent); err != nil {
 		t.Fatalf("Save parent: %v", err)
 	}
-	worktrees := mocks.NewMockWorktreeOps()
-	worktrees.CurrentHeadSHAFn = func(string) (string, error) { return "0123456789abcdef0123456789abcdef01234567", nil }
-	lifecycle := mocks.NewMockFeatureLifecycle()
-	lifecycle.GetFn = func(id string) (*feature.Feature, error) {
-		return &feature.Feature{ID: id, Parent: &feature.ChildRelationship{ParentID: parent.ID, Kind: feature.ChildKindRebase}}, nil
-	}
-	lifecycle.RunSetupFn = func(string, ...feature.SetupRunnerOptions) error { return nil }
+	cfg := config.NewDefault()
+	cfg.Repos[testRepoAName] = config.RepoConfig{Path: repoPath}
+	manager := feature.NewManager(store, cfg)
+	worktrees := gitadapter.NewWorktreeManager(filepath.Join(runtimeDir, "worktrees"))
+	manager.Worktrees = worktrees
 	orch := orchestrator.New(orchestrator.Deps{
-		Lifecycle: responseShapeRebaseLifecycle{MockFeatureLifecycle: lifecycle},
+		Manager:   manager,
 		Store:     store,
 		Worktrees: worktrees,
 	}, orchestrator.Hooks{})
@@ -666,12 +645,12 @@ func newResponseShapeRebaseTarget(t *testing.T) (mutationTarget, string) {
 		orch.WaitForCycles()
 		_ = orch.Shutdown()
 	})
-	return mutationTarget{orch: orch}, parent.ID
+	return newMutationTarget(Deps{Orchestrator: orch}), parent.ID
 }
 
 // newResponseShapeDiscardTarget stores an active refactor child (without
 // worktrees) under a published parent.
-func newResponseShapeDiscardTarget(t *testing.T) (mutationTarget, string) {
+func newResponseShapeDiscardTarget(t *testing.T) (*mutationTarget, string) {
 	t.Helper()
 	runtimeDir := t.TempDir()
 	store := feature.NewStore(filepath.Join(runtimeDir, "features"))
@@ -694,5 +673,5 @@ func newResponseShapeDiscardTarget(t *testing.T) (mutationTarget, string) {
 			t.Fatalf("Save %s: %v", f.ID, err)
 		}
 	}
-	return mutationTarget{orch: newStoreOrchestrator(store)}, child.ID
+	return newMutationTarget(Deps{Orchestrator: newStoreOrchestrator(store)}), child.ID
 }

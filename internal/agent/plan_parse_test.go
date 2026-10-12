@@ -123,21 +123,6 @@ func TestParsePlanTasks_NoTasksSection(t *testing.T) {
 	}
 }
 
-func TestPlanTaskRepos(t *testing.T) {
-	got := PlanTaskRepos(samplePlanMultiRepo)
-	want := []string{testRepoNameAPI, testRepoNameWeb}
-	if !reflect.DeepEqual(got, want) {
-		t.Errorf("repos = %v, want %v", got, want)
-	}
-}
-
-func TestPlanTaskRepos_SingleRepoEmptyTags(t *testing.T) {
-	got := PlanTaskRepos(samplePlanSingleRepo)
-	if got != nil {
-		t.Errorf("expected nil for untagged plan, got %v", got)
-	}
-}
-
 func TestParsePhasePlanFrontend(t *testing.T) {
 	tests := []struct {
 		name string
@@ -177,7 +162,7 @@ func TestParsePhasePlanFrontend(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got := ParsePhasePlanFrontend(tt.plan)
+			got := parsePhasePlanFrontend(tt.plan)
 			if got != tt.want {
 				t.Errorf("ParsePhasePlanFrontend() = %v, want %v", got, tt.want)
 			}
@@ -235,10 +220,6 @@ func TestParsePlanTasks_FencedHeadingsDoNotTruncate(t *testing.T) {
 	want := []string{"agentic", "agentic", "payments", "payments"}
 	if !reflect.DeepEqual(got, want) {
 		t.Errorf("repos = %v, want %v", got, want)
-	}
-	repos := PlanTaskRepos(plan)
-	if !reflect.DeepEqual(repos, []string{"agentic", "payments"}) {
-		t.Errorf("PlanTaskRepos = %v, want [agentic payments]", repos)
 	}
 }
 

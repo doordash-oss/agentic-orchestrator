@@ -17,7 +17,7 @@ limitations under the License.
 import { VerificationGateActionSchema, type VerificationGateAction } from '../../../shared/ipc';
 import type { AttentionGate } from './NeedUserInputModal';
 
-export interface NeedUserInputVerificationDecisionProps {
+interface NeedUserInputVerificationDecisionProps {
   item: AttentionGate;
   selectedAction: VerificationGateAction | '';
   idPrefix: string;

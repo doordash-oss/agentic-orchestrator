@@ -34,7 +34,7 @@ func TestReconcileSourceUpdateStateClassifiesObservedTip(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ReconcileSourceUpdateState() error = %v", err)
 	}
-	if report.State != SourceReconcileOriginalTip || report.LocalSHA != local {
+	if report.State != sourceReconcileOriginalTip || report.LocalSHA != local {
 		t.Fatalf("report = %+v; want original tip %s", report, local)
 	}
 
@@ -48,7 +48,7 @@ func TestReconcileSourceUpdateStateClassifiesObservedTip(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ReconcileSourceUpdateState() error = %v", err)
 	}
-	if report.State != SourceReconcileTargetPresent || report.LocalSHA != origin {
+	if report.State != sourceReconcileTargetPresent || report.LocalSHA != origin {
 		t.Fatalf("report = %+v; want target present %s", report, origin)
 	}
 
@@ -60,7 +60,7 @@ func TestReconcileSourceUpdateStateClassifiesObservedTip(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ReconcileSourceUpdateState() error = %v", err)
 	}
-	if report.State != SourceReconcileLocalChanged || report.LocalSHA != third {
+	if report.State != sourceReconcileLocalChanged || report.LocalSHA != third {
 		t.Fatalf("report = %+v; want local changed %s", report, third)
 	}
 }
@@ -75,7 +75,7 @@ func TestReconcileSourceUpdateStateReportsMissingBranch(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ReconcileSourceUpdateState() error = %v", err)
 	}
-	if report.State != SourceReconcileBranchMissing || report.LocalSHA != "" {
+	if report.State != sourceReconcileBranchMissing || report.LocalSHA != "" {
 		t.Fatalf("report = %+v; want branch missing", report)
 	}
 }
@@ -107,7 +107,7 @@ func TestReconcileSourceUpdateStateObservesOriginalCheckout(t *testing.T) {
 	if err != nil {
 		t.Fatalf("reconcile: %v", err)
 	}
-	if report.State != SourceReconcileOriginalTip || report.Checkout != nil {
+	if report.State != sourceReconcileOriginalTip || report.Checkout != nil {
 		t.Fatalf("report = %+v; want the original tip and no checkout observation", report)
 	}
 
@@ -117,7 +117,7 @@ func TestReconcileSourceUpdateStateObservesOriginalCheckout(t *testing.T) {
 	if err != nil {
 		t.Fatalf("reconcile: %v", err)
 	}
-	if report.Checkout == nil || report.Checkout.State != CheckoutReconcileClean ||
+	if report.Checkout == nil || report.Checkout.State != checkoutReconcileClean ||
 		report.Checkout.HeadRef != "refs/heads/main" || report.Checkout.HeadSHA != local {
 		t.Fatalf("checkout = %+v; want a clean checkout at the original tip", report.Checkout)
 	}
@@ -132,21 +132,21 @@ func TestReconcileSourceUpdateStateObservesOriginalCheckout(t *testing.T) {
 	if err != nil {
 		t.Fatalf("reconcile: %v", err)
 	}
-	if report.State != SourceReconcileTargetPresent || report.Checkout == nil ||
-		report.Checkout.State != CheckoutReconcileClean || report.Checkout.HeadSHA != origin {
+	if report.State != sourceReconcileTargetPresent || report.Checkout == nil ||
+		report.Checkout.State != checkoutReconcileClean || report.Checkout.HeadSHA != origin {
 		t.Fatalf("report = %+v; want the target tip with a clean consistent checkout", report)
 	}
 }
 
 func TestReconcileSourceUpdateStateObservesDirtyAndBusyCheckouts(t *testing.T) {
-	for name, dirty := range map[string]func(t *testing.T, repo string) CheckoutReconcileState{
-		"dirty": func(t *testing.T, repo string) CheckoutReconcileState {
+	for name, dirty := range map[string]func(t *testing.T, repo string) checkoutReconcileState{
+		"dirty": func(t *testing.T, repo string) checkoutReconcileState {
 			if err := os.WriteFile(filepath.Join(repo, "README.md"), []byte("local edit\n"), 0o644); err != nil {
 				t.Fatal(err)
 			}
-			return CheckoutReconcileDirty
+			return checkoutReconcileDirty
 		},
-		"operation in progress": func(t *testing.T, repo string) CheckoutReconcileState {
+		"operation in progress": func(t *testing.T, repo string) checkoutReconcileState {
 			gitDir := runGitUpdateTest(t, repo, "rev-parse", "--git-dir")
 			if !filepath.IsAbs(gitDir) {
 				gitDir = filepath.Join(repo, gitDir)
@@ -154,7 +154,7 @@ func TestReconcileSourceUpdateStateObservesDirtyAndBusyCheckouts(t *testing.T) {
 			if err := os.WriteFile(filepath.Join(gitDir, "MERGE_HEAD"), []byte("marker\n"), 0o644); err != nil {
 				t.Fatal(err)
 			}
-			return CheckoutReconcileOperationInProgress
+			return checkoutReconcileOperationInProgress
 		},
 	} {
 		fx := newOriginalCheckoutFixture(t)
@@ -170,7 +170,7 @@ func TestReconcileSourceUpdateStateObservesDirtyAndBusyCheckouts(t *testing.T) {
 			t.Fatalf("%s: checkout = %+v; want state %q", name, report.Checkout, want)
 		}
 		// The tip settlement is unaffected by the checkout observation.
-		if report.State != SourceReconcileOriginalTip || report.LocalSHA != local {
+		if report.State != sourceReconcileOriginalTip || report.LocalSHA != local {
 			t.Fatalf("%s: report = %+v; want the original tip", name, report)
 		}
 	}
@@ -180,21 +180,21 @@ func TestReconcileSourceUpdateStateUnobservedCheckoutFailsTruthfully(t *testing.
 	fx := newOriginalCheckoutFixture(t)
 	local := gitUpdateSHA(t, fx.repo, "refs/heads/main")
 	origin := gitUpdateSHA(t, fx.bare, "refs/heads/main")
-	options := OriginCheckOptions{Runner: BranchProbeRunnerFunc(func(ctx context.Context, repoPath string, args []string, diagnosticLimit int) BranchProbeCommandResult {
+	options := OriginCheckOptions{Runner: branchProbeRunnerFunc(func(ctx context.Context, repoPath string, args []string, diagnosticLimit int) branchProbeCommandResult {
 		if len(args) > 0 && args[0] == "status" {
-			return BranchProbeCommandResult{ExitCode: 128, Diagnostics: "checkout inspection failed"}
+			return branchProbeCommandResult{ExitCode: 128, Diagnostics: "checkout inspection failed"}
 		}
-		return ExecBranchProbeRunner{}.Run(ctx, repoPath, args, diagnosticLimit)
+		return execBranchProbeRunner{}.Run(ctx, repoPath, args, diagnosticLimit)
 	})}
 
 	report, err := ReconcileSourceUpdateState(context.Background(), fx.repo, "main", local, origin, true, options)
 	if err != nil {
 		t.Fatalf("reconcile: %v", err)
 	}
-	if report.State != SourceReconcileOriginalTip {
+	if report.State != sourceReconcileOriginalTip {
 		t.Fatalf("report = %+v; want the settled tip", report)
 	}
-	if report.Checkout == nil || report.Checkout.State != CheckoutReconcileUnobserved {
+	if report.Checkout == nil || report.Checkout.State != checkoutReconcileUnobserved {
 		t.Fatalf("checkout = %+v; want an unobserved checkout that supports no whole-checkout claim", report.Checkout)
 	}
 }
@@ -209,7 +209,7 @@ func TestReconcileSourceUpdateStateOriginalCheckoutNoLongerHoldsBranch(t *testin
 	if err != nil {
 		t.Fatalf("reconcile: %v", err)
 	}
-	if report.State != SourceReconcileOriginalTip {
+	if report.State != sourceReconcileOriginalTip {
 		t.Fatalf("report = %+v; want the original tip", report)
 	}
 	if report.Checkout != nil {

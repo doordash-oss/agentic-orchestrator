@@ -30,18 +30,18 @@ import (
 
 var ErrSetupAlreadyRunning = errors.New("setup already running")
 
-type SetupEventKind string
+type setupEventKind string
 
 const (
-	SetupEventStarted       SetupEventKind = "started"
-	SetupEventTaskStarted   SetupEventKind = "task_started"
-	SetupEventTaskCompleted SetupEventKind = "task_completed"
-	SetupEventCompleted     SetupEventKind = "completed"
-	SetupEventFailed        SetupEventKind = "failed"
+	SetupEventStarted       setupEventKind = "started"
+	setupEventTaskStarted   setupEventKind = "task_started"
+	SetupEventTaskCompleted setupEventKind = "task_completed"
+	SetupEventCompleted     setupEventKind = "completed"
+	SetupEventFailed        setupEventKind = "failed"
 )
 
 type SetupEvent struct {
-	Kind      SetupEventKind
+	Kind      setupEventKind
 	FeatureID string
 	RunNumber int
 	Attempt   int
@@ -133,8 +133,8 @@ func (m *Manager) runSetup(featureID string, retry bool, opts ...SetupRunnerOpti
 		if f.Status != StatusFailed || !errcat.IsSetupFailure(f.FailureCode()) || setup.Status != SetupStatusFailed {
 			return fmt.Errorf("setup retry requires Failed feature with a setup failure (%s, %s, or %s) and failed setup state", errcat.WorktreeSetupFailed, errcat.SetupAssetCopyFailed, errcat.SetupInterrupted)
 		}
-	} else if f.Status != StatusSettingUpWorktrees || setup.Status != SetupStatusRunning {
-		return fmt.Errorf("setup can only run from active setup state")
+	} else if f.Status != StatusSettingUpWorktrees || !setup.Status.unfinished() {
+		return fmt.Errorf("setup can only run from queued or active setup state")
 	}
 
 	attempt := setup.Attempt
@@ -202,10 +202,11 @@ func (m *Manager) runSetup(featureID string, retry bool, opts ...SetupRunnerOpti
 			continue
 		}
 		task.Attempt = attempt
-		if err := m.markSetupTaskRunning(featureID, task, logPath); err != nil {
+		task, err = m.markSetupTaskRunning(featureID, task, logPath)
+		if err != nil {
 			return err
 		}
-		emit(setupTaskEvent(SetupEventTaskStarted, featureID, current.ActiveRun, attempt, logPath, task, ""))
+		emit(setupTaskEvent(setupEventTaskStarted, featureID, current.ActiveRun, attempt, logPath, task, ""))
 
 		completed, err := m.executeSetupTask(current, task, logPath)
 		if err != nil {
@@ -221,7 +222,8 @@ func (m *Manager) runSetup(featureID string, retry bool, opts ...SetupRunnerOpti
 			emit(ev)
 			return err
 		}
-		if err := m.completeSetupTask(featureID, completed); err != nil {
+		completed, err = m.completeSetupTask(featureID, completed)
+		if err != nil {
 			return err
 		}
 		appendSetupLog(logPath, "task %s completed", completed.Key)
@@ -265,21 +267,25 @@ func (m *Manager) prepareSetupRetry(featureID string, attempt int) error {
 	})
 }
 
-func (m *Manager) markSetupTaskRunning(featureID string, task SetupTask, logPath string) error {
-	return m.Store.Modify(featureID, func(f *Feature) error {
+// markSetupTaskRunning durably moves one task to running and returns the
+// task as persisted, so the task-started event and the task's later
+// completion carry the running status and its start time.
+func (m *Manager) markSetupTaskRunning(featureID string, task SetupTask, logPath string) (SetupTask, error) {
+	now := time.Now()
+	task.Status = SetupStatusRunning
+	task.StartedAt = &now
+	task.EndedAt = nil
+	task.Error = nil
+	err := m.Store.Modify(featureID, func(f *Feature) error {
 		setup := f.Run().Setup
 		if setup == nil {
 			return fmt.Errorf("feature %s has no setup state", featureID)
 		}
-		now := time.Now()
-		task.Status = SetupStatusRunning
-		task.StartedAt = &now
-		task.EndedAt = nil
-		task.Error = nil
 		setup.LatestLogPath = logPath
 		setup.Tasks[task.Key] = task
 		return nil
 	})
+	return task, err
 }
 
 func (m *Manager) executeSetupTask(f *Feature, task SetupTask, logPath string) (SetupTask, error) {
@@ -450,16 +456,18 @@ func (m *Manager) executeAttachmentSetupTask(f *Feature, task SetupTask, logPath
 	return task, nil
 }
 
-func (m *Manager) completeSetupTask(featureID string, task SetupTask) error {
-	return m.Store.Modify(featureID, func(f *Feature) error {
+// completeSetupTask durably marks one task done and returns the task as
+// persisted, so the task-completed event reports the terminal status.
+func (m *Manager) completeSetupTask(featureID string, task SetupTask) (SetupTask, error) {
+	now := time.Now()
+	task.Status = SetupStatusDone
+	task.EndedAt = &now
+	task.Error = nil
+	err := m.Store.Modify(featureID, func(f *Feature) error {
 		setup := f.Run().Setup
 		if setup == nil {
 			return fmt.Errorf("feature %s has no setup state", featureID)
 		}
-		now := time.Now()
-		task.Status = SetupStatusDone
-		task.EndedAt = &now
-		task.Error = nil
 		setup.Tasks[task.Key] = task
 		switch task.Kind {
 		case SetupTaskWorktree:
@@ -477,6 +485,7 @@ func (m *Manager) completeSetupTask(featureID string, task SetupTask) error {
 		}
 		return nil
 	})
+	return task, err
 }
 
 // setupFailureOwner resolves the task that owns a setup failure: the task
@@ -608,13 +617,15 @@ func (m *Manager) completeSetup(featureID string) error {
 }
 
 func (m *Manager) ReconcileAbandonedSetups() ([]string, error) {
-	features, err := m.List()
+	features, err := m.Store.List()
 	if err != nil && !IsPartialLoadError(err) {
 		return nil, err
 	}
 	var reconciled []string
 	for _, f := range features {
 		setup := f.Run().Setup
+		// Only a running setup was abandoned mid-flight. A queued setup was
+		// never dispatched; it stays queued and dispatchable.
 		if setup == nil || setup.Status != SetupStatusRunning || f.Status != StatusSettingUpWorktrees {
 			continue
 		}
@@ -633,7 +644,7 @@ func (m *Manager) failAbandonedSetup(featureID, msg string) error {
 }
 
 // SetupFailureOutcome reports what FailActiveSetup durably recorded: the
-// owning task and both stored records when it marked a still-running setup
+// owning task and both stored records when it marked an unfinished setup
 // failed.
 type SetupFailureOutcome struct {
 	Marked     bool
@@ -642,9 +653,9 @@ type SetupFailureOutcome struct {
 	RunRecord  *errcat.FailureRecord
 }
 
-// FailActiveSetup durably fails a still-running setup, parking the feature
-// in Failed with a setup_interrupted record so it is retryable through
-// RetrySetup. It is a no-op (Marked=false) once setup has reached a terminal
+// FailActiveSetup durably fails an unfinished (queued or running) setup,
+// parking the feature in Failed with a setup_interrupted record so it is
+// retryable through RetrySetup. It is a no-op (Marked=false) once setup has reached a terminal
 // state, so callers that clean up after a setup runner error never clobber
 // a failure the runner already recorded — the runner owns task-level
 // diagnostics whenever it got far enough to persist them.
@@ -652,7 +663,7 @@ func (m *Manager) FailActiveSetup(featureID, msg string) (SetupFailureOutcome, e
 	var outcome SetupFailureOutcome
 	err := m.Store.Modify(featureID, func(f *Feature) error {
 		setup := f.Run().Setup
-		if setup == nil || setup.Status != SetupStatusRunning {
+		if setup == nil || !setup.Status.unfinished() {
 			return nil
 		}
 		outcome.Marked = true
@@ -716,7 +727,7 @@ func setupTaskOrder(setup *SetupState) []string {
 	return append(order, rest...)
 }
 
-func setupTaskEvent(kind SetupEventKind, featureID string, runNumber, attempt int, logPath string, task SetupTask, errMsg string) SetupEvent {
+func setupTaskEvent(kind setupEventKind, featureID string, runNumber, attempt int, logPath string, task SetupTask, errMsg string) SetupEvent {
 	return SetupEvent{
 		Kind:       kind,
 		FeatureID:  featureID,

@@ -15,17 +15,14 @@
 package orchestrator_test
 
 import (
-	"errors"
 	"os"
 	"path/filepath"
 	"strings"
-	"sync"
 	"testing"
 
 	"github.com/doordash-oss/agentic-orchestrator/internal/feature"
 	"github.com/doordash-oss/agentic-orchestrator/internal/orchestrator"
 	"github.com/doordash-oss/agentic-orchestrator/internal/ports"
-	"github.com/doordash-oss/agentic-orchestrator/test/testutil/mocks"
 )
 
 // writeTempFile writes contents to a file in t.TempDir and returns the path.
@@ -67,82 +64,6 @@ func writeExecOrderNextToPlan(t *testing.T, planPath string, repos []feature.Fea
 // Helpers
 // ---------------------------------------------------------------------------
 
-// featureStore wraps a map[string]*feature.Feature so that ModifyFn callbacks
-// observe the same object that GetFn returns. Tests mutate features via
-// store.set, and Modify applies the callback to the stored feature.
-type featureStore struct {
-	*mocks.MockFeatureStore
-	mu       sync.Mutex
-	features map[string]*feature.Feature
-}
-
-func newFeatureStore(features ...*feature.Feature) *featureStore {
-	fs := &featureStore{
-		MockFeatureStore: mocks.NewMockFeatureStore(),
-		features:         make(map[string]*feature.Feature),
-	}
-	for _, f := range features {
-		fs.features[f.ID] = f
-	}
-	fs.LoadFn = func(id string) (*feature.Feature, error) {
-		fs.mu.Lock()
-		defer fs.mu.Unlock()
-		f, ok := fs.features[id]
-		if !ok {
-			return nil, errors.New("feature not found")
-		}
-		return f, nil
-	}
-	fs.ModifyFn = func(id string, fn func(ff *feature.Feature) error) error {
-		fs.mu.Lock()
-		defer fs.mu.Unlock()
-		f, ok := fs.features[id]
-		if !ok {
-			return errors.New("feature not found")
-		}
-		return fn(f)
-	}
-	fs.ListFn = func() ([]*feature.Feature, error) {
-		fs.mu.Lock()
-		defer fs.mu.Unlock()
-		out := make([]*feature.Feature, 0, len(fs.features))
-		for _, f := range fs.features {
-			out = append(out, f)
-		}
-		return out, nil
-	}
-	return fs
-}
-
-// lifecycleForFeature returns a MockFeatureLifecycle whose Get returns the
-// supplied feature and Transition mutates the feature's Status in-place.
-func lifecycleForFeature(f *feature.Feature) *mocks.MockFeatureLifecycle {
-	lc := mocks.NewMockFeatureLifecycle()
-	lc.GetFn = func(id string) (*feature.Feature, error) { return f, nil }
-	lc.TransitionFn = func(id string, to feature.Status) error {
-		f.Status = to
-		return nil
-	}
-	return lc
-}
-
-// withStatusTransitions wires StartXxx hooks on a MockFeatureLifecycle so
-// that each transition also mutates the feature's Status field in-place.
-// Async phase loops (plan_validation.go, implement.go, final_review.go) gate
-// on isFeatureInterrupted, which reads Status from the store — without these
-// transitions the feature stays at StatusInterrupted and loops exit before
-// BuildSession fires. Tests that exercise full PhaseRunner dispatch chains
-// should apply this helper after lifecycleForFeature.
-func withStatusTransitions(lc *mocks.MockFeatureLifecycle, f *feature.Feature) *mocks.MockFeatureLifecycle {
-	lc.StartInquireFn = func(id string) error { f.Status = feature.StatusInquiring; return nil }
-	lc.StartDesignFn = func(id string) error { f.Status = feature.StatusDesigning; return nil }
-	lc.StartResearchFn = func(id string) error { f.Status = feature.StatusResearching; return nil }
-	lc.StartPlanningFn = func(id string) error { f.Status = feature.StatusPlanning; return nil }
-	lc.StartImplementationFn = func(id string) error { f.Status = feature.StatusImplementing; return nil }
-	lc.StartKnowledgeBaseFn = func(id string) error { f.Status = feature.StatusBuildingKB; return nil }
-	return lc
-}
-
 // drainEvents pulls all events currently buffered on the channel.
 func drainEvents(o *orchestrator.Orchestrator) []ports.Event {
 	var out []ports.Event
@@ -183,45 +104,4 @@ func hasPhaseCompleted(events []ports.Event, want feature.Phase) bool {
 		}
 	}
 	return false
-}
-
-// assertLifecycleCall asserts that the mock lifecycle recorded a call to the
-// named method. Returns the first matching call, or nil.
-func assertLifecycleCall(t *testing.T, lc *mocks.MockFeatureLifecycle, method string) *mocks.MockCall {
-	t.Helper()
-	for i, c := range lc.Calls {
-		if c.Method == method {
-			return &lc.Calls[i]
-		}
-	}
-	t.Errorf("expected lifecycle call %q; got calls: %v", method, lifecycleCallNames(lc))
-	return nil
-}
-
-func lifecycleCallNames(lc *mocks.MockFeatureLifecycle) []string {
-	names := make([]string, len(lc.Calls))
-	for i, c := range lc.Calls {
-		names[i] = c.Method
-	}
-	return names
-}
-
-func indexOf(names []string, want string) int {
-	for i, name := range names {
-		if name == want {
-			return i
-		}
-	}
-	return -1
-}
-
-// refuteLifecycleCall asserts that the lifecycle did NOT receive a named call.
-func refuteLifecycleCall(t *testing.T, lc *mocks.MockFeatureLifecycle, method string) {
-	t.Helper()
-	for _, c := range lc.Calls {
-		if c.Method == method {
-			t.Errorf("did not expect lifecycle call %q, but it was called; all calls: %v", method, lifecycleCallNames(lc))
-			return
-		}
-	}
 }

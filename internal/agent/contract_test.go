@@ -27,12 +27,12 @@ import (
 )
 
 func TestContractRegistryImplementerLookup(t *testing.T) {
-	contract, ok := Lookup(feature.PhaseImplement, RoleImplementer)
+	contract, ok := lookup(feature.PhaseImplement, roleImplementer)
 	if !ok {
 		t.Fatal("Lookup(PhaseImplement, RoleImplementer) ok = false, want true")
 	}
-	if contract.Role != RoleImplementer {
-		t.Fatalf("Lookup(PhaseImplement, RoleImplementer).Role = %q, want %q", contract.Role, RoleImplementer)
+	if contract.Role != roleImplementer {
+		t.Fatalf("Lookup(PhaseImplement, RoleImplementer).Role = %q, want %q", contract.Role, roleImplementer)
 	}
 	if len(contract.Required) != 1 {
 		t.Fatalf("Lookup(PhaseImplement, RoleImplementer) required artifacts = %d, want 1", len(contract.Required))
@@ -42,7 +42,7 @@ func TestContractRegistryImplementerLookup(t *testing.T) {
 func TestContractRegistryPlanRoadmapPlanner(t *testing.T) {
 	attemptDir := writeRoadmapPlannerAttempt(t, validRoadmapText(), validPlanAttemptMetaYAML())
 
-	contract, ok := Lookup(feature.PhasePlan, RolePlanRoadmapPlanner)
+	contract, ok := lookup(feature.PhasePlan, RolePlanRoadmapPlanner)
 	if !ok {
 		t.Fatal("Lookup(PhasePlan, RolePlanRoadmapPlanner) ok = false, want true")
 	}
@@ -72,7 +72,7 @@ func TestContractRegistryPlanRoadmapPlannerReportsMissingRoadmap(t *testing.T) {
 	if out.OK {
 		t.Fatal("Validate() OK = true, want false")
 	}
-	got := JoinProtocolViolations(violations)
+	got := joinProtocolViolations(violations)
 	if !strings.Contains(got, "roadmap markdown") || !strings.Contains(got, "missing") {
 		t.Fatalf("JoinProtocolViolations() = %q, want missing roadmap markdown", got)
 	}
@@ -88,7 +88,7 @@ func TestContractRegistryPlanRoadmapPlannerReportsMalformedRoadmap(t *testing.T)
 	if out.OK {
 		t.Fatal("Validate() OK = true, want false")
 	}
-	got := JoinProtocolViolations(violations)
+	got := joinProtocolViolations(violations)
 	if !strings.Contains(got, "roadmap markdown") || !strings.Contains(got, "unparseable") {
 		t.Fatalf("JoinProtocolViolations() = %q, want malformed roadmap violation", got)
 	}
@@ -104,7 +104,7 @@ func TestContractRegistryPlanRoadmapPlannerReportsMissingMeta(t *testing.T) {
 	if out.OK {
 		t.Fatal("Validate() OK = true, want false")
 	}
-	got := JoinProtocolViolations(violations)
+	got := joinProtocolViolations(violations)
 	if !strings.Contains(got, "meta.yaml") || !strings.Contains(got, "missing") {
 		t.Fatalf("JoinProtocolViolations() = %q, want missing meta.yaml", got)
 	}
@@ -117,7 +117,7 @@ func TestValidateArtifactsPreflightPlanRoadmapPlannerSkipsHarnessMeta(t *testing
 	if err != nil {
 		t.Fatalf("ValidateArtifactsPreflight() error = %v", err)
 	}
-	got := JoinProtocolViolations(violations)
+	got := joinProtocolViolations(violations)
 	if strings.Contains(got, "meta.yaml") {
 		t.Fatalf("JoinProtocolViolations() = %q, want no meta.yaml violation", got)
 	}
@@ -136,7 +136,7 @@ func TestContractRegistryPlanRoadmapPlannerReportsMalformedMeta(t *testing.T) {
 	if out.OK {
 		t.Fatal("Validate() OK = true, want false")
 	}
-	got := JoinProtocolViolations(violations)
+	got := joinProtocolViolations(violations)
 	if !strings.Contains(got, "meta.yaml") || !strings.Contains(got, "unparseable") {
 		t.Fatalf("JoinProtocolViolations() = %q, want malformed meta.yaml violation", got)
 	}
@@ -147,7 +147,7 @@ func TestContractRegistryPlanPhasePlanner(t *testing.T) {
 		PlanText: validPhasePlanText(),
 	})
 
-	contract, ok := Lookup(feature.PhasePlan, RolePlanPhasePlanner)
+	contract, ok := lookup(feature.PhasePlan, RolePlanPhasePlanner)
 	if !ok {
 		t.Fatal("Lookup(PhasePlan, RolePlanPhasePlanner) ok = false, want true")
 	}
@@ -174,7 +174,7 @@ func TestContractRegistryPlanPhasePlannerReportsMissingPlanMarkdown(t *testing.T
 	if err != nil {
 		t.Fatalf("Validate() error = %v", err)
 	}
-	got := JoinProtocolViolations(violations)
+	got := joinProtocolViolations(violations)
 	if out.OK || !strings.Contains(got, "phase plan markdown") {
 		t.Fatalf("JoinProtocolViolations() = %q, want missing phase plan markdown", got)
 	}
@@ -189,7 +189,7 @@ func TestContractRegistryPlanPhasePlannerReportsEmptyPlanMarkdown(t *testing.T) 
 	if err != nil {
 		t.Fatalf("Validate() error = %v", err)
 	}
-	got := JoinProtocolViolations(violations)
+	got := joinProtocolViolations(violations)
 	if out.OK || !strings.Contains(got, "phase plan markdown") || !strings.Contains(got, "empty") {
 		t.Fatalf("JoinProtocolViolations() = %q, want empty phase plan markdown violation", got)
 	}
@@ -213,7 +213,7 @@ func TestContractRegistryPlanPhasePlannerReportsMissingEvidenceSections(t *testi
 	if err != nil {
 		t.Fatalf("Validate() error = %v", err)
 	}
-	got := JoinProtocolViolations(violations)
+	got := joinProtocolViolations(violations)
 	if out.OK || !strings.Contains(got, "### Visual Evidence") || !strings.Contains(got, "### Behavioral Evidence") {
 		t.Fatalf("JoinProtocolViolations() = %q, want missing evidence section violations", got)
 	}
@@ -227,7 +227,7 @@ func TestContractRegistryPlanPhasePlannerReportsMissingAutomatedVerification(t *
 	if err != nil {
 		t.Fatalf("Validate() error = %v", err)
 	}
-	got := JoinProtocolViolations(violations)
+	got := joinProtocolViolations(violations)
 	if out.OK || !strings.Contains(got, "### Automated Verification") {
 		t.Fatalf("Validate() = (%+v, %q), want missing automated verification violation", out, got)
 	}
@@ -255,7 +255,7 @@ func TestContractRegistryPlanPhasePlannerRejectsUnscopedMultiRepoCommand(t *test
 	if err != nil {
 		t.Fatalf("Validate() error = %v", err)
 	}
-	got := JoinProtocolViolations(violations)
+	got := joinProtocolViolations(violations)
 	if out.OK || !strings.Contains(got, "[repo: <name>]") {
 		t.Fatalf("Validate() = (%+v, %q), want explicit multi-repo verification scope violation", out, got)
 	}
@@ -285,9 +285,41 @@ func TestContractRegistryPlanPhasePlannerRejectsEmptyNoneReasonAndManualCommand(
 	if err != nil {
 		t.Fatalf("Validate() error = %v", err)
 	}
-	got := JoinProtocolViolations(violations)
+	got := joinProtocolViolations(violations)
 	if out.OK || !strings.Contains(got, "concrete reason") || !strings.Contains(got, "without executable backtick commands") {
 		t.Fatalf("Validate() = (%+v, %q), want empty None reason and disguised manual command rejected", out, got)
+	}
+}
+
+func TestPhasePlanCommandWarningsFlagsDoubledBackslash(t *testing.T) {
+	t.Parallel()
+	single := "- [ ] Fences match: `python3 -c 'import re; re.findall(r\"^[^\\n]*$\", \"\")'`"
+	doubled := "- [ ] Fences match: `python3 -c 'import re; re.findall(r\"^[^\\\\n]*$\", \"\")'`"
+	for _, tc := range []struct {
+		name string
+		item string
+		want int
+	}{
+		{name: "single backslash", item: single, want: 0},
+		{name: "doubled backslash", item: doubled, want: 1},
+	} {
+		plan := strings.Replace(validPhasePlanText(), "- [ ] Tests pass: `go test ./...`", tc.item, 1)
+		attemptDir := writePhasePlannerAttempt(t, phasePlannerArtifacts{PlanText: plan})
+
+		out, violations, err := ValidateArtifactsPreflight(feature.PhasePlan, RolePlanPhasePlanner, attemptDir)
+		if err != nil || !out.OK {
+			t.Fatalf("%s: ValidateArtifactsPreflight() = (%+v, %v, %v), want OK (lint must only warn)", tc.name, out, violations, err)
+		}
+		got := PhasePlanCommandWarnings(feature.PhasePlan, RolePlanPhasePlanner, attemptDir)
+		if len(got) != tc.want {
+			t.Fatalf("%s: PhasePlanCommandWarnings() = %q, want %d warning(s)", tc.name, got, tc.want)
+		}
+		if tc.want > 0 && !strings.Contains(got[0], "Fences match") {
+			t.Fatalf("%s: warning %q does not name the offending item", tc.name, got[0])
+		}
+	}
+	if got := PhasePlanCommandWarnings(feature.PhasePlan, RolePlanRoadmapPlanner, t.TempDir()); got != nil {
+		t.Fatalf("PhasePlanCommandWarnings(roadmap planner) = %q, want nil", got)
 	}
 }
 
@@ -301,7 +333,7 @@ func TestContractRegistryPlanPhasePlannerRejectsMultipleManualArtifacts(t *testi
 	if err != nil {
 		t.Fatalf("Validate() error = %v", err)
 	}
-	got := JoinProtocolViolations(violations)
+	got := joinProtocolViolations(violations)
 	if out.OK || !strings.Contains(got, "single consolidated") {
 		t.Fatalf("Validate() = (%+v, %q), want consolidated manual evidence violation", out, got)
 	}
@@ -317,7 +349,7 @@ func TestContractRegistryPlanPhasePlannerRejectsMultipleBehavioralArtifacts(t *t
 	if err != nil {
 		t.Fatalf("Validate() error = %v", err)
 	}
-	got := JoinProtocolViolations(violations)
+	got := joinProtocolViolations(violations)
 	if out.OK || !strings.Contains(got, "one consolidated primary-journey artifact") {
 		t.Fatalf("Validate() = (%+v, %q), want consolidated behavioral evidence violation", out, got)
 	}
@@ -345,7 +377,7 @@ func TestContractRegistryPlanPhasePlannerReportsTaskScopedEvidenceSections(t *te
 	if err != nil {
 		t.Fatalf("Validate() error = %v", err)
 	}
-	got := JoinProtocolViolations(violations)
+	got := joinProtocolViolations(violations)
 	if out.OK || !strings.Contains(got, "Task 1") || !strings.Contains(got, "phase-level") {
 		t.Fatalf("JoinProtocolViolations() = %q, want task-scoped evidence violation", got)
 	}
@@ -374,7 +406,7 @@ func frontendPlanTextWithNoneRequiredVisualEvidence() string {
 
 func TestPhasePlanEvidenceModeViolationsRejectsFrontendWithoutRealVisualEvidenceWhenContracting(t *testing.T) {
 	violations := phasePlanEvidenceModeViolations(frontendPlanTextWithNoneRequiredVisualEvidence(), true)
-	got := JoinProtocolViolations(violations)
+	got := joinProtocolViolations(violations)
 	if !strings.Contains(got, "frontend/visual-evidence rule") || !strings.Contains(got, "real checklist visual evidence requirement") {
 		t.Fatalf("phasePlanEvidenceModeViolations() = %q, want frontend visual evidence rule violation", got)
 	}
@@ -459,7 +491,7 @@ func TestContractRegistryPlanPhasePlannerReportsMissingMeta(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Validate() error = %v", err)
 	}
-	got := JoinProtocolViolations(violations)
+	got := joinProtocolViolations(violations)
 	if out.OK || !strings.Contains(got, "meta.yaml") {
 		t.Fatalf("JoinProtocolViolations() = %q, want missing meta.yaml violation", got)
 	}
@@ -481,7 +513,7 @@ func TestContractKnowledgeBaseBuilderRequiresIndexPresence(t *testing.T) {
 		t.Fatalf("write index.md: %v", err)
 	}
 
-	contract, ok := Lookup(feature.PhaseKnowledgeBase, RoleKnowledgeBaseBuilder)
+	contract, ok := lookup(feature.PhaseKnowledgeBase, RoleKnowledgeBaseBuilder)
 	if !ok {
 		t.Fatal("Lookup(PhaseKnowledgeBase, RoleKnowledgeBaseBuilder) ok = false, want true")
 	}
@@ -558,7 +590,7 @@ func TestContractRegistryArtifactPhaseRolesRequireMarkdown(t *testing.T) {
 				t.Fatalf("write artifact: %v", err)
 			}
 
-			contract, ok := Lookup(tt.phase, tt.role)
+			contract, ok := lookup(tt.phase, tt.role)
 			if !ok {
 				t.Fatalf("Lookup(%s, %s) ok = false, want true", tt.phase, tt.role)
 			}
@@ -602,7 +634,7 @@ func TestContractRegistryArtifactPhaseRolesReportMissingMarkdown(t *testing.T) {
 			if out.OK {
 				t.Fatal("Validate() OK = true, want false")
 			}
-			got := JoinProtocolViolations(violations)
+			got := joinProtocolViolations(violations)
 			if !strings.Contains(got, "markdown") || !strings.Contains(got, "missing") {
 				t.Fatalf("JoinProtocolViolations() = %q, want missing markdown violation", got)
 			}
@@ -623,7 +655,7 @@ func TestContractRegistryArtifactPhaseRolesIgnoreExcludedMarkdown(t *testing.T) 
 	if out.OK {
 		t.Fatal("Validate() OK = true, want false")
 	}
-	if got := JoinProtocolViolations(violations); !strings.Contains(got, "markdown") {
+	if got := joinProtocolViolations(violations); !strings.Contains(got, "markdown") {
 		t.Fatalf("JoinProtocolViolations() = %q, want markdown violation", got)
 	}
 }
@@ -659,9 +691,9 @@ func TestContractRegistryImplementer(t *testing.T) {
 	iterDir := t.TempDir()
 	artifactDir := filepath.Dir(iterDir)
 	progressPath := filepath.Join(artifactDir, "progress.md")
-	writeValidProgress(t, progressPath, "", StateSuccess)
+	writeValidProgress(t, progressPath, "", stateSuccess)
 
-	out, violations, err := Validate(feature.PhaseImplement, RoleImplementer, iterDir)
+	out, violations, err := Validate(feature.PhaseImplement, roleImplementer, iterDir)
 	if err != nil {
 		t.Fatalf("Validate() error = %v", err)
 	}
@@ -680,7 +712,7 @@ func TestValidateArtifactsPreflightImplementerAcceptsAgentEvidence(t *testing.T)
 	if err := os.MkdirAll(iterDir, 0o755); err != nil {
 		t.Fatalf("mkdir iteration: %v", err)
 	}
-	writeValidProgress(t, filepath.Join(artifactDir, "progress.md"), "", StateSuccess)
+	writeValidProgress(t, filepath.Join(artifactDir, "progress.md"), "", stateSuccess)
 
 	contract := CompileTestingContract(strings.Join([]string{
 		"### Visual Evidence",
@@ -692,7 +724,7 @@ func TestValidateArtifactsPreflightImplementerAcceptsAgentEvidence(t *testing.T)
 
 	var visual TestingContractItem
 	for _, item := range contract.Items {
-		if item.Owner == TestingContractOwnerAgent && item.Source == testingContractVisualSource {
+		if item.Owner == testingContractOwnerAgent && item.Source == testingContractVisualSource {
 			visual = item
 			break
 		}
@@ -702,7 +734,7 @@ func TestValidateArtifactsPreflightImplementerAcceptsAgentEvidence(t *testing.T)
 	}
 	writeTestPNG(t, filepath.Join(iterDir, filepath.FromSlash(visual.ExpectedEvidence.Path)), 1, 1)
 
-	out, violations, err := ValidateArtifactsPreflight(feature.PhaseImplement, RoleImplementer, iterDir)
+	out, violations, err := ValidateArtifactsPreflight(feature.PhaseImplement, roleImplementer, iterDir)
 	if err != nil {
 		t.Fatalf("ValidateArtifactsPreflight() error = %v", err)
 	}
@@ -718,7 +750,7 @@ func TestValidateArtifactsPreflightImplementerReportsMissingAgentEvidence(t *tes
 	if err := os.MkdirAll(iterDir, 0o755); err != nil {
 		t.Fatalf("mkdir iteration: %v", err)
 	}
-	writeValidProgress(t, filepath.Join(artifactDir, "progress.md"), "", StateSuccess)
+	writeValidProgress(t, filepath.Join(artifactDir, "progress.md"), "", stateSuccess)
 
 	contract := CompileTestingContract(strings.Join([]string{
 		"### Manual Verification",
@@ -728,11 +760,11 @@ func TestValidateArtifactsPreflightImplementerReportsMissingAgentEvidence(t *tes
 		t.Fatalf("WriteTestingContract() error = %v", err)
 	}
 
-	_, violations, err := ValidateArtifactsPreflight(feature.PhaseImplement, RoleImplementer, iterDir)
+	_, violations, err := ValidateArtifactsPreflight(feature.PhaseImplement, roleImplementer, iterDir)
 	if err != nil {
 		t.Fatalf("ValidateArtifactsPreflight() error = %v", err)
 	}
-	got := JoinProtocolViolations(violations)
+	got := joinProtocolViolations(violations)
 	if !strings.Contains(got, "observations/confirm-the-status-copy-is-understandable-to-a-user.md") ||
 		!strings.Contains(got, "required agent-owned evidence is missing") {
 		t.Fatalf("JoinProtocolViolations() = %q, want missing agent evidence", got)
@@ -742,17 +774,33 @@ func TestValidateArtifactsPreflightImplementerReportsMissingAgentEvidence(t *tes
 func TestContractRegistryImplementerReportsMissingArtifacts(t *testing.T) {
 	iterDir := t.TempDir()
 
-	out, violations, err := Validate(feature.PhaseImplement, RoleImplementer, iterDir)
+	out, violations, err := Validate(feature.PhaseImplement, roleImplementer, iterDir)
 	if err != nil {
 		t.Fatalf("Validate() error = %v", err)
 	}
 	if out.OK {
 		t.Fatal("Validate() OK = true, want false")
 	}
-	got := JoinProtocolViolations(violations)
+	got := joinProtocolViolations(violations)
 	if !strings.Contains(got, "progress.md") {
 		t.Fatalf("JoinProtocolViolations() = %q, want progress.md", got)
 	}
+}
+
+// notRunVerificationReport builds a legacy v1 report listing each required
+// item as an unrun check.
+func notRunVerificationReport(required ...requiredVerificationItem) verificationReport {
+	report := verificationReport{Version: 1}
+	for _, item := range required {
+		report.RequiredChecks = append(report.RequiredChecks, verificationCheckResult{
+			Name:        item.Name,
+			Requirement: item.Requirement,
+			Command:     item.Requirement,
+			Mode:        verificationModeUnknown,
+			Status:      verificationStatusNotRun,
+		})
+	}
+	return report
 }
 
 func TestContractRegistryImplementerReportsMalformedProgress(t *testing.T) {
@@ -764,18 +812,18 @@ func TestContractRegistryImplementerReportsMalformedProgress(t *testing.T) {
 	if err := os.WriteFile(progressPath, []byte("# Iteration Progress\n\n## Iteration Handoff\n- malformed\n"), 0o644); err != nil {
 		t.Fatalf("write malformed progress: %v", err)
 	}
-	if err := WriteVerificationReport(reportPath, BuildVerificationReportStub(nil)); err != nil {
+	if err := writeVerificationReport(reportPath, notRunVerificationReport()); err != nil {
 		t.Fatalf("WriteVerificationReport() error = %v", err)
 	}
 
-	out, violations, err := Validate(feature.PhaseImplement, RoleImplementer, iterDir)
+	out, violations, err := Validate(feature.PhaseImplement, roleImplementer, iterDir)
 	if err != nil {
 		t.Fatalf("Validate() error = %v", err)
 	}
 	if out.OK {
 		t.Fatal("Validate() OK = true, want false")
 	}
-	got := JoinProtocolViolations(violations)
+	got := joinProtocolViolations(violations)
 	if !strings.Contains(got, "progress.md") || !strings.Contains(got, "Iteration State") {
 		t.Fatalf("JoinProtocolViolations() = %q, want progress.md Iteration State violation", got)
 	}
@@ -787,15 +835,13 @@ func TestContractRegistryImplementerAllowsRetryWithNotRunVerification(t *testing
 	progressPath := filepath.Join(artifactDir, "progress.md")
 	reportPath := filepath.Join(iterDir, "verification-report.yaml")
 
-	writeValidProgress(t, progressPath, reportPath, StateRetry)
-	report := BuildVerificationReportStub([]RequiredVerificationItem{
-		{Name: "Relevant tests pass", Requirement: "go test ./..."},
-	})
-	if err := WriteVerificationReport(reportPath, report); err != nil {
+	writeValidProgress(t, progressPath, reportPath, stateRetry)
+	report := notRunVerificationReport(requiredVerificationItem{Name: "Relevant tests pass", Requirement: "go test ./..."})
+	if err := writeVerificationReport(reportPath, report); err != nil {
 		t.Fatalf("WriteVerificationReport() error = %v", err)
 	}
 
-	out, violations, err := Validate(feature.PhaseImplement, RoleImplementer, iterDir)
+	out, violations, err := Validate(feature.PhaseImplement, roleImplementer, iterDir)
 	if err != nil {
 		t.Fatalf("Validate() error = %v", err)
 	}
@@ -813,12 +859,12 @@ func TestContractRegistryImplementerDoesNotRequireNeedUserInputForSuccess(t *tes
 	progressPath := filepath.Join(artifactDir, "progress.md")
 	reportPath := filepath.Join(iterDir, "verification-report.yaml")
 
-	writeValidProgress(t, progressPath, reportPath, StateSuccess)
-	if err := WriteVerificationReport(reportPath, BuildVerificationReportStub(nil)); err != nil {
+	writeValidProgress(t, progressPath, reportPath, stateSuccess)
+	if err := writeVerificationReport(reportPath, notRunVerificationReport()); err != nil {
 		t.Fatalf("WriteVerificationReport() error = %v", err)
 	}
 
-	out, violations, err := Validate(feature.PhaseImplement, RoleImplementer, iterDir)
+	out, violations, err := Validate(feature.PhaseImplement, roleImplementer, iterDir)
 	if err != nil {
 		t.Fatalf("Validate() error = %v", err)
 	}
@@ -828,17 +874,17 @@ func TestContractRegistryImplementerDoesNotRequireNeedUserInputForSuccess(t *tes
 }
 
 func TestContractRegistryFinalReviewFixerRequiresNoReportArtifact(t *testing.T) {
-	contract, ok := Lookup(feature.PhaseReview, RoleFinalReviewFixer)
+	contract, ok := lookup(feature.PhaseReview, roleFinalReviewFixer)
 	if !ok {
 		t.Fatal("Lookup(PhaseReview, RoleFinalReviewFixer) ok = false, want true")
 	}
-	if contract.Role != RoleFinalReviewFixer {
-		t.Fatalf("Lookup(PhaseReview, RoleFinalReviewFixer).Role = %q, want %q", contract.Role, RoleFinalReviewFixer)
+	if contract.Role != roleFinalReviewFixer {
+		t.Fatalf("Lookup(PhaseReview, RoleFinalReviewFixer).Role = %q, want %q", contract.Role, roleFinalReviewFixer)
 	}
 
 	// verification-report.yaml is harness-owned: an empty fix iteration dir
 	// must validate cleanly instead of demanding an agent-authored report.
-	out, violations, err := Validate(feature.PhaseReview, RoleFinalReviewFixer, t.TempDir())
+	out, violations, err := Validate(feature.PhaseReview, roleFinalReviewFixer, t.TempDir())
 	if err != nil {
 		t.Fatalf("Validate() error = %v", err)
 	}
@@ -857,15 +903,15 @@ func TestContractRegistryPlanValidatorRequiresAxisFeedback(t *testing.T) {
 	}
 	writeReviewFeedbackFile(t, filepath.Join(helperDir, "validation-scope-feedback.md"), testutil.StructuredReviewFeedback("", "", agentStatusApproved))
 
-	contract, ok := Lookup(feature.PhasePlan, RoleValidateRoadmapScope)
+	contract, ok := lookup(feature.PhasePlan, roleValidateRoadmapScope)
 	if !ok {
 		t.Fatal("Lookup(PhasePlan, RoleValidateRoadmapScope) ok = false, want true")
 	}
-	if contract.Role != RoleValidateRoadmapScope {
-		t.Fatalf("Lookup(PhasePlan, RoleValidateRoadmapScope).Role = %q, want %q", contract.Role, RoleValidateRoadmapScope)
+	if contract.Role != roleValidateRoadmapScope {
+		t.Fatalf("Lookup(PhasePlan, RoleValidateRoadmapScope).Role = %q, want %q", contract.Role, roleValidateRoadmapScope)
 	}
 
-	out, violations, err := Validate(feature.PhasePlan, RoleValidateRoadmapScope, helperDir)
+	out, violations, err := Validate(feature.PhasePlan, roleValidateRoadmapScope, helperDir)
 	if err != nil {
 		t.Fatalf("Validate() error = %v", err)
 	}
@@ -888,7 +934,7 @@ frozen_sections:
 		t.Fatalf("write axis approval: %v", err)
 	}
 
-	out, violations, err := Validate(feature.PhasePlan, RoleValidateRoadmapScope, helperDir)
+	out, violations, err := Validate(feature.PhasePlan, roleValidateRoadmapScope, helperDir)
 	if err != nil {
 		t.Fatalf("Validate() error = %v", err)
 	}
@@ -903,24 +949,24 @@ func TestContractRegistryPlanValidatorReportsMissingAxisFeedback(t *testing.T) {
 		t.Fatalf("MkdirAll() error = %v", err)
 	}
 
-	out, violations, err := Validate(feature.PhasePlan, RoleValidateRoadmapScope, helperDir)
+	out, violations, err := Validate(feature.PhasePlan, roleValidateRoadmapScope, helperDir)
 	if err != nil {
 		t.Fatalf("Validate() error = %v", err)
 	}
-	got := JoinProtocolViolations(violations)
+	got := joinProtocolViolations(violations)
 	if out.OK || !strings.Contains(got, "validation-scope-feedback.md") {
 		t.Fatalf("Validate() = (%+v, %q), want missing validation-scope-feedback.md", out, got)
 	}
 }
 
 func TestContractRegistryRejectsLegacyGenericPlanValidator(t *testing.T) {
-	if _, ok := Lookup(feature.PhasePlan, Role("plan_validator")); ok {
+	if _, ok := lookup(feature.PhasePlan, Role("plan_validator")); ok {
 		t.Fatal("Lookup(PhasePlan, plan_validator) ok = true, want false; validators must use per-axis RoleSpecs")
 	}
 }
 
 func TestContractRegistryRejectsLegacyIterationReviewer(t *testing.T) {
-	if _, ok := Lookup(feature.PhaseReview, Role("iteration_reviewer")); ok {
+	if _, ok := lookup(feature.PhaseReview, Role("iteration_reviewer")); ok {
 		t.Fatal("Lookup(PhaseReview, iteration_reviewer) ok = true, want false; implementation review must use per-axis RoleSpecs")
 	}
 }
@@ -932,7 +978,7 @@ func TestContractRegistryImplementationReviewAxisRequiresReviewFeedback(t *testi
 	}
 	writeReviewFeedbackFile(t, filepath.Join(helperDir, "review-feedback.md"), testutil.StructuredReviewFeedback("", "", agentStatusApproved))
 
-	contract, ok := Lookup(feature.PhaseReview, RoleImplementationReviewCraft)
+	contract, ok := lookup(feature.PhaseReview, RoleImplementationReviewCraft)
 	if !ok {
 		t.Fatal("Lookup(PhaseReview, RoleImplementationReviewCraft) ok = false, want true")
 	}
@@ -956,7 +1002,7 @@ func writeReviewFeedbackFile(t *testing.T, path, body string) {
 	}
 }
 
-func writeValidProgress(t *testing.T, path string, reportPath string, state IterationState) {
+func writeValidProgress(t *testing.T, path string, reportPath string, state iterationState) {
 	t.Helper()
 	_ = reportPath
 	body := fmt.Sprintf(`# Iteration Progress

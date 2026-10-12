@@ -104,7 +104,7 @@ func TestCodexProtocol_NativeToollessReviewConfiguresOneEphemeralTurn(t *testing
 
 	var threadReq struct {
 		Method string            `json:"method"`
-		Params ThreadStartParams `json:"params"`
+		Params threadStartParams `json:"params"`
 	}
 	if err := json.Unmarshal(buf.Bytes(), &threadReq); err != nil {
 		t.Fatalf("unmarshal thread/start: %v", err)
@@ -141,7 +141,7 @@ func TestCodexProtocol_NativeToollessReviewConfiguresOneEphemeralTurn(t *testing
 	}
 	var turnReq struct {
 		Method string          `json:"method"`
-		Params TurnStartParams `json:"params"`
+		Params turnStartParams `json:"params"`
 	}
 	if err := json.Unmarshal(buf.Bytes(), &turnReq); err != nil {
 		t.Fatalf("unmarshal turn/start: %v", err)
@@ -715,15 +715,15 @@ func TestCodexProtocol_TokenUsageUpdated(t *testing.T) {
 func TestCodexCommandExecutionCompletedIncludesStructuredFileReads(t *testing.T) {
 	p := NewProtocol(llm.ProtocolOpts{WorkDir: "/tmp/test", Model: "codex"})
 	exitCode := 0
-	params, err := json.Marshal(ItemCompletedParams{
+	params, err := json.Marshal(itemCompletedParams{
 		ThreadID: "thread-1",
 		TurnID:   "turn-1",
-		Item: ItemUnion{
+		Item: itemUnion{
 			ID:               "call_read",
 			Type:             "commandExecution",
 			AggregatedOutput: "file contents",
 			ExitCode:         &exitCode,
-			CommandActions: []CommandAction{
+			CommandActions: []commandAction{
 				{Type: "read", Path: "/tmp/state/guidelines/go/index.md"},
 				{Type: codexFileChangeOperationWrite, Path: "/tmp/state/output.txt"},
 				{Type: "read", Path: ""},
@@ -798,6 +798,9 @@ func TestCodexFileChangeCompletedIncludesStructuredDiff(t *testing.T) {
 	if msg.ToolProgress.ToolUseID != "call_write" || msg.ToolProgress.ToolName != codexToolNameWrite {
 		t.Fatalf("ToolProgress = %+v, want call_write Write", msg.ToolProgress)
 	}
+	if msg.ToolProgress.Summary != "/tmp/test/README.md" {
+		t.Fatalf("ToolProgress.Summary = %q, want the changed path", msg.ToolProgress.Summary)
+	}
 	if len(msg.FileChanges) != 1 {
 		t.Fatalf("len(FileChanges) = %d, want 1", len(msg.FileChanges))
 	}
@@ -822,12 +825,13 @@ func TestCodexFileChangeCompletedIncludesStructuredDiff(t *testing.T) {
 func TestCodexToolProgressIncludesProviderItemID(t *testing.T) {
 	p := NewProtocol(llm.ProtocolOpts{WorkDir: "/tmp/test", Model: "codex"})
 
-	startedParams, err := json.Marshal(ItemStartedParams{
+	startedParams, err := json.Marshal(itemStartedParams{
 		ThreadID: "thread-1",
 		TurnID:   "turn-1",
-		Item: ItemUnion{
-			ID:   "call_1",
-			Type: "commandExecution",
+		Item: itemUnion{
+			ID:      "call_1",
+			Type:    "commandExecution",
+			Command: "go test ./...",
 		},
 	})
 	if err != nil {
@@ -843,8 +847,11 @@ func TestCodexToolProgressIncludesProviderItemID(t *testing.T) {
 	if started.ToolProgress.ToolUseID != "call_1" || started.ToolProgress.ToolName != "Bash" {
 		t.Fatalf("started ToolProgress = %+v, want ToolUseID call_1 and Bash", started.ToolProgress)
 	}
+	if started.ToolProgress.Summary != "go test ./..." {
+		t.Fatalf("started Summary = %q, want the command", started.ToolProgress.Summary)
+	}
 
-	deltaParams, err := json.Marshal(CommandOutputDelta{
+	deltaParams, err := json.Marshal(commandOutputDelta{
 		ThreadID: "thread-1",
 		TurnID:   "turn-1",
 		ItemID:   "call_1",
@@ -862,6 +869,9 @@ func TestCodexToolProgressIncludesProviderItemID(t *testing.T) {
 	}
 	if delta.ToolProgress.ToolUseID != "call_1" || delta.ToolProgress.ToolName != "Bash" {
 		t.Fatalf("delta ToolProgress = %+v, want ToolUseID call_1 and Bash", delta.ToolProgress)
+	}
+	if delta.ToolProgress.Summary != "" {
+		t.Fatalf("delta Summary = %q, want none: output is not a summary", delta.ToolProgress.Summary)
 	}
 }
 
@@ -891,12 +901,12 @@ func TestTokenUsageUpdatedSurfacesAsSDKMessage(t *testing.T) {
 	p := NewProtocol(llm.ProtocolOpts{WorkDir: "/tmp/test"})
 	p.SetThreadIDForTest("thread-abc")
 
-	// Build the JSON-RPC notification params matching TokenUsageUpdatedParams.
-	payload := TokenUsageUpdatedParams{
+	// Build the JSON-RPC notification params matching tokenUsageUpdatedParams.
+	payload := tokenUsageUpdatedParams{
 		ThreadID: "thread-abc",
 		TurnID:   "turn-1",
-		TokenUsage: ThreadTokenUsage{
-			Total: TokenUsageBreakdown{
+		TokenUsage: threadTokenUsage{
+			Total: tokenUsageBreakdown{
 				InputTokens:  1500,
 				OutputTokens: 750,
 			},
@@ -940,7 +950,7 @@ func TestTokenUsageUpdatedSurfacesAsSDKMessage(t *testing.T) {
 func TestCodexCommandApproval_NormalizesToBash(t *testing.T) {
 	p := NewProtocol(llm.ProtocolOpts{WorkDir: "/tmp/test"})
 
-	params, err := json.Marshal(CommandApprovalParams{Command: "ls -la"})
+	params, err := json.Marshal(commandApprovalParams{Command: "ls -la"})
 	if err != nil {
 		t.Fatalf("json.Marshal: %v", err)
 	}
@@ -1088,9 +1098,9 @@ func TestCodexProtocol_ErrorResponseSurfacesAsResultError(t *testing.T) {
 
 func completedTurnParams(t *testing.T, threadID string) json.RawMessage {
 	t.Helper()
-	payload := TurnCompletedParams{
+	payload := turnCompletedParams{
 		ThreadID: threadID,
-		Turn:     CompletedTurn{ID: "turn-1", Status: "completed"},
+		Turn:     completedTurn{ID: "turn-1", Status: "completed"},
 	}
 	raw, err := json.Marshal(payload)
 	if err != nil {
@@ -1254,7 +1264,7 @@ func TestNativeReviewFailureDiagnosticsAreSanitizedAndTerminal(t *testing.T) {
 func TestInteractiveFileResultCarriesOnlySuccessfulDiffs(t *testing.T) {
 	for _, status := range []string{"completed", "failed", "declined"} {
 		t.Run(status, func(t *testing.T) {
-			var item ItemUnion
+			var item itemUnion
 			if err := json.Unmarshal([]byte(`{"id":"edit-1","type":"fileChange","changes":[{"path":"src/a.go","kind":{"type":"update"},"diff":"-old\n+new"}]}`), &item); err != nil {
 				t.Fatal(err)
 			}
@@ -1272,7 +1282,7 @@ func TestInteractiveFileResultCarriesOnlySuccessfulDiffs(t *testing.T) {
 }
 
 func TestCodexShellToolHistoryPreservesCwd(t *testing.T) {
-	msg := toolUseMessage(ItemUnion{ID: "shell", Type: "commandExecution", Command: "python3 edit.py", Cwd: "/repo"}, nil)
+	msg := toolUseMessage(itemUnion{ID: "shell", Type: "commandExecution", Command: "python3 edit.py", Cwd: "/repo"}, nil)
 	var input map[string]any
 	json.Unmarshal(msg.Assistant.Message.Content[0].Input, &input)
 	if input["cwd"] != "/repo" {

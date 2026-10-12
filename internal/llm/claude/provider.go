@@ -18,9 +18,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"os/exec"
 	"strings"
-	"sync"
 
 	"github.com/doordash-oss/agentic-orchestrator/internal/llm"
 	"github.com/doordash-oss/agentic-orchestrator/internal/llm/clirun"
@@ -32,18 +30,25 @@ const defaultBinary = "claude"
 
 // Provider implements llm.LLMProvider for Claude Code CLI.
 type Provider struct {
-	mu      sync.RWMutex
-	catalog []llm.ModelInfo
-	runner  clirun.CommandRunner
+	// Catalog holds the discovered model catalog and the offline
+	// routing defaults; its promoted methods are the provider's catalog
+	// surface.
+	llm.Catalog
+	runner clirun.CommandRunner
 	// binary overrides the CLI executable name; empty means defaultBinary.
 	binary string
 }
 
-func (p *Provider) Name() string { return "claude" }
+// NewProvider returns a Claude provider that launches binary instead of the
+// claude executable on PATH; empty means the default. The embedded catalog is
+// bound to the resolved CLI name and the hardcoded default entries.
+func NewProvider(binary string) *Provider {
+	p := &Provider{binary: binary}
+	p.Catalog = llm.NewCatalog(p.cliBinary(), defaultModelInfos)
+	return p
+}
 
-// SupportsSessionResume reports that a prior CLI session can be resumed via
-// CommandBuildOpts.ResumeSessionID (the --resume flag).
-func (p *Provider) SupportsSessionResume() bool { return true }
+func (p *Provider) Name() string { return "claude" }
 
 // cliBinary returns the configured CLI executable name, falling back to the
 // provider default when no override is set.
@@ -52,46 +57,6 @@ func (p *Provider) cliBinary() string {
 		return p.binary
 	}
 	return defaultBinary
-}
-
-func (p *Provider) MatchesModel(model string) bool {
-	p.mu.RLock()
-	cat := p.catalog
-	p.mu.RUnlock()
-	if len(cat) == 0 {
-		cat = p.defaultModelInfos()
-	}
-	m := strings.ToLower(model)
-	for _, entry := range cat {
-		if strings.EqualFold(entry.ID, m) {
-			return true
-		}
-		for _, alias := range entry.Aliases {
-			if strings.EqualFold(alias, m) {
-				return true
-			}
-		}
-	}
-	return false
-}
-
-func (p *Provider) DetectCLI() bool {
-	_, err := exec.LookPath(p.cliBinary())
-	return err == nil
-}
-
-func (p *Provider) AvailableModels() []string {
-	p.mu.RLock()
-	cat := p.catalog
-	p.mu.RUnlock()
-	if len(cat) == 0 {
-		cat = p.defaultModelInfos()
-	}
-	ids := make([]string, len(cat))
-	for i, m := range cat {
-		ids[i] = m.ID
-	}
-	return ids
 }
 
 func (p *Provider) BuildCommand(opts llm.CommandBuildOpts) ([]string, []string, error) {
@@ -129,35 +94,6 @@ Preferred free-text shape when the value is inherently unconstrained:
 {"questions":[{"header":"Version","question":"What exact version should Agentic be bumped to?","multiSelect":false,"options":[]}]} `
 }
 
-func (p *Provider) ComputeCost(_ string, _, _ int64) float64 {
-	// Claude CLI reports cost in the result message TotalCostUSD field.
-	return 0
-}
-
-func (p *Provider) ContextWindowForModel(model string) int {
-	p.mu.RLock()
-	cat := p.catalog
-	p.mu.RUnlock()
-	if len(cat) == 0 {
-		cat = p.defaultModelInfos()
-	}
-	for _, entry := range cat {
-		if strings.EqualFold(entry.ID, model) {
-			if entry.ContextWindow > 0 {
-				return entry.ContextWindow
-			}
-		}
-		for _, alias := range entry.Aliases {
-			if strings.EqualFold(alias, model) {
-				if entry.ContextWindow > 0 {
-					return entry.ContextWindow
-				}
-			}
-		}
-	}
-	return 0
-}
-
 func (p *Provider) NewProtocol(opts llm.ProtocolOpts) llm.Protocol {
 	return NewProtocol(opts)
 }
@@ -168,11 +104,11 @@ func (p *Provider) InstallHint() string {
 
 func (p *Provider) VersionInfo() (string, error) {
 	bin := p.cliBinary()
-	out, err := exec.Command(bin, "--version").CombinedOutput()
+	out, err := clirun.VersionProbe(p.runner, bin)
 	if err != nil {
 		return "", fmt.Errorf("failed to run '%s --version': %w", bin, err)
 	}
-	return strings.TrimSpace(string(out)), nil
+	return out, nil
 }
 
 func (p *Provider) MinVersion() [3]int { return [3]int{2, 1, 81} }
@@ -244,27 +180,6 @@ func formatReadyAuthDetail(status authStatus) string {
 	}
 }
 
-// PhaseDefaults returns Claude's recommended models per phase.
-// SetModelCatalog sets the discovered model catalog.
-func (p *Provider) SetModelCatalog(models []llm.ModelInfo) {
-	p.mu.Lock()
-	p.catalog = models
-	p.mu.Unlock()
-}
-
-// ModelCatalog returns the current catalog. Falls back to the hardcoded
-// defaults when nothing has been set, so callers (desktop app, registry) always see
-// a populated catalog without needing an explicit seeding step.
-func (p *Provider) ModelCatalog() []llm.ModelInfo {
-	p.mu.RLock()
-	cat := p.catalog
-	p.mu.RUnlock()
-	if len(cat) == 0 {
-		return p.defaultModelInfos()
-	}
-	return cat
-}
-
 // RecommendedModels nominates the balanced Claude family as the default for
 // every role. Provider-local family knowledge stays out of shared selection
 // code; configured model_recommendations override these nominations.
@@ -296,24 +211,10 @@ func reviewModelMatchesHint(model llm.ModelInfo, hint string) bool {
 	return false
 }
 
-// CLIVersion returns the installed Claude CLI version.
-func (p *Provider) CLIVersion() (string, error) {
-	runner := p.runner
-	if runner == nil {
-		runner = clirun.DefaultRunner()
-	}
-	bin := p.cliBinary()
-	out, err := runner(context.Background(), bin, []string{"--version"}, nil)
-	if err != nil {
-		return "", fmt.Errorf("running %s --version: %w", bin, err)
-	}
-	return clirun.ParseVersionOutput(out)
-}
-
 // defaultModelInfos supplies offline routing defaults when initialization and
 // the persisted catalog are unavailable. Discovery never filters through this
 // list, and these hints never claim to be CLI-reported capabilities.
-func (p *Provider) defaultModelInfos() []llm.ModelInfo {
+func defaultModelInfos() []llm.ModelInfo {
 	return []llm.ModelInfo{
 		{ID: "fable[1M]", DisplayName: "Claude Fable (1M)", ContextWindow: 1_000_000, Aliases: []string{"fable"}, Category: "capable"},
 		{ID: "opus[200K]", DisplayName: "Claude Opus (200K)", ContextWindow: 200_000, Aliases: []string{"opus"}, Category: "capable"},
@@ -326,8 +227,8 @@ func (p *Provider) defaultModelInfos() []llm.ModelInfo {
 
 // --- Command building helpers ---
 
-// InsertAfterBinary inserts flags right after the binary name (args[0]).
-func InsertAfterBinary(cmd []string, flags ...string) []string {
+// insertAfterBinary inserts flags right after the binary name (args[0]).
+func insertAfterBinary(cmd []string, flags ...string) []string {
 	if len(cmd) == 0 {
 		return cmd
 	}
@@ -355,12 +256,12 @@ func buildInteractiveCommand(binary string, opts llm.CommandBuildOpts) []string 
 	// agents, and other customizations while retaining normal authentication.
 	// It ensures the hidden reviewer's context contains only the static review
 	// policy and declared execution-context fields.
-	if opts.NoCustomization {
-		args = InsertAfterBinary(args, "--safe-mode")
+	if opts.NativeToollessReview {
+		args = insertAfterBinary(args, "--safe-mode")
 	}
 
 	if opts.DangerouslySkipPerms {
-		args = InsertAfterBinary(args, "--dangerously-skip-permissions")
+		args = insertAfterBinary(args, "--dangerously-skip-permissions")
 	}
 
 	// Pin the session permission mode when the caller asks for a specific one.
@@ -369,7 +270,7 @@ func buildInteractiveCommand(binary string, opts llm.CommandBuildOpts) []string 
 	// clarifying questions" system-reminder that silently overrides
 	// grilling-phase prompts ([grill-me]).
 	if opts.PermissionMode != "" {
-		args = InsertAfterBinary(args, "--permission-mode", opts.PermissionMode)
+		args = insertAfterBinary(args, "--permission-mode", opts.PermissionMode)
 	}
 
 	// Activate the control_request protocol for AskUserQuestion and tool permissions
@@ -377,32 +278,19 @@ func buildInteractiveCommand(binary string, opts llm.CommandBuildOpts) []string 
 	if tool == "" {
 		tool = "stdio"
 	}
-	args = InsertAfterBinary(args, "--permission-prompt-tool", tool)
+	args = insertAfterBinary(args, "--permission-prompt-tool", tool)
 
 	for _, dir := range opts.AdditionalDirs {
 		if dir != "" {
-			args = InsertAfterBinary(args, "--add-dir", dir)
+			args = insertAfterBinary(args, "--add-dir", dir)
 		}
 	}
 	return args
 }
 
 func (p *Provider) claudeCLIModel(model string) string {
-	p.mu.RLock()
-	cat := p.catalog
-	p.mu.RUnlock()
-	if len(cat) == 0 {
-		cat = p.defaultModelInfos()
-	}
-	for _, entry := range cat {
-		if strings.EqualFold(entry.ID, model) {
-			return claudeCLIModelForCatalogEntry(entry)
-		}
-		for _, alias := range entry.Aliases {
-			if strings.EqualFold(alias, model) {
-				return claudeCLIModelForCatalogEntry(entry)
-			}
-		}
+	if entry, ok := llm.LookupModel(p.ModelCatalog(), model); ok {
+		return claudeCLIModelForCatalogEntry(entry)
 	}
 	return model
 }
@@ -421,7 +309,7 @@ func applyStreamingOpts(args []string, opts llm.CommandBuildOpts) []string {
 	if opts.SystemPrompt != "" {
 		args = append(args, "--append-system-prompt", opts.SystemPrompt)
 	}
-	if opts.ZeroTools {
+	if opts.NativeToollessReview {
 		args = append(args, "--tools", "")
 	} else if len(opts.DisallowedTools) > 0 {
 		args = append(args, "--disallowedTools", strings.Join(opts.DisallowedTools, ","))
@@ -429,7 +317,7 @@ func applyStreamingOpts(args []string, opts llm.CommandBuildOpts) []string {
 	if len(opts.AllowedTools) > 0 {
 		args = append(args, "--allowedTools", strings.Join(opts.AllowedTools, ","))
 	}
-	if opts.NoSessionPersistence {
+	if opts.NativeToollessReview {
 		args = append(args, "--no-session-persistence")
 	}
 	if opts.ResumeSessionID != "" {

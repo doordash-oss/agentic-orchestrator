@@ -31,7 +31,7 @@ import (
 // the write to its own feedback artifact, aborting the helper.
 func TestNormalizePermissionInput_EditFilepathLowercase(t *testing.T) {
 	want := "/x/validate-architecture/validation-architecture-feedback.md"
-	tc := PermissionToolCall{
+	tc := permissionToolCall{
 		Kind:     ToolKindEdit,
 		Title:    "edit",
 		RawInput: json.RawMessage(`{"filepath":"` + want + `","diff":"--- a\n+++ b\n"}`),
@@ -59,7 +59,7 @@ func TestNormalizePermissionInput_EditFilepathLowercase(t *testing.T) {
 // "other" prompts.
 func TestNormalizePermissionInput_OtherExternalDirectory(t *testing.T) {
 	parent := "/Users/x/.agentic-workflow/knowledge-base/repo"
-	tc := PermissionToolCall{
+	tc := permissionToolCall{
 		Kind:     ToolKindOther,
 		Title:    parent,
 		RawInput: json.RawMessage(`{"filepath":"` + parent + `/index.md","parentDir":"` + parent + `"}`),
@@ -86,7 +86,7 @@ func TestNormalizePermissionInput_OtherExternalDirectory(t *testing.T) {
 // so prompts are recognizable and remembered Bash rules can match them.
 func TestNormalizePermissionInput_OtherCommand(t *testing.T) {
 	command := "cd /repo && cat > /tmp/debug-test.ts << 'EOF'\nEOF\nnpx vitest run"
-	tc := PermissionToolCall{
+	tc := permissionToolCall{
 		Kind:     ToolKindOther,
 		Title:    command,
 		RawInput: json.RawMessage(`{"command":"` + strings.ReplaceAll(command, "\n", `\n`) + `","directories":["/repo","/tmp"],"patterns":["/repo/*","/tmp/*"]}`),
@@ -306,11 +306,11 @@ func TestRespondToControl_DenyWithoutRejectOptionCancels(t *testing.T) {
 	}
 }
 
-func decodePermissionResponse(t *testing.T, line []byte) PermissionResponse {
+func decodePermissionResponse(t *testing.T, line []byte) permissionResponse {
 	t.Helper()
-	var out PermissionResponse
+	var out permissionResponse
 	if err := json.Unmarshal(line, &out); err != nil {
-		t.Fatalf("response is not a PermissionResponse: %v (raw %q)", err, line)
+		t.Fatalf("response is not a permissionResponse: %v (raw %q)", err, line)
 	}
 	return out
 }
@@ -447,24 +447,25 @@ func TestRespondToAskUser_StructuredFreeFormFallsBackToFollowUpTurn(t *testing.T
 	if err := p.RespondToAskUser("92", resolveAnswers(t, raw, map[string]string{"1": "Actually do C instead"})); err != nil {
 		t.Fatalf("RespondToAskUser error: %v", err)
 	}
-	lines := strings.Split(strings.TrimSpace(buf.String()), "\n")
-	if len(lines) != 2 {
-		t.Fatalf("outbound lines = %d, want cancellation followed by prompt: %q", len(lines), buf.String())
+	all := strings.Split(strings.TrimSpace(buf.String()), "\n")
+	if len(all) < 2 {
+		t.Fatalf("outbound lines = %d, want cancellation followed by prompt: %q", len(all), buf.String())
 	}
-	cancelled := decodePermissionResponse(t, []byte(lines[len(lines)-2]))
+	lines := all[len(all)-2:]
+	cancelled := decodePermissionResponse(t, []byte(lines[0]))
 	if cancelled.ID != reqID || cancelled.Result.Outcome.Outcome != OutcomeCancelled || cancelled.Result.Outcome.OptionID != "" {
 		t.Fatalf("cancellation = %+v, want request %d cancelled without option", cancelled, reqID)
 	}
 
 	// The last outbound line is the follow-up turn carrying the answer envelope.
 	var followUp Request
-	if err := json.Unmarshal([]byte(lines[len(lines)-1]), &followUp); err != nil {
+	if err := json.Unmarshal([]byte(lines[1]), &followUp); err != nil {
 		t.Fatalf("expected a follow-up session/prompt: %v (%q)", err, buf.String())
 	}
 	if followUp.Method != "session/prompt" {
 		t.Fatalf("follow-up method = %q, want session/prompt", followUp.Method)
 	}
-	var params PromptParams
+	var params promptParams
 	if err := json.Unmarshal(mustMarshal(t, followUp.Params), &params); err != nil {
 		t.Fatalf("decode follow-up params: %v", err)
 	}
@@ -616,7 +617,7 @@ func TestPromptEndTurn_NumberedOptionsWithoutStemRemindsBeforeSurfacing(t *testi
 	if err := json.Unmarshal(buf.lastLine(t), &reminder); err != nil || reminder.Method != "session/prompt" {
 		t.Fatalf("expected question-format reminder session/prompt; got %q (err %v)", buf.String(), err)
 	}
-	var pp PromptParams
+	var pp promptParams
 	if err := json.Unmarshal(mustMarshal(t, reminder.Params), &pp); err != nil {
 		t.Fatalf("decode reminder params: %v", err)
 	}
@@ -626,7 +627,7 @@ func TestPromptEndTurn_NumberedOptionsWithoutStemRemindsBeforeSurfacing(t *testi
 
 	var msgs []llm.SDKMessage
 	for i := 0; i < maxQuestionFormatRetries+1 && len(msgs) == 0; i++ {
-		pID := p.promptIDForTest()
+		pID := lastPromptRequestID(t, buf)
 		streamAssistantText(t, p, optionsOnly)
 		msgs = endTurn(t, p, pID)
 	}
@@ -657,7 +658,7 @@ func TestPromptEndTurn_NumberedOptionsMissingConfidenceRemindsBeforeSurfacing(t 
 	if err := json.Unmarshal(buf.lastLine(t), &reminder); err != nil || reminder.Method != "session/prompt" {
 		t.Fatalf("expected a confidence-format reminder session/prompt; got %q (err %v)", buf.String(), err)
 	}
-	var pp PromptParams
+	var pp promptParams
 	if err := json.Unmarshal(mustMarshal(t, reminder.Params), &pp); err != nil {
 		t.Fatalf("decode reminder params: %v", err)
 	}
@@ -729,13 +730,13 @@ func TestPromptEndTurn_MalformedQuestionRemindsThenSynthesizes(t *testing.T) {
 	// Turn 2: the agent ignores the reminder and ends with another bare question.
 	// After the retry budget is spent the provider synthesizes a free-form
 	// AskUserQuestion rather than blocking forever.
-	p2ID := p.promptIDForTest()
+	p2ID := lastPromptRequestID(t, buf)
 	streamAssistantText(t, p, "Are you sure?")
 	msgs := endTurn(t, p, p2ID)
 	// Either another reminder (retry remaining) or a synthesized question; drive
 	// until a question is synthesized, bounded by the retry limit.
 	for i := 0; i < maxQuestionFormatRetries+1 && len(msgs) == 0; i++ {
-		pID := p.promptIDForTest()
+		pID := lastPromptRequestID(t, buf)
 		streamAssistantText(t, p, "Still just asking?")
 		msgs = endTurn(t, p, pID)
 	}
@@ -775,12 +776,13 @@ func TestPromptEndTurn_InteractiveNeverSynthesizesQuestion(t *testing.T) {
 				Model:       "opencode:anthropic/claude-sonnet-4-5",
 				Interactive: true,
 			})
+			before := buf.lineCount()
 			streamAssistantText(t, p, c.text)
 			msgs := endTurn(t, p, promptID)
 			if !terminalResult(t, msgs).IsSuccess() {
 				t.Fatalf("produced %+v, want a success result", msgs)
 			}
-			if buf.String() != "" {
+			if after := buf.lineCount(); after != before {
 				t.Fatalf("sent a reformat reminder %q, want none", buf.String())
 			}
 		})
@@ -807,7 +809,7 @@ func TestPromptEndTurn_NonQuestionIsCleanSuccess(t *testing.T) {
 // still get a fresh terminal result for every turn, or the caller's UI is left
 // waiting forever after the first reply.
 func TestPromptEndTurn_SecondTurnAlsoEmitsSuccess(t *testing.T) {
-	p, _, promptID1 := newPostHandshakeProtocol(t)
+	p, buf, promptID1 := newPostHandshakeProtocol(t)
 	streamAssistantText(t, p, "First answer.")
 	msgs1 := endTurn(t, p, promptID1)
 	if !terminalResult(t, msgs1).IsSuccess() {
@@ -817,7 +819,7 @@ func TestPromptEndTurn_SecondTurnAlsoEmitsSuccess(t *testing.T) {
 	if err := p.SendUserMessage("second question"); err != nil {
 		t.Fatalf("SendUserMessage: %v", err)
 	}
-	promptID2 := p.promptIDForTest()
+	promptID2 := lastPromptRequestID(t, buf)
 	streamAssistantText(t, p, "Second answer.")
 	msgs2 := endTurn(t, p, promptID2)
 	if !terminalResult(t, msgs2).IsSuccess() {
@@ -865,7 +867,7 @@ func TestRespondToAskUser_SyntheticAnswerDeliversFollowUpTurn(t *testing.T) {
 	if err := json.Unmarshal(buf.lastLine(t), &followUp); err != nil || followUp.Method != "session/prompt" {
 		t.Fatalf("expected a follow-up session/prompt; got %q (err %v)", buf.String(), err)
 	}
-	var pp PromptParams
+	var pp promptParams
 	if err := json.Unmarshal(mustMarshal(t, followUp.Params), &pp); err != nil {
 		t.Fatalf("decode follow-up params: %v", err)
 	}

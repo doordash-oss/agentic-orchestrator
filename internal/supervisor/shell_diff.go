@@ -263,10 +263,6 @@ func shellPatch(path string, before, after []byte, operation string) *llm.FileCh
 	return change
 }
 
-func (r *shellRepository) changes() []llm.FileChangeEvent {
-	return r.changesExcept(nil)
-}
-
 func (r *shellRepository) changesExcept(native map[string]bool) []llm.FileChangeEvent {
 	next, ok := r.snapshot()
 	if !ok {

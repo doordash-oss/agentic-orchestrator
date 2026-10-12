@@ -28,7 +28,29 @@ import (
 	"github.com/doordash-oss/agentic-orchestrator/internal/observe"
 	"github.com/doordash-oss/agentic-orchestrator/internal/session"
 	"github.com/doordash-oss/agentic-orchestrator/test/testutil"
+	"go.uber.org/fx"
 )
+
+// observerFromModule builds the observer through the fx module with the
+// given observability settings (events flag, OTel off, service name) and
+// state dir, mirroring the production construction path.
+func observerFromModule(t *testing.T, events bool, stateDir, serviceName string) *observe.Observer {
+	t.Helper()
+	cfg := config.NewDefault()
+	cfg.Observability.Events = events
+	cfg.Observability.OTelServiceName = serviceName
+	var obs *observe.Observer
+	app := fx.New(
+		fx.Supply(cfg, fx.Annotate(stateDir, fx.ResultTags(`name:"stateDir"`))),
+		observe.Module,
+		fx.Populate(&obs),
+		fx.NopLogger,
+	)
+	if err := app.Err(); err != nil {
+		t.Fatalf("build observer: %v", err)
+	}
+	return obs
+}
 
 type contextReadTrackerTestSession struct {
 	onToolAllowed func(string, json.RawMessage)
@@ -109,18 +131,18 @@ func TestContextReadTrackerEmitsProviderReportedGuidelineRead(t *testing.T) {
 	if err := os.MkdirAll(filepath.Join(observeDir, featureID), 0o755); err != nil {
 		t.Fatalf("mkdir feature observe dir: %v", err)
 	}
-	obs := observe.New(true, observeDir, false, "", false, "agentic-test")
+	obs := observerFromModule(t, true, observeDir, "agentic-test")
 	guidelinesDir := filepath.Join(t.TempDir(), "guidelines")
 	sess := &contextReadTrackerTestSession{}
 	sc := observe.SpanContextForFeature(featureID, "trace-1", "feature", "span-1").Child()
 
-	tracker := &ContextReadTracker{
+	tracker := &contextReadTracker{
 		KBBaseDir:     filepath.Join(t.TempDir(), "knowledge-base"),
 		SkillsDir:     filepath.Join(t.TempDir(), "skills"),
 		GuidelinesDir: guidelinesDir,
 		Observer:      obs,
 	}
-	tracker.Install(sess, sc, feature.PhaseImplement.String(), "session-1")
+	tracker.install(sess, sc, feature.PhaseImplement.String(), "session-1")
 	if sess.onFileRead == nil {
 		t.Fatal("onFileRead callback was not installed")
 	}
@@ -165,7 +187,7 @@ func TestImplementLoopEmitsFullEventSequence(t *testing.T) {
 	observeDir := t.TempDir()
 	featureID := "test-observe-impl-001"
 	os.MkdirAll(filepath.Join(observeDir, featureID), 0755)
-	obs := observe.New(true, observeDir, false, "", false, "agentic")
+	obs := observerFromModule(t, true, observeDir, "agentic")
 
 	// Create feature state directory
 	stateDir := t.TempDir()
@@ -235,7 +257,7 @@ func TestImplementLoopEmitsFullEventSequence(t *testing.T) {
 		Observer:            obs,
 	}
 
-	result, err := RunImplementationLoop(cfg, sm)
+	result, err := runImplementationLoop(cfg, sm)
 	if err != nil {
 		t.Fatalf("RunImplementationLoop error: %v", err)
 	}
@@ -373,7 +395,7 @@ func TestRunInquireEmitsPhaseAndSessionEvents(t *testing.T) {
 	observeDir := t.TempDir()
 	featureID := "test-observe-inquire-001"
 	os.MkdirAll(filepath.Join(observeDir, featureID), 0755)
-	obs := observe.New(true, observeDir, false, "", false, "agentic")
+	obs := observerFromModule(t, true, observeDir, "agentic")
 
 	stateDir := t.TempDir()
 	store := feature.NewStore(stateDir)
@@ -413,6 +435,7 @@ func TestRunInquireEmitsPhaseAndSessionEvents(t *testing.T) {
 		Observer:       obs,
 		BuildSessionFn: func(opts BuildSessionOpts) ([]string, []string, *session.SessionOpts, error) {
 			return []string{"bash", agentScript}, nil, &session.SessionOpts{
+				Protocol: testSessionProtocol(opts.Prompt),
 				PIDDir:   opts.PIDDir,
 				RepoName: opts.RepoName,
 			}, nil
@@ -487,7 +510,7 @@ func TestRunResearchEmitsPhaseAndSessionEvents(t *testing.T) {
 	observeDir := t.TempDir()
 	featureID := "test-observe-research-001"
 	os.MkdirAll(filepath.Join(observeDir, featureID), 0755)
-	obs := observe.New(true, observeDir, false, "", false, "agentic")
+	obs := observerFromModule(t, true, observeDir, "agentic")
 
 	stateDir := t.TempDir()
 	store := feature.NewStore(stateDir)
@@ -527,6 +550,7 @@ func TestRunResearchEmitsPhaseAndSessionEvents(t *testing.T) {
 		Observer:       obs,
 		BuildSessionFn: func(opts BuildSessionOpts) ([]string, []string, *session.SessionOpts, error) {
 			return []string{"bash", agentScript}, nil, &session.SessionOpts{
+				Protocol: testSessionProtocol(opts.Prompt),
 				PIDDir:   opts.PIDDir,
 				RepoName: opts.RepoName,
 			}, nil
@@ -606,7 +630,7 @@ func TestRunKBForRepoEmitsEventsWithRepoName(t *testing.T) {
 	observeDir := t.TempDir()
 	featureID := "test-observe-kb-001"
 	os.MkdirAll(filepath.Join(observeDir, featureID), 0755)
-	obs := observe.New(true, observeDir, false, "", false, "agentic")
+	obs := observerFromModule(t, true, observeDir, "agentic")
 
 	// stateDir must be structured so KBStateDir resolves correctly:
 	// KBStateDir(stateDir, repoName) = filepath.Dir(stateDir) + "/knowledge-base/" + repoName
@@ -652,6 +676,7 @@ func TestRunKBForRepoEmitsEventsWithRepoName(t *testing.T) {
 		Observer:       obs,
 		BuildSessionFn: func(opts BuildSessionOpts) ([]string, []string, *session.SessionOpts, error) {
 			return []string{"bash", agentScript}, nil, &session.SessionOpts{
+				Protocol: testSessionProtocol(opts.Prompt),
 				PIDDir:   opts.PIDDir,
 				RepoName: opts.RepoName,
 			}, nil
@@ -733,7 +758,7 @@ func TestRunKBForRepoEmitsEventsWithRepoName(t *testing.T) {
 
 	// Verify KB lock was released (cleanup func ran)
 	kbDir := KBStateDir(stateDir, repo.Name)
-	lockPath := KBLockPath(kbDir)
+	lockPath := kbLockPath(kbDir)
 	if _, err := os.Stat(lockPath); !os.IsNotExist(err) {
 		t.Error("KB lock should have been released after session ended")
 	}
@@ -747,7 +772,7 @@ func TestImplementLoopMultiIterationEmitsUniqueSpans(t *testing.T) {
 	observeDir := t.TempDir()
 	featureID := "test-observe-multi-iter-001"
 	os.MkdirAll(filepath.Join(observeDir, featureID), 0755)
-	obs := observe.New(true, observeDir, false, "", false, "agentic")
+	obs := observerFromModule(t, true, observeDir, "agentic")
 
 	stateDir := t.TempDir()
 	store := feature.NewStore(stateDir)
@@ -812,12 +837,12 @@ fi
 		MaxConsecNoProgress: 5,
 		Model:               "test-model",
 		ReviewModel:         "test-review-model",
-		BuildSession:        mockBuildSession(agentScript, reviewScript),
+		BuildSession:        mockBuildSessionStillCrashingOnResume(agentScript, reviewScript),
 		ExitCriteria:        "test criteria",
 		Observer:            obs,
 	}
 
-	result, err := RunImplementationLoop(cfg, sm)
+	result, err := runImplementationLoop(cfg, sm)
 	if err != nil {
 		t.Fatalf("RunImplementationLoop error: %v", err)
 	}
@@ -865,12 +890,14 @@ fi
 	// Each iteration should have its own session.started/ended pair
 	sessionStarted := filterEventsByType(events, "session.started")
 	sessionEnded := filterEventsByType(events, "session.ended")
-	// Iteration 1: 1 impl session; Iteration 2: 1 impl session + 3 review axes = 5 total
-	if len(sessionStarted) != 5 {
-		t.Errorf("expected 5 session.started events (2 impl + 3 review axes), got %d", len(sessionStarted))
+	// Iteration 1: impl session + one crash-resume session (the mock agent's
+	// silent exit is a process crash, so the loop restarts the provider once);
+	// Iteration 2: 1 impl session + 3 review axes = 6 total
+	if len(sessionStarted) != 6 {
+		t.Errorf("expected 6 session.started events (3 impl incl. one crash resume + 3 review axes), got %d", len(sessionStarted))
 	}
-	if len(sessionEnded) != 5 {
-		t.Errorf("expected 5 session.ended events, got %d", len(sessionEnded))
+	if len(sessionEnded) != 6 {
+		t.Errorf("expected 6 session.ended events, got %d", len(sessionEnded))
 	}
 
 	// Review events should only appear once (iteration 2)
@@ -911,7 +938,7 @@ func TestImplementLoopFailurePathEmitsPhaseCompleted(t *testing.T) {
 	observeDir := t.TempDir()
 	featureID := "test-observe-failure-001"
 	os.MkdirAll(filepath.Join(observeDir, featureID), 0755)
-	obs := observe.New(true, observeDir, false, "", false, "agentic")
+	obs := observerFromModule(t, true, observeDir, "agentic")
 
 	stateDir := t.TempDir()
 	store := feature.NewStore(stateDir)
@@ -965,12 +992,12 @@ func TestImplementLoopFailurePathEmitsPhaseCompleted(t *testing.T) {
 		MaxConsecNoProgress: 10,
 		Model:               "test-model",
 		ReviewModel:         "test-review-model",
-		BuildSession:        mockBuildSession(agentScript, reviewScript),
+		BuildSession:        mockBuildSessionStillCrashingOnResume(agentScript, reviewScript),
 		ExitCriteria:        "test criteria",
 		Observer:            obs,
 	}
 
-	result, err := RunImplementationLoop(cfg, sm)
+	result, err := runImplementationLoop(cfg, sm)
 	if err != nil {
 		t.Fatalf("RunImplementationLoop error: %v", err)
 	}
@@ -1022,10 +1049,12 @@ func TestImplementLoopFailurePathEmitsPhaseCompleted(t *testing.T) {
 		t.Errorf("phase.failed Status = %q, want %q", phaseFailed[0].Status, "failed")
 	}
 
-	// Verify session.ended events exist for each iteration's impl session
+	// Verify session.ended events exist for each iteration's impl session.
+	// Each failed iteration crashes once and is crash-resumed once, so every
+	// iteration accounts two impl sessions (original + resume).
 	sessionEnded := filterEventsByType(events, "session.ended")
-	if len(sessionEnded) != 2 {
-		t.Errorf("expected 2 session.ended events (1 per failed iteration), got %d", len(sessionEnded))
+	if len(sessionEnded) != 4 {
+		t.Errorf("expected 4 session.ended events (2 per failed iteration: original + crash resume), got %d", len(sessionEnded))
 	}
 
 	// TraceID consistency

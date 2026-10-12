@@ -41,7 +41,7 @@ func TestPromptChangesModelBeforeTurnOnlyWhenNeeded(t *testing.T) {
 		t.Fatal("unchanged model sent set_model")
 	}
 	out.Reset()
-	p.SetPromptModel("opencode:vendor/second")
+	p.setPromptModel("opencode:vendor/second")
 	if err := p.sendPrompt("second"); err != nil {
 		t.Fatal(err)
 	}
@@ -76,7 +76,7 @@ func TestPromptModelRefusalUsesPreviousModel(t *testing.T) {
 	p.acpSessionID = "ses_fresh"
 	var out bytes.Buffer
 	p.SetStdin(&out)
-	p.SetPromptModel("opencode:vendor/second")
+	p.setPromptModel("opencode:vendor/second")
 	if err := p.sendPrompt("hello"); err != nil {
 		t.Fatal(err)
 	}
@@ -127,7 +127,7 @@ func TestSeedHistoryPostsNoReplyToLiveSession(t *testing.T) {
 	}
 	p := NewProtocol(llm.ProtocolOpts{SeedHistoryPath: path})
 	p.acpSessionID = "ses_fresh"
-	p.bridge = newServerBridge(serverClient{addr: server.Listener.Addr().String(), password: "secret", directory: "/tmp/work dir", http: &http.Client{Transport: &http.Transport{Proxy: nil, DialContext: (&net.Dialer{}).DialContext}}}, nil)
+	p.bridge = newServerBridge(serverClient{addr: server.Listener.Addr().String(), password: "secret", directory: "/tmp/work dir", http: &http.Client{Transport: &http.Transport{Proxy: nil, DialContext: (&net.Dialer{}).DialContext}}})
 	if err := p.seedHistory(context.Background()); err != nil {
 		t.Fatal(err)
 	}

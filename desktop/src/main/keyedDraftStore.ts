@@ -49,7 +49,7 @@ interface DraftSchema<T> {
   parse(value: unknown): T;
 }
 
-export interface KeyedDraftStoreConfig<
+interface KeyedDraftStoreConfig<
   Draft extends { savedAt: string },
   Key,
   Lookup,
@@ -66,7 +66,7 @@ export interface KeyedDraftStoreConfig<
   recoveryLabel: string;
 }
 
-export interface KeyedDraftStoreOptions {
+interface KeyedDraftStoreOptions {
   warn?: (message: string) => void;
   now?: () => Date;
 }

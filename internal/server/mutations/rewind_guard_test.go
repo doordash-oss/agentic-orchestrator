@@ -41,7 +41,7 @@ func TestWireRewindWarningsClassifiesAndRedacts(t *testing.T) {
 		if warnings[i].Code != string(want) {
 			t.Fatalf("warnings[%d].Code = %q; want %q", i, warnings[i].Code, want)
 		}
-		if warnings[i].Class != serverruntime.ErrorClass(errcat.ClassWarning) {
+		if warnings[i].Class != serverruntime.ErrorClassWarning {
 			t.Fatalf("warnings[%d].Class = %q; want warning", i, warnings[i].Class)
 		}
 	}

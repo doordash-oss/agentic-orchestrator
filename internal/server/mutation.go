@@ -46,15 +46,6 @@ const (
 	maxRememberedCreationResults    = 1000
 )
 
-// decisionAllowOnce, decisionAllowRemember and decisionDeny are the valid
-// PermissionAnswerRequest.Decision values. decisionAllowRemember additionally
-// requires a RememberScope.
-const (
-	decisionAllowOnce     = "allow_once"
-	decisionAllowRemember = "allow_remember"
-	decisionDeny          = "deny"
-)
-
 // errMessageInvalidDecision is the bad_request error message returned when
 // PermissionAnswerRequest.Decision is not one of the allowed values.
 const errMessageInvalidDecision = "decision must be allow_once, allow_remember, deny, or retry_auto_review"
@@ -82,21 +73,13 @@ const apiPathPermissionsAnswer = "/api/v1/permissions/answer"
 // version. On error the response is discarded.
 type MutationTarget interface {
 	CreateFeature(CreateFeatureRequest) (CreateFeatureResponse, error)
-	// SetupFeature dispatches server-owned durable setup (fresh run or retry
-	// of unfinished tasks) without starting orchestration; on success the
-	// feature ends in a startable pre-orchestration state.
-	SetupFeature(featureID string) (FeatureSetupResponse, error)
-	// StartFeature starts a created feature or resumes a stopped one; the
-	// REST start and resume actions both call it.
-	StartFeature(featureID string) (FeatureStartResponse, error)
-	StopFeature(featureID string) (FeatureStopResponse, error)
-	RestartFeature(featureID string, req RestartFeatureRequest) (FeatureRestartResponse, error)
+	RunFeatureLifecycle(featureID string, action FeatureAction, guard GuardedFeatureActionRequest) (FeatureActionResponse, error)
+	RestartFeature(featureID string, req RestartFeatureRequest) (FeatureActionResponse, error)
 	// ReviewDecision applies a review-gate decision; the live caller is the
 	// review-session decision endpoint, which uses the request only.
 	ReviewDecision(featureID string, req ReviewDecisionRequest) error
-	UpdateFeatureConfig(featureID string, req FeatureConfigMutationRequest) (FeatureConfigUpdateResponse, error)
-	ResumeNeedUserInput(featureID string) (NeedUserInputResumeResponse, error)
-	DraftNeedUserInputAnswers(featureID string, req NeedUserInputDraftRequest) (NeedUserInputDraftResponse, error)
+	UpdateFeatureConfig(featureID string, req FeatureConfigMutationRequest) (FeatureActionResponse, error)
+	DraftNeedUserInputAnswers(featureID string, req NeedUserInputDraftRequest) (FeatureActionResponse, error)
 	// WaiveTestingContractItems records user-authorized waivers on the
 	// current phase's testing contract outside the verification gate.
 	WaiveTestingContractItems(featureID string, req TestingContractWaiveRequest) (TestingContractWaiveResponse, error)
@@ -105,20 +88,16 @@ type MutationTarget interface {
 	SendHelp(req HelpAnswerRequest) (HelpSendResponse, error)
 	RuntimeConfig(req RuntimeConfigMutationRequest) (RuntimeConfigUpdateResponse, error)
 	GeneratePublishDescription(featureID string, req PublishDescriptionRequest) (PublishDescriptionResponse, error)
-	PublishFeature(featureID string, req PublishFeatureRequest) (PublishFeatureResponse, error)
-	MergeFeature(featureID string, req GuardedFeatureActionRequest) (MergeFeatureResponse, error)
+	PublishFeature(featureID string, req PublishFeatureRequest) (FeatureActionResponse, error)
 	RewindFeature(featureID string, req RewindFeatureRequest) (RewindFeatureResponse, error)
-	RetryFeature(featureID string) (RetryFeatureResponse, error)
-	RebaseFeature(featureID string) (RebaseFeatureResponse, error)
-	RefactorFeature(featureID string, req RefactorFeatureRequest) (RefactorFeatureResponse, error)
+	RebaseFeature(featureID string) (ChildLaunchResponse, error)
+	RefactorFeature(featureID string, req RefactorFeatureRequest) (ChildLaunchResponse, error)
 	ReviewFeedbackFeature(featureID string, req ReviewFeedbackFeatureRequest) (ReviewFeedbackFeatureResponse, error)
 	CompletionPreflight(featureID string) (CompletionPreflightResponse, error)
 	RepositoryDiff(featureID, repoName, filePath string) (RepositoryDiffResponse, error)
 	RepositoryPath(featureID, repoName string) (RepositoryPathResponse, error)
-	MarkDone(featureID string, req GuardedFeatureActionRequest) (MarkDoneResponse, error)
 	CleanupFeature(featureID string, req CleanupActionRequest) (CleanupFeatureResponse, error)
 	DeleteFeature(featureID string, req GuardedFeatureActionRequest) (DeleteFeatureResponse, error)
-	DiscardChild(featureID string) (DiscardChildResponse, error)
 	ScanRecovery(ctx context.Context) ([]ports.RecoveryItem, error)
 	ExecuteRecovery(ctx context.Context, items []ports.RecoveryItem, actions map[string]ports.RecoveryAction) (RecoveryActionResponse, error)
 }
@@ -226,11 +205,6 @@ type PermissionAnswerRequest struct {
 	AutoApproveScope string `json:"auto_approve_scope,omitempty"`
 }
 
-const (
-	AutoApproveScopeFeature   = "feature"
-	AutoApproveScopeWorkspace = "workspace"
-)
-
 type AskUserAnswerRequest struct {
 	RequestID string                   `json:"request_id"`
 	SessionID string                   `json:"session_id,omitempty"`
@@ -326,28 +300,6 @@ func ApplyModelConfigPatch(base config.ModelConfig, patch ModelConfigPatch) conf
 	return base
 }
 
-// ModelConfigToPatch constructs a non-empty overlay patch from a ModelConfig.
-// AutomaticReview stays omitted when empty, matching config overlay semantics:
-// a feature-level phase override must not clear the workspace reviewer model.
-// Callers that intentionally clear AutomaticReview must construct an explicit
-// non-nil pointer to the empty string.
-func ModelConfigToPatch(m config.ModelConfig) ModelConfigPatch {
-	patch := ModelConfigPatch{
-		Inquiry:        m.Inquiry,
-		Research:       m.Research,
-		Planning:       m.Planning,
-		Implementation: m.Implementation,
-		Review:         m.Review,
-		Utilities:      m.Utilities,
-		KBBuild:        m.KBBuild,
-	}
-	if m.AutomaticReview != "" {
-		ar := m.AutomaticReview
-		patch.AutomaticReview = &ar
-	}
-	return patch
-}
-
 type PublishFeatureRequest struct {
 	SourceRevision string   `json:"source_revision,omitempty"`
 	Repos          []string `json:"repos,omitempty"`
@@ -415,15 +367,9 @@ func serveMutation[Req, Resp any](w http.ResponseWriter, r *http.Request, status
 // into it still rejects a malformed body while tolerating arbitrary fields.
 type ignoredBody = map[string]any
 
-// deleteActionResponse extends DeleteFeatureResponse with a retry indicator
-// so a parked cascade reads as resumable work rather than plain success.
-type deleteActionResponse struct {
-	DeleteFeatureResponse
-	Retryable bool `json:"retryable,omitempty"`
-}
-
-func annotateDeleteResponse(r DeleteFeatureResponse) deleteActionResponse {
-	resp := deleteActionResponse{DeleteFeatureResponse: r}
+// annotateDeleteResponse marks a parked cascade as resumable work.
+func annotateDeleteResponse(r DeleteFeatureResponse) DeleteFeatureResponse {
+	resp := r
 	if r.Status == feature.CascadeDeleteCleanupPending ||
 		r.Status == feature.CascadeDeleteAttentionRequired {
 		resp.Retryable = true
@@ -753,14 +699,14 @@ func mutationRouteMethods(path string) ([]string, bool) {
 			return nil, false
 		}
 		switch parts[2] {
-		case actionSetup, actionStart, actionPauseStop, actionResume, actionRestart, actionPublish, actionMerge, actionRewind, actionRebase, actionRefactor, actionReviewFeedback, actionNeedUserInput, actionNeedInputDraft, actionTestingContractWaive, actionRetry, actionMarkDone, actionCleanup, actionDelete, actionDiscard:
+		case string(FeatureActionSetup), string(FeatureActionStart), string(FeatureActionPauseStop), string(FeatureActionResume), string(FeatureActionRestart), string(FeatureActionPublish), string(FeatureActionMerge), string(FeatureActionRewind), string(FeatureActionRebase), string(FeatureActionRefactor), string(FeatureActionReviewFeedback), string(FeatureActionNeedUserInput), string(FeatureActionNeedUserInputDraft), string(FeatureActionTestingContractWaive), string(FeatureActionRetry), string(FeatureActionMarkDone), string(FeatureActionCleanup), string(FeatureActionDelete), string(FeatureActionDiscard):
 			if len(parts) == 3 {
 				return []string{http.MethodPost}, true
 			}
-			if parts[2] == actionPublish && parts[3] == phaseNameDescription {
+			if parts[2] == string(FeatureActionPublish) && parts[3] == phaseNameDescription {
 				return []string{http.MethodPost}, true
 			}
-			if parts[2] == actionReviewFeedback && (parts[3] == reviewFeedbackSubactionFetch || parts[3] == reviewFeedbackSubactionSelection) {
+			if parts[2] == string(FeatureActionReviewFeedback) && (parts[3] == string(FeatureSubactionFetch) || parts[3] == string(FeatureSubactionSelection)) {
 				return []string{http.MethodPost}, true
 			}
 		}
@@ -956,7 +902,7 @@ func (h *apiHandler) handleFeatureMutationRoute(w http.ResponseWriter, r *http.R
 		return validatePipelineProfile(w, req.Pipeline) &&
 			validateAutomaticReviewMode(w, req.AutomaticReviewMode) &&
 			validateEffortConfig(w, req.Effort, req.Models, h.registry)
-	}, func(req FeatureConfigMutationRequest) (FeatureConfigUpdateResponse, error) {
+	}, func(req FeatureConfigMutationRequest) (FeatureActionResponse, error) {
 		return h.mutations.UpdateFeatureConfig(featureID, req)
 	})
 	return true
@@ -975,46 +921,46 @@ func (h *apiHandler) handleFeatureActionRoute(w http.ResponseWriter, r *http.Req
 		return true
 	}
 	switch {
-	case action == actionPublish && subaction == phaseNameDescription:
+	case action == string(FeatureActionPublish) && subaction == phaseNameDescription:
 		serveMutation(w, r, http.StatusOK, func(req *PublishDescriptionRequest) bool {
 			return validateRepoList(w, req.Repos, false)
 		}, func(req PublishDescriptionRequest) (PublishDescriptionResponse, error) {
 			return h.mutations.GeneratePublishDescription(featureID, req)
 		})
 		return true
-	case action == actionReviewFeedback && subaction == reviewFeedbackSubactionFetch:
+	case action == string(FeatureActionReviewFeedback) && subaction == string(FeatureSubactionFetch):
 		h.handleReviewFeedbackFetchTrusted(w, r, featureID)
 		return true
-	case action == actionReviewFeedback && subaction == reviewFeedbackSubactionSelection:
+	case action == string(FeatureActionReviewFeedback) && subaction == string(FeatureSubactionSelection):
 		h.handleReviewFeedbackSelectionTrusted(w, r, featureID)
 		return true
 	case subaction != "":
 		return false
 	}
 	switch action {
-	case actionSetup:
-		serveMutation(w, r, http.StatusOK, nil, func(ignoredBody) (FeatureSetupResponse, error) {
-			return h.mutations.SetupFeature(featureID)
+	case string(FeatureActionSetup):
+		serveMutation(w, r, http.StatusOK, nil, func(ignoredBody) (FeatureActionResponse, error) {
+			return h.mutations.RunFeatureLifecycle(featureID, FeatureActionSetup, GuardedFeatureActionRequest{})
 		})
-	case actionStart, actionResume:
-		serveMutation(w, r, http.StatusOK, nil, func(ignoredBody) (FeatureStartResponse, error) {
-			return h.mutations.StartFeature(featureID)
+	case string(FeatureActionStart), string(FeatureActionResume):
+		serveMutation(w, r, http.StatusOK, nil, func(ignoredBody) (FeatureActionResponse, error) {
+			return h.mutations.RunFeatureLifecycle(featureID, FeatureActionStart, GuardedFeatureActionRequest{})
 		})
-	case actionPauseStop:
-		serveMutation(w, r, http.StatusOK, nil, func(ignoredBody) (FeatureStopResponse, error) {
-			return h.mutations.StopFeature(featureID)
+	case string(FeatureActionPauseStop):
+		serveMutation(w, r, http.StatusOK, nil, func(ignoredBody) (FeatureActionResponse, error) {
+			return h.mutations.RunFeatureLifecycle(featureID, FeatureActionPauseStop, GuardedFeatureActionRequest{})
 		})
-	case actionRestart:
-		serveMutation(w, r, http.StatusOK, nil, func(req RestartFeatureRequest) (FeatureRestartResponse, error) {
+	case string(FeatureActionRestart):
+		serveMutation(w, r, http.StatusOK, nil, func(req RestartFeatureRequest) (FeatureActionResponse, error) {
 			return h.mutations.RestartFeature(featureID, req)
 		})
-	case actionNeedUserInput:
+	case string(FeatureActionNeedUserInput):
 		// The resume takes no input, but the empty struct still rejects the
 		// retired decision payload as an unknown field.
-		serveMutation(w, r, http.StatusOK, nil, func(struct{}) (NeedUserInputResumeResponse, error) {
-			return h.mutations.ResumeNeedUserInput(featureID)
+		serveMutation(w, r, http.StatusOK, nil, func(struct{}) (FeatureActionResponse, error) {
+			return h.mutations.RunFeatureLifecycle(featureID, FeatureActionNeedUserInput, GuardedFeatureActionRequest{})
 		})
-	case actionTestingContractWaive:
+	case string(FeatureActionTestingContractWaive):
 		serveMutation(w, r, http.StatusOK, func(req *TestingContractWaiveRequest) bool {
 			if len(req.ItemIDs) == 0 {
 				writeAPIError(w, http.StatusBadRequest, errcat.BadRequest, errcat.WithDiagnostics("item_ids are required"))
@@ -1028,40 +974,40 @@ func (h *apiHandler) handleFeatureActionRoute(w http.ResponseWriter, r *http.Req
 		}, func(req TestingContractWaiveRequest) (TestingContractWaiveResponse, error) {
 			return h.mutations.WaiveTestingContractItems(featureID, req)
 		})
-	case actionNeedInputDraft:
+	case string(FeatureActionNeedUserInputDraft):
 		serveMutation(w, r, http.StatusOK, func(req *NeedUserInputDraftRequest) bool {
 			if len(req.Answers) == 0 {
 				writeAPIError(w, http.StatusBadRequest, errcat.BadRequest, errcat.WithDiagnostics("answers are required"))
 				return false
 			}
 			return true
-		}, func(req NeedUserInputDraftRequest) (NeedUserInputDraftResponse, error) {
+		}, func(req NeedUserInputDraftRequest) (FeatureActionResponse, error) {
 			return h.mutations.DraftNeedUserInputAnswers(featureID, req)
 		})
-	case actionPublish:
+	case string(FeatureActionPublish):
 		serveMutation(w, r, http.StatusOK, func(req *PublishFeatureRequest) bool {
 			return validateRepoList(w, req.Repos, false)
-		}, func(req PublishFeatureRequest) (PublishFeatureResponse, error) {
+		}, func(req PublishFeatureRequest) (FeatureActionResponse, error) {
 			return h.mutations.PublishFeature(featureID, req)
 		})
-	case actionMerge:
-		serveMutation(w, r, http.StatusOK, nil, func(req GuardedFeatureActionRequest) (MergeFeatureResponse, error) {
-			return h.mutations.MergeFeature(featureID, req)
+	case string(FeatureActionMerge):
+		serveMutation(w, r, http.StatusOK, nil, func(req GuardedFeatureActionRequest) (FeatureActionResponse, error) {
+			return h.mutations.RunFeatureLifecycle(featureID, FeatureActionMerge, req)
 		})
-	case actionMarkDone:
-		serveMutation(w, r, http.StatusOK, nil, func(req GuardedFeatureActionRequest) (MarkDoneResponse, error) {
-			return h.mutations.MarkDone(featureID, req)
+	case string(FeatureActionMarkDone):
+		serveMutation(w, r, http.StatusOK, nil, func(req GuardedFeatureActionRequest) (FeatureActionResponse, error) {
+			return h.mutations.RunFeatureLifecycle(featureID, FeatureActionMarkDone, req)
 		})
-	case actionDelete:
-		serveMutation(w, r, http.StatusOK, nil, func(req GuardedFeatureActionRequest) (deleteActionResponse, error) {
+	case string(FeatureActionDelete):
+		serveMutation(w, r, http.StatusOK, nil, func(req GuardedFeatureActionRequest) (DeleteFeatureResponse, error) {
 			resp, err := h.mutations.DeleteFeature(featureID, req)
 			return annotateDeleteResponse(resp), err
 		})
-	case actionRetry:
-		serveMutation(w, r, http.StatusOK, nil, func(ignoredBody) (RetryFeatureResponse, error) {
-			return h.mutations.RetryFeature(featureID)
+	case string(FeatureActionRetry):
+		serveMutation(w, r, http.StatusOK, nil, func(ignoredBody) (FeatureActionResponse, error) {
+			return h.mutations.RunFeatureLifecycle(featureID, FeatureActionRetry, GuardedFeatureActionRequest{})
 		})
-	case actionRewind:
+	case string(FeatureActionRewind):
 		serveMutation(w, r, http.StatusOK, func(req *RewindFeatureRequest) bool {
 			return validatePhaseName(w, req.TargetPhase) &&
 				validatePositiveOptionalInt(w, "roadmap_phase", req.RoadmapPhase) &&
@@ -1069,12 +1015,12 @@ func (h *apiHandler) handleFeatureActionRoute(w http.ResponseWriter, r *http.Req
 		}, func(req RewindFeatureRequest) (RewindFeatureResponse, error) {
 			return h.mutations.RewindFeature(featureID, req)
 		})
-	case actionRebase:
+	case string(FeatureActionRebase):
 		// Child launches answer 201 with the new child.
-		serveMutation(w, r, http.StatusCreated, nil, func(ignoredBody) (RebaseFeatureResponse, error) {
+		serveMutation(w, r, http.StatusCreated, nil, func(ignoredBody) (ChildLaunchResponse, error) {
 			return h.mutations.RebaseFeature(featureID)
 		})
-	case actionRefactor:
+	case string(FeatureActionRefactor):
 		serveMutation(w, r, http.StatusCreated, func(req *RefactorFeatureRequest) bool {
 			req.Name = strings.TrimSpace(req.Name)
 			if req.Name == "" {
@@ -1086,13 +1032,13 @@ func (h *apiHandler) handleFeatureActionRoute(w http.ResponseWriter, r *http.Req
 				validateInquireness(w, req.Inquireness) &&
 				validateEffortConfig(w, req.Effort, req.Models, h.registry) &&
 				validateCombinedUploadCounts(w, len(req.Images), len(req.ImageUploads), len(req.Attachments), len(req.AttachmentUploads))
-		}, func(req RefactorFeatureRequest) (RefactorFeatureResponse, error) {
+		}, func(req RefactorFeatureRequest) (ChildLaunchResponse, error) {
 			// Staged uploads resolve into durable handoff copies that roll
 			// back when the launch fails; the staged sources are deleted only
 			// after it succeeds, as for feature creation.
 			consumed, err := h.consumeUploadRefs(req.ImageUploads, req.AttachmentUploads, "")
 			if err != nil {
-				return RefactorFeatureResponse{}, err
+				return ChildLaunchResponse{}, err
 			}
 			if consumed != nil {
 				req.Images = append(req.Images, consumed.imagePaths...)
@@ -1101,24 +1047,24 @@ func (h *apiHandler) handleFeatureActionRoute(w http.ResponseWriter, r *http.Req
 			resp, err := h.mutations.RefactorFeature(featureID, req)
 			if err != nil {
 				consumed.rollback() // nil-safe: nothing to roll back without refs
-				return RefactorFeatureResponse{}, err
+				return ChildLaunchResponse{}, err
 			}
 			consumed.commit()
 			return resp, nil
 		})
-	case actionReviewFeedback:
+	case string(FeatureActionReviewFeedback):
 		serveMutation(w, r, http.StatusCreated, nil, func(req ReviewFeedbackFeatureRequest) (ReviewFeedbackFeatureResponse, error) {
 			return h.mutations.ReviewFeedbackFeature(featureID, req)
 		})
-	case actionCleanup:
+	case string(FeatureActionCleanup):
 		serveMutation(w, r, http.StatusOK, func(req *CleanupActionRequest) bool {
 			return validateCleanupRequest(w, *req)
 		}, func(req CleanupActionRequest) (CleanupFeatureResponse, error) {
 			return h.mutations.CleanupFeature(featureID, req)
 		})
-	case actionDiscard:
-		serveMutation(w, r, http.StatusOK, nil, func(ignoredBody) (DiscardChildResponse, error) {
-			return h.mutations.DiscardChild(featureID)
+	case string(FeatureActionDiscard):
+		serveMutation(w, r, http.StatusOK, nil, func(ignoredBody) (FeatureActionResponse, error) {
+			return h.mutations.RunFeatureLifecycle(featureID, FeatureActionDiscard, GuardedFeatureActionRequest{})
 		})
 	default:
 		return false
@@ -1251,22 +1197,22 @@ func validatePermissionAnswer(w http.ResponseWriter, req PermissionAnswerRequest
 		return false
 	}
 	switch req.Decision {
-	case decisionAllowOnce, decisionAllowRemember, decisionDeny, "retry_auto_review":
+	case string(AllowOnce), string(AllowRemember), string(Deny), "retry_auto_review":
 	default:
 		writeAPIError(w, http.StatusBadRequest, errcat.BadRequest, errcat.WithDiagnostics(errMessageInvalidDecision))
 		return false
 	}
-	if req.Decision == decisionAllowRemember && req.RememberScope == nil {
+	if req.Decision == string(AllowRemember) && req.RememberScope == nil {
 		writeAPIError(w, http.StatusBadRequest, errcat.BadRequest, errcat.WithDiagnostics("remember_scope is required for allow_remember"))
 		return false
 	}
 	switch req.AutoApproveScope {
-	case "", AutoApproveScopeFeature, AutoApproveScopeWorkspace:
+	case "", string(PermissionAnswerRequestAutoApproveScopeFeature), string(PermissionAnswerRequestAutoApproveScopeWorkspace):
 	default:
 		writeAPIError(w, http.StatusBadRequest, errcat.BadRequest, errcat.WithDiagnostics("auto_approve_scope must be feature or workspace"))
 		return false
 	}
-	if req.AutoApproveScope != "" && (req.Decision == decisionDeny || req.Decision == "retry_auto_review") {
+	if req.AutoApproveScope != "" && (req.Decision == string(Deny) || req.Decision == "retry_auto_review") {
 		writeAPIError(w, http.StatusBadRequest, errcat.BadRequest, errcat.WithDiagnostics("auto_approve_scope cannot be combined with deny or retry_auto_review"))
 		return false
 	}
@@ -1349,44 +1295,6 @@ func validateInquireness(w http.ResponseWriter, inq feature.Inquireness) bool {
 		writeAPIError(w, http.StatusBadRequest, errcat.BadRequest, errcat.WithDiagnostics("inquireness must be none, medium, or high"))
 		return false
 	}
-}
-
-// RefactorChildSpecFromRequest maps a typed refactor launch request to the
-// domain launch brief. This is the single request→spec mapping: the
-// production mutation target and tests share it so no request field (Review
-// configuration, copied inputs) can silently drift out of one path. Staged
-// upload references (image_uploads/attachment_uploads) never reach this
-// mapper: the route handler resolves them to durable local paths and merges
-// them into Images/Attachments first.
-func RefactorChildSpecFromRequest(req RefactorFeatureRequest) (feature.RefactorChildSpec, error) {
-	spec := feature.RefactorChildSpec{
-		Name:         req.Name,
-		Description:  req.Description,
-		Images:       req.Images,
-		Attachments:  req.Attachments,
-		Checkpoints:  req.Checkpoints,
-		Effort:       req.Effort,
-		Models:       req.Models,
-		RiskLevel:    req.RiskLevel,
-		ExitCriteria: req.ExitCriteria,
-		Inquireness:  req.Inquireness,
-	}
-	if req.Pipeline != "" {
-		pipeline, err := feature.ParsePipelineProfile(string(req.Pipeline))
-		if err != nil {
-			return spec, err
-		}
-		spec.Pipeline = pipeline
-	}
-	return spec, nil
-}
-
-// ReviewFeedbackGateFromRequest maps the optional gate presence of the
-// constant-size launch request onto the pointer the domain launch expects.
-// The comment payloads no longer travel with the request: launch reconciles
-// the committed pending draft against current server-resolved GitHub data.
-func ReviewFeedbackGateFromRequest(req ReviewFeedbackFeatureRequest) *bool {
-	return req.Gate
 }
 
 func validateAutomaticReviewMode(w http.ResponseWriter, raw *string) bool {
@@ -1480,7 +1388,7 @@ func validateRepoName(w http.ResponseWriter, repo string, required bool) bool {
 
 func validatePhaseName(w http.ResponseWriter, phase string) bool {
 	switch strings.ToLower(strings.TrimSpace(phase)) {
-	case "knowledge-base", "knowledgebase", targetPhaseInquire, "research", "design", targetPhasePlan, targetPhaseImplement, "review", "final-review", actionPublish:
+	case "knowledge-base", "knowledgebase", targetPhaseInquire, "research", "design", targetPhasePlan, targetPhaseImplement, "review", "final-review", string(FeatureActionPublish):
 		return true
 	default:
 		writeAPIError(w, http.StatusBadRequest, errcat.BadRequest, errcat.WithDiagnostics("target_phase is invalid"))

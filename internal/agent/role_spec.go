@@ -74,12 +74,12 @@ type roleSpec struct {
 	IterationState       bool
 }
 
-// ArtifactPath resolves an artifact path using the spec's named output roots.
-func (s roleSpec) ArtifactPath(rt roleRuntime, artifact roleArtifactSpec) string {
+// artifactPath resolves an artifact path using the spec's named output roots.
+func (s roleSpec) artifactPath(rt roleRuntime, artifact roleArtifactSpec) string {
 	if artifact.ResolvePath != nil {
 		return artifact.ResolvePath(rt, artifact)
 	}
-	roots := s.OutputRootPaths(rt)
+	roots := s.outputRootPaths(rt)
 	root := roots[artifact.RootName]
 	if root == "" {
 		return artifact.RelativePath
@@ -90,8 +90,8 @@ func (s roleSpec) ArtifactPath(rt roleRuntime, artifact roleArtifactSpec) string
 	return filepath.Join(root, artifact.RelativePath)
 }
 
-// OutputRootPaths resolves every named root for a runtime invocation.
-func (s roleSpec) OutputRootPaths(rt roleRuntime) map[string]string {
+// outputRootPaths resolves every named root for a runtime invocation.
+func (s roleSpec) outputRootPaths(rt roleRuntime) map[string]string {
 	roots := make(map[string]string, len(s.OutputRoots))
 	for _, root := range s.OutputRoots {
 		if root.ResolvePath == nil {
@@ -102,17 +102,17 @@ func (s roleSpec) OutputRootPaths(rt roleRuntime) map[string]string {
 	return roots
 }
 
-// Contract derives the deterministic completion contract from the spec,
+// contract derives the deterministic completion contract from the spec,
 // binding each artifact's validator and path resolver once.
-func (s roleSpec) Contract() RoleContract {
-	contract := RoleContract{Role: s.Role}
+func (s roleSpec) contract() roleContract {
+	contract := roleContract{Role: s.Role}
 	for _, artifact := range s.Artifacts {
-		contract.Required = append(contract.Required, RequiredArtifact{
+		contract.Required = append(contract.Required, requiredArtifact{
 			Name:          artifact.Name,
 			DisplayPath:   artifact.DisplayPath,
 			HideFromSkill: artifact.HideFromSkill,
 			ResolvePath: func(iterDir string) string {
-				return s.ArtifactPath(roleRuntime{IterationDir: iterDir}, artifact)
+				return s.artifactPath(roleRuntime{IterationDir: iterDir}, artifact)
 			},
 			Validate: func(iterDir, path string, out *Outcome) ([]ProtocolViolation, error) {
 				return artifact.Validate(artifact, iterDir, path, out)
@@ -122,62 +122,25 @@ func (s roleSpec) Contract() RoleContract {
 	return contract
 }
 
-func artifactDirOutputRoot(description string) outputRootSpec {
+// iterationOutputRoot exposes the active iteration directory under name.
+func iterationOutputRoot(name, description string) outputRootSpec {
 	return outputRootSpec{
-		Name:        "artifact_dir",
+		Name:        name,
+		Description: description,
+		ResolvePath: func(rt roleRuntime) string {
+			return rt.IterationDir
+		},
+	}
+}
+
+// iterationParentOutputRoot exposes the directory that owns the active
+// iteration directory under name.
+func iterationParentOutputRoot(name, description string) outputRootSpec {
+	return outputRootSpec{
+		Name:        name,
 		Description: description,
 		ResolvePath: func(rt roleRuntime) string {
 			return filepath.Dir(rt.IterationDir)
-		},
-	}
-}
-
-func attemptDirOutputRoot(description string) outputRootSpec {
-	return outputRootSpec{
-		Name:        "attempt_dir",
-		Description: description,
-		ResolvePath: func(rt roleRuntime) string {
-			return rt.IterationDir
-		},
-	}
-}
-
-func singleShotPhaseDirOutputRoot(description string) outputRootSpec {
-	return outputRootSpec{
-		Name:        "phase_dir",
-		Description: description,
-		ResolvePath: func(rt roleRuntime) string {
-			return rt.IterationDir
-		},
-	}
-}
-
-func iterationDirOutputRoot(description string) outputRootSpec {
-	return outputRootSpec{
-		Name:        "iteration_dir",
-		Description: description,
-		ResolvePath: func(rt roleRuntime) string {
-			return rt.IterationDir
-		},
-	}
-}
-
-func validatorAttemptDirOutputRoot() outputRootSpec {
-	return outputRootSpec{
-		Name:        "attempt_dir",
-		Description: "Parent planning attempt directory that owns this validator helper.",
-		ResolvePath: func(rt roleRuntime) string {
-			return filepath.Dir(rt.IterationDir)
-		},
-	}
-}
-
-func validatorHelperDirOutputRoot() outputRootSpec {
-	return outputRootSpec{
-		Name:        "helper_dir",
-		Description: "Validator helper artifact directory for this axis.",
-		ResolvePath: func(rt roleRuntime) string {
-			return rt.IterationDir
 		},
 	}
 }
@@ -245,7 +208,7 @@ func reviewFeedbackRoleArtifact(rootName string) roleArtifactSpec {
 
 func resolvePlanMarkdownRoleArtifact(fallbackName string) func(roleRuntime, roleArtifactSpec) string {
 	return func(rt roleRuntime, _ roleArtifactSpec) string {
-		artifactDir := artifactDirOutputRoot("").ResolvePath(rt)
+		artifactDir := filepath.Dir(rt.IterationDir)
 		if path := newestPhaseMarkdownArtifact(artifactDir); path != "" {
 			return path
 		}

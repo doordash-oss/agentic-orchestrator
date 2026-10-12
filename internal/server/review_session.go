@@ -43,7 +43,7 @@ const (
 type reviewDecisionFunc func(featureID string, req ReviewDecisionRequest) error
 
 type reviewSessionService struct {
-	store   FeatureReader
+	store   featureReader
 	decider reviewDecisionFunc
 	now     func() time.Time
 	locks   *reviewSessionLockSet
@@ -99,7 +99,7 @@ type reviewSessionMeta struct {
 	UpdatedAt      time.Time `yaml:"updated_at"`
 }
 
-func newReviewSessionService(store FeatureReader, decider reviewDecisionFunc, lockSets ...*reviewSessionLockSet) *reviewSessionService {
+func newReviewSessionService(store featureReader, decider reviewDecisionFunc, lockSets ...*reviewSessionLockSet) *reviewSessionService {
 	locks := newReviewSessionLockSet()
 	if len(lockSets) > 0 && lockSets[0] != nil {
 		locks = lockSets[0]
@@ -114,7 +114,7 @@ func newReviewSessionService(store FeatureReader, decider reviewDecisionFunc, lo
 	}
 }
 
-func (s *reviewSessionService) Create(featureID string) (ReviewSessionResponse, error) {
+func (s *reviewSessionService) create(featureID string) (ReviewSessionResponse, error) {
 	ctx, err := s.resolveContext(featureID)
 	if err != nil {
 		return ReviewSessionResponse{}, err
@@ -163,7 +163,7 @@ func (s *reviewSessionService) Create(featureID string) (ReviewSessionResponse, 
 // Read returns an existing active review session without re-seeding or
 // otherwise changing the persisted draft. Callers use it after invalidation
 // events and before reconcile flows, where Create's reopen semantics are unsafe.
-func (s *reviewSessionService) Read(featureID string) (ReviewSessionResponse, error) {
+func (s *reviewSessionService) read(featureID string) (ReviewSessionResponse, error) {
 	ctx, err := s.resolveContext(featureID)
 	if err != nil {
 		return ReviewSessionResponse{}, err
@@ -184,7 +184,7 @@ func (s *reviewSessionService) Read(featureID string) (ReviewSessionResponse, er
 // ValidateDraft performs only synchronous advisory checks. It deliberately
 // evaluates the supplied text instead of stored draft state so the desktop can
 // explain whether the exact pending buffer is eligible for proceeding.
-func (s *reviewSessionService) ValidateDraft(featureID, reviewID string, req ReviewDraftValidationRequest) (ReviewDraftValidationResponse, error) {
+func (s *reviewSessionService) validateDraft(featureID, reviewID string, req ReviewDraftValidationRequest) (ReviewDraftValidationResponse, error) {
 	unlock := s.locks.lock(featureID, reviewID)
 	defer unlock()
 	meta, _, _, err := s.loadMetaForFeature(featureID, reviewID)
@@ -220,7 +220,7 @@ func phasePlanValidationFindings(text string) []ReviewDraftValidationFinding {
 	return findings
 }
 
-func (s *reviewSessionService) SaveDraft(featureID, reviewID string, req ReviewDraftUpdateRequest) (ReviewSessionResponse, error) {
+func (s *reviewSessionService) saveDraft(featureID, reviewID string, req ReviewDraftUpdateRequest) (ReviewSessionResponse, error) {
 	unlock := s.locks.lock(featureID, reviewID)
 	defer unlock()
 	meta, draftPath, metaPath, err := s.loadMetaForFeature(featureID, reviewID)
@@ -241,7 +241,7 @@ func (s *reviewSessionService) SaveDraft(featureID, reviewID string, req ReviewD
 	return reviewSessionResponseFromMeta(meta, req.Text), nil
 }
 
-func (s *reviewSessionService) SubmitDecision(featureID, reviewID string, req ReviewSessionDecisionRequest) (ReviewSessionDecisionResponse, error) {
+func (s *reviewSessionService) submitDecision(featureID, reviewID string, req ReviewSessionDecisionRequest) (ReviewSessionDecisionResponse, error) {
 	if req.Decision != reviewDecisionProceed && req.Decision != reviewDecisionIterate {
 		return ReviewSessionDecisionResponse{}, fmt.Errorf("decision must be proceed or iterate")
 	}

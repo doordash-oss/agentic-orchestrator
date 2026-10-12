@@ -28,6 +28,7 @@ import { FieldError } from '../components/FieldError';
 import { useConnectionState, useMediaQuery } from '../hooks';
 import { parseIpcError } from '../wizard/ipcError';
 import { renderSanitizedMarkdown } from './sanitizedMarkdown';
+import { defined } from '../../../shared/defined';
 
 type View = 'edit' | 'preview' | 'split';
 
@@ -107,7 +108,7 @@ export function ReviewSurface({
       <ErrorSurface
         error={noticeError.error}
         variant="compact"
-        {...(noticeError.caption === undefined ? {} : { caption: noticeError.caption })}
+        {...defined('caption', noticeError.caption)}
       />
     ) : (
       <p role="status">{notice}</p>

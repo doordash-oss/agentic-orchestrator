@@ -28,7 +28,7 @@ import { ERROR_CLASS_LABELS } from '../../../shared/ipc';
 import { highestSeverityError } from './featureView';
 import { passActiveVerb } from './refactor/refactorPassModel';
 
-export interface ErrorStatusChip {
+interface ErrorStatusChip {
   /** `<owner verb> — <class label>`, or the bare class label. */
   label: string;
   /** From the class: blocking reads danger, needs_action reads attention. */

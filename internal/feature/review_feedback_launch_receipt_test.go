@@ -22,7 +22,6 @@ import (
 	"testing"
 
 	"github.com/doordash-oss/agentic-orchestrator/internal/feature"
-	gitadapter "github.com/doordash-oss/agentic-orchestrator/internal/git"
 )
 
 // launchReceiptManager builds the two-repo launch fixture: a published parent
@@ -43,8 +42,8 @@ func launchReceiptManager(t *testing.T) (*feature.Manager, *feature.Feature, *fe
 
 // launchReceiptFetch yields one changed comment (11), omits web's deleted
 // comment (21), and adds one deferred comment (30), giving 1/1/1 counts.
-func launchReceiptFetch() map[string][]gitadapter.ReviewComment {
-	return map[string][]gitadapter.ReviewComment{
+func launchReceiptFetch() map[string][][]byte {
+	return map[string][][]byte{
 		"api": {
 			launchComment(11, feature.ReviewFeedbackCommentTypeReview, "alice", "edited after review"),
 			launchComment(12, feature.ReviewFeedbackCommentTypeReview, "bob", "will be edited"),
@@ -55,10 +54,10 @@ func launchReceiptFetch() map[string][]gitadapter.ReviewComment {
 
 // installCountingLaunchFetchStub installs the GitHub resolver and returns the
 // number of resolver calls made.
-func installCountingLaunchFetchStub(t *testing.T, byRepo map[string][]gitadapter.ReviewComment) *int {
+func installCountingLaunchFetchStub(t *testing.T, byRepo map[string][][]byte) *int {
 	t.Helper()
 	calls := new(int)
-	restore := feature.SwapFetchPRCommentsForTest(func(_ string, prURL string) ([]gitadapter.ReviewComment, error) {
+	restore := feature.SwapFetchPRCommentsForTest(func(_ string, prURL string) ([][]byte, error) {
 		*calls++
 		if strings.Contains(prURL, "/api/") {
 			return byRepo["api"], nil
@@ -690,7 +689,7 @@ func TestLaunchCreationRejectsConcurrentSelectionCommit(t *testing.T) {
 func TestLaunchZeroLaunchableLeavesNoReceipt(t *testing.T) {
 	mgr, parent, draft := launchReceiptManager(t)
 	// Every selected comment is deleted before launch.
-	installLaunchFetchStub(t, map[string][]gitadapter.ReviewComment{"api": {}, "web": {}})
+	installLaunchFetchStub(t, map[string][][]byte{"api": {}, "web": {}})
 
 	var zero *feature.ReviewFeedbackZeroLaunchableSelectionError
 	if _, err := mgr.LaunchReviewFeedbackChildFromDraft(parent.ID, draft.Revision, nil); !errors.As(err, &zero) {

@@ -24,7 +24,7 @@ import (
 )
 
 func writeTestCompletionReceipt(t testing.TB, dir string) {
-	writeTestCompletionReceiptFor(t, dir, feature.PhaseImplement, RoleImplementer)
+	writeTestCompletionReceiptFor(t, dir, feature.PhaseImplement, roleImplementer)
 }
 
 func writeTestCompletionReceiptFor(t testing.TB, dir string, phase feature.Phase, role Role) {

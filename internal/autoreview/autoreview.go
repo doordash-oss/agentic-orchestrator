@@ -227,8 +227,7 @@ func eligibleReviewerProviders(registry *llm.Registry) (map[string]llm.LLMProvid
 			continue
 		}
 		eligibility.detected++
-		capability, ok := provider.(llm.NativeToollessReviewer)
-		if !ok || !capability.SupportsNativeToollessReview() {
+		if !provider.SupportsNativeToollessReview() {
 			eligibility.rejections[provider.Name()] = "isolated tool-less review is not supported"
 			continue
 		}
@@ -251,21 +250,17 @@ func isBuiltinReviewerProvider(name string) bool {
 }
 
 func reviewerCatalog(provider llm.LLMProvider) []llm.ModelInfo {
-	catalogProvider, ok := provider.(llm.CatalogProvider)
-	if !ok {
-		return nil
-	}
-	return catalogProvider.ModelCatalog()
+	return provider.ModelCatalog()
 }
 
+// catalogModel resolves a selector to the single catalog entry it names by
+// ID or alias. Two catalog entries with different IDs both matching the same
+// selector are ambiguous and rejected: the scan (not the shared lookup) owns
+// that rule, so each entry is matched through the lookup one at a time.
 func catalogModel(provider llm.LLMProvider, selector string) (string, bool) {
 	var found string
 	for _, model := range reviewerCatalog(provider) {
-		matches := strings.EqualFold(model.ID, selector)
-		for _, alias := range model.Aliases {
-			matches = matches || strings.EqualFold(alias, selector)
-		}
-		if !matches {
+		if _, ok := llm.LookupModel([]llm.ModelInfo{model}, selector); !ok {
 			continue
 		}
 		if found != "" && !strings.EqualFold(found, model.ID) {
@@ -277,13 +272,7 @@ func catalogModel(provider llm.LLMProvider, selector string) (string, bool) {
 }
 
 func reviewPreferenceBand(provider llm.LLMProvider, model llm.ModelInfo) (int, bool) {
-	if ranker, ok := provider.(llm.ReviewModelRanker); ok {
-		return ranker.ReviewPreferenceBand(model)
-	}
-	if model.Category == "cheap" {
-		return 0, true
-	}
-	return 0, false
+	return provider.ReviewPreferenceBand(model)
 }
 
 // RestoreReviewer reconstructs a Reviewer from a snapshotted provider name
@@ -405,7 +394,7 @@ func ClassifyDetailed(ctx context.Context, reviewer Reviewer, req ClassifyReques
 		if result.Outcome == OutcomeMalformedResponse {
 			// Only invalid decision text is retryable; broken protocol streams
 			// remain terminal. Never feed raw reviewer output into the retry.
-			prompt += agentprompts.AutoReviewFormatRetryPrompt()
+			prompt += agentprompts.MustRender(agentprompts.TemplateAutoReviewFormatRetry, nil)
 		}
 		if !waitForProviderRetry(deadlineCtx) {
 			if err := ctx.Err(); err != nil {
@@ -621,13 +610,6 @@ func classifyAttempt(
 	return attemptResult{result: Result{Decision: decision, Outcome: OutcomeDefer, Timing: timing}}
 }
 
-// Classify preserves the original decision/bool API for callers that do not
-// need the typed operational outcome.
-func Classify(ctx context.Context, reviewer Reviewer, req ClassifyRequest) (Decision, bool) {
-	result := ClassifyDetailed(ctx, reviewer, req)
-	return result.Decision, result.Outcome == OutcomeAllow || result.Outcome == OutcomeDefer
-}
-
 func mergeTiming(dst *Timing, src Timing) {
 	if dst.Launch == 0 && src.Launch > 0 {
 		dst.Launch = src.Launch
@@ -831,9 +813,7 @@ func buildReviewCommand(reviewer Reviewer, req ClassifyRequest) (args []string, 
 	cmdArgs, cmdEnv, bErr := reviewer.Provider.BuildCommand(llm.CommandBuildOpts{
 		Model:                reviewer.Model,
 		EffortLevel:          llm.EffortLow,
-		ZeroTools:            true,
-		NoSessionPersistence: true,
-		NoCustomization:      true,
+		NativeToollessReview: true,
 		StateDir:             configDir,
 		WorkDir:              req.WorkDir,
 		WritableRoots:        req.WritableRoots,
@@ -959,7 +939,7 @@ func reviewPromptWithNonce(req ClassifyRequest, nonce string) string {
 		writableRootsSummary += " (writes may target only these roots; reads are not limited by this field)"
 	}
 
-	return agentprompts.AutoReviewUserPrompt(agentprompts.AutoReviewUserInput{
+	return agentprompts.MustRender(agentprompts.TemplateAutoReviewUser, agentprompts.AutoReviewUserInput{
 		Nonce:                nonce,
 		ToolName:             toolName,
 		Command:              command,

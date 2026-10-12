@@ -60,9 +60,9 @@ var integrationAttentionCodes = map[Code]bool{
 	RebaseGatePassthroughModified:   true,
 }
 
-// IsIntegrationAttention reports whether code is one of the integration
+// isIntegrationAttention reports whether code is one of the integration
 // attention codes a parked transaction journal can carry.
-func IsIntegrationAttention(code Code) bool {
+func isIntegrationAttention(code Code) bool {
 	return integrationAttentionCodes[code]
 }
 

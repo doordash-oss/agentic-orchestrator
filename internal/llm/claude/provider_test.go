@@ -116,8 +116,7 @@ func assertCommand(t *testing.T, gotName string, gotArgs []string, wantName stri
 // TestClaudeProvider_DefaultCatalog_Invariants locks in the hardcoded
 // fallback catalog used when CLI discovery is unavailable.
 func TestClaudeProvider_DefaultCatalog_Invariants(t *testing.T) {
-	p := &Provider{}
-	cat := p.defaultModelInfos()
+	cat := defaultModelInfos()
 
 	byID := make(map[string]llm.ModelInfo, len(cat))
 	for _, m := range cat {
@@ -165,48 +164,6 @@ func TestClaudeProvider_DefaultCatalog_Invariants(t *testing.T) {
 	}
 }
 
-// TestClaudeProvider_ContextWindowForModel_ReturnsHardcodedWithoutSeed
-// guards against regressions where ContextWindowForModel stopped falling
-// back to defaultModelInfos when SetModelCatalog had not been called.
-// Before the fix that path silently returned 0, which made the
-// implement-loop 60% handoff ticker dead on fresh sessions.
-func TestClaudeProvider_ContextWindowForModel_ReturnsHardcodedWithoutSeed(t *testing.T) {
-	p := &Provider{}
-
-	tests := map[string]int{
-		"fable":        1_000_000,
-		"fable[1M]":    1_000_000,
-		"opus":         200_000,
-		"opus[200K]":   200_000,
-		"opus[1m]":     1_000_000,
-		"opus[1M]":     1_000_000,
-		"sonnet":       200_000,
-		"sonnet[1m]":   1_000_000,
-		"sonnet[1M]":   1_000_000,
-		"sonnet[200K]": 200_000,
-		"haiku[200K]":  200_000,
-		"haiku":        200_000,
-	}
-	for model, want := range tests {
-		t.Run(model, func(t *testing.T) {
-			if got := p.ContextWindowForModel(model); got != want {
-				t.Errorf("ContextWindowForModel(%q) = %d, want %d", model, got, want)
-			}
-		})
-	}
-}
-
-// TestClaudeProvider_ModelCatalog_FallsBackToHardcoded verifies the same
-// fallback on the catalog-exposing API that the desktop app and registry depend on.
-func TestClaudeProvider_ModelCatalog_FallsBackToHardcoded(t *testing.T) {
-	p := &Provider{}
-	got := p.ModelCatalog()
-	want := p.defaultModelInfos()
-	if len(got) != len(want) {
-		t.Fatalf("ModelCatalog() len = %d, want %d", len(got), len(want))
-	}
-}
-
 func TestProviderBuildCommand_UsesCatalogAliasForClaudeCLIModel(t *testing.T) {
 	tests := []struct {
 		model string
@@ -221,7 +178,7 @@ func TestProviderBuildCommand_UsesCatalogAliasForClaudeCLIModel(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.model, func(t *testing.T) {
-			p := &Provider{}
+			p := NewProvider("")
 			args, env, err := p.BuildCommand(llm.CommandBuildOpts{Model: tt.model})
 			if err != nil {
 				t.Fatalf("BuildCommand() error: %v", err)
@@ -331,10 +288,10 @@ func TestBuildInteractiveCommand_PermissionMode_CoexistsWithDSP(t *testing.T) {
 }
 
 // TestBuildInteractiveCommand_IsolationFlags is a table-driven test covering
-// the hidden reviewer's launch-option isolation contract: ZeroTools emits
-// --tools "" (and suppresses --disallowedTools), NoSessionPersistence emits
-// --no-session-persistence, NoCustomization emits --safe-mode, and all three can
-// coexist on the same invocation.
+// the hidden reviewer's launch-option isolation contract: the single
+// NativeToollessReview flag emits --tools "" (and suppresses
+// --disallowedTools), --no-session-persistence, and --safe-mode together on
+// the same invocation; none of them are emitted when it is off.
 func TestBuildInteractiveCommand_IsolationFlags(t *testing.T) {
 	cases := []struct {
 		name             string
@@ -344,32 +301,15 @@ func TestBuildInteractiveCommand_IsolationFlags(t *testing.T) {
 		wantNoDisallowed bool
 	}{
 		{
-			name:             "zero_tools",
-			opts:             llm.CommandBuildOpts{Model: "haiku", ZeroTools: true, DisallowedTools: []string{"Bash", "Read"}},
+			name:             "native_toolless_review",
+			opts:             llm.CommandBuildOpts{Model: "haiku", NativeToollessReview: true, DisallowedTools: []string{"Bash", "Read"}},
+			wantFlags:        []string{"--no-session-persistence", "--safe-mode"},
 			wantEmptyTools:   true,
 			wantNoDisallowed: true,
 		},
 		{
-			name:      "no_session_persistence",
-			opts:      llm.CommandBuildOpts{Model: "haiku", NoSessionPersistence: true},
-			wantFlags: []string{"--no-session-persistence"},
-		},
-		{
-			name:      "no_customization",
-			opts:      llm.CommandBuildOpts{Model: "haiku", NoCustomization: true},
-			wantFlags: []string{"--safe-mode"},
-		},
-		{
-			name:           "zero_tools_and_no_session_persistence",
-			opts:           llm.CommandBuildOpts{Model: "haiku", ZeroTools: true, NoSessionPersistence: true},
-			wantFlags:      []string{"--no-session-persistence"},
-			wantEmptyTools: true,
-		},
-		{
-			name:           "full_isolation",
-			opts:           llm.CommandBuildOpts{Model: "haiku", ZeroTools: true, NoSessionPersistence: true, NoCustomization: true},
-			wantFlags:      []string{"--no-session-persistence", "--safe-mode"},
-			wantEmptyTools: true,
+			name: "isolation off",
+			opts: llm.CommandBuildOpts{Model: "haiku", DisallowedTools: []string{"Bash"}},
 		},
 	}
 	for _, tc := range cases {
@@ -380,23 +320,28 @@ func TestBuildInteractiveCommand_IsolationFlags(t *testing.T) {
 					t.Errorf("missing %s: %v", flag, args)
 				}
 			}
-			if tc.opts.NoCustomization && slices.Contains(args, "--bare") {
-				t.Errorf("NoCustomization must retain normal authentication, got --bare: %v", args)
+			if tc.opts.NativeToollessReview && slices.Contains(args, "--bare") {
+				t.Errorf("NativeToollessReview must retain normal authentication, got --bare: %v", args)
 			}
-			if tc.wantEmptyTools {
-				hasEmptyTools := false
-				for i, a := range args {
-					if a == "--tools" && i+1 < len(args) && args[i+1] == "" {
-						hasEmptyTools = true
-					}
+			hasEmptyTools := false
+			for i, a := range args {
+				if a == "--tools" && i+1 < len(args) && args[i+1] == "" {
+					hasEmptyTools = true
 				}
-				if !hasEmptyTools {
-					t.Errorf("missing --tools \"\": %v", args)
-				}
+			}
+			if hasEmptyTools != tc.wantEmptyTools {
+				t.Errorf("--tools \"\" present = %v, want %v: %v", hasEmptyTools, tc.wantEmptyTools, args)
 			}
 			if tc.wantNoDisallowed {
 				if slices.Contains(args, "--disallowedTools") {
-					t.Errorf("must not emit --disallowedTools when ZeroTools=true: %v", args)
+					t.Errorf("must not emit --disallowedTools when NativeToollessReview=true: %v", args)
+				}
+			}
+			if !tc.opts.NativeToollessReview {
+				for _, flag := range []string{"--safe-mode", "--no-session-persistence"} {
+					if slices.Contains(args, flag) {
+						t.Errorf("isolation flag %s emitted without NativeToollessReview: %v", flag, args)
+					}
 				}
 			}
 		})
@@ -411,7 +356,7 @@ func TestClaudeProvider_CLIBinaryDefault(t *testing.T) {
 
 func TestClaudeProvider_BuildCommandUsesCustomBinary(t *testing.T) {
 	t.Run("default", func(t *testing.T) {
-		args, _, err := (&Provider{}).BuildCommand(llm.CommandBuildOpts{Model: "opus"})
+		args, _, err := NewProvider("").BuildCommand(llm.CommandBuildOpts{Model: "opus"})
 		if err != nil {
 			t.Fatalf("BuildCommand() error: %v", err)
 		}
@@ -420,7 +365,7 @@ func TestClaudeProvider_BuildCommandUsesCustomBinary(t *testing.T) {
 		}
 	})
 	t.Run("override", func(t *testing.T) {
-		p := &Provider{binary: "fcc-claude"}
+		p := NewProvider("fcc-claude")
 		args, _, err := p.BuildCommand(llm.CommandBuildOpts{Model: "opus"})
 		if err != nil {
 			t.Fatalf("BuildCommand() error: %v", err)
@@ -448,20 +393,44 @@ func TestClaudeProvider_CheckReadinessUsesCustomBinary(t *testing.T) {
 	}
 }
 
-func TestClaudeProvider_CLIVersionUsesCustomBinary(t *testing.T) {
+func TestClaudeProvider_VersionInfoUsesInjectedRunner(t *testing.T) {
 	var gotName string
+	var gotArgs []string
 	p := &Provider{
 		binary: "fcc-claude",
 		runner: func(ctx context.Context, name string, args []string, env []string) ([]byte, error) {
 			gotName = name
-			return []byte("2.1.81 (Claude Code)"), nil
+			gotArgs = args
+			return []byte("2.1.81 (Claude Code)\n"), nil
 		},
 	}
-	if _, err := p.CLIVersion(); err != nil {
-		t.Fatalf("CLIVersion() error: %v", err)
+	got, err := p.VersionInfo()
+	if err != nil {
+		t.Fatalf("VersionInfo() error: %v", err)
+	}
+	if got != "2.1.81 (Claude Code)" {
+		t.Fatalf("VersionInfo() = %q, want trimmed raw output", got)
 	}
 	if gotName != "fcc-claude" {
-		t.Errorf("CLIVersion probed %q, want fcc-claude", gotName)
+		t.Errorf("VersionInfo probed %q, want fcc-claude", gotName)
+	}
+	if !slices.Equal(gotArgs, []string{"--version"}) {
+		t.Errorf("VersionInfo args = %v, want [--version]", gotArgs)
+	}
+}
+
+func TestClaudeProvider_VersionInfoWrapsRunnerError(t *testing.T) {
+	p := &Provider{
+		runner: func(ctx context.Context, name string, args []string, env []string) ([]byte, error) {
+			return nil, errors.New("boom")
+		},
+	}
+	_, err := p.VersionInfo()
+	if err == nil {
+		t.Fatal("VersionInfo() error = nil, want error")
+	}
+	if !strings.Contains(err.Error(), "failed to run 'claude --version'") || !strings.Contains(err.Error(), "boom") {
+		t.Fatalf("VersionInfo() error = %v, want provider wrap around raw runner error", err)
 	}
 }
 
@@ -470,11 +439,4 @@ func firstArg(args []string) string {
 		return ""
 	}
 	return args[0]
-}
-
-func TestProviderSupportsSessionResume(t *testing.T) {
-	p := &Provider{}
-	if !p.SupportsSessionResume() {
-		t.Error("SupportsSessionResume() = false, want true")
-	}
 }

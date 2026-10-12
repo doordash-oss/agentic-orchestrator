@@ -1246,8 +1246,6 @@ const REWIND_RESULT: FeatureActionResult = {
   featureId: 'abcd1234ef567890',
   action: 'rewind',
   result: 'rewound',
-  phase: 'Implement',
-  sessionIds: [],
   sourceRunNumber: 8,
   newRunNumber: 9,
   warnings: [
@@ -1912,10 +1910,7 @@ function makeMockApi(
       }
       if (scene === 'bulk-queue' && featureId === 'alpha1234ef567890') {
         return new Promise((resolve) =>
-          setTimeout(
-            () => resolve({ featureId, action, result: 'started', sessionIds: [] }),
-            3_000,
-          ),
+          setTimeout(() => resolve({ featureId, action, result: 'started' }), 3_000),
         );
       }
       if (scene === 'bulk-queue' && featureId === 'gamma1234ef567890') {
@@ -1928,13 +1923,10 @@ function makeMockApi(
       }
       if (scene === 'bulk-queue' && featureId === 'epsilon1234ef567890') {
         return new Promise((resolve) =>
-          setTimeout(
-            () => resolve({ featureId, action, result: 'started', sessionIds: [] }),
-            5_000,
-          ),
+          setTimeout(() => resolve({ featureId, action, result: 'started' }), 5_000),
         );
       }
-      return Promise.resolve({ featureId, action, result: 'started', sessionIds: [] });
+      return Promise.resolve({ featureId, action, result: 'started' });
     },
     getAttention: () =>
       Promise.resolve({

@@ -36,8 +36,8 @@ func TestValidateCloneRemoteAcceptsSupportedForms(t *testing.T) {
 		"gitolite:widget",
 	}
 	for _, remote := range valid {
-		if err := ValidateCloneRemote(remote); err != nil {
-			t.Errorf("ValidateCloneRemote(%q) = %v, want nil", remote, err)
+		if err := validateCloneRemote(remote); err != nil {
+			t.Errorf("validateCloneRemote(%q) = %v, want nil", remote, err)
 		}
 	}
 }
@@ -69,29 +69,29 @@ func TestValidateCloneRemoteRejectsUnsupportedForms(t *testing.T) {
 		{"", ValidationRemoteInvalid},
 	}
 	for _, tc := range cases {
-		err := ValidateCloneRemote(tc.remote)
+		err := validateCloneRemote(tc.remote)
 		if err == nil {
-			t.Errorf("ValidateCloneRemote(%q) = nil, want %s", tc.remote, tc.kind)
+			t.Errorf("validateCloneRemote(%q) = nil, want %s", tc.remote, tc.kind)
 			continue
 		}
-		verr, ok := err.(*ValidationError)
+		verr, ok := err.(*validationError)
 		if !ok {
-			t.Fatalf("ValidateCloneRemote(%q) error type %T", tc.remote, err)
+			t.Fatalf("validateCloneRemote(%q) error type %T", tc.remote, err)
 		}
 		if verr.Kind != tc.kind {
-			t.Errorf("ValidateCloneRemote(%q) kind = %s, want %s", tc.remote, verr.Kind, tc.kind)
+			t.Errorf("validateCloneRemote(%q) kind = %s, want %s", tc.remote, verr.Kind, tc.kind)
 		}
 	}
 }
 
 func TestValidateCloneRemoteRejectsOverlongRemote(t *testing.T) {
 	t.Parallel()
-	long := "https://example.com/" + strings.Repeat("a", MaxRemoteURLLength) + ".git"
-	err := ValidateCloneRemote(long)
+	long := "https://example.com/" + strings.Repeat("a", maxRemoteURLLength) + ".git"
+	err := validateCloneRemote(long)
 	if err == nil {
 		t.Fatal("overlong remote accepted")
 	}
-	if verr := err.(*ValidationError); verr.Kind != ValidationRemoteTooLong {
+	if verr := err.(*validationError); verr.Kind != ValidationRemoteTooLong {
 		t.Fatalf("kind = %s, want %s", verr.Kind, ValidationRemoteTooLong)
 	}
 }
@@ -104,12 +104,12 @@ func TestRedactRemoteNeverEchoesSecrets(t *testing.T) {
 		"user:secretpw@example.com:acme/widget.git":                   "contains neither secretpw nor path",
 	}
 	for raw, want := range cases {
-		redacted := RedactRemote(raw)
+		redacted := redactRemote(raw)
 		if strings.Contains(redacted, "secretpw") {
-			t.Errorf("RedactRemote(%q) = %q leaked password", raw, redacted)
+			t.Errorf("redactRemote(%q) = %q leaked password", raw, redacted)
 		}
 		if strings.Contains(redacted, "token=abc") || strings.Contains(redacted, "#frag") {
-			t.Errorf("RedactRemote(%q) = %q leaked query/fragment", raw, redacted)
+			t.Errorf("redactRemote(%q) = %q leaked query/fragment", raw, redacted)
 		}
 		_ = want
 	}
@@ -119,8 +119,8 @@ func TestValidateDestination(t *testing.T) {
 	t.Parallel()
 	valid := []string{"widget", "my-widget-2", "Widget.Name", "ünïcode-repo", "a"}
 	for _, name := range valid {
-		if err := ValidateDestination(name); err != nil {
-			t.Errorf("ValidateDestination(%q) = %v, want nil", name, err)
+		if err := validateDestination(name); err != nil {
+			t.Errorf("validateDestination(%q) = %v, want nil", name, err)
 		}
 	}
 	invalid := map[string]string{
@@ -140,52 +140,35 @@ func TestValidateDestination(t *testing.T) {
 		"CON":             ValidationDestinationReserved,
 		"com1":            ValidationDestinationReserved,
 		"LPT9":            ValidationDestinationReserved,
-		strings.Repeat("x", MaxDestinationLength+1): ValidationDestinationTooLong,
+		strings.Repeat("x", maxDestinationLength+1): ValidationDestinationTooLong,
 	}
 	for name, kind := range invalid {
-		err := ValidateDestination(name)
+		err := validateDestination(name)
 		if err == nil {
-			t.Errorf("ValidateDestination(%q) = nil, want %s", name, kind)
+			t.Errorf("validateDestination(%q) = nil, want %s", name, kind)
 			continue
 		}
-		if verr := err.(*ValidationError); verr.Kind != kind {
-			t.Errorf("ValidateDestination(%q) kind = %s, want %s", name, verr.Kind, kind)
+		if verr := err.(*validationError); verr.Kind != kind {
+			t.Errorf("validateDestination(%q) kind = %s, want %s", name, verr.Kind, kind)
 		}
 	}
 }
 
 func TestValidateIdempotencyKey(t *testing.T) {
 	t.Parallel()
-	if err := ValidateIdempotencyKey("0192f0c1-8f2a-7c3e-b9d1-3e4f5a6b7c8d"); err != nil {
+	if err := validateIdempotencyKey("0192f0c1-8f2a-7c3e-b9d1-3e4f5a6b7c8d"); err != nil {
 		t.Errorf("valid uuid key rejected: %v", err)
 	}
-	if err := ValidateIdempotencyKey(""); err == nil {
+	if err := validateIdempotencyKey(""); err == nil {
 		t.Error("empty key accepted")
 	}
-	if err := ValidateIdempotencyKey(strings.Repeat("k", MaxIdempotencyLength+1)); err == nil {
+	if err := validateIdempotencyKey(strings.Repeat("k", maxIdempotencyLength+1)); err == nil {
 		t.Error("overlong key accepted")
 	}
-	if err := ValidateIdempotencyKey("with space"); err == nil {
+	if err := validateIdempotencyKey("with space"); err == nil {
 		t.Error("key with space accepted")
 	}
-	if err := ValidateIdempotencyKey("with\x01control"); err == nil {
+	if err := validateIdempotencyKey("with\x01control"); err == nil {
 		t.Error("key with control accepted")
-	}
-}
-
-func TestSuggestDestination(t *testing.T) {
-	t.Parallel()
-	cases := map[string]string{
-		"https://github.com/acme/widget.git":        "widget",
-		"https://github.com/acme/widget":            "widget",
-		"https://github.com/acme/widget/":           "widget",
-		"git@github.com:acme/widget.git":            "widget",
-		"ssh://git@github.com:2222/acme/widget.git": "widget",
-		"gh:acme/deep/nested/widget.git":            "widget",
-	}
-	for remote, want := range cases {
-		if got := SuggestDestination(remote); got != want {
-			t.Errorf("SuggestDestination(%q) = %q, want %q", remote, got, want)
-		}
 	}
 }

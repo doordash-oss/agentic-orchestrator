@@ -31,7 +31,7 @@ func TestBuildDesignPrompt(t *testing.T) {
 		Inquireness: feature.InquirenessHigh,
 	}
 
-	prompt := BuildDesignPrompt(f, "", "", "/tmp/research/doc.md", nil)
+	prompt := buildDesignPrompt(f, "/tmp/research/doc.md", nil)
 
 	checks := []string{
 		"# Feature Context",
@@ -56,7 +56,7 @@ func TestBuildDesignPromptNoResearch(t *testing.T) {
 		Description: "A feature",
 		Inquireness: feature.InquirenessMedium,
 	}
-	prompt := BuildDesignPrompt(f, "", "", "", nil)
+	prompt := buildDesignPrompt(f, "", nil)
 	if strings.Contains(prompt, "## Research Findings") {
 		t.Error("expected no research section when path is empty")
 	}
@@ -69,7 +69,7 @@ func TestBuildDesignPromptWithImages(t *testing.T) {
 		Images:      []string{"/tmp/images/image-1.png"},
 		Inquireness: feature.InquirenessMedium,
 	}
-	prompt := BuildDesignPrompt(f, "", "", "/tmp/research.md", nil)
+	prompt := buildDesignPrompt(f, "/tmp/research.md", nil)
 	if !strings.Contains(prompt, "Attached Images:") {
 		t.Error("expected 'Attached Images' section")
 	}
@@ -82,7 +82,7 @@ func TestBuildDesignPromptWithQAPaths(t *testing.T) {
 		Inquireness: feature.InquirenessMedium,
 	}
 	qaFiles := []string{"/tmp/features/abc/inquire/qa-answers.md", "/tmp/features/abc/research/qa-answers.md"}
-	prompt := BuildDesignPrompt(f, "", "", "/tmp/research.md", qaFiles)
+	prompt := buildDesignPrompt(f, "/tmp/research.md", qaFiles)
 
 	if !strings.Contains(prompt, "## User Decisions") {
 		t.Error("expected '## User Decisions' section")
@@ -103,12 +103,12 @@ func TestBuildDesignPromptNoQAPaths(t *testing.T) {
 		Description: "A feature without Q&A",
 		Inquireness: feature.InquirenessMedium,
 	}
-	prompt := BuildDesignPrompt(f, "", "", "/tmp/research.md", nil)
+	prompt := buildDesignPrompt(f, "/tmp/research.md", nil)
 	if strings.Contains(prompt, "## User Decisions") {
 		t.Error("expected no User Decisions section when qaFilePaths is nil")
 	}
 
-	prompt2 := BuildDesignPrompt(f, "", "", "/tmp/research.md", []string{})
+	prompt2 := buildDesignPrompt(f, "/tmp/research.md", []string{})
 	if strings.Contains(prompt2, "## User Decisions") {
 		t.Error("expected no User Decisions section when qaFilePaths is empty")
 	}
@@ -124,7 +124,7 @@ func TestBuildResearchFromQuestionsPrompt(t *testing.T) {
 		Inquireness: feature.InquirenessMedium,
 	}
 
-	prompt := BuildResearchFromQuestionsPrompt(f, "", "/tmp/inquire/questions.md")
+	prompt := buildResearchFromQuestionsPrompt(f, "/tmp/inquire/questions.md")
 
 	// Should contain questions path
 	if !strings.Contains(prompt, "/tmp/inquire/questions.md") {
@@ -153,7 +153,7 @@ func TestBuildResearchFromQuestionsPromptHasRepoInfo(t *testing.T) {
 		Inquireness: feature.InquirenessMedium,
 	}
 
-	prompt := BuildResearchFromQuestionsPrompt(f, "", "/tmp/questions.md")
+	prompt := buildResearchFromQuestionsPrompt(f, "/tmp/questions.md")
 	if !strings.Contains(prompt, "myrepo") {
 		t.Error("expected prompt to contain repo info")
 	}
@@ -167,7 +167,7 @@ func TestBuildDesignPromptUsesDescription(t *testing.T) {
 			{Name: "repo", Path: "/tmp/test"},
 		},
 	}
-	prompt := BuildDesignPrompt(f, "", "", "some research output", nil)
+	prompt := buildDesignPrompt(f, "some research output", nil)
 	if !strings.Contains(prompt, "original desc") {
 		t.Error("expected original description in design output")
 	}
@@ -183,7 +183,7 @@ func TestBuildDesignPrompt_MultiRepo(t *testing.T) {
 				{Name: "repo-b", Path: "/path/b"},
 			},
 		}
-		prompt := BuildDesignPrompt(f, "", "", "/tmp/research.md", nil)
+		prompt := buildDesignPrompt(f, "/tmp/research.md", nil)
 		if !strings.Contains(prompt, "Target Repositories") {
 			t.Error("expected 'Target Repositories' section for multi-repo feature")
 		}
@@ -196,7 +196,7 @@ func TestBuildDesignPrompt_MultiRepo(t *testing.T) {
 			Name:  "test-feature",
 			Repos: []feature.FeatureRepo{{Name: "repo-a", Path: "/path/a"}},
 		}
-		prompt := BuildDesignPrompt(f, "", "", "/tmp/research.md", nil)
+		prompt := buildDesignPrompt(f, "/tmp/research.md", nil)
 		if strings.Contains(prompt, "Target Repositories") {
 			t.Error("single-repo feature should not have 'Target Repositories' section")
 		}
@@ -209,7 +209,7 @@ func TestBuildDesignPrompt_MultiRepo(t *testing.T) {
 				{Name: "repo-b", Path: "/path/b", WorktreePath: "/wt/b"},
 			},
 		}
-		prompt := BuildDesignPrompt(f, "", "", "/tmp/research.md", nil)
+		prompt := buildDesignPrompt(f, "/tmp/research.md", nil)
 		if !strings.Contains(prompt, "/wt/a") {
 			t.Error("expected worktree path /wt/a in prompt")
 		}

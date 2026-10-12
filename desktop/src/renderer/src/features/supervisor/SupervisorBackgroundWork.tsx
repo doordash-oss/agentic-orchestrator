@@ -16,7 +16,7 @@ limitations under the License.
 
 import type { SupervisorBackgroundTask } from '../../../../shared/ipc';
 
-export function backgroundTaskActive(task: SupervisorBackgroundTask): boolean {
+function backgroundTaskActive(task: SupervisorBackgroundTask): boolean {
   return task.state === 'watching' || task.state === 'running';
 }
 

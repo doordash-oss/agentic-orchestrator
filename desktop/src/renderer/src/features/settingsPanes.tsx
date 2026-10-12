@@ -40,7 +40,7 @@ import {
   UpdateIcon,
 } from '../components/icons';
 
-export interface SettingsPaneDescriptor {
+interface SettingsPaneDescriptor {
   id: SettingsPaneId;
   label: string;
   Icon(props: SVGProps<SVGSVGElement>): React.ReactElement;

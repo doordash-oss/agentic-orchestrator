@@ -16,7 +16,6 @@ package agent
 
 import (
 	"regexp"
-	"sort"
 	"strings"
 )
 
@@ -179,32 +178,10 @@ func detectFenceMarker(ln string) (byte, int) {
 	return c, n
 }
 
-// PlanTaskRepos returns the sorted, deduplicated set of repo names tagged
-// across the plan's Tasks section. Untagged tasks contribute nothing.
-// Returns nil when the plan has no Tasks or no Repo tags.
-func PlanTaskRepos(planMarkdown string) []string {
-	tasks := ParsePlanTasks(planMarkdown)
-	seen := make(map[string]bool, len(tasks))
-	for _, t := range tasks {
-		for _, repo := range t.Repos {
-			seen[repo] = true
-		}
-	}
-	if len(seen) == 0 {
-		return nil
-	}
-	out := make([]string, 0, len(seen))
-	for name := range seen {
-		out = append(out, name)
-	}
-	sort.Strings(out)
-	return out
-}
-
-// ParsePhasePlanFrontend reads the plan-level frontend metadata flag.
+// parsePhasePlanFrontend reads the plan-level frontend metadata flag.
 // Missing legacy metadata, a missing field, or an unrecognized value all
 // resolve to false for backward compatibility with already-authored plans.
-func ParsePhasePlanFrontend(planMarkdown string) bool {
+func parsePhasePlanFrontend(planMarkdown string) bool {
 	metadata := extractMarkdownSection(planMarkdown, "## Metadata")
 	if metadata == "" {
 		return false

@@ -89,7 +89,7 @@ func TestCompileTestingContractMultiRepo_CrossRepoStepsFromPlan(t *testing.T) {
 		Repos:    []string{testRepoNameAPI, testRepoNameWeb},
 		PlanText: plan,
 	})
-	if got := countItems(c.Items, testingContractCrossRepoSource, TestingContractCrossRepoTag); got != 2 {
+	if got := countItems(c.Items, testingContractCrossRepoSource, testingContractCrossRepoTag); got != 2 {
 		t.Fatalf("cross-repo rows = %d, want 2", got)
 	}
 	wantCmds := map[string]bool{"scripts/e2e.sh": false, "scripts/contract-test.sh": false}
@@ -235,8 +235,8 @@ func TestCompileTestingContractMultiRepo_ManualVerificationIsCrossRepo(t *testin
 	if got == nil {
 		t.Fatalf("missing manual item: %+v", c.Items)
 	}
-	if got.Repo != TestingContractCrossRepoTag {
-		t.Fatalf("manual repo = %q, want %q", got.Repo, TestingContractCrossRepoTag)
+	if got.Repo != testingContractCrossRepoTag {
+		t.Fatalf("manual repo = %q, want %q", got.Repo, testingContractCrossRepoTag)
 	}
 	if got.ExpectedEvidence.Kind != testingContractManualKind {
 		t.Fatalf("manual evidence kind = %q", got.ExpectedEvidence.Kind)
@@ -279,10 +279,10 @@ func TestCompileTestingContractMultiRepo_EvidenceRowsMultiRepoAreCrossRepo(t *te
 		PlanText: plan,
 	})
 
-	if got := countItems(c.Items, testingContractVisualSource, TestingContractCrossRepoTag); got != 1 {
+	if got := countItems(c.Items, testingContractVisualSource, testingContractCrossRepoTag); got != 1 {
 		t.Fatalf("multi-repo visual rows = %d, want 1", got)
 	}
-	if got := countItems(c.Items, testingContractBehavioralSource, TestingContractCrossRepoTag); got != 1 {
+	if got := countItems(c.Items, testingContractBehavioralSource, testingContractCrossRepoTag); got != 1 {
 		t.Fatalf("multi-repo behavioral rows = %d, want 1", got)
 	}
 }

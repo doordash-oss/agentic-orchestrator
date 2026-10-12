@@ -25,8 +25,8 @@ import (
 	"go.uber.org/fx"
 )
 
-// OrchestratorParams declares fx-injected dependencies.
-type OrchestratorParams struct {
+// orchestratorParams declares fx-injected dependencies.
+type orchestratorParams struct {
 	fx.In
 	FeatureManager  *feature.Manager
 	FeatureStore    *feature.Store
@@ -43,7 +43,7 @@ type OrchestratorParams struct {
 // where lifecycle shutdown is registered; keeping it co-located with the
 // provider prevents double-registration in API and CLI wiring.
 var Module = fx.Module("orchestrator",
-	fx.Provide(func(p OrchestratorParams) *Orchestrator {
+	fx.Provide(func(p orchestratorParams) *Orchestrator {
 		// Install the attach-drop metric reporter on the session manager
 		// so any session critical-send timeout emits
 		// session.critical_message_dropped to events.jsonl. Safe on a nil
@@ -57,8 +57,8 @@ var Module = fx.Module("orchestrator",
 		}
 
 		o := New(Deps{
-			Lifecycle:   p.FeatureManager, // implicit satisfaction
-			Store:       p.FeatureStore,   // implicit satisfaction
+			Manager:     p.FeatureManager,
+			Store:       p.FeatureStore,
 			Sessions:    p.SessionManager, // *session.Manager satisfies ports.SessionManager
 			Worktrees:   p.Worktrees,      // retained feature.WorktreeOps seam
 			PhaseRunner: p.PhaseRunner,    // concrete *agent.PhaseRunner

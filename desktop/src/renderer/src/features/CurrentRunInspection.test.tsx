@@ -1279,6 +1279,49 @@ describe('CurrentRunInspection', () => {
     expect(await screen.findByLabelText('Review gate')).toBeVisible();
     expect(screen.getByLabelText('Review axes')).toHaveTextContent('Craft✓');
   });
+
+  it('shows retrying and failed validators with their last error', async () => {
+    const mock = installAgenticoMock();
+    mock.api.getLivePreview.mockResolvedValue({
+      featureId: 'abcd1234ef567890',
+      activity: 'Final Review',
+      contextPercentage: -1,
+      totalSeconds: 10,
+      totalUsd: 0,
+      transcript: [],
+    });
+    mock.api.listRunArtifacts.mockResolvedValue({ artifacts: [] });
+    mock.api.listRunSessions.mockResolvedValue({ runNumber: 8, sessions: [] });
+
+    render(
+      <CurrentRunInspection
+        featureId="abcd1234ef567890"
+        runNumber={8}
+        currentPhase="Final Review"
+        reviewGate={{
+          reviewingGate: true,
+          reviewFixing: false,
+          validatingPlan: false,
+          validatorStatuses: { QA: 'retrying', Cleanliness: 'error' },
+          validatorErrors: {
+            QA: 'opencode initialize timeout',
+            Cleanliness: 'provider unavailable (non-retryable): Cannot connect to API',
+          },
+        }}
+        presentation="record"
+        shouldStream={false}
+      />,
+    );
+
+    const axes = await screen.findByLabelText('Review axes');
+    const items = Array.from(axes.querySelectorAll('li'));
+    const qa = items.find((item) => item.textContent?.startsWith('QA'));
+    const cleanliness = items.find((item) => item.textContent?.startsWith('Clean'));
+    expect(qa).toHaveAttribute('data-status', 'running');
+    expect(qa).toHaveAttribute('title', 'QA: retrying — opencode initialize timeout');
+    expect(cleanliness).toHaveAttribute('data-status', 'failed');
+    expect(cleanliness?.getAttribute('title')).toContain('Cannot connect to API');
+  });
 });
 
 describe('CurrentRunInspection error surfaces', () => {

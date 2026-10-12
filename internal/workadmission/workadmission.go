@@ -110,9 +110,9 @@ func (a Activity) Busy() bool {
 		a.Uploads > 0 || a.OriginChecks > 0 || a.RepositoryWork > 0
 }
 
-// SupervisorWorking reports a supervisor that is starting or running: the
+// supervisorWorking reports a supervisor that is starting or running: the
 // supervisor activity that blocks an unattended install.
-func (a Activity) SupervisorWorking() bool {
+func (a Activity) supervisorWorking() bool {
 	return a.SupervisorActive && !a.SupervisorWaiting
 }
 
@@ -122,7 +122,7 @@ func (a Activity) SupervisorWorking() bool {
 // answer, and the install's own shutdown ends the supervisor and resolves
 // the open request as interrupted.
 func (a Activity) BlocksIdleInstall() bool {
-	return a.Features > 0 || a.SupervisorWorking() || a.Clones > 0 ||
+	return a.Features > 0 || a.supervisorWorking() || a.Clones > 0 ||
 		a.Uploads > 0 || a.OriginChecks > 0 || a.RepositoryWork > 0
 }
 
@@ -148,7 +148,7 @@ type Options struct {
 	Detectors []Detector
 	// FallbackPoll bounds how long an idle waiter can go without
 	// reevaluating when activity-change events are missed. Zero uses
-	// DefaultFallbackPoll.
+	// defaultFallbackPoll.
 	FallbackPoll time.Duration
 	// Now is the injectable clock; nil uses time.Now.
 	Now func() time.Time
@@ -157,8 +157,8 @@ type Options struct {
 	After func(d time.Duration) <-chan time.Time
 }
 
-// DefaultFallbackPoll bounds missed activity events between reevaluations.
-const DefaultFallbackPoll = 2 * time.Second
+// defaultFallbackPoll bounds missed activity events between reevaluations.
+const defaultFallbackPoll = 2 * time.Second
 
 // Coordinator is the runtime work-admission boundary. Acquisition, release,
 // and closure share one mutex. Activity discovery happens outside the
@@ -188,7 +188,7 @@ type Coordinator struct {
 func New(opts Options) *Coordinator {
 	poll := opts.FallbackPoll
 	if poll <= 0 {
-		poll = DefaultFallbackPoll
+		poll = defaultFallbackPoll
 	}
 	now := opts.Now
 	if now == nil {
@@ -217,7 +217,7 @@ func New(opts Options) *Coordinator {
 // the handler is constructed.
 func (c *Coordinator) SetDetectors(detectors []Detector) {
 	c.detectors.Store(&detectors)
-	c.NotifyChanged()
+	c.notifyChanged()
 }
 
 // Acquire reserves one unit of admitted work. It fails with *ClosedError
@@ -303,7 +303,7 @@ func (c *Coordinator) Open() {
 	c.mu.Lock()
 	c.closed = false
 	c.mu.Unlock()
-	c.NotifyChanged()
+	c.notifyChanged()
 }
 
 // Detect runs every detector outside the coordinator mutex and merges the
@@ -325,7 +325,7 @@ func (c *Coordinator) Detect(ctx context.Context) (Activity, error) {
 			}
 			merged.Features += activity.Features
 			merged.SupervisorActive = merged.SupervisorActive || activity.SupervisorActive
-			working = working || activity.SupervisorWorking()
+			working = working || activity.supervisorWorking()
 			merged.Clones += activity.Clones
 			merged.Uploads += activity.Uploads
 			merged.OriginChecks += activity.OriginChecks
@@ -336,7 +336,7 @@ func (c *Coordinator) Detect(ctx context.Context) (Activity, error) {
 	return merged, nil
 }
 
-// IdleSnapshot combines one detection with the current reservation count.
+// idleSnapshot combines one detection with the current reservation count.
 // It is an advisory observation; the authoritative gate is CloseIfQuiesced.
 func (c *Coordinator) IdleSnapshot(ctx context.Context) (Activity, int, error) {
 	activity, err := c.Detect(ctx)
@@ -379,10 +379,10 @@ func (c *Coordinator) WaitForIdle(ctx context.Context) error {
 	}
 }
 
-// NotifyChanged signals that activity may have changed, waking an idle
+// notifyChanged signals that activity may have changed, waking an idle
 // waiter. Non-blocking: a signal arriving during an evaluation is satisfied
 // by that evaluation.
-func (c *Coordinator) NotifyChanged() {
+func (c *Coordinator) notifyChanged() {
 	select {
 	case c.change <- struct{}{}:
 	default:
@@ -422,6 +422,6 @@ func (r *Reservation) Release() {
 			r.coordinator.total--
 		}
 		r.coordinator.mu.Unlock()
-		r.coordinator.NotifyChanged()
+		r.coordinator.notifyChanged()
 	})
 }

@@ -23,15 +23,15 @@ import (
 	"sync"
 )
 
-// Emitter writes Event structs as JSONL lines to a per-feature file.
-type Emitter struct {
+// emitter writes Event structs as JSONL lines to a per-feature file.
+type emitter struct {
 	stateDir string
 	mu       sync.Mutex
 }
 
-// NewEmitter creates an Emitter that writes to <stateDir>/<featureID>/events.jsonl.
-func NewEmitter(stateDir string) *Emitter {
-	return &Emitter{stateDir: stateDir}
+// newEmitter creates an emitter that writes to <stateDir>/<featureID>/events.jsonl.
+func newEmitter(stateDir string) *emitter {
+	return &emitter{stateDir: stateDir}
 }
 
 // Emit writes a single event as a JSON line to the feature's events.jsonl.
@@ -42,7 +42,7 @@ func NewEmitter(stateDir string) *Emitter {
 // create the directory: if the feature has been deleted out from under an
 // in-flight phase runner, the open fails with ENOENT and the event is
 // silently dropped rather than resurrecting the deleted directory.
-func (e *Emitter) Emit(evt Event) error {
+func (e *emitter) emit(evt Event) error {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 

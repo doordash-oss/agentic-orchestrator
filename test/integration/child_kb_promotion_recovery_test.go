@@ -273,7 +273,7 @@ func (r *realCommandRunner) Run(ctx context.Context, name string, args []string,
 
 func (fx *kbPromoFixture) orchestrator() *orchestrator.Orchestrator {
 	return orchestrator.New(orchestrator.Deps{
-		Lifecycle: fx.mgr,
+		Manager:   fx.mgr,
 		Store:     fx.store,
 		Worktrees: fx.wm,
 	}, orchestrator.Hooks{})
@@ -313,7 +313,7 @@ func (fx *kbPromoFixture) phaseRunner(succeed bool) (*agent.PhaseRunner, *mocks.
 func (fx *kbPromoFixture) orchestratorWithPhaseRunner(succeed bool) *orchestrator.Orchestrator {
 	pr, mockSM := fx.phaseRunner(succeed)
 	o := orchestrator.New(orchestrator.Deps{
-		Lifecycle:   fx.mgr,
+		Manager:     fx.mgr,
 		Store:       fx.store,
 		Worktrees:   fx.wm,
 		PhaseRunner: pr,

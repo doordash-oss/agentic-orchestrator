@@ -74,14 +74,14 @@ export interface ToolbarUpdateProps {
   onInstallWhenIdle(): Promise<void>;
 }
 
-export interface ToolbarRecoveryProps {
+interface ToolbarRecoveryProps {
   /** True while the server reports orphaned sessions; tints the button. */
   attention: boolean;
   /** Opens the Recovery sheet (recovery workspace above bulk resume/retry). */
   onOpen(): void;
 }
 
-export interface ToolbarProps {
+interface ToolbarProps {
   /**
    * The shell-owned leading content. While the sidebar is collapsed the shell
    * moves its window-chrome control cluster (sidebar toggle + palette search)

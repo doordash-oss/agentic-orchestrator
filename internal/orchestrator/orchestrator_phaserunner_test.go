@@ -17,6 +17,7 @@ package orchestrator_test
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -26,8 +27,6 @@ import (
 
 	"github.com/doordash-oss/agentic-orchestrator/internal/agent"
 	"github.com/doordash-oss/agentic-orchestrator/internal/feature"
-	"github.com/doordash-oss/agentic-orchestrator/internal/llm"
-	"github.com/doordash-oss/agentic-orchestrator/internal/llm/askuser"
 	"github.com/doordash-oss/agentic-orchestrator/internal/orchestrator"
 	"github.com/doordash-oss/agentic-orchestrator/internal/ports"
 	"github.com/doordash-oss/agentic-orchestrator/internal/session"
@@ -44,109 +43,21 @@ import (
 // tracker. The stub satisfies those calls without spinning up a real PTY.
 // ---------------------------------------------------------------------------
 
+// stubSessionHandle embeds the shared mock session view; the PhaseRunner
+// code that runs after MockSessionManager.StartSession returns the handle
+// uses only a narrow slice of SessionHandle — it registers cleanup
+// callbacks, sets a log file, and registers a tool-read tracker. The mock
+// satisfies those calls without spinning up a real PTY.
 type stubSessionHandle struct {
-	id        string
-	featureID string
-	phase     feature.Phase
-	repoName  string
-	done      chan struct{}
-	statusCh  chan string
-	attachCh  chan llm.SDKMessage
-	msgLog    *session.MessageLog
+	*mocks.MockSessionView
 }
 
 func newStubSessionHandle(id, featureID string, phase feature.Phase, repoName string) *stubSessionHandle {
-	return &stubSessionHandle{
-		id:        id,
-		featureID: featureID,
-		phase:     phase,
-		repoName:  repoName,
-		done:      make(chan struct{}),
-		statusCh:  make(chan string, 1),
-		attachCh:  make(chan llm.SDKMessage, 1),
-		msgLog:    session.NewMessageLog(),
-	}
+	m := mocks.NewMockSessionView(id, featureID)
+	m.PhaseVal = phase
+	m.RepoNameVal = repoName
+	return &stubSessionHandle{MockSessionView: m}
 }
-
-// SessionView identity/metadata.
-func (s *stubSessionHandle) ID() string              { return s.id }
-func (s *stubSessionHandle) FeatureID() string       { return s.featureID }
-func (s *stubSessionHandle) Phase() feature.Phase    { return s.phase }
-func (s *stubSessionHandle) RepoName() string        { return s.repoName }
-func (s *stubSessionHandle) PermCacheScope() string  { return "" }
-func (s *stubSessionHandle) Kind() ports.SessionKind { return ports.KindPhase }
-func (s *stubSessionHandle) Label() string           { return "" }
-
-// SessionView state.
-func (s *stubSessionHandle) Status() session.SessionStatus    { return session.SessionRunning }
-func (s *stubSessionHandle) IsActive() bool                   { return true }
-func (s *stubSessionHandle) Iteration() int                   { return 0 }
-func (s *stubSessionHandle) StartedAt() time.Time             { return time.Time{} }
-func (s *stubSessionHandle) WaitingSince() time.Time          { return time.Time{} }
-func (s *stubSessionHandle) InitialPrompt() string            { return "" }
-func (s *stubSessionHandle) ProviderName() string             { return "" }
-func (s *stubSessionHandle) Model() string                    { return "" }
-func (s *stubSessionHandle) WorkDir() string                  { return "" }
-func (s *stubSessionHandle) EffectiveEffort() llm.EffortLevel { return "" }
-func (s *stubSessionHandle) EffortSource() llm.EffortSource   { return "" }
-
-// SessionView data access.
-func (s *stubSessionHandle) MessageLog() ports.MessageLog                         { return s.msgLog }
-func (s *stubSessionHandle) Cost() *llm.ResultMessage                             { return nil }
-func (s *stubSessionHandle) LatestUsage() *llm.Usage                              { return nil }
-func (s *stubSessionHandle) AccumulatedUsage() llm.Usage                          { return llm.Usage{} }
-func (s *stubSessionHandle) LastControlRequest() *llm.ControlRequestMessage       { return nil }
-func (s *stubSessionHandle) PendingControlRequests() []*llm.ControlRequestMessage { return nil }
-func (s *stubSessionHandle) QALog() []session.QAPair                              { return nil }
-func (s *stubSessionHandle) LogFilePath() string                                  { return "" }
-func (s *stubSessionHandle) ContextPercentage() int                               { return 0 }
-func (s *stubSessionHandle) ErrorDetail() string                                  { return "" }
-func (s *stubSessionHandle) ExitCodeDetail() string                               { return "" }
-func (s *stubSessionHandle) LastStdoutAt() time.Time                              { return time.Time{} }
-
-// SessionView channels.
-func (s *stubSessionHandle) StatusCh() <-chan string         { return s.statusCh }
-func (s *stubSessionHandle) AttachCh() <-chan llm.SDKMessage { return s.attachCh }
-func (s *stubSessionHandle) Done() <-chan struct{}           { return s.done }
-
-// SessionView query.
-func (s *stubSessionHandle) HasPendingAskUserQuestion() bool { return false }
-func (s *stubSessionHandle) HasPendingRootAskUserQuestion() bool {
-	return false
-}
-func (s *stubSessionHandle) RootCompletionIntent() llm.CompletionIntent {
-	return llm.CompletionIntent{}
-}
-func (s *stubSessionHandle) LiveBackgroundTaskCount() int { return 0 }
-func (s *stubSessionHandle) TaskActivities() []llm.TaskActivity {
-	return nil
-}
-
-// SessionView interaction (no-ops).
-func (s *stubSessionHandle) SendUserMessage(text string) error { return nil }
-func (s *stubSessionHandle) RespondToControl(requestID string, allow bool, reason string) error {
-	return nil
-}
-func (s *stubSessionHandle) RespondToAskUser(string, askuser.Resolved) error {
-	return nil
-}
-func (s *stubSessionHandle) Stop() error      { return nil }
-func (s *stubSessionHandle) Interrupt() error { return nil }
-func (s *stubSessionHandle) Wait()            {}
-
-// SessionHandle mutation (no-ops).
-func (s *stubSessionHandle) SetStatus(status session.SessionStatus) {}
-func (s *stubSessionHandle) SetLogFile(f *os.File)                  {}
-func (s *stubSessionHandle) AddCleanupFunc(fn func())               {}
-func (s *stubSessionHandle) SetHasUnansweredQuestion(v bool)        {}
-func (s *stubSessionHandle) CloseStdin()                            {}
-func (s *stubSessionHandle) SetOnToolAllowed(fn func(toolName string, input json.RawMessage)) {
-}
-func (s *stubSessionHandle) SetOnFileRead(fn func(read llm.FileReadEvent))  {}
-func (s *stubSessionHandle) SetOnSubagentEvent(fn func(msg llm.SDKMessage)) {}
-
-// Compile-time check that stubSessionHandle satisfies SessionHandle.
-var _ ports.SessionHandle = (*stubSessionHandle)(nil)
 
 // ---------------------------------------------------------------------------
 // capturingPhaseRunner — helper that constructs a real *agent.PhaseRunner
@@ -185,7 +96,7 @@ func newCapturingPhaseRunner(t *testing.T) *capturingPhaseRunner {
 
 	pr := &agent.PhaseRunner{
 		SessionManager: sm,
-		FeatureStore:   mocks.NewMockFeatureStore(),
+		FeatureStore:   feature.NewStore(stateDir),
 		CommandRunner:  cmd,
 		StateDir:       stateDir,
 	}
@@ -274,27 +185,6 @@ func seedFreshKB(t *testing.T, stateDir, repoName, headCommit string) string {
 	return kbDir
 }
 
-// countLifecycleCalls counts recorded calls whose method matches name.
-func countLifecycleCalls(lc *mocks.MockFeatureLifecycle, method string) int {
-	count := 0
-	for _, c := range lc.Calls {
-		if c.Method == method {
-			count++
-		}
-	}
-	return count
-}
-
-// lifecycleCallArgs returns the first recorded call for method, or nil.
-func lifecycleCallArgs(lc *mocks.MockFeatureLifecycle, method string) []any {
-	for _, c := range lc.Calls {
-		if c.Method == method {
-			return c.Args
-		}
-	}
-	return nil
-}
-
 // writeRoadmap writes a minimal roadmap document with two phases to path.
 func writeRoadmap(t *testing.T, path string) {
 	t.Helper()
@@ -348,18 +238,17 @@ func TestOrchestrator_StartKB_MixedFresh_FansOutPerRepo(t *testing.T) {
 		CurrentPhase: feature.PhaseKnowledgeBase,
 		Pipeline:     feature.PipelineLarge,
 		Repos: []feature.FeatureRepo{
-			{Name: "repo-fresh", Path: "/tmp/repo-fresh"},
+			{Name: "repo-fresh", Path: t.TempDir()},
 			{Name: "repo-stale", Path: "/tmp/repo-stale"},
 			{Name: "repo-dirty", Path: "/tmp/repo-dirty"},
 		},
 	}
-	lc := lifecycleForFeature(f)
-	fs := newFeatureStore(f)
+	fs, lc := newStoredFeatureFixture(t, f)
 	cpr.pr.FeatureStore = fs
 
 	var startedPhases []feature.Phase
 	o := orchestrator.New(orchestrator.Deps{
-		Lifecycle:   lc,
+		Manager:     lc,
 		Store:       fs,
 		Sessions:    cpr.sm,
 		PhaseRunner: cpr.pr,
@@ -374,22 +263,9 @@ func TestOrchestrator_StartKB_MixedFresh_FansOutPerRepo(t *testing.T) {
 		t.Fatalf("StartFeature: %v", err)
 	}
 
-	// Transition/init fired exactly once.
-	if n := countLifecycleCalls(lc, "StartKnowledgeBase"); n != 1 {
-		t.Errorf("StartKnowledgeBase calls = %d, want 1", n)
-	}
-	if n := countLifecycleCalls(lc, "InitKBStatus"); n != 1 {
-		t.Errorf("InitKBStatus calls = %d, want 1", n)
-	}
-
-	// Exactly one MarkRepoKBCompleted — for the fresh repo.
-	if n := countLifecycleCalls(lc, "MarkRepoKBCompleted"); n != 1 {
-		t.Errorf("MarkRepoKBCompleted calls = %d, want 1", n)
-	}
-	if args := lifecycleCallArgs(lc, "MarkRepoKBCompleted"); len(args) >= 2 {
-		if repoName, ok := args[1].(string); !ok || repoName != "repo-fresh" {
-			t.Errorf("MarkRepoKBCompleted repoName = %v, want repo-fresh", args[1])
-		}
+	stored := loadStoredFeature(t, fs, f.ID)
+	if stored.Status != feature.StatusBuildingKB || stored.KBStatus["repo-fresh"] != "completed" {
+		t.Fatalf("persisted KB state = status %s, repos %v; want BuildingKB with repo-fresh completed", stored.Status, stored.KBStatus)
 	}
 
 	// Two KB sessions started — one per non-fresh repo.
@@ -432,6 +308,74 @@ func TestOrchestrator_StartKB_MixedFresh_FansOutPerRepo(t *testing.T) {
 	// PhaseStarted hook fired exactly once for KB.
 	if len(startedPhases) != 1 || startedPhases[0] != feature.PhaseKnowledgeBase {
 		t.Errorf("startedPhases = %v, want [PhaseKnowledgeBase]", startedPhases)
+	}
+
+	refuteKBIndexDirCreated(t, cpr.stateDir, "repo-fresh")
+}
+
+// With every repo fresh, startKB skips straight to Inquire: no KB transition,
+// no per-repo completion bookkeeping, no KB sessions, and nothing written
+// under the knowledge-base state directories.
+func TestOrchestrator_StartKB_AllFresh_SkipsToInquire(t *testing.T) {
+	cpr := newCapturingPhaseRunner(t)
+
+	repoNames := []string{"repo-one", "repo-two"}
+	var repos []feature.FeatureRepo
+	for _, name := range repoNames {
+		seedFreshKB(t, cpr.stateDir, name, "deadbeef")
+		repos = append(repos, feature.FeatureRepo{Name: name, Path: t.TempDir()})
+	}
+
+	f := &feature.Feature{
+		ID:           "feat-all-fresh",
+		Status:       feature.StatusInterrupted,
+		CurrentPhase: feature.PhaseKnowledgeBase,
+		Pipeline:     feature.PipelineLarge,
+		Repos:        repos,
+	}
+	fs, lc := newStoredFeatureFixture(t, f)
+	cpr.pr.FeatureStore = fs
+
+	var startedPhases []feature.Phase
+	o := orchestrator.New(orchestrator.Deps{
+		Manager:     lc,
+		Store:       fs,
+		Sessions:    cpr.sm,
+		PhaseRunner: cpr.pr,
+		CmdRunner:   cpr.cmd,
+	}, orchestrator.Hooks{
+		OnPhaseStarted: func(id string, p feature.Phase) {
+			startedPhases = append(startedPhases, p)
+		},
+	})
+
+	if err := o.StartFeature(f.ID); err != nil {
+		t.Fatalf("StartFeature: %v", err)
+	}
+
+	stored := loadStoredFeature(t, fs, f.ID)
+	if stored.Status != feature.StatusInquiring || len(stored.KBStatus) != 0 {
+		t.Errorf("persisted state = status %s, KB %v; want Inquiring with no KB bookkeeping", stored.Status, stored.KBStatus)
+	}
+	if kbSessions := cpr.startSessionsByPhase(feature.PhaseKnowledgeBase); len(kbSessions) != 0 {
+		t.Errorf("KB StartSession calls = %d, want 0", len(kbSessions))
+	}
+	if len(startedPhases) != 1 || startedPhases[0] != feature.PhaseInquire {
+		t.Errorf("startedPhases = %v, want [PhaseInquire]", startedPhases)
+	}
+
+	for _, name := range repoNames {
+		refuteKBIndexDirCreated(t, cpr.stateDir, name)
+	}
+}
+
+// refuteKBIndexDirCreated fails when startKB left an "index" directory in the
+// repo's knowledge-base state directory.
+func refuteKBIndexDirCreated(t *testing.T, stateDir, repoName string) {
+	t.Helper()
+	dir := filepath.Join(agent.KBStateDir(stateDir, repoName), "index")
+	if _, err := os.Stat(dir); !errors.Is(err, os.ErrNotExist) {
+		t.Errorf("knowledge-base index directory %s: stat err = %v, want not exist", dir, err)
 	}
 }
 
@@ -523,11 +467,10 @@ func TestOrchestrator_StartPhase_PhaseRunnerDispatch_Sync(t *testing.T) {
 			}
 			tt.setup(t, f, cpr.stateDir)
 
-			lc := lifecycleForFeature(f)
-			fs := newFeatureStore(f)
+			fs, lc := newStoredFeatureFixture(t, f)
 			cpr.pr.FeatureStore = fs
 			o := orchestrator.New(orchestrator.Deps{
-				Lifecycle:   lc,
+				Manager:     lc,
 				Store:       fs,
 				Sessions:    cpr.sm,
 				PhaseRunner: cpr.pr,
@@ -538,8 +481,8 @@ func TestOrchestrator_StartPhase_PhaseRunnerDispatch_Sync(t *testing.T) {
 				t.Fatalf("StartFeature: %v", err)
 			}
 
-			if countLifecycleCalls(lc, tt.wantTransition) != 1 {
-				t.Errorf("expected exactly one %s call; got %v", tt.wantTransition, lifecycleCallNames(lc))
+			if got := loadStoredFeature(t, fs, f.ID).CurrentPhase; got != tt.phase {
+				t.Errorf("persisted phase = %s, want %s", got, tt.phase)
 			}
 
 			captured := cpr.capturedByPhase(tt.phase)
@@ -625,11 +568,10 @@ func TestOrchestrator_StartPhase_PhaseRunnerDispatch_Async(t *testing.T) {
 			}
 			tt.setup(t, f, cpr.stateDir)
 
-			lc := withStatusTransitions(lifecycleForFeature(f), f)
-			fs := newFeatureStore(f)
+			fs, lc := newStoredFeatureFixture(t, f)
 			cpr.pr.FeatureStore = fs
 			o := orchestrator.New(orchestrator.Deps{
-				Lifecycle:   lc,
+				Manager:     lc,
 				Store:       fs,
 				Sessions:    cpr.sm,
 				PhaseRunner: cpr.pr,
@@ -640,8 +582,8 @@ func TestOrchestrator_StartPhase_PhaseRunnerDispatch_Async(t *testing.T) {
 				t.Fatalf("StartFeature: %v", err)
 			}
 
-			if countLifecycleCalls(lc, tt.wantTransition) != 1 {
-				t.Errorf("expected exactly one %s call; got %v", tt.wantTransition, lifecycleCallNames(lc))
+			if got := loadStoredFeature(t, fs, f.ID).Status; got != feature.StatusPlanning {
+				t.Errorf("persisted status = %s, want Planning", got)
 			}
 
 			captured := waitForCapturedPhase(t, cpr, tt.phase, 3*time.Second)
@@ -688,11 +630,10 @@ func TestOrchestrator_StartPlanIncludesResearchDocumentInRoadmapPrompt(t *testin
 		Repos:        []feature.FeatureRepo{{Name: "repo1", Path: cpr.stateDir}},
 	}
 
-	lc := withStatusTransitions(lifecycleForFeature(f), f)
-	fs := newFeatureStore(f)
+	fs, lc := newStoredFeatureFixture(t, f)
 	cpr.pr.FeatureStore = fs
 	o := orchestrator.New(orchestrator.Deps{
-		Lifecycle:   lc,
+		Manager:     lc,
 		Store:       fs,
 		Sessions:    cpr.sm,
 		PhaseRunner: cpr.pr,
@@ -750,11 +691,10 @@ func TestOrchestrator_StartRoadmapPhasePlanIncludesResearchDocument(t *testing.T
 		Repos:               []feature.FeatureRepo{{Name: "repo1", Path: cpr.stateDir}},
 	}
 
-	lc := withStatusTransitions(lifecycleForFeature(f), f)
-	fs := newFeatureStore(f)
+	fs, lc := newStoredFeatureFixture(t, f)
 	cpr.pr.FeatureStore = fs
 	o := orchestrator.New(orchestrator.Deps{
-		Lifecycle:   lc,
+		Manager:     lc,
 		Store:       fs,
 		Sessions:    cpr.sm,
 		PhaseRunner: cpr.pr,
@@ -805,11 +745,10 @@ func TestOrchestrator_StartPhase_PhaseRunnerDispatch_Implement(t *testing.T) {
 	}
 	writeExecOrderNextToPlan(t, planPath, f.Repos)
 
-	lc := withStatusTransitions(lifecycleForFeature(f), f)
-	fs := newFeatureStore(f)
+	fs, lc := newStoredFeatureFixture(t, f)
 	cpr.pr.FeatureStore = fs
 	o := orchestrator.New(orchestrator.Deps{
-		Lifecycle:   lc,
+		Manager:     lc,
 		Store:       fs,
 		Sessions:    cpr.sm,
 		PhaseRunner: cpr.pr,
@@ -820,12 +759,9 @@ func TestOrchestrator_StartPhase_PhaseRunnerDispatch_Implement(t *testing.T) {
 		t.Fatalf("StartFeature: %v", err)
 	}
 
-	// Synchronous lifecycle transitions fire before the goroutine launches.
-	if countLifecycleCalls(lc, "StartImplementation") != 1 {
-		t.Errorf("expected exactly one StartImplementation call; got %v", lifecycleCallNames(lc))
-	}
-	if countLifecycleCalls(lc, "InitRepoImpl") != 1 {
-		t.Errorf("expected exactly one InitRepoImpl call; got %v", lifecycleCallNames(lc))
+	stored := loadStoredFeature(t, fs, f.ID)
+	if stored.Status != feature.StatusImplementing || stored.RepoStates["repo1"] == nil {
+		t.Errorf("persisted implementation state = status %s, repos %v", stored.Status, stored.RepoStates)
 	}
 
 	// Wait for the multi-repo orchestrator goroutine to reach BuildSession.
@@ -857,13 +793,12 @@ func TestOrchestrator_StartFeature_InterruptedWithMissingCurrentPhase_FallsBackT
 		// StartedAt nil — no phase ever started.
 		Repos: nil, // empty repos so startKB skips straight to Inquire
 	}
-	lc := lifecycleForFeature(f)
-	fs := newFeatureStore(f)
+	fs, lc := newStoredFeatureFixture(t, f)
 	cpr.pr.FeatureStore = fs
 
 	var observed feature.Phase
 	o := orchestrator.New(orchestrator.Deps{
-		Lifecycle:   lc,
+		Manager:     lc,
 		Store:       fs,
 		Sessions:    cpr.sm,
 		PhaseRunner: cpr.pr,
@@ -878,11 +813,8 @@ func TestOrchestrator_StartFeature_InterruptedWithMissingCurrentPhase_FallsBackT
 
 	// Nil StartedAt + zero CurrentPhase + Large pipeline → fallback to KB.
 	// With no repos, startKB cleanly skips to Inquire → StartInquire fires.
-	if countLifecycleCalls(lc, "StartInquire") != 1 {
-		t.Errorf("expected StartInquire via fallback; got calls: %v", lifecycleCallNames(lc))
-	}
-	if countLifecycleCalls(lc, "StartResearch") != 0 {
-		t.Errorf("StartResearch should NOT fire when CurrentPhase==0 is treated as unset")
+	if got := loadStoredFeature(t, fs, f.ID).Status; got != feature.StatusInquiring {
+		t.Errorf("persisted status = %s, want Inquiring", got)
 	}
 	if observed != feature.PhaseInquire {
 		t.Errorf("OnPhaseStarted phase = %v, want PhaseInquire (KB skipped to Inquire)", observed)
@@ -923,12 +855,11 @@ func TestOrchestrator_StartFeature_InterruptedMidResearch_HonorsCurrentPhase(t *
 	}
 	f.Artifacts = map[string]string{"inquire": questionsPath}
 
-	lc := lifecycleForFeature(f)
-	fs := newFeatureStore(f)
+	fs, lc := newStoredFeatureFixture(t, f)
 	cpr.pr.FeatureStore = fs
 
 	o := orchestrator.New(orchestrator.Deps{
-		Lifecycle:   lc,
+		Manager:     lc,
 		Store:       fs,
 		Sessions:    cpr.sm,
 		PhaseRunner: cpr.pr,
@@ -939,14 +870,8 @@ func TestOrchestrator_StartFeature_InterruptedMidResearch_HonorsCurrentPhase(t *
 		t.Fatalf("StartFeature: %v", err)
 	}
 
-	if countLifecycleCalls(lc, "StartResearch") != 1 {
-		t.Errorf("expected StartResearch (legit mid-Research resume); got calls: %v", lifecycleCallNames(lc))
-	}
-	if countLifecycleCalls(lc, "StartKnowledgeBase") != 0 {
-		t.Errorf("KB should NOT restart when StartedAt signals the feature already started")
-	}
-	if countLifecycleCalls(lc, "StartInquire") != 0 {
-		t.Errorf("Inquire should NOT restart when StartedAt signals the feature already started")
+	if got := loadStoredFeature(t, fs, f.ID).Status; got != feature.StatusResearching {
+		t.Errorf("persisted status = %s, want Researching", got)
 	}
 }
 
@@ -987,11 +912,10 @@ func TestOrchestrator_StartPlan_RoadmapPhase_WhenPlanning_SkipsTransition(t *tes
 		Repos:               []feature.FeatureRepo{{Name: "repo1", Path: cpr.stateDir}},
 	}
 
-	lc := withStatusTransitions(lifecycleForFeature(f), f)
-	fs := newFeatureStore(f)
+	fs, lc := newStoredFeatureFixture(t, f)
 	cpr.pr.FeatureStore = fs
 	o := orchestrator.New(orchestrator.Deps{
-		Lifecycle:   lc,
+		Manager:     lc,
 		Store:       fs,
 		Sessions:    cpr.sm,
 		PhaseRunner: cpr.pr,
@@ -1002,9 +926,8 @@ func TestOrchestrator_StartPlan_RoadmapPhase_WhenPlanning_SkipsTransition(t *tes
 		t.Fatalf("StartFeature: %v", err)
 	}
 
-	// StartPlanning must NOT be called — feature is already StatusPlanning.
-	if n := countLifecycleCalls(lc, "StartPlanning"); n != 0 {
-		t.Errorf("StartPlanning calls = %d, want 0 (feature already in StatusPlanning)", n)
+	if got := loadStoredFeature(t, fs, f.ID).Status; got != feature.StatusPlanning {
+		t.Errorf("persisted status = %s, want Planning", got)
 	}
 
 	// RunPhasePlanning should still fire — verify a BuildSession capture
@@ -1041,11 +964,10 @@ func TestOrchestrator_StartPlan_RoadmapPhase_WhenNotPlanning_Transitions(t *test
 		Repos:               []feature.FeatureRepo{{Name: "repo1", Path: cpr.stateDir}},
 	}
 
-	lc := withStatusTransitions(lifecycleForFeature(f), f)
-	fs := newFeatureStore(f)
+	fs, lc := newStoredFeatureFixture(t, f)
 	cpr.pr.FeatureStore = fs
 	o := orchestrator.New(orchestrator.Deps{
-		Lifecycle:   lc,
+		Manager:     lc,
 		Store:       fs,
 		Sessions:    cpr.sm,
 		PhaseRunner: cpr.pr,
@@ -1056,9 +978,8 @@ func TestOrchestrator_StartPlan_RoadmapPhase_WhenNotPlanning_Transitions(t *test
 		t.Fatalf("StartFeature: %v", err)
 	}
 
-	// StartPlanning MUST be called — feature was not yet StatusPlanning.
-	if n := countLifecycleCalls(lc, "StartPlanning"); n != 1 {
-		t.Errorf("StartPlanning calls = %d, want 1 (feature should transition from StatusPlanReady)", n)
+	if got := loadStoredFeature(t, fs, f.ID).Status; got != feature.StatusPlanning {
+		t.Errorf("persisted status = %s, want Planning", got)
 	}
 
 	captured := waitForCapturedPhase(t, cpr, feature.PhasePlan, 3*time.Second)
@@ -1066,10 +987,4 @@ func TestOrchestrator_StartPlan_RoadmapPhase_WhenNotPlanning_Transitions(t *test
 		t.Fatalf("no BuildSession captured for Phase=PhasePlan; captures: %v", cpr.capturedOpts)
 	}
 
-	// After StartPlanning, the orchestrator re-loads the feature, so the
-	// in-place Status mutation (from lifecycleForFeature's TransitionFn) is
-	// visible to the rest of the dispatch. Assert the feature is now planning.
-	if f.Status != feature.StatusPlanning {
-		t.Errorf("feature.Status = %v, want StatusPlanning after transition", f.Status)
-	}
 }

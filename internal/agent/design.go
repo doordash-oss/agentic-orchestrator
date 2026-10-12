@@ -19,17 +19,14 @@ import (
 	"github.com/doordash-oss/agentic-orchestrator/internal/feature"
 )
 
-// BuildDesignPrompt constructs the user message for the Design phase. The
+// buildDesignPrompt constructs the user message for the Design phase. The
 // agent receives research output + original ticket and produces a design doc.
 // The prose lives in internal/agent/prompts/templates/design.user.tmpl.
-//
-// skillsDir, guidelinesDir, and kbInfos are retained for caller compatibility.
-// The RoleSpec system prompt now owns primary skill discovery and Useful Resources.
-func BuildDesignPrompt(f *feature.Feature, skillsDir, guidelinesDir, researchArtifactPath string, qaFilePaths []string, kbInfos ...KBInfo) string {
-	_, _, _ = skillsDir, guidelinesDir, kbInfos
+// The RoleSpec system prompt owns skill discovery and Useful Resources.
+func buildDesignPrompt(f *feature.Feature, researchArtifactPath string, qaFilePaths []string) string {
 	repos, images, attachments := researchFeatureViews(f)
 
-	return prompts.DesignUserPrompt(designUserInput{
+	return prompts.MustRender(prompts.TemplateDesignUser, designUserInput{
 		Name:                  f.Name,
 		Description:           f.Description,
 		ExitCriteria:          f.ExitCriteria,

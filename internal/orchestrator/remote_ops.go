@@ -20,7 +20,6 @@ import "github.com/doordash-oss/agentic-orchestrator/internal/git"
 // cannot be exercised hermetically against a local bare repository.
 type RemoteOps interface {
 	Push(worktreePath, branch string) error
-	ForcePush(worktreePath, branch string) error
 	PushRewrittenBranch(worktreePath, branch string) error
 	PullRebase(worktreePath, branch string) error
 	CreatePR(repoPath, branch, title, body, baseBranch string, draft bool) (string, error)
@@ -32,10 +31,6 @@ type gitRemoteOps struct{}
 
 func (gitRemoteOps) Push(worktreePath, branch string) error {
 	return git.Push(worktreePath, branch)
-}
-
-func (gitRemoteOps) ForcePush(worktreePath, branch string) error {
-	return git.ForcePush(worktreePath, branch)
 }
 
 func (gitRemoteOps) PushRewrittenBranch(worktreePath, branch string) error {

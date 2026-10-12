@@ -90,7 +90,7 @@ func assertPhaseArtifactContract(t *testing.T, phase feature.Phase, role Role, b
 			if !out.OK || len(violations) != 0 || out.PhaseArtifactPath != path {
 				t.Fatalf("valid artifact rejected: outcome=%+v violations=%v", out, violations)
 			}
-		} else if out.OK || out.PhaseArtifactPath != "" || !strings.Contains(JoinProtocolViolations(violations), wantViolation) {
+		} else if out.OK || out.PhaseArtifactPath != "" || !strings.Contains(joinProtocolViolations(violations), wantViolation) {
 			t.Fatalf("outcome=%+v violations=%v, want rejection containing %q", out, violations, wantViolation)
 		}
 	}

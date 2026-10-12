@@ -20,12 +20,12 @@ import os from 'node:os';
 import path from 'node:path';
 import type { VerifiedUpdatePackage } from './updates';
 
-export interface AppliedUpdate {
+interface AppliedUpdate {
   installedPath: string;
   previousPath: string;
 }
 
-export interface UpdateInstallerOptions {
+interface UpdateInstallerOptions {
   platform?: NodeJS.Platform;
   execPath?: string;
   appImagePath?: string;

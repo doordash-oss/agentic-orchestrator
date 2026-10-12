@@ -66,10 +66,10 @@ func (s *seedingConverter) rebuilds() []RebuildInput {
 
 // liveSessionIDs reports a fresh live ACP session id on every launch, as the
 // OpenCode adapter's init message does.
-func liveSessionIDs() func(LaunchRequest) *llm.SystemInitMessage {
+func liveSessionIDs() func(launchRequest) *llm.SystemInitMessage {
 	var mu sync.Mutex
 	n := 0
-	return func(LaunchRequest) *llm.SystemInitMessage {
+	return func(launchRequest) *llm.SystemInitMessage {
 		mu.Lock()
 		defer mu.Unlock()
 		n++

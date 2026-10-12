@@ -34,9 +34,9 @@ type fakeHandle struct {
 	identity   string
 	done       chan struct{}
 	termCh     chan struct{}
-	result     RunResult
+	result     runResult
 	terminated atomic.Bool
-	spec       RunSpec
+	spec       runSpec
 	mu         sync.Mutex
 }
 
@@ -44,7 +44,7 @@ func (h *fakeHandle) Pid() int              { return h.pid }
 func (h *fakeHandle) Pgid() int             { return h.pid }
 func (h *fakeHandle) StartIdentity() string { return h.identity }
 
-func (h *fakeHandle) Wait() RunResult {
+func (h *fakeHandle) Wait() runResult {
 	<-h.done
 	h.mu.Lock()
 	defer h.mu.Unlock()
@@ -64,12 +64,12 @@ func (h *fakeHandle) terminatedCh() <-chan struct{} { return h.termCh }
 func (h *fakeHandle) emitLine(line string) {
 	clean := stripControls(line)
 	if h.spec.OnStage != nil && progressPattern.MatchString(clean) {
-		h.spec.OnStage(StageTransferring, boundProgress(clean))
+		h.spec.OnStage(stageTransferring, boundProgress(clean))
 	}
 }
 
 // finish completes the handle with a run result.
-func (h *fakeHandle) finish(res RunResult) {
+func (h *fakeHandle) finish(res runResult) {
 	h.mu.Lock()
 	h.result = res
 	h.mu.Unlock()
@@ -83,7 +83,7 @@ type fakeRunner struct {
 	starts   []*fakeHandle
 	nextPid  int
 	script   func(h *fakeHandle)
-	onStart  func(spec RunSpec)
+	onStart  func(spec runSpec)
 	startErr error
 }
 
@@ -97,7 +97,7 @@ func (r *fakeRunner) setScript(script func(h *fakeHandle)) {
 	r.script = script
 }
 
-func (r *fakeRunner) setOnStart(onStart func(spec RunSpec)) {
+func (r *fakeRunner) setOnStart(onStart func(spec runSpec)) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	r.onStart = onStart
@@ -109,7 +109,7 @@ func (r *fakeRunner) setStartErr(err error) {
 	r.startErr = err
 }
 
-func (r *fakeRunner) Start(spec RunSpec) (RunHandle, error) {
+func (r *fakeRunner) Start(spec runSpec) (runHandle, error) {
 	r.mu.Lock()
 	r.nextPid++
 	pid := r.nextPid
@@ -154,23 +154,23 @@ func succeedScript(h *fakeHandle) {
 	}
 	h.emitLine("Counting objects: 3, done.")
 	h.emitLine("Receiving objects: 100% (3/3), done.")
-	h.finish(RunResult{ExitCode: 0})
+	h.finish(runResult{ExitCode: 0})
 }
 
 // hangScript blocks until terminated, then exits non-zero like a killed
 // git process.
 func hangScript(h *fakeHandle) {
 	<-h.terminatedCh()
-	h.finish(RunResult{ExitCode: -1})
+	h.finish(runResult{ExitCode: -1})
 }
 
 // failScript finishes with exit code 128 and an authentication-flavored
 // tail.
 func failAuthScript(h *fakeHandle) {
-	h.finish(RunResult{ExitCode: 128, OutputTail: "fatal: Authentication failed for 'https://example.com/acme/widget.git'"})
+	h.finish(runResult{ExitCode: 128, OutputTail: "fatal: Authentication failed for 'https://example.com/acme/widget.git'"})
 }
 
-// serviceFixture wires a Service against a temp state dir and root.
+// serviceFixture wires a service against a temp state dir and root.
 type serviceFixture struct {
 	t        *testing.T
 	root     string
@@ -181,7 +181,7 @@ type serviceFixture struct {
 	// createGit overrides the repository-creation executor; nil uses the
 	// real bounded git implementation.
 	createGit func(ctx context.Context, dir string) error
-	svc       *Service
+	svc       *service
 	hooks     *recordingHooks
 	now       func() time.Time
 	// Per-fixture completion budget. Real-Git scripts need extra headroom
@@ -241,7 +241,7 @@ func newServiceFixture(t *testing.T, script func(h *fakeHandle)) *serviceFixture
 	svc, err := New(Options{
 		StateDir: stateDir,
 		Config:   func() *config.Config { return fx.cfg },
-		Runner:   fx.runner,
+		runner:   fx.runner,
 		// Read through the fixture so tests may retarget the create
 		// executor after construction; nil means the real bounded git.
 		CreateGit: func(ctx context.Context, dir string) error {
@@ -289,7 +289,7 @@ func (fx *serviceFixture) start(key string) Record {
 
 // waitForState polls the authoritative snapshot until the operation
 // reaches one of the want states.
-func (fx *serviceFixture) waitForState(id string, want ...State) Record {
+func (fx *serviceFixture) waitForState(id string, want ...state) Record {
 	fx.t.Helper()
 	deadline := time.Now().Add(fx.waitTimeout)
 	for {

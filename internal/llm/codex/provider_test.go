@@ -312,14 +312,12 @@ func TestProviderBuildCommand_NativeToollessReviewIsIsolated(t *testing.T) {
 	t.Setenv("CODEX_HOME", realHome)
 
 	stateDir := t.TempDir()
-	p := &Provider{}
+	p := NewProvider("")
 	cmd, env, err := p.BuildCommand(llm.CommandBuildOpts{
 		Model:                "gpt-5.4-mini[400K]",
 		StateDir:             stateDir,
 		EffortLevel:          llm.EffortLow,
-		ZeroTools:            true,
-		NoSessionPersistence: true,
-		NoCustomization:      true,
+		NativeToollessReview: true,
 	})
 	if err != nil {
 		t.Fatalf("BuildCommand(native tool-less review) error: %v", err)
@@ -394,31 +392,16 @@ func TestProviderReviewPreferenceBand(t *testing.T) {
 	}
 }
 
-func TestProviderBuildCommand_RejectsPartialToollessReview(t *testing.T) {
-	tests := []struct {
-		name string
-		opts llm.CommandBuildOpts
-	}{
-		{
-			name: "missing zero tools",
-			opts: llm.CommandBuildOpts{NoSessionPersistence: true, NoCustomization: true},
-		},
-		{
-			name: "missing no persistence",
-			opts: llm.CommandBuildOpts{ZeroTools: true, NoCustomization: true},
-		},
-		{
-			name: "missing no customization",
-			opts: llm.CommandBuildOpts{ZeroTools: true, NoSessionPersistence: true},
-		},
+func TestProviderBuildCommand_NativeToollessReviewRequiresStateDir(t *testing.T) {
+	_, _, err := (&Provider{}).BuildCommand(llm.CommandBuildOpts{
+		Model:                "gpt-5.4",
+		NativeToollessReview: true,
+	})
+	if err == nil {
+		t.Fatal("BuildCommand(native tool-less review without a state dir) error = nil")
 	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			tt.opts.StateDir = t.TempDir()
-			if _, _, err := (&Provider{}).BuildCommand(tt.opts); err == nil {
-				t.Fatal("BuildCommand(partial tool-less review) error = nil")
-			}
-		})
+	if !strings.Contains(err.Error(), "Codex native tool-less review requires an ephemeral provider state directory") {
+		t.Fatalf("BuildCommand(native tool-less review without a state dir) error = %v, want state-directory requirement", err)
 	}
 }
 
@@ -624,7 +607,7 @@ func TestParseCodexModelCatalog_FiltersAndMapsVisibleAPIModels(t *testing.T) {
 		{"slug":"private-model","display_name":"Private","visibility":"list","supported_in_api":false,"context_window":123000}
 	]}`)
 
-	models, err := parseCodexModelCatalog(catalogJSON)
+	models, err := parseCodexModelCatalogWithProgress(catalogJSON, nil)
 	if err != nil {
 		t.Fatalf("parseCodexModelCatalog() error: %v", err)
 	}
@@ -740,7 +723,7 @@ func TestProviderDiscoverModelCatalog_FallsBackToBundledCatalog(t *testing.T) {
 }
 
 func TestProviderBuildCommand_AddsSelectedContextWindowOverride(t *testing.T) {
-	p := &Provider{}
+	p := NewProvider("")
 	homeDir := t.TempDir()
 	stateDir := t.TempDir()
 	t.Setenv("CODEX_HOME", "")
@@ -762,8 +745,7 @@ func TestProviderBuildCommand_AddsSelectedContextWindowOverride(t *testing.T) {
 // TestCodexProvider_DefaultCatalog_Invariants locks in the hardcoded
 // Codex catalog that replaced the former discovery pipeline.
 func TestCodexProvider_DefaultCatalog_Invariants(t *testing.T) {
-	p := &Provider{}
-	cat := p.defaultModelInfos()
+	cat := defaultModelInfos()
 
 	byID := make(map[string]llm.ModelInfo, len(cat))
 	for _, m := range cat {
@@ -790,33 +772,6 @@ func TestCodexProvider_DefaultCatalog_Invariants(t *testing.T) {
 	}
 	if got := byID["gpt-5.4[272K]"].Category; got != "balanced" {
 		t.Errorf("gpt-5.4[272K].Category = %q, want balanced", got)
-	}
-}
-
-// TestCodexProvider_ContextWindowForModel_ReturnsHardcodedWithoutSeed
-// guards the fallback path that keeps ContextPercentage() honest before
-// the first usage event arrives.
-func TestCodexProvider_ContextWindowForModel_ReturnsHardcodedWithoutSeed(t *testing.T) {
-	p := &Provider{}
-	tests := map[string]int{
-		"gpt-5.5":             272_000,
-		"gpt-5.5[272K]":       272_000,
-		"gpt-5.4":             272_000,
-		"gpt-5.4[272K]":       272_000,
-		"gpt-5.4[1M]":         1_000_000,
-		"gpt-5.4-mini":        400_000,
-		"gpt-5.4-mini[400K]":  400_000,
-		"gpt-5.3-codex":       400_000,
-		"gpt-5.3-codex[400K]": 400_000,
-		"gpt-5.2":             400_000,
-		"gpt-5.2[400K]":       400_000,
-	}
-	for model, want := range tests {
-		t.Run(model, func(t *testing.T) {
-			if got := p.ContextWindowForModel(model); got != want {
-				t.Errorf("ContextWindowForModel(%q) = %d, want %d", model, got, want)
-			}
-		})
 	}
 }
 
@@ -874,21 +829,52 @@ func TestCodexProvider_CheckReadinessUsesCustomBinary(t *testing.T) {
 	}
 }
 
-func TestProviderSupportsSessionResume(t *testing.T) {
-	p := &Provider{}
-	if !p.SupportsSessionResume() {
-		t.Error("SupportsSessionResume() = false, want true")
+func TestCodexProvider_VersionInfoUsesInjectedRunner(t *testing.T) {
+	var gotName string
+	var gotArgs []string
+	p := &Provider{
+		binary: "my-codex",
+		runner: func(ctx context.Context, name string, args []string, env []string) ([]byte, error) {
+			gotName = name
+			gotArgs = args
+			return []byte("OpenAI Codex v0.153.2\n"), nil
+		},
+	}
+	got, err := p.VersionInfo()
+	if err != nil {
+		t.Fatalf("VersionInfo() error: %v", err)
+	}
+	if got != "OpenAI Codex v0.153.2" {
+		t.Fatalf("VersionInfo() = %q, want trimmed raw output", got)
+	}
+	if gotName != "my-codex" {
+		t.Errorf("VersionInfo probed %q, want my-codex", gotName)
+	}
+	if !slices.Equal(gotArgs, []string{"--version"}) {
+		t.Errorf("VersionInfo args = %v, want [--version]", gotArgs)
+	}
+}
+
+func TestCodexProvider_VersionInfoWrapsRunnerError(t *testing.T) {
+	p := &Provider{
+		runner: func(ctx context.Context, name string, args []string, env []string) ([]byte, error) {
+			return nil, errors.New("boom")
+		},
+	}
+	_, err := p.VersionInfo()
+	if err == nil {
+		t.Fatal("VersionInfo() error = nil, want error")
+	}
+	if !strings.Contains(err.Error(), "failed to run 'codex --version'") || !strings.Contains(err.Error(), "boom") {
+		t.Fatalf("VersionInfo() error = %v, want provider wrap around raw runner error", err)
 	}
 }
 
 func TestAstraCatalogRoutingWindowsAndEffort(t *testing.T) {
-	p := &Provider{}
+	p := NewProvider("")
 	for _, selection := range []string{"gpt-6-astra", "gpt-6-astra[272K]", "gpt-6-astra[872K]"} {
 		if !p.MatchesModel(selection) {
 			t.Fatalf("Astra not routed to Codex: %s", selection)
-		}
-		if p.OutputPricePerMToken(selection) != 50 {
-			t.Fatalf("Astra priced as a different model: %s", selection)
 		}
 		wantWindow := 272_000
 		if strings.Contains(selection, "872K") {
@@ -899,7 +885,7 @@ func TestAstraCatalogRoutingWindowsAndEffort(t *testing.T) {
 		}
 	}
 	raw := []byte(`{"models":[{"slug":"gpt-6-astra","visibility":"list","supported_in_api":true,"context_window":272000,"max_context_window":872000,"supported_reasoning_levels":[{"effort":"low"},{"effort":"max"},{"effort":"ultra"}]}]}`)
-	catalog, err := parseCodexModelCatalog(raw)
+	catalog, err := parseCodexModelCatalogWithProgress(raw, nil)
 	if err != nil {
 		t.Fatal(err)
 	}

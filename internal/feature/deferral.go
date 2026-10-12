@@ -22,37 +22,37 @@ import (
 	"time"
 )
 
-// DeferralStatus is the lifecycle state of a cross-phase deferral.
-type DeferralStatus string
+// deferralStatus is the lifecycle state of a cross-phase deferral.
+type deferralStatus string
 
 const (
 	// DeferralOpen — work has been declared as deferred to a future phase
 	// and has not yet landed. The ledger will carry this forward into the
 	// plan/implement prompts of DueByPhase and its integrity gate will
 	// refuse SUCCESS while the status remains Open.
-	DeferralOpen DeferralStatus = "open"
+	DeferralOpen deferralStatus = "open"
 
-	// DeferralClosed — the deferred work landed; the implementer cited
+	// deferralClosed — the deferred work landed; the implementer cited
 	// this ID in closed_deferrals: on the iteration that delivered it.
 	// Implementation review is expected to verify the diff actually implements
 	// the described work.
-	DeferralClosed DeferralStatus = "closed"
+	deferralClosed deferralStatus = "closed"
 
 	// DeferralRedeferred — the deferral was punted to a later phase. A
 	// new event is appended to History; DueByPhase is updated to the new
 	// target. Status remains Open logically (carry-forward still applies
 	// at the new phase); Redeferred is a marker used by desktop app surfaces
 	// and by the phase-plan validator to flag chronic re-deferrals.
-	DeferralRedeferred DeferralStatus = "open_redeferred"
+	DeferralRedeferred deferralStatus = "open_redeferred"
 )
 
-// DeferralEventKind enumerates the entries in Deferral.History.
-type DeferralEventKind string
+// deferralEventKind enumerates the entries in Deferral.History.
+type deferralEventKind string
 
 const (
-	DeferralEventCreated    DeferralEventKind = "created"
-	DeferralEventRedeferred DeferralEventKind = "redeferred"
-	DeferralEventClosed     DeferralEventKind = "closed"
+	DeferralEventCreated    deferralEventKind = "created"
+	DeferralEventRedeferred deferralEventKind = "redeferred"
+	deferralEventClosed     deferralEventKind = "closed"
 )
 
 // Deferral records a single cross-phase commitment: "work W was declared
@@ -72,7 +72,7 @@ type Deferral struct {
 	CreatedInKind  string          `yaml:"created_in_kind"`           // "roadmap" | "plan" | "implement" | "design"
 	DueByPhase     int             `yaml:"due_by_phase"`              // target phase (current value; History preserves prior values)
 	Reason         string          `yaml:"reason"`                    // why deferred — required; integrity gate rejects empty reasons
-	Status         DeferralStatus  `yaml:"status"`                    // open | closed | open_redeferred
+	Status         deferralStatus  `yaml:"status"`                    // open | closed | open_redeferred
 	ClosedAt       *time.Time      `yaml:"closed_at,omitempty"`       // set when Status==closed
 	ClosedInPhase  int             `yaml:"closed_in_phase,omitempty"` // phase where the work actually landed
 	ClosedInKind   string          `yaml:"closed_in_kind,omitempty"`  // "plan" | "implement" (which artifact declared closure)
@@ -88,7 +88,7 @@ type Deferral struct {
 // DeferralEvent is a single transition in a deferral's lifecycle.
 type DeferralEvent struct {
 	At        time.Time         `yaml:"at"`
-	Kind      DeferralEventKind `yaml:"kind"`
+	Kind      deferralEventKind `yaml:"kind"`
 	FromPhase int               `yaml:"from_phase,omitempty"` // for redeferred: prior DueByPhase
 	ToPhase   int               `yaml:"to_phase,omitempty"`   // for redeferred: new DueByPhase; for closed: the phase that landed it
 	Reason    string            `yaml:"reason,omitempty"`     // cited reason for this transition (required for redeferred)
@@ -131,16 +131,16 @@ func normalizeDeferralDescription(s string) string {
 	return b.String()
 }
 
-// DueForPhase returns the subset of deferrals whose DueByPhase matches the
+// dueForPhase returns the subset of deferrals whose DueByPhase matches the
 // given phase and whose status is still open (including open_redeferred).
 // Sorted by ID for deterministic rendering in prompts.
-func DueForPhase(deferrals []Deferral, phase int) []Deferral {
+func dueForPhase(deferrals []Deferral, phase int) []Deferral {
 	var out []Deferral
 	for _, d := range deferrals {
 		if d.DueByPhase != phase {
 			continue
 		}
-		if d.Status == DeferralClosed {
+		if d.Status == deferralClosed {
 			continue
 		}
 		out = append(out, d)
@@ -149,14 +149,14 @@ func DueForPhase(deferrals []Deferral, phase int) []Deferral {
 	return out
 }
 
-// DueForPhaseScopedTo returns the subset of DueForPhase(deferrals, phase)
+// DueForPhaseScopedTo returns the subset of dueForPhase(deferrals, phase)
 // whose RepoScope includes repoName. An empty/nil RepoScope is feature-wide
 // (always included). An empty repoName is permissive (no entries filtered
 // out) — preserves callers that pre-date per-repo prompt threading.
 //
-// Sorted by ID for deterministic rendering, same as DueForPhase.
+// Sorted by ID for deterministic rendering, same as dueForPhase.
 func DueForPhaseScopedTo(deferrals []Deferral, phase int, repoName string) []Deferral {
-	due := DueForPhase(deferrals, phase)
+	due := dueForPhase(deferrals, phase)
 	if repoName == "" {
 		return due
 	}
@@ -317,7 +317,7 @@ func MergeDeferrals(existing []Deferral, incoming []IncomingDeferral, createdInP
 		}
 		if matched {
 			cur := &existing[idx]
-			if cur.Status == DeferralClosed {
+			if cur.Status == deferralClosed {
 				continue
 			}
 			descChanged := normalizeDeferralDescription(cur.Description) != normalizeDeferralDescription(in.Description)
@@ -405,17 +405,17 @@ func CloseDeferrals(existing []Deferral, ids []string, closedInPhase int, closed
 		if _, ok := want[existing[i].ID]; !ok {
 			continue
 		}
-		if existing[i].Status == DeferralClosed {
+		if existing[i].Status == deferralClosed {
 			continue
 		}
-		existing[i].Status = DeferralClosed
+		existing[i].Status = deferralClosed
 		t := now
 		existing[i].ClosedAt = &t
 		existing[i].ClosedInPhase = closedInPhase
 		existing[i].ClosedInKind = closedInKind
 		existing[i].History = append(existing[i].History, DeferralEvent{
 			At:      now,
-			Kind:    DeferralEventClosed,
+			Kind:    deferralEventClosed,
 			ToPhase: closedInPhase,
 		})
 		closed++

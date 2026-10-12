@@ -33,10 +33,7 @@ func (o *Orchestrator) commitSingleShotOutcome(
 	phase feature.Phase,
 	intent llm.CompletionIntent,
 ) ([]agent.ProtocolViolation, error) {
-	if o == nil || o.deps.Lifecycle == nil {
-		return nil, fmt.Errorf("committing %s outcome: lifecycle is not configured", phase)
-	}
-	f, err := o.deps.Lifecycle.Get(featureID)
+	f, err := o.deps.Store.Load(featureID)
 	if err != nil {
 		return nil, fmt.Errorf("committing %s outcome: loading feature: %w", phase, err)
 	}

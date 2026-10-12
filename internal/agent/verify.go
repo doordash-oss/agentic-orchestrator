@@ -21,46 +21,46 @@ import (
 	"time"
 )
 
-// VerificationStep represents a single automated verification command
+// verificationStep represents a single automated verification command
 // extracted from a plan's "Automated Verification" section.
-type VerificationStep struct {
+type verificationStep struct {
 	Description  string // Human-readable description (e.g., "Unit tests pass")
 	Command      string // Executable command (e.g., "go test ./...")
 	Repo         string // Explicit [repo: <name>] scope for multi-repo phase commands.
 	Timeout      string // Optional [timeout: <duration>] override for the harness run timeout.
-	Capabilities []VerificationCapability
+	Capabilities []verificationCapability
 }
 
-// VerificationCapability is explicit plan metadata for an environmental
+// verificationCapability is explicit plan metadata for an environmental
 // prerequisite. It is deliberately declared rather than inferred from test
 // output so arbitrary failures cannot be mislabeled as authorization blocks.
-type VerificationCapability struct {
+type verificationCapability struct {
 	Name string
 	// Probe is the planner-authored shell probe. Empty when Name resolves to
 	// a built-in registry capability such as authenticated-browser(host).
 	Probe string
 }
 
-// ManualVerificationStep represents one manual check extracted from a plan's
+// manualVerificationStep represents one manual check extracted from a plan's
 // "Manual Verification" section.
-type ManualVerificationStep struct {
+type manualVerificationStep struct {
 	Description  string
-	Capabilities []VerificationCapability
+	Capabilities []verificationCapability
 }
 
-// EvidenceRequirement represents one visual or behavioral artifact requirement
+// evidenceRequirement represents one visual or behavioral artifact requirement
 // extracted from a phase plan. Command is set when the bullet ends with an
 // executable backtick span (the harness runs it); Width/Height come from an
 // optional [size: WxH] tag on visual bullets.
-type EvidenceRequirement struct {
+type evidenceRequirement struct {
 	Description  string
 	Command      string
 	Width        int
 	Height       int
-	Capabilities []VerificationCapability
+	Capabilities []verificationCapability
 }
 
-// ParsePlanVerification extracts automated verification commands from a plan's
+// parsePlanVerification extracts automated verification commands from a plan's
 // markdown text. It looks for "#### Automated Verification:" sections and
 // parses checklist items that contain backtick-delimited commands.
 //
@@ -69,24 +69,24 @@ type EvidenceRequirement struct {
 //   - [x] Description: `command`
 //   - [ ] `command`
 //   - [ ] Description (`command`)
-func ParsePlanVerification(planText string) []VerificationStep {
+func parsePlanVerification(planText string) []verificationStep {
 	return parseVerificationSection(planText, isAutomatedVerificationHeader, parseChecklistItem)
 }
 
-// ParseCrossRepoVerification extracts cross-repo verification commands from a
+// parseCrossRepoVerification extracts cross-repo verification commands from a
 // plan's "Cross-Repo Verification" section. Accepts both checklist items
 // ("- [ ] Description: `command`") and plain bullets ("- Description: `command`")
 // so planner-authored ## Cross-Repo Verification blocks match production plans.
-func ParseCrossRepoVerification(planText string) []VerificationStep {
+func parseCrossRepoVerification(planText string) []verificationStep {
 	return parseVerificationSection(planText, isCrossRepoVerificationHeader, parseCrossRepoItem)
 }
 
 func parseVerificationSection(
 	planText string,
 	isSectionHeader func(string) bool,
-	parseItem func(string) (VerificationStep, bool),
-) []VerificationStep {
-	var steps []VerificationStep
+	parseItem func(string) (verificationStep, bool),
+) []verificationStep {
+	var steps []verificationStep
 	forEachVerificationSectionLine(planText, isSectionHeader, func(trimmed string) {
 		if step, ok := parseItem(trimmed); ok {
 			steps = append(steps, step)
@@ -126,12 +126,12 @@ func forEachVerificationSectionLine(planText string, isSectionHeader func(string
 	}
 }
 
-// ParsePlanManualVerification extracts manual verification checklist bullets
+// parsePlanManualVerification extracts manual verification checklist bullets
 // from "Manual Verification" sections. A checklist item beginning with
 // "None required:" is treated as an explicit absence marker and is not
 // returned as a required manual check.
-func ParsePlanManualVerification(planText string) []ManualVerificationStep {
-	var steps []ManualVerificationStep
+func parsePlanManualVerification(planText string) []manualVerificationStep {
+	var steps []manualVerificationStep
 	forEachVerificationSectionLine(planText, isManualVerificationHeader, func(trimmed string) {
 		if step, ok := parseManualChecklistItem(trimmed); ok {
 			steps = append(steps, step)
@@ -140,24 +140,24 @@ func ParsePlanManualVerification(planText string) []ManualVerificationStep {
 	return steps
 }
 
-// ParsePlanVisualEvidence extracts visual evidence checklist bullets from
+// parsePlanVisualEvidence extracts visual evidence checklist bullets from
 // "Visual Evidence" sections. A checklist item beginning with
 // "None required:" is treated as an explicit absence marker and is not
 // returned as a required evidence artifact.
-func ParsePlanVisualEvidence(planText string) []EvidenceRequirement {
+func parsePlanVisualEvidence(planText string) []evidenceRequirement {
 	return parsePlanEvidenceRequirements(planText, isVisualEvidenceHeader)
 }
 
-// ParsePlanBehavioralEvidence extracts behavioral evidence checklist bullets
+// parsePlanBehavioralEvidence extracts behavioral evidence checklist bullets
 // from "Behavioral Evidence" sections. A checklist item beginning with
 // "None required:" is treated as an explicit absence marker and is not
 // returned as a required evidence artifact.
-func ParsePlanBehavioralEvidence(planText string) []EvidenceRequirement {
+func parsePlanBehavioralEvidence(planText string) []evidenceRequirement {
 	return parsePlanEvidenceRequirements(planText, isBehavioralEvidenceHeader)
 }
 
-func parsePlanEvidenceRequirements(planText string, isSectionHeader func(string) bool) []EvidenceRequirement {
-	var requirements []EvidenceRequirement
+func parsePlanEvidenceRequirements(planText string, isSectionHeader func(string) bool) []evidenceRequirement {
+	var requirements []evidenceRequirement
 	forEachVerificationSectionLine(planText, isSectionHeader, func(trimmed string) {
 		if requirement, ok := parseEvidenceChecklistItem(trimmed); ok {
 			requirements = append(requirements, requirement)
@@ -226,10 +226,10 @@ var evidenceSizeRE = regexp.MustCompile(`(?i)\[size:\s*(\d+)\s*x\s*(\d+)\s*\]`)
 // than a regex so that backticks appearing inside shell quotes (e.g. the
 // triple-backtick literal in `grep -cE '^` + "```" + `' README.md`) are
 // treated as part of the command, not as span delimiters.
-func parseChecklistItem(line string) (VerificationStep, bool) {
+func parseChecklistItem(line string) (verificationStep, bool) {
 	// Must be a checklist item: "- [ ]" or "- [x]"
 	if !strings.HasPrefix(line, "- [") {
-		return VerificationStep{}, false
+		return verificationStep{}, false
 	}
 	return parseBacktickVerificationItem(line)
 }
@@ -239,9 +239,9 @@ func parseChecklistItem(line string) (VerificationStep, bool) {
 // Plain bullets require a command-shaped backtick span (no last-span fallback)
 // so prose notes like `- Keep `service-a` and `service-b` schemas in sync`
 // do not become fabricated contract rows.
-func parseCrossRepoItem(line string) (VerificationStep, bool) {
+func parseCrossRepoItem(line string) (verificationStep, bool) {
 	if !strings.HasPrefix(line, "- ") {
-		return VerificationStep{}, false
+		return verificationStep{}, false
 	}
 	if strings.HasPrefix(line, "- [") {
 		return parseBacktickVerificationItem(line)
@@ -249,15 +249,15 @@ func parseCrossRepoItem(line string) (VerificationStep, bool) {
 	return parsePlainCrossRepoBullet(line)
 }
 
-func parseBacktickVerificationItem(line string) (VerificationStep, bool) {
+func parseBacktickVerificationItem(line string) (verificationStep, bool) {
 	matches := findBacktickSpans(line)
 	if len(matches) == 0 {
-		return VerificationStep{}, false
+		return verificationStep{}, false
 	}
 
 	chosen := pickCommandSpan(line, matches)
 	if chosen == nil {
-		return VerificationStep{}, false
+		return verificationStep{}, false
 	}
 	return verificationStepFromSpan(line, chosen)
 }
@@ -265,23 +265,23 @@ func parseBacktickVerificationItem(line string) (VerificationStep, bool) {
 // parsePlainCrossRepoBullet parses "- description: `cmd`" lines. Unlike
 // checklist parsing, it rejects lines whose backtick spans are only bare
 // identifiers (no looksLikeShellCommand match).
-func parsePlainCrossRepoBullet(line string) (VerificationStep, bool) {
+func parsePlainCrossRepoBullet(line string) (verificationStep, bool) {
 	matches := findBacktickSpans(line)
 	if len(matches) == 0 {
-		return VerificationStep{}, false
+		return verificationStep{}, false
 	}
 	for _, m := range matches {
 		if looksLikeShellCommand(line[m[2]:m[3]]) {
 			return verificationStepFromSpan(line, m)
 		}
 	}
-	return VerificationStep{}, false
+	return verificationStep{}, false
 }
 
-func verificationStepFromSpan(line string, chosen []int) (VerificationStep, bool) {
+func verificationStepFromSpan(line string, chosen []int) (verificationStep, bool) {
 	command := strings.TrimSpace(line[chosen[2]:chosen[3]])
 	if command == "" {
-		return VerificationStep{}, false
+		return verificationStep{}, false
 	}
 
 	commandWithBackticks := line[chosen[0]:chosen[1]]
@@ -291,7 +291,7 @@ func verificationStepFromSpan(line string, chosen []int) (VerificationStep, bool
 	description = strings.TrimSpace(verificationTimeoutRE.ReplaceAllString(description, ""))
 	description = strings.TrimSpace(strings.TrimSuffix(description, ":"))
 
-	return VerificationStep{
+	return verificationStep{
 		Description:  description,
 		Command:      command,
 		Repo:         parseVerificationRepo(line),
@@ -329,14 +329,14 @@ func parseVerificationTimeout(line string) string {
 	return timeout
 }
 
-func parseVerificationCapabilities(line string) []VerificationCapability {
+func parseVerificationCapabilities(line string) []verificationCapability {
 	matches := verificationCapabilityRE.FindAllStringSubmatch(line, -1)
-	out := make([]VerificationCapability, 0, len(matches))
+	out := make([]verificationCapability, 0, len(matches))
 	for _, match := range matches {
 		name := strings.TrimSpace(match[1])
 		probe := strings.TrimSpace(match[2])
 		if name != "" {
-			out = append(out, VerificationCapability{Name: name, Probe: probe})
+			out = append(out, verificationCapability{Name: name, Probe: probe})
 		}
 	}
 	return out
@@ -348,31 +348,31 @@ func stripCapabilityTags(description string) string {
 	return strings.Join(strings.Fields(verificationCapabilityRE.ReplaceAllString(description, " ")), " ")
 }
 
-func parseManualChecklistItem(line string) (ManualVerificationStep, bool) {
+func parseManualChecklistItem(line string) (manualVerificationStep, bool) {
 	description, ok := parseChecklistDescription(line)
 	if !ok {
-		return ManualVerificationStep{}, false
+		return manualVerificationStep{}, false
 	}
 	if isNoneRequiredDescription(description) {
-		return ManualVerificationStep{}, false
+		return manualVerificationStep{}, false
 	}
 	capabilities := parseVerificationCapabilities(description)
 	description = stripCapabilityTags(description)
 	if description == "" {
-		return ManualVerificationStep{}, false
+		return manualVerificationStep{}, false
 	}
-	return ManualVerificationStep{Description: description, Capabilities: capabilities}, true
+	return manualVerificationStep{Description: description, Capabilities: capabilities}, true
 }
 
-func parseEvidenceChecklistItem(line string) (EvidenceRequirement, bool) {
+func parseEvidenceChecklistItem(line string) (evidenceRequirement, bool) {
 	description, ok := parseChecklistDescription(line)
 	if !ok {
-		return EvidenceRequirement{}, false
+		return evidenceRequirement{}, false
 	}
 	if isNoneRequiredDescription(description) {
-		return EvidenceRequirement{}, false
+		return evidenceRequirement{}, false
 	}
-	req := EvidenceRequirement{Description: description, Capabilities: parseVerificationCapabilities(description)}
+	req := evidenceRequirement{Description: description, Capabilities: parseVerificationCapabilities(description)}
 	req.Description = stripCapabilityTags(req.Description)
 	if m := evidenceSizeRE.FindStringSubmatch(req.Description); m != nil {
 		req.Width, _ = strconv.Atoi(m[1])
@@ -384,7 +384,7 @@ func parseEvidenceChecklistItem(line string) (EvidenceRequirement, bool) {
 		req.Description = stripped
 	}
 	if strings.TrimSpace(req.Description) == "" {
-		return EvidenceRequirement{}, false
+		return evidenceRequirement{}, false
 	}
 	return req, true
 }

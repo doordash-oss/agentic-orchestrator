@@ -31,12 +31,12 @@ import (
 	"github.com/doordash-oss/agentic-orchestrator/internal/ports"
 )
 
-// ReviewHelperConfig configures a bounded review or validation run that uses
+// reviewHelperConfig configures a bounded review or validation run that uses
 // the bounded-helper artifact protocol: the helper is granted scoped write
 // permission only for declared helper-owned artifacts, and the harness routes
 // on ParseReviewFeedback(FeedbackPath) after the turn ends. FeedbackPath,
 // HelperIterDir, and Role are required.
-type ReviewHelperConfig struct {
+type reviewHelperConfig struct {
 	SessionID string
 	FeatureID string
 	Phase     feature.Phase
@@ -71,26 +71,31 @@ type ReviewHelperConfig struct {
 	// Label is a short context-specific sub-label (validator domain, review
 	// target, …) surfaced in attach-view tabs.
 	Label string
+	// Posture selects the execution posture; empty is read-only.
+	Posture reviewExecutionPosture
+	// OnRetry, when set, is called before each retried session attempt with
+	// the error that ended the previous attempt.
+	OnRetry func(nextAttempt int, err error)
 }
 
-// ReviewHelperResult captures the parsed verdict from a bounded helper run.
+// reviewHelperResult captures the parsed verdict from a bounded helper run.
 //
 // Feedback holds the canonical body of the structured review-feedback.md
 // (verbatim if the LLM produced a clean file and satisfied completion;
 // deterministic CHANGES_REQUESTED protocol feedback otherwise). Output retains
 // the helper's stdout for log surfaces (desktop app, debug) but is not part of the
 // wire protocol — the file is.
-type ReviewHelperResult struct {
+type reviewHelperResult struct {
 	Output   string
-	Status   ReviewStatus
+	Status   reviewStatus
 	Feedback string
-	Markers  ValidatorMarkers
+	Markers  validatorMarkers
 	Usage    llm.Usage
 }
 
 // reviewHelperEffortLevel returns the effort level to pass to BuildSessionOpts:
 // the resolved effective effort when set, otherwise the pipeline-driven level.
-func reviewHelperEffortLevel(cfg ReviewHelperConfig) llm.EffortLevel {
+func reviewHelperEffortLevel(cfg reviewHelperConfig) llm.EffortLevel {
 	if cfg.EffectiveEffort != "" {
 		return cfg.EffectiveEffort
 	}
@@ -99,7 +104,7 @@ func reviewHelperEffortLevel(cfg ReviewHelperConfig) llm.EffortLevel {
 
 // setReviewHelperEffortOnOpts records the effective effort pair on sessOpts
 // when effort resolution was performed.
-func setReviewHelperEffortOnOpts(sessOpts *ports.SessionOpts, cfg ReviewHelperConfig) {
+func setReviewHelperEffortOnOpts(sessOpts *ports.SessionOpts, cfg reviewHelperConfig) {
 	if sessOpts != nil && cfg.EffectiveEffort != "" {
 		sessOpts.EffectiveEffort = cfg.EffectiveEffort
 		sessOpts.EffortSource = cfg.EffortSource
@@ -108,7 +113,7 @@ func setReviewHelperEffortOnOpts(sessOpts *ports.SessionOpts, cfg ReviewHelperCo
 
 // Review helpers may use a different provider from their parent planner or
 // implementer. Resolve the protocol for the model actually being launched.
-func (pr *PhaseRunner) reviewHelperSystemPrompt(spec roleSpec, cfg ReviewHelperConfig) string {
+func (pr *PhaseRunner) reviewHelperSystemPrompt(spec roleSpec, cfg reviewHelperConfig) string {
 	askingClause, completionTool := cfg.CompletionAskingClause, cfg.CompletionTool
 	if pr.Registry != nil {
 		askingClause = pr.askingQuestionsClauseForModel(cfg.Model)
@@ -124,37 +129,70 @@ func (pr *PhaseRunner) reviewHelperSystemPrompt(spec roleSpec, cfg ReviewHelperC
 	})
 }
 
-// RunReadOnlyReviewHelper runs a bounded review helper under the file-based
-// handoff protocol and parses ParseReviewFeedback(FeedbackPath). The helper
-// is read-only with respect to the worktree; it may only write to
-// FeedbackPath, and the harness deterministically routes on the structured
-// `## Verdict` section of that file.
-func (pr *PhaseRunner) RunReadOnlyReviewHelper(ctx context.Context, cfg ReviewHelperConfig) (*ReviewHelperResult, error) {
+// reviewExecutionPosture selects how a review helper may touch the machine.
+type reviewExecutionPosture string
+
+const (
+	// reviewPostureReadOnly may write only its declared helper artifacts.
+	reviewPostureReadOnly reviewExecutionPosture = "read_only"
+	// reviewPostureLiveRun adds broad shell access plus harness-owned writable
+	// scratch roots, while file tools stay scoped away from the reviewed
+	// source tree.
+	reviewPostureLiveRun reviewExecutionPosture = "live_run"
+)
+
+// runReviewHelper runs a bounded review helper under the file-based handoff
+// protocol and parses ParseReviewFeedback(FeedbackPath); the harness
+// deterministically routes on the structured `## Verdict` section of that
+// file. The helper is read-only with respect to the worktree unless
+// cfg.Posture is the live-run posture.
+func (pr *PhaseRunner) runReviewHelper(ctx context.Context, cfg reviewHelperConfig) (*reviewHelperResult, error) {
+	liveRun := cfg.Posture == reviewPostureLiveRun
+	label := "review helper"
+	if liveRun {
+		label = "live-run review helper"
+	}
+	errPrefix := "running " + label
 	if cfg.SessionID == "" {
-		return nil, fmt.Errorf("running review helper: missing session id")
+		return nil, fmt.Errorf("%s: missing session id", errPrefix)
 	}
 	if cfg.Model == "" {
-		return nil, fmt.Errorf("running review helper: missing model")
+		return nil, fmt.Errorf("%s: missing model", errPrefix)
 	}
 	if cfg.Prompt == "" {
-		return nil, fmt.Errorf("running review helper: missing prompt")
+		return nil, fmt.Errorf("%s: missing prompt", errPrefix)
 	}
 	if cfg.WorkDir == "" {
-		return nil, fmt.Errorf("running review helper: missing work dir")
+		return nil, fmt.Errorf("%s: missing work dir", errPrefix)
 	}
 	if cfg.FeedbackPath == "" {
-		return nil, fmt.Errorf("running review helper: missing feedback path (file-based handoff is required)")
+		return nil, fmt.Errorf("%s: missing feedback path (file-based handoff is required)", errPrefix)
 	}
 	if cfg.HelperIterDir == "" {
-		return nil, fmt.Errorf("running review helper: missing helper iteration directory")
+		return nil, fmt.Errorf("%s: missing helper iteration directory", errPrefix)
 	}
 	if cfg.Role == "" {
-		return nil, fmt.Errorf("running review helper: missing helper role")
+		return nil, fmt.Errorf("%s: missing helper role", errPrefix)
 	}
 
+	prompt := cfg.Prompt
+	var scratch liveRunReviewScratch
+	if liveRun {
+		var err error
+		scratch, err = prepareLiveRunReviewScratch(cfg.HelperIterDir)
+		if err != nil {
+			return nil, err
+		}
+		defer func() {
+			if err := scratch.release(); err != nil {
+				log.Printf("live-run review %s: %v", cfg.SessionID, err)
+			}
+		}()
+		prompt = liveRunReviewPrompt(cfg.Prompt, scratch)
+	}
 	if cfg.PromptPath != "" {
-		if err := os.WriteFile(cfg.PromptPath, []byte(cfg.Prompt), 0o644); err != nil {
-			return nil, fmt.Errorf("running review helper: writing prompt: %w", err)
+		if err := os.WriteFile(cfg.PromptPath, []byte(prompt), 0o644); err != nil {
+			return nil, fmt.Errorf("%s: writing prompt: %w", errPrefix, err)
 		}
 	}
 
@@ -169,35 +207,51 @@ func (pr *PhaseRunner) RunReadOnlyReviewHelper(ctx context.Context, cfg ReviewHe
 	}
 	spec, ok := lookupRoleSpec(contractPhase, cfg.Role)
 	if !ok {
-		return nil, fmt.Errorf("running review helper: missing RoleSpec for phase %s role %s", contractPhase, cfg.Role)
+		return nil, fmt.Errorf("%s: missing RoleSpec for phase %s role %s", errPrefix, contractPhase, cfg.Role)
 	}
 	systemPrompt := pr.reviewHelperSystemPrompt(spec, cfg)
 	allowedPaths := boundedReviewHelperAllowedPaths(cfg)
-	boundedHandler := &permission.BoundedHelperArtifactHandler{AllowedPaths: allowedPaths}
+	writableRoots := allowedPaths
+	var boundedHandler *permission.BoundedHelperArtifactHandler
+	var permHandler ports.PermissionHandler
+	if liveRun {
+		writableRoots = append(append([]string(nil), allowedPaths...), scratch.roots()...)
+		permHandler = permission.Guarded(&permission.LiveRunReviewHandler{
+			AllowedPaths:  allowedPaths,
+			ScratchRoots:  scratch.roots(),
+			DenyWriteHint: "live-run review may write only review-feedback.md and files under its scratch roots",
+		})
+	} else {
+		boundedHandler = &permission.BoundedHelperArtifactHandler{AllowedPaths: allowedPaths}
+		permHandler = permission.Guarded(boundedHandler)
+	}
 	command, env, sessOpts, err := pr.BuildSession(BuildSessionOpts{
-		Model:                          cfg.Model,
-		Prompt:                         cfg.Prompt,
-		SystemPrompt:                   systemPrompt,
-		DisallowedTools:                boundedHelperDisallowedTools,
-		AdditionalDirs:                 cfg.AdditionalDirs,
-		WritableRoots:                  allowedPaths,
-		PIDDir:                         pidDir,
-		PermHandler:                    permission.Guarded(boundedHandler),
-		RepoName:                       cfg.RepoName,
-		WorkDir:                        cfg.WorkDir,
-		LogPath:                        cfg.LogPath,
-		EffortLevel:                    reviewHelperEffortLevel(cfg),
-		AgentNames:                     explorationAgentNames(),
-		Phase:                          cfg.Phase,
-		SystemPromptHasUsefulResources: true,
-		CompletionProtocol:             true,
+		Model:              cfg.Model,
+		Prompt:             prompt,
+		SystemPrompt:       systemPrompt,
+		DisallowedTools:    boundedHelperDisallowedTools,
+		AdditionalDirs:     cfg.AdditionalDirs,
+		WritableRoots:      writableRoots,
+		PIDDir:             pidDir,
+		PermHandler:        permHandler,
+		RepoName:           cfg.RepoName,
+		WorkDir:            cfg.WorkDir,
+		LogPath:            cfg.LogPath,
+		EffortLevel:        reviewHelperEffortLevel(cfg),
+		AgentNames:         explorationAgentNames(),
+		Phase:              cfg.Phase,
+		CompletionProtocol: true,
 	})
 	if err != nil {
-		return nil, fmt.Errorf("running review helper: building session: %w", err)
+		return nil, fmt.Errorf("%s: building session: %w", errPrefix, err)
 	}
+	if liveRun {
+		env = mergeSessionEnv(env, scratch.env()...)
+	}
+
 	sandboxRequested := sessOpts != nil && sessOpts.UsesBoundedHelperSandbox
 	if sessOpts != nil && cfg.SystemPromptPrefix != "" && cfg.PromptPath != "" {
-		WriteValidatorSystemPrompt(filepath.Dir(cfg.PromptPath), cfg.SystemPromptPrefix, sessOpts.DebugSystemPrompt)
+		writeValidatorSystemPrompt(filepath.Dir(cfg.PromptPath), cfg.SystemPromptPrefix, sessOpts.DebugSystemPrompt)
 	}
 	if sessOpts != nil {
 		setReviewHelperEffortOnOpts(sessOpts, cfg)
@@ -218,7 +272,16 @@ func (pr *PhaseRunner) RunReadOnlyReviewHelper(ctx context.Context, cfg ReviewHe
 	if sessOpts != nil {
 		var sandboxed bool
 		command, sandboxed, sandboxCleanup = maybeWrapHelperSandbox(command, sandboxRequested, pr.StateDir)
-		boundedHandler.Sandboxed = sandboxed
+		if sandboxRequested && !sandboxed {
+			// Launch unconfined rather than fail to start; the bounded
+			// handler falls back to tool-level write denial.
+			if status := SandboxAvailability(); status.Unavailable {
+				recordSandboxUnavailable(pr.FeatureStore, cfg.FeatureID, status.Reason)
+			}
+		}
+		if boundedHandler != nil {
+			boundedHandler.Sandboxed = sandboxed
+		}
 	}
 	if sandboxCleanup != nil {
 		defer sandboxCleanup()
@@ -230,7 +293,7 @@ func (pr *PhaseRunner) RunReadOnlyReviewHelper(ctx context.Context, cfg ReviewHe
 		sessionID:     cfg.SessionID,
 		featureID:     cfg.FeatureID,
 		phase:         cfg.Phase,
-		label:         "review helper",
+		label:         label,
 		observerPhase: "review",
 		model:         cfg.Model,
 		responsePath:  cfg.ResponsePath,
@@ -244,12 +307,13 @@ func (pr *PhaseRunner) RunReadOnlyReviewHelper(ctx context.Context, cfg ReviewHe
 		contractPhase: contractPhase,
 		contractRole:  cfg.Role,
 		parentSpanCtx: cfg.ParentSpanCtx,
+		onRetry:       cfg.OnRetry,
 	})
 	if boundedResult == nil {
 		return nil, runErr
 	}
 
-	result := &ReviewHelperResult{
+	result := &reviewHelperResult{
 		Output: boundedResult.Output,
 		Usage:  boundedResult.Usage,
 	}
@@ -257,201 +321,31 @@ func (pr *PhaseRunner) RunReadOnlyReviewHelper(ctx context.Context, cfg ReviewHe
 	// Parse the structured handoff file; on protocol violation, overwrite
 	// it with the synthesized CHANGES_REQUESTED feedback so the on-disk
 	// artifact matches the verdict the harness routed on.
-	parsed, parseErr := ParseReviewFeedback(cfg.FeedbackPath)
+	parsed, parseErr := parseReviewFeedback(cfg.FeedbackPath)
 	if parseErr != nil {
 		if runErr != nil {
 			return result, runErr
 		}
-		return result, fmt.Errorf("running review helper: parsing review-feedback.md: %w", parseErr)
+		return result, fmt.Errorf("%s: parsing review-feedback.md: %w", errPrefix, parseErr)
 	}
-	if parsed.OK() {
+	if parsed.ok() {
 		result.Status = parsed.Verdict
 		result.Feedback = strings.TrimSpace(parsed.Body)
 		result.Markers = parsed.Markers
 	} else {
 		synth := reviewHelperProtocolViolationFeedback(parsed, runErr)
 		_ = os.WriteFile(cfg.FeedbackPath, []byte(synth), 0o644)
-		result.Status = ReviewChangesRequested
+		result.Status = reviewChangesRequested
 		result.Feedback = strings.TrimSpace(synth)
 	}
 
 	if runErr != nil {
-		if isProtocolViolationError(runErr) && parsed.OK() {
+		if isProtocolViolationError(runErr) && parsed.ok() {
 			synth := reviewHelperProtocolViolationFeedback(parsed, runErr)
 			_ = os.WriteFile(cfg.FeedbackPath, []byte(synth), 0o644)
-			result.Status = ReviewChangesRequested
+			result.Status = reviewChangesRequested
 			result.Feedback = strings.TrimSpace(synth)
-			result.Markers = ValidatorMarkers{}
-		}
-		return result, runErr
-	}
-	return result, nil
-}
-
-// RunLiveRunReviewHelper runs a review helper with the live-run posture: broad
-// shell access plus harness-owned writable scratch roots, while file tools stay
-// scoped away from the reviewed source tree.
-func (pr *PhaseRunner) RunLiveRunReviewHelper(ctx context.Context, cfg ReviewHelperConfig) (*ReviewHelperResult, error) {
-	if cfg.SessionID == "" {
-		return nil, fmt.Errorf("running live-run review helper: missing session id")
-	}
-	if cfg.Model == "" {
-		return nil, fmt.Errorf("running live-run review helper: missing model")
-	}
-	if cfg.Prompt == "" {
-		return nil, fmt.Errorf("running live-run review helper: missing prompt")
-	}
-	if cfg.WorkDir == "" {
-		return nil, fmt.Errorf("running live-run review helper: missing work dir")
-	}
-	if cfg.FeedbackPath == "" {
-		return nil, fmt.Errorf("running live-run review helper: missing feedback path (file-based handoff is required)")
-	}
-	if cfg.HelperIterDir == "" {
-		return nil, fmt.Errorf("running live-run review helper: missing helper iteration directory")
-	}
-	if cfg.Role == "" {
-		return nil, fmt.Errorf("running live-run review helper: missing helper role")
-	}
-
-	scratch, err := prepareLiveRunReviewScratch(cfg.HelperIterDir)
-	if err != nil {
-		return nil, err
-	}
-	defer func() {
-		if err := scratch.release(); err != nil {
-			log.Printf("live-run review %s: %v", cfg.SessionID, err)
-		}
-	}()
-	prompt := liveRunReviewPrompt(cfg.Prompt, scratch)
-	if cfg.PromptPath != "" {
-		if err := os.WriteFile(cfg.PromptPath, []byte(prompt), 0o644); err != nil {
-			return nil, fmt.Errorf("running live-run review helper: writing prompt: %w", err)
-		}
-	}
-
-	pidDir := pr.StateDir
-	if cfg.FeatureID != "" {
-		pidDir = filepath.Join(pr.StateDir, cfg.FeatureID)
-	}
-
-	contractPhase := cfg.ContractPhase
-	if contractPhase == 0 {
-		contractPhase = cfg.Phase
-	}
-	spec, ok := lookupRoleSpec(contractPhase, cfg.Role)
-	if !ok {
-		return nil, fmt.Errorf("running live-run review helper: missing RoleSpec for phase %s role %s", contractPhase, cfg.Role)
-	}
-	systemPrompt := pr.reviewHelperSystemPrompt(spec, cfg)
-	allowedPaths := boundedReviewHelperAllowedPaths(cfg)
-	writableRoots := append([]string(nil), allowedPaths...)
-	writableRoots = append(writableRoots, scratch.roots()...)
-	liveHandler := &permission.LiveRunReviewHandler{
-		AllowedPaths:  allowedPaths,
-		ScratchRoots:  scratch.roots(),
-		DenyWriteHint: "live-run review may write only review-feedback.md and files under its scratch roots",
-	}
-	command, env, sessOpts, err := pr.BuildSession(BuildSessionOpts{
-		Model:                          cfg.Model,
-		Prompt:                         prompt,
-		SystemPrompt:                   systemPrompt,
-		DisallowedTools:                boundedHelperDisallowedTools,
-		AdditionalDirs:                 cfg.AdditionalDirs,
-		WritableRoots:                  writableRoots,
-		PIDDir:                         pidDir,
-		PermHandler:                    permission.Guarded(liveHandler),
-		RepoName:                       cfg.RepoName,
-		WorkDir:                        cfg.WorkDir,
-		LogPath:                        cfg.LogPath,
-		EffortLevel:                    reviewHelperEffortLevel(cfg),
-		AgentNames:                     explorationAgentNames(),
-		Phase:                          cfg.Phase,
-		SystemPromptHasUsefulResources: true,
-		CompletionProtocol:             true,
-	})
-	if err != nil {
-		return nil, fmt.Errorf("running live-run review helper: building session: %w", err)
-	}
-	env = mergeSessionEnv(env, scratch.env()...)
-
-	sandboxRequested := sessOpts != nil && sessOpts.UsesBoundedHelperSandbox
-	if sessOpts != nil && cfg.SystemPromptPrefix != "" && cfg.PromptPath != "" {
-		WriteValidatorSystemPrompt(filepath.Dir(cfg.PromptPath), cfg.SystemPromptPrefix, sessOpts.DebugSystemPrompt)
-	}
-	if sessOpts != nil {
-		setReviewHelperEffortOnOpts(sessOpts, cfg)
-		if cfg.Kind != 0 {
-			sessOpts.Kind = cfg.Kind
-		} else {
-			sessOpts.Kind = ports.KindReviewHelper
-		}
-		if cfg.Label != "" {
-			sessOpts.Label = cfg.Label
-		}
-	}
-
-	var sandboxCleanup func()
-	if sessOpts != nil {
-		command, _, sandboxCleanup = maybeWrapHelperSandbox(command, sandboxRequested, pr.StateDir)
-	}
-	if sandboxCleanup != nil {
-		defer sandboxCleanup()
-	}
-
-	boundedResult, runErr := pr.runBoundedHelperSession(ctx, boundedHelperRunConfig{
-		sessionID:     cfg.SessionID,
-		featureID:     cfg.FeatureID,
-		phase:         cfg.Phase,
-		label:         "live-run review helper",
-		observerPhase: "review",
-		model:         cfg.Model,
-		responsePath:  cfg.ResponsePath,
-		repoName:      cfg.RepoName,
-		workDir:       cfg.WorkDir,
-		command:       command,
-		env:           env,
-		sessOpts:      sessOpts,
-		requireOutput: false,
-		completionDir: cfg.HelperIterDir,
-		contractPhase: contractPhase,
-		contractRole:  cfg.Role,
-		parentSpanCtx: cfg.ParentSpanCtx,
-	})
-	if boundedResult == nil {
-		return nil, runErr
-	}
-
-	result := &ReviewHelperResult{
-		Output: boundedResult.Output,
-		Usage:  boundedResult.Usage,
-	}
-
-	parsed, parseErr := ParseReviewFeedback(cfg.FeedbackPath)
-	if parseErr != nil {
-		if runErr != nil {
-			return result, runErr
-		}
-		return result, fmt.Errorf("running live-run review helper: parsing review-feedback.md: %w", parseErr)
-	}
-	if parsed.OK() {
-		result.Status = parsed.Verdict
-		result.Feedback = strings.TrimSpace(parsed.Body)
-		result.Markers = parsed.Markers
-	} else {
-		synth := reviewHelperProtocolViolationFeedback(parsed, runErr)
-		_ = os.WriteFile(cfg.FeedbackPath, []byte(synth), 0o644)
-		result.Status = ReviewChangesRequested
-		result.Feedback = strings.TrimSpace(synth)
-	}
-
-	if runErr != nil {
-		if isProtocolViolationError(runErr) && parsed.OK() {
-			synth := reviewHelperProtocolViolationFeedback(parsed, runErr)
-			_ = os.WriteFile(cfg.FeedbackPath, []byte(synth), 0o644)
-			result.Status = ReviewChangesRequested
-			result.Feedback = strings.TrimSpace(synth)
-			result.Markers = ValidatorMarkers{}
+			result.Markers = validatorMarkers{}
 		}
 		return result, runErr
 	}
@@ -580,7 +474,7 @@ func mergeSessionEnv(env []string, overrides ...string) []string {
 	return out
 }
 
-func reviewHelperProtocolViolationFeedback(parsed *ParsedReviewFeedback, runErr error) string {
+func reviewHelperProtocolViolationFeedback(parsed *parsedReviewFeedback, runErr error) string {
 	var findings []string
 	if parsed != nil {
 		for _, violation := range parsed.ProtocolViolations {
@@ -590,15 +484,15 @@ func reviewHelperProtocolViolationFeedback(parsed *ParsedReviewFeedback, runErr 
 	if runErr != nil && isProtocolViolationError(runErr) {
 		findings = append(findings, fmt.Sprintf("- **Critical**: review helper completion protocol violation: %v", runErr))
 	}
-	return FormatStructuredReviewFeedback(
+	return formatStructuredReviewFeedback(
 		"Review Helper — Handoff Protocol Violation",
 		strings.Join(findings, "\n"),
 		"",
-		ReviewChangesRequested,
+		reviewChangesRequested,
 	)
 }
 
-func boundedReviewHelperAllowedPaths(cfg ReviewHelperConfig) []string {
+func boundedReviewHelperAllowedPaths(cfg reviewHelperConfig) []string {
 	allowed := []string{cfg.FeedbackPath}
 	allowed = append(allowed, cfg.AllowedPaths...)
 	return allowed

@@ -135,7 +135,7 @@ func TestSupervisorCrossHarnessLive(t *testing.T) {
 								t.Setenv(key, value)
 							}
 						}
-						provider := opencode.NewWithBinary(bin)
+						provider := opencode.New(bin, nil)
 						provider.SetModelCatalog([]llm.ModelInfo{{ID: model, DisplayName: model, ContextWindow: 200000}})
 						registry.Register(provider)
 					}

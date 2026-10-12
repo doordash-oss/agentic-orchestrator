@@ -34,7 +34,7 @@ const (
 
 // publishFailureCodes is the closed set of codes a repository publish
 // failure can carry. Every predicate that needs to know whether a failure
-// is a publish failure keys on IsPublishFailure instead of comparing codes
+// is a publish failure keys on isPublishFailure instead of comparing codes
 // directly.
 var publishFailureCodes = map[Code]bool{
 	PublishRebaseConflict:    true,
@@ -46,31 +46,31 @@ var publishFailureCodes = map[Code]bool{
 	PublishPushFailed:        true,
 }
 
-// IsPublishFailure reports whether code is one of the publish failure codes
+// isPublishFailure reports whether code is one of the publish failure codes
 // a repository state's stored record can carry.
-func IsPublishFailure(code Code) bool {
+func isPublishFailure(code Code) bool {
 	return publishFailureCodes[code]
 }
 
-// PublishRepoParams carries the repository name, branch, rebase target, and
+// publishRepoParams carries the repository name, branch, rebase target, and
 // remote-only commit count a publish-failure summary interpolates.
 // RenderRecord derives them from a stored record's repositories block; the
 // static summary applies when the record carries no repositories.
-type PublishRepoParams struct {
+type publishRepoParams struct {
 	Repo              string
 	Branch            string
 	RebaseTarget      string
 	RemoteOnlyCommits int
 }
 
-func (PublishRepoParams) params() {}
+func (publishRepoParams) params() {}
 
 // publishRepoParams extracts the publish summary params from p, reporting
 // whether the template may render.
-func publishRepoParams(p Params) (PublishRepoParams, bool) {
-	params, ok := p.(PublishRepoParams)
+func asPublishRepoParams(p Params) (publishRepoParams, bool) {
+	params, ok := p.(publishRepoParams)
 	if !ok || strings.TrimSpace(params.Repo) == "" {
-		return PublishRepoParams{}, false
+		return publishRepoParams{}, false
 	}
 	return params, true
 }
@@ -78,7 +78,7 @@ func publishRepoParams(p Params) (PublishRepoParams, bool) {
 // publishNamedRepo renders the repository-keyed sentence via format when the
 // params name a repository, or "" for the static fallback.
 func publishNamedRepo(p Params, format string) string {
-	params, ok := publishRepoParams(p)
+	params, ok := asPublishRepoParams(p)
 	if !ok {
 		return ""
 	}
@@ -88,7 +88,7 @@ func publishNamedRepo(p Params, format string) string {
 // publishRebaseConflictSummary names the repository, branch, and rebase
 // target of the conflicted pull rebase.
 func publishRebaseConflictSummary(p Params) string {
-	params, ok := publishRepoParams(p)
+	params, ok := asPublishRepoParams(p)
 	if !ok {
 		return ""
 	}
@@ -104,7 +104,7 @@ func publishRebaseConflictSummary(p Params) string {
 // publishDivergedSummary names the repository and remote-only commit count
 // of the diverged pull-request branch.
 func publishDivergedSummary(p Params) string {
-	params, ok := publishRepoParams(p)
+	params, ok := asPublishRepoParams(p)
 	if !ok {
 		return ""
 	}
@@ -141,7 +141,7 @@ func publishDescriptionFailedSummary(p Params) string {
 // publishPushFailedSummary names the repository (and branch when known) whose
 // publish push failed.
 func publishPushFailedSummary(p Params) string {
-	params, ok := publishRepoParams(p)
+	params, ok := asPublishRepoParams(p)
 	if !ok {
 		return ""
 	}
@@ -155,10 +155,10 @@ func publishPushFailedSummary(p Params) string {
 // named repository of a stored record's repositories block. Publish records
 // are per-repository, so the block carries exactly one repository; a block
 // with no named repository yields the zero params and the static summary.
-func publishRepoSummaryParams(repos []CodeRepository) PublishRepoParams {
+func publishRepoSummaryParams(repos []CodeRepository) publishRepoParams {
 	for _, repo := range repos {
 		if name := strings.TrimSpace(repo.Name); name != "" {
-			return PublishRepoParams{
+			return publishRepoParams{
 				Repo:              name,
 				Branch:            repo.Branch,
 				RebaseTarget:      repo.RebaseTarget,
@@ -166,5 +166,5 @@ func publishRepoSummaryParams(repos []CodeRepository) PublishRepoParams {
 			}
 		}
 	}
-	return PublishRepoParams{}
+	return publishRepoParams{}
 }

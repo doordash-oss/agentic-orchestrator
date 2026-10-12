@@ -43,12 +43,32 @@ type Protocol struct {
 	contextWindow int    // provider-derived fallback, refined by result.modelUsage
 }
 
+// defaultContextWindow is Claude's standard context window. The Claude CLI
+// reports a window only in the final result's modelUsage, and the discovered
+// catalog carries one only for [<window>]-suffixed selectors, so plain model
+// IDs (e.g. "claude-haiku-5-5") would otherwise leave the live context meter
+// unknown for the whole turn.
+const defaultContextWindow = 200_000
+
 // NewProtocol creates a new Claude protocol handler.
 func NewProtocol(opts llm.ProtocolOpts) *Protocol {
 	return &Protocol{
 		opts:          opts,
-		contextWindow: opts.ContextWindow,
+		contextWindow: initialContextWindow(opts),
 	}
+}
+
+// initialContextWindow seeds the live context window: the caller's catalog
+// window, else a [<window>] selector suffix such as "opus[1m]", else the
+// Claude default. result.modelUsage refines it once reported.
+func initialContextWindow(opts llm.ProtocolOpts) int {
+	if opts.ContextWindow > 0 {
+		return opts.ContextWindow
+	}
+	if window := llm.ParseModelContextWindow(strings.TrimSpace(opts.Model)); window > 0 {
+		return window
+	}
+	return defaultContextWindow
 }
 
 func (p *Protocol) SetStdin(w io.Writer) {
@@ -59,7 +79,7 @@ func (p *Protocol) SetStdin(w io.Writer) {
 
 // Handshake sends the SDK initialize request and the initial user message.
 func (p *Protocol) Handshake(ctx context.Context) error {
-	if err := p.writeJSON(llm.NewInitializeRequest()); err != nil {
+	if err := p.writeJSON(newInitializeRequest()); err != nil {
 		return fmt.Errorf("sending initialize: %w", err)
 	}
 	if p.opts.InitialPrompt != "" {
@@ -156,20 +176,20 @@ func (p *Protocol) ParseLine(line []byte) ([]llm.SDKMessage, error) {
 
 // SendUserMessage sends a user message via JSON stdin.
 func (p *Protocol) SendUserMessage(text string) error {
-	return p.writeJSON(llm.NewUserInput(text))
+	return p.writeJSON(newUserInput(text))
 }
 
 // RespondToControl sends a control response (allow/deny) for a tool permission request.
 func (p *Protocol) RespondToControl(requestID string, allow bool, originalInput json.RawMessage, reason string) error {
 	if allow {
-		return p.writeJSON(llm.NewAllowResponse(requestID, originalInput))
+		return p.writeJSON(newAllowResponse(requestID, originalInput))
 	}
-	return p.writeJSON(llm.NewDenyResponse(requestID, reason))
+	return p.writeJSON(newDenyResponse(requestID, reason))
 }
 
 // RespondToHook sends a hook continue response for PreToolUse callbacks.
 func (p *Protocol) RespondToHook(requestID string) error {
-	return p.writeJSON(llm.NewHookContinueResponse(requestID))
+	return p.writeJSON(newHookContinueResponse(requestID))
 }
 
 // RespondToAskUser sends a control response for an AskUserQuestion tool use.
@@ -179,7 +199,7 @@ func (p *Protocol) RespondToHook(requestID string) error {
 // free-text answer is injected as an extra option before being selected.
 func (p *Protocol) RespondToAskUser(requestID string, resolved askuser.Resolved) error {
 	bundle, answers := presentAskUserAnswers(resolved)
-	return p.writeJSON(llm.NewAskUserResponse(requestID, bundle, answers))
+	return p.writeJSON(newAskUserResponse(requestID, bundle, answers))
 }
 
 // presentAskUserAnswers returns the bundle to echo and the answers keyed by
@@ -274,11 +294,5 @@ func (p *Protocol) writeJSON(v interface{}) error {
 		return fmt.Errorf("claude protocol: stdin not set")
 	}
 
-	data, err := json.Marshal(v)
-	if err != nil {
-		return fmt.Errorf("marshaling JSON: %w", err)
-	}
-	data = append(data, '\n')
-	_, err = w.Write(data)
-	return err
+	return llm.WriteJSONLine(w, v)
 }

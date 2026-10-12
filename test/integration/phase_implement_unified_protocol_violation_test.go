@@ -197,6 +197,7 @@ func protocolViolationBuildSession(agentScript, reviewScript string) func(agent.
 			InitialPrompt: opts.Prompt,
 			RepoName:      opts.RepoName,
 			LogPath:       opts.LogPath,
+			Protocol:      testutil.SessionProtocol(opts.Prompt),
 		}, nil
 	}
 }
@@ -310,8 +311,8 @@ func TestPhaseImplementUnified_ProtocolViolation_PersistsFailureRecord(t *testin
 	}
 
 	orch := orchestrator.New(orchestrator.Deps{
-		Lifecycle: feature.NewManager(store, nil),
-		Store:     store,
+		Manager: feature.NewManager(store, nil),
+		Store:   store,
 	}, orchestrator.Hooks{})
 	if err := orch.HandlePhaseCompletion(f.ID, orchestrator.PhaseCompletionInput{
 		Phase:           feature.PhaseImplement,

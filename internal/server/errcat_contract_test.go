@@ -27,30 +27,6 @@ import (
 	"github.com/doordash-oss/agentic-orchestrator/internal/feature"
 )
 
-// TestCatalogActionReferencesAreValidFeatureActions pins the catalog's
-// remediation action references to the generated feature-action enum: a typo
-// in a referenced action ID can never reach the wire.
-func TestCatalogActionReferencesAreValidFeatureActions(t *testing.T) {
-	t.Parallel()
-
-	invalid := 0
-	for _, code := range errcat.Codes() {
-		entry, ok := errcat.Lookup(code)
-		if !ok {
-			t.Fatalf("%s: listed by Codes but missing from catalog", code)
-		}
-		for _, action := range entry.Actions {
-			if !FeatureAction(action).Valid() {
-				t.Errorf("%s: action reference %q is not a generated FeatureAction value", code, action)
-				invalid++
-			}
-		}
-	}
-	if invalid > 0 {
-		t.Fatalf("%d invalid action references", invalid)
-	}
-}
-
 // readinessIssueCodes are the codes the readiness projection renders as
 // canonical errors on the wire. The generated readiness-issue enum is gone
 // (the codes are catalog codes), so this set pins what the projection may
@@ -97,6 +73,7 @@ func TestRepresentativeRejectionsCarryCanonicalBodies(t *testing.T) {
 	handler := NewHandler(HandlerOptions{
 		AuthToken:             testAuthToken,
 		Features:              store,
+		FeatureStore:          store,
 		DisableHostValidation: true,
 	})
 
@@ -217,7 +194,7 @@ func TestRebaseActionErrorFamilyCarriesRepositoryContext(t *testing.T) {
 			name:       "already up to date",
 			err:        &feature.RebaseAlreadyUpToDateError{Targets: []feature.RebaseRepoTarget{{Repo: "web", Target: "main", Ref: "origin/main", Publishable: true}}},
 			wantCode:   errcat.RebaseAlreadyUpToDate,
-			wantClass:  errcat.ClassWarning,
+			wantClass:  "warning",
 			wantRepo:   "web",
 			wantTarget: "main",
 		},

@@ -28,14 +28,7 @@ import (
 // success, emits refresh signals for both feature identifiers. Rejected or
 // replayed no-op writes do not emit misleading partial-success events.
 func (o *Orchestrator) updatePairedFeatureConfig(parentID string, input feature.PairedConfigInput, submittedPipeline feature.PipelineProfile, addressedID string) error {
-	type pairedConfigUpdater interface {
-		UpdatePairedConfig(parentID string, input feature.PairedConfigInput, submittedPipeline feature.PipelineProfile, addressedID string) (*feature.PairedConfigResult, error)
-	}
-	updater, ok := o.deps.Store.(pairedConfigUpdater)
-	if !ok {
-		return fmt.Errorf("paired config update is not supported by the configured store")
-	}
-	result, err := updater.UpdatePairedConfig(parentID, input, submittedPipeline, addressedID)
+	result, err := o.deps.Store.UpdatePairedConfig(parentID, input, submittedPipeline, addressedID)
 	if err != nil {
 		return err
 	}
@@ -60,7 +53,7 @@ func (o *Orchestrator) updatePairedFeatureConfig(parentID string, input feature.
 // discovery fails so the caller fails closed rather than falling through to
 // the single-record update path.
 func (o *Orchestrator) detectPairedConfigTarget(featureID string) (parentID string, childID string, paired bool, err error) {
-	f, err := o.deps.Lifecycle.Get(featureID)
+	f, err := o.deps.Store.Load(featureID)
 	if err != nil || f == nil {
 		return "", "", false, err
 	}

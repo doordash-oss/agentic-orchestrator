@@ -15,148 +15,20 @@ limitations under the License.
 */
 
 /**
- * The complete IPC surface between renderer and main. Channel names are
- * centralized here with a zod request/response contract per channel; there is
- * deliberately no generic invoke passthrough anywhere in the app.
+ * The complete IPC surface between renderer and main. Each renderer method
+ * has a zod request/response contract here and a fixed channel name in
+ * ipcChannels.ts; there is no generic invoke passthrough.
  */
 import { z } from 'zod';
 import { CanonicalErrorSchema, type CanonicalError } from './api/parse';
+import type { IpcMethod } from './ipcChannels';
+import { defined } from './defined';
 
-export type { CanonicalError, CanonicalErrorResponse } from './api/parse';
+export type { CanonicalError } from './api/parse';
 
 export const ATTENTION_ALREADY_RESOLVED_NOTICE =
   'This item was already resolved. The inbox has been refreshed.';
 export const ATTENTION_SUBMITTED_NOTICE = 'Submitted. Waiting for the server snapshot...';
-
-export const IPC_CHANNELS = {
-  connectionGetStatus: 'agentico:connection:get-status',
-  connectionRetry: 'agentico:connection:retry',
-  connectionRestart: 'agentico:connection:restart',
-  connectionChooseServer: 'agentico:connection:choose-server',
-  connectionSwitchServer: 'agentico:connection:switch-server',
-  connectionStartLocal: 'agentico:connection:start-local',
-  serversList: 'agentico:servers:list',
-  serversProbe: 'agentico:servers:probe',
-  remoteServerAdd: 'agentico:servers:remote-add',
-  serverRemove: 'agentico:servers:remove',
-  serverTokenStatus: 'agentico:servers:token-status',
-  settingsGet: 'agentico:settings:get',
-  settingsUpdate: 'agentico:settings:update',
-  windowOpenSettings: 'agentico:window:open-settings',
-  themeGet: 'agentico:theme:get',
-  themeSet: 'agentico:theme:set',
-  runtimeReadinessGet: 'agentico:readiness:runtime:get',
-  runtimeReadinessRefresh: 'agentico:readiness:runtime:refresh',
-  readinessGet: 'agentico:readiness:get',
-  readinessRefresh: 'agentico:readiness:refresh',
-  workspacePickDirectory: 'agentico:workspace:pick-directory',
-  workspaceAddRoot: 'agentico:workspace:add-root',
-  workspaceRemoveRoot: 'agentico:workspace:remove-root',
-  workspaceReorderRoots: 'agentico:workspace:reorder-roots',
-  workspaceInitRepository: 'agentico:workspace:init-repository',
-  cloneStart: 'agentico:clone:start',
-  cloneOperationGet: 'agentico:clone:operation-get',
-  cloneOperationsList: 'agentico:clone:operations-list',
-  cloneOperationCancel: 'agentico:clone:operation-cancel',
-  cloneOperationCleanup: 'agentico:clone:operation-cleanup',
-  cloneOperationRetry: 'agentico:clone:operation-retry',
-  createRepository: 'agentico:create:repository',
-  initializeRepository: 'agentico:initialize:repository',
-  repositoriesList: 'agentico:repositories:list',
-  featuresList: 'agentico:features:list',
-  featuresGet: 'agentico:features:get',
-  featuresCreate: 'agentico:features:create',
-  featuresSetup: 'agentico:features:setup',
-  featuresDispatchAction: 'agentico:features:dispatch-action',
-  featuresRebase: 'agentico:features:rebase',
-  featuresRefactor: 'agentico:features:refactor',
-  featuresRefactorDiscard: 'agentico:features:refactor:discard',
-  featuresReviewFeedbackFetch: 'agentico:features:review-feedback:fetch',
-  featuresReviewFeedbackSelection: 'agentico:features:review-feedback:selection',
-  featuresReviewFeedbackLaunch: 'agentico:features:review-feedback:launch',
-  featuresDeleteCascade: 'agentico:features:delete:cascade',
-  recoveryScan: 'agentico:recovery:scan',
-  recoveryExecute: 'agentico:recovery:execute',
-  recoveryLogRead: 'agentico:recovery:log-read',
-  bulkPreview: 'agentico:bulk:preview',
-  updatesGet: 'agentico:updates:get',
-  updatesCheck: 'agentico:updates:check',
-  updatesInstallWhenIdle: 'agentico:updates:install-when-idle',
-  updatesInstallNow: 'agentico:updates:install-now',
-  updatesRestart: 'agentico:updates:restart',
-  serverUpdatesGet: 'agentico:server-updates:get',
-  serverUpdatesCheck: 'agentico:server-updates:check',
-  serverUpdatesInstall: 'agentico:server-updates:install',
-  serverUpdatesCancel: 'agentico:server-updates:cancel',
-  diagnosticsGet: 'agentico:diagnostics:get',
-  diagnosticsReveal: 'agentico:diagnostics:reveal',
-  diagnosticsClear: 'agentico:diagnostics:clear',
-  attentionGet: 'agentico:attention:get',
-  attentionAnswerPermission: 'agentico:attention:answer-permission',
-  attentionAnswerQuestions: 'agentico:attention:answer-questions',
-  attentionSendHelp: 'agentico:attention:send-help',
-  attentionSaveGateDraft: 'agentico:attention:save-gate-draft',
-  attentionResolveGate: 'agentico:attention:resolve-gate',
-  attentionWaiveTestingContract: 'agentico:attention:waive-testing-contract',
-  attentionGetTestingContract: 'agentico:attention:get-testing-contract',
-  sessionsList: 'agentico:sessions:list',
-  sessionsGet: 'agentico:sessions:get',
-  sessionsTranscript: 'agentico:sessions:transcript',
-  sessionsOutputOpen: 'agentico:sessions:output-open',
-  sessionsOutputCancel: 'agentico:sessions:output-cancel',
-  supervisorStateGet: 'agentico:supervisor:state-get',
-  supervisorSettingsUpdate: 'agentico:supervisor:settings-update',
-  supervisorPendingChangeCancel: 'agentico:supervisor:pending-change-cancel',
-  supervisorPersistFailureDismiss: 'agentico:supervisor:persist-failure-dismiss',
-  supervisorTranscriptGet: 'agentico:supervisor:transcript-get',
-  supervisorMessageSend: 'agentico:supervisor:message-send',
-  supervisorInterrupt: 'agentico:supervisor:interrupt',
-  supervisorEnd: 'agentico:supervisor:end',
-  supervisorReset: 'agentico:supervisor:reset',
-  creationDefaults: 'agentico:creation:defaults',
-  creationSources: 'agentico:creation:sources',
-  creationOriginStatus: 'agentico:creation:origin-status',
-  creationUpdateSource: 'agentico:creation:update-source',
-  creationReconcileSourceUpdate: 'agentico:creation:reconcile-source-update',
-  creationPickFiles: 'agentico:creation:pick-files',
-  creationUploadFiles: 'agentico:creation:upload-files',
-  clipboardReadImage: 'agentico:clipboard:read-image',
-  creationSearchFiles: 'agentico:creation:search-files',
-  creationCancelFileSearch: 'agentico:creation:cancel-file-search',
-  reviewDraftsLoad: 'agentico:review-drafts:load',
-  reviewDraftsSave: 'agentico:review-drafts:save',
-  reviewDraftsDiscard: 'agentico:review-drafts:discard',
-  reviewsRead: 'agentico:reviews:read',
-  reviewsOpen: 'agentico:reviews:open',
-  reviewsSave: 'agentico:reviews:save',
-  reviewsValidate: 'agentico:reviews:validate',
-  reviewsDecide: 'agentico:reviews:decide',
-  configFeatureGet: 'agentico:config:feature-get',
-  configFeatureUpdate: 'agentico:config:feature-update',
-  configDefaultsGet: 'agentico:config:defaults-get',
-  configDefaultsUpdate: 'agentico:config:defaults-update',
-  configModelCatalogue: 'agentico:config:model-catalogue',
-  configProviderModelsRefresh: 'agentico:config:provider-models-refresh',
-  runsList: 'agentico:runs:list',
-  runsGet: 'agentico:runs:get',
-  runSessionsList: 'agentico:runs:sessions-list',
-  livePreviewGet: 'agentico:runs:live-preview',
-  runArtifactsList: 'agentico:runs:artifacts-list',
-  runLogsList: 'agentico:runs:logs-list',
-  runArtifactContent: 'agentico:runs:artifact-content',
-  runLogContent: 'agentico:runs:log-content',
-  rewindPreview: 'agentico:rewind:preview',
-  rewindExecute: 'agentico:rewind:execute',
-  completionPreflight: 'agentico:completion:preflight',
-  repositoryDiff: 'agentico:completion:repository-diff',
-  publishDescription: 'agentico:completion:publish-description',
-  openExternal: 'agentico:open:external',
-  revealPath: 'agentico:open:reveal',
-  clipboardWriteText: 'agentico:clipboard:write-text',
-  uiStatePublish: 'agentico:ui-state:publish',
-} as const;
-
-export type IpcChannel = (typeof IPC_CHANNELS)[keyof typeof IPC_CHANNELS];
 
 /**
  * The two window kinds the app ever opens. The main process keys its window
@@ -165,7 +37,7 @@ export type IpcChannel = (typeof IPC_CHANNELS)[keyof typeof IPC_CHANNELS];
  */
 export const WINDOW_PURPOSES = ['main', 'settings'] as const;
 
-export const WindowPurposeSchema = z.enum(WINDOW_PURPOSES);
+const WindowPurposeSchema = z.enum(WINDOW_PURPOSES);
 export type WindowPurpose = z.output<typeof WindowPurposeSchema>;
 
 /**
@@ -183,17 +55,6 @@ export function windowPurposeFromArgv(argv: readonly string[]): WindowPurpose {
   const parsed = WindowPurposeSchema.safeParse(flag.slice(WINDOW_PURPOSE_ARGUMENT_PREFIX.length));
   return parsed.success ? parsed.data : 'main';
 }
-
-/** Main-to-renderer push events (webContents.send). */
-export const IPC_EVENTS = {
-  connectionChanged: 'agentico:connection:changed',
-  serversChanged: 'agentico:servers:changed',
-  appEvent: 'agentico:events:app',
-  sessionOutput: 'agentico:sessions:output',
-  supervisorEvent: 'agentico:supervisor:event',
-  routeRequested: 'agentico:route:requested',
-  windowFocusChanged: 'agentico:window:focus-changed',
-} as const;
 
 // --- Error shapes crossing the boundary -------------------------------------
 
@@ -221,20 +82,10 @@ export const CONNECTION_STAGES = [
   'ready',
 ] as const;
 
-export const ConnectionStageSchema = z.enum(CONNECTION_STAGES);
-export type ConnectionStage = z.output<typeof ConnectionStageSchema>;
-
-/** In-flight startup statuses before any server is attached or owned. */
-export const CONNECTION_PENDING_STATUSES = [
-  'idle',
-  'resolving-runtime',
-  'discovering',
-  'attaching',
-  'launching',
-] as const;
+export type ConnectionStage = (typeof CONNECTION_STAGES)[number];
 
 /** Terminal states that surface the error panel and a manual retry path. */
-export const CONNECTION_ERROR_STATUSES = [
+const CONNECTION_ERROR_STATUSES = [
   'incompatible',
   'resources-missing',
   'launch-failed',
@@ -242,21 +93,21 @@ export const CONNECTION_ERROR_STATUSES = [
   'error',
 ] as const;
 
-export const CONNECTION_STATUSES = [
-  ...CONNECTION_PENDING_STATUSES,
-  'waiting-health',
-  'connecting',
-  'awaiting-server-choice',
-  'ready',
-  ...CONNECTION_ERROR_STATUSES,
-] as const;
+type ConnectionStatus =
+  | 'idle'
+  | 'resolving-runtime'
+  | 'discovering'
+  | 'attaching'
+  | 'launching'
+  | (typeof CONNECTION_ERROR_STATUSES)[number]
+  | 'waiting-health'
+  | 'connecting'
+  | 'awaiting-server-choice'
+  | 'ready';
 
-export const ConnectionStatusSchema = z.enum(CONNECTION_STATUSES);
-export type ConnectionStatus = z.output<typeof ConnectionStatusSchema>;
+type ConnectionErrorStatus = (typeof CONNECTION_ERROR_STATUSES)[number];
 
-export type ConnectionErrorStatus = (typeof CONNECTION_ERROR_STATUSES)[number];
-
-export function isConnectionErrorStatus(status: ConnectionStatus): status is ConnectionErrorStatus {
+function isConnectionErrorStatus(status: ConnectionStatus): status is ConnectionErrorStatus {
   return (CONNECTION_ERROR_STATUSES as readonly ConnectionStatus[]).includes(status);
 }
 
@@ -264,16 +115,14 @@ export function isConnectionErrorStatus(status: ConnectionStatus): status is Con
  * Who owns the server process: `app-owned` children may be stopped by the
  * app on quit; `external` servers are never signalled or terminated.
  */
-export const ServerOwnershipSchema = z.enum(['none', 'external', 'app-owned']);
+const ServerOwnershipSchema = z.enum(['none', 'external', 'app-owned']);
 export type ServerOwnership = z.output<typeof ServerOwnershipSchema>;
 
 /** Server build identity (informational; never gates compatibility). */
-export const ServerBuildInfoSchema = z.strictObject({
+const ServerBuildInfoSchema = z.strictObject({
   version: z.string(),
   revision: z.string().optional(),
 });
-
-export type ServerBuildInfo = z.output<typeof ServerBuildInfoSchema>;
 
 /** Fields every connection-state variant shares apart from its lifecycle stage. */
 const connectionStateBase = {
@@ -337,7 +186,7 @@ const ConnectionLaunchingStateSchema = z.strictObject({
 });
 
 /** Supervising the freshly spawned child, which is always app-owned. */
-export const ConnectionSupervisingStateSchema = z.strictObject({
+const ConnectionSupervisingStateSchema = z.strictObject({
   status: z.literal('waiting-health'),
   stage: connectionStage('wait-health'),
   ...connectionStateBase,
@@ -345,7 +194,7 @@ export const ConnectionSupervisingStateSchema = z.strictObject({
 });
 
 /** Authenticating against a concrete server, so ownership is decided. */
-export const ConnectionAuthenticatingStateSchema = z.strictObject({
+const ConnectionAuthenticatingStateSchema = z.strictObject({
   status: z.literal('connecting'),
   stage: connectionStage('authenticate'),
   ...connectionStateBase,
@@ -358,8 +207,7 @@ export const ConnectionAuthenticatingStateSchema = z.strictObject({
  * endpoint (`remote`, identified by URL). Persisted local entries must carry
  * `runtimeDir`; remote entries must not.
  */
-export const ServerKindSchema = z.enum(['local', 'remote']);
-export type ServerKind = z.output<typeof ServerKindSchema>;
+const ServerKindSchema = z.enum(['local', 'remote']);
 
 /**
  * Connected: always names who owns the server, never carries an error, and
@@ -368,7 +216,7 @@ export type ServerKind = z.output<typeof ServerKindSchema>;
  * endpoint. Main-process-owned: the gateway stamps it from its internal
  * attach bookkeeping; consumers never derive it from the server list.
  */
-export const ConnectionReadyStateSchema = z.strictObject({
+const ConnectionReadyStateSchema = z.strictObject({
   status: z.literal('ready'),
   stage: connectionStage('ready'),
   ...connectionStateBase,
@@ -376,9 +224,8 @@ export const ConnectionReadyStateSchema = z.strictObject({
   kind: ServerKindSchema,
 });
 
-export const SERVER_ROW_HEALTH = ['healthy', 'unreachable', 'probing'] as const;
-export const ServerRowHealthSchema = z.enum(SERVER_ROW_HEALTH);
-export type ServerRowHealth = z.output<typeof ServerRowHealthSchema>;
+const SERVER_ROW_HEALTH = ['healthy', 'unreachable', 'probing'] as const;
+const ServerRowHealthSchema = z.enum(SERVER_ROW_HEALTH);
 
 /**
  * A registry candidate offered in the picker. Strictly renderer-safe: the
@@ -388,7 +235,7 @@ export type ServerRowHealth = z.output<typeof ServerRowHealthSchema>;
  * no runtime dir, and they carry the health verdict of the bounded
  * auth-exempt probe run while the picker snapshot was assembled.
  */
-export const ServerChoiceCandidateSchema = z.strictObject({
+const ServerChoiceCandidateSchema = z.strictObject({
   serverKey: z.string().min(1).max(64),
   kind: ServerKindSchema,
   name: z.string().max(64).nullable(),
@@ -408,7 +255,7 @@ export const MAX_SERVER_CHOICE_CANDIDATES = 32;
  * "Back to <name>"). Renderer-safe only — keys, names, runtime dirs; never
  * tokens or URLs. Absent from errors unrelated to switching.
  */
-export const SwitchContextSchema = z.strictObject({
+const SwitchContextSchema = z.strictObject({
   attempted: ServerChoiceCandidateSchema,
   previous: ServerChoiceCandidateSchema.nullable(),
   /**
@@ -426,7 +273,7 @@ export type SwitchContext = z.output<typeof SwitchContextSchema>;
  * proceed until the user picks one (attach-only snapshot — retry rescans).
  * It is neither pending nor an error: connecting waits on a human choice.
  */
-export const ConnectionAwaitingServerChoiceStateSchema = z.strictObject({
+const ConnectionAwaitingServerChoiceStateSchema = z.strictObject({
   status: z.literal('awaiting-server-choice'),
   stage: connectionStage('connect'),
   ...connectionStateBase,
@@ -485,14 +332,6 @@ const ConnectionUnexpectedErrorStateSchema = z.strictObject({
   startupLink: z.literal(true).optional(),
 });
 
-export const ConnectionErrorStateSchema = z.union([
-  ConnectionIncompatibleStateSchema,
-  ConnectionResourcesMissingStateSchema,
-  ConnectionLaunchFailedStateSchema,
-  ConnectionCrashedStateSchema,
-  ConnectionUnexpectedErrorStateSchema,
-]);
-
 /**
  * The renderer-visible connection model, discriminated on `status` so
  * impossible combinations — a ready state with no ownership, a terminal
@@ -519,14 +358,13 @@ export const ConnectionStateSchema = z.discriminatedUnion('status', [
 ]);
 
 export type ConnectionState = z.output<typeof ConnectionStateSchema>;
-export type ConnectionReadyState = z.output<typeof ConnectionReadyStateSchema>;
-export type ConnectionErrorState = z.output<typeof ConnectionErrorStateSchema>;
+type ConnectionErrorState = Extract<ConnectionState, { status: ConnectionErrorStatus }>;
 
 /**
  * The picker choice: the opaque identity key of one candidate from the
  * awaiting-server-choice snapshot. Never a URL or token.
  */
-export const ChooseServerRequestSchema = z.strictObject({
+const ChooseServerRequestSchema = z.strictObject({
   serverKey: z.string().min(1).max(64),
 });
 export type ChooseServerRequest = z.output<typeof ChooseServerRequestSchema>;
@@ -537,7 +375,7 @@ export type ChooseServerRequest = z.output<typeof ChooseServerRequestSchema>;
  * chooseServer this is not gated on awaiting-server-choice; it is invokable
  * while ready and from a failed switch's error state.
  */
-export const SwitchServerRequestSchema = z.strictObject({
+const SwitchServerRequestSchema = z.strictObject({
   serverKey: z.string().min(1).max(64),
 });
 export type SwitchServerRequest = z.output<typeof SwitchServerRequestSchema>;
@@ -549,7 +387,7 @@ export type SwitchServerRequest = z.output<typeof SwitchServerRequestSchema>;
  * Servers pane folds any known-servers entry with this key into its
  * permanent "This machine" row.
  */
-export const BundledRuntimeInfoSchema = z.strictObject({
+const BundledRuntimeInfoSchema = z.strictObject({
   serverKey: z.string().min(1).max(64),
   runtimeDir: z.string().max(4096),
   running: z.boolean(),
@@ -561,7 +399,7 @@ export type BundledRuntimeInfo = z.output<typeof BundledRuntimeInfoSchema>;
 // probed for liveness while the switcher popover is open. Rows NEVER carry
 // tokens or other credential material; base URLs stay in the main process.
 
-export const ServerListRowSchema = z.strictObject({
+const ServerListRowSchema = z.strictObject({
   serverKey: z.string().min(1).max(64),
   kind: ServerKindSchema,
   name: z.string().max(64).nullable(),
@@ -588,10 +426,10 @@ export type ServerListSnapshot = z.output<typeof ServerListSnapshotSchema>;
  * all polling. The response is the freshest snapshot at apply time; further
  * updates stream over IPC_EVENTS.serversChanged.
  */
-export const ServersProbeRequestSchema = z.strictObject({
+const ServersProbeRequestSchema = z.strictObject({
   open: z.boolean(),
 });
-export type ServersProbeRequest = z.output<typeof ServersProbeRequestSchema>;
+type ServersProbeRequest = z.output<typeof ServersProbeRequestSchema>;
 
 // --- Add-remote-server flow --------------------------------------------------
 // The connection string (which embeds the bearer token) crosses renderer →
@@ -645,8 +483,8 @@ export type ServerTokenStatusRequest = z.output<typeof ServerTokenStatusRequestS
  * credentials are re-pasted; `re-paste-required` means a blob exists but
  * cannot be decrypted on this machine.
  */
-export const SERVER_TOKEN_STATUS = ['local', 'saved', 'session-only', 're-paste-required'] as const;
-export const ServerTokenStatusSchema = z.enum(SERVER_TOKEN_STATUS);
+const SERVER_TOKEN_STATUS = ['local', 'saved', 'session-only', 're-paste-required'] as const;
+const ServerTokenStatusSchema = z.enum(SERVER_TOKEN_STATUS);
 export type ServerTokenStatus = z.output<typeof ServerTokenStatusSchema>;
 
 export const ServerTokenStatusResultSchema = z.strictObject({
@@ -668,48 +506,46 @@ export function isConnectionErrorState(state: ConnectionState): state is Connect
 // `{code, message, remedy}` shape.
 
 /** The readiness issue codes the server catalog defines, for step mapping. */
-export const READINESS_ISSUE_CODES = [
-  'missing_executable',
-  'unsupported_version',
-  'unauthenticated',
-  'models_unavailable',
-  'invalid_configuration',
-  'invalid_workspace_root',
-  'invalid_repository',
-] as const;
-
-export type ReadinessIssueCode = (typeof READINESS_ISSUE_CODES)[number];
+export type ReadinessIssueCode =
+  | 'missing_executable'
+  | 'unsupported_version'
+  | 'unauthenticated'
+  | 'models_unavailable'
+  | 'invalid_configuration'
+  | 'invalid_workspace_root'
+  | 'invalid_repository';
 
 /** Canonical catalog-rendered readiness issue — the one error shape. */
-export const ReadinessIssueSchema = CanonicalErrorSchema;
+const ReadinessIssueSchema = CanonicalErrorSchema;
 export type ReadinessIssue = CanonicalError;
 
-export const ProviderReadinessSchema = z.strictObject({
+const ProviderReadinessSchema = z.strictObject({
   name: z.string(),
   installed: z.boolean(),
   version: z.string().optional(),
   ready: z.boolean(),
   issue: ReadinessIssueSchema.optional(),
+  /** Bounded reachability probe of the provider's custom API endpoint;
+   * absent when none is configured or the check is pending. Advisory only. */
+  endpointReachable: z.boolean().optional(),
+  /** Non-blocking warning (`provider_endpoint_unreachable`). */
+  warning: ReadinessIssueSchema.optional(),
 });
 
 export type ProviderReadiness = z.output<typeof ProviderReadinessSchema>;
 
-export const ModelsReadinessSchema = z.strictObject({
+const ModelsReadinessSchema = z.strictObject({
   available: z.boolean(),
   models: z.array(z.string()).optional(),
   issue: ReadinessIssueSchema.optional(),
 });
 
-export type ModelsReadiness = z.output<typeof ModelsReadinessSchema>;
-
-export const ConfigurationReadinessSchema = z.strictObject({
+const ConfigurationReadinessSchema = z.strictObject({
   valid: z.boolean(),
   issue: ReadinessIssueSchema.optional(),
 });
 
-export type ConfigurationReadiness = z.output<typeof ConfigurationReadinessSchema>;
-
-export const WorkspaceRootStateSchema = z.strictObject({
+const WorkspaceRootStateSchema = z.strictObject({
   path: z.string(),
   valid: z.boolean(),
   issue: ReadinessIssueSchema.optional(),
@@ -725,7 +561,7 @@ export type WorkspaceRootState = z.output<typeof WorkspaceRootStateSchema>;
  * discovery refreshes compares identities, never keys or paths alone. The
  * filesystem fields are decimal text so 64-bit values stay exact.
  */
-export const RepositoryIdentitySchema = z.strictObject({
+const RepositoryIdentitySchema = z.strictObject({
   /** Canonical checkout path (symlinks resolved). */
   path: z.string().min(1).max(4096),
   /** Resolved Git common directory; linked worktrees share it with the main checkout. */
@@ -755,7 +591,7 @@ export function sameRepositoryIdentity(a: RepositoryIdentity, b: RepositoryIdent
   );
 }
 
-export const RepositoryStateSchema = z.strictObject({
+const RepositoryStateSchema = z.strictObject({
   name: z.string(),
   path: z.string(),
   valid: z.boolean(),
@@ -801,7 +637,7 @@ export type RuntimeReadinessSnapshot = z.output<typeof RuntimeReadinessSnapshotS
 export const ThemePreferenceSchema = z.enum(['light', 'dark', 'system']);
 export type ThemePreference = z.output<typeof ThemePreferenceSchema>;
 
-export const ThemeInfoSchema = z.strictObject({
+const ThemeInfoSchema = z.strictObject({
   preference: ThemePreferenceSchema,
   resolved: z.enum(['light', 'dark']),
 });
@@ -814,7 +650,7 @@ export type ThemeInfo = z.output<typeof ThemeInfoSchema>;
 // foreign field at the preload boundary.
 
 /** Event kinds are dotted lowercase identifiers (e.g. `feature.updated`). */
-export const InvalidationKindSchema = z
+const InvalidationKindSchema = z
   .string()
   .min(1)
   .max(64)
@@ -872,7 +708,7 @@ export type WindowFocusEvent = z.output<typeof WindowFocusEventSchema>;
  * The deep-linkable Settings destinations. Every value is also a Settings
  * pane id (`SETTINGS_PANES`), so a section name selects a pane directly.
  */
-export const SettingsSectionSchema = z.enum(['updates', 'diagnostics', 'servers']);
+const SettingsSectionSchema = z.enum(['updates', 'diagnostics', 'servers']);
 export type SettingsSection = z.output<typeof SettingsSectionSchema>;
 
 /**
@@ -881,8 +717,8 @@ export type SettingsSection = z.output<typeof SettingsSectionSchema>;
  * today. Kept separate from `settingsSection` so a pane switch and a focus
  * intent ride one atomic route event.
  */
-export const SETTINGS_FOCUS = ['add-server'] as const;
-export const SettingsFocusSchema = z.enum(SETTINGS_FOCUS);
+const SETTINGS_FOCUS = ['add-server'] as const;
+const SettingsFocusSchema = z.enum(SETTINGS_FOCUS);
 export type SettingsFocus = z.output<typeof SettingsFocusSchema>;
 
 // --- Error references ---------------------------------------------------------
@@ -911,7 +747,7 @@ const ERROR_REFERENCE_FORBIDDEN_KEYS = {
   recovery: ['featureId', 'repository', 'taskKey'],
 } as const;
 
-export const ErrorReferenceSchema = z
+const ErrorReferenceSchema = z
   .strictObject({
     scope: z.enum(['run', 'transaction', 'repository', 'setup', 'recovery']),
     code: z.string().min(1).max(128),
@@ -1049,10 +885,10 @@ export interface RoutedRequest {
 // staged filesystem paths, signatures, native install, and restart control stay
 // in the main process.
 
-export const UpdatePackageFormatSchema = z.enum(['macos', 'appimage', 'deb', 'unknown']);
+const UpdatePackageFormatSchema = z.enum(['macos', 'appimage', 'deb', 'unknown']);
 export type UpdatePackageFormat = z.output<typeof UpdatePackageFormatSchema>;
 
-export const UpdateStatusSchema = z.enum([
+const UpdateStatusSchema = z.enum([
   'idle',
   'checking',
   'current',
@@ -1063,16 +899,13 @@ export const UpdateStatusSchema = z.enum([
   'installing',
   'failed',
 ]);
-export type UpdateStatus = z.output<typeof UpdateStatusSchema>;
 
-export const UpdateSignatureStatusSchema = z.enum(['unknown', 'verified', 'failed']);
-export type UpdateSignatureStatus = z.output<typeof UpdateSignatureStatusSchema>;
+const UpdateSignatureStatusSchema = z.enum(['unknown', 'verified', 'failed']);
 
-export const UpdateProgressSchema = z.strictObject({
+const UpdateProgressSchema = z.strictObject({
   downloadedBytes: z.number().int().nonnegative(),
   totalBytes: z.number().int().positive().optional(),
 });
-export type UpdateProgress = z.output<typeof UpdateProgressSchema>;
 
 export const UpdateStateSchema = z
   .strictObject({
@@ -1112,7 +945,7 @@ export const UpdateStateSchema = z
   });
 export type UpdateState = z.output<typeof UpdateStateSchema>;
 
-export const UpdateInstallNowRequestSchema = z.strictObject({
+const UpdateInstallNowRequestSchema = z.strictObject({
   consent: z.literal(true),
   stopActiveWork: z.boolean(),
 });
@@ -1122,7 +955,7 @@ export type UpdateInstallNowRequest = z.output<typeof UpdateInstallNowRequestSch
 // Renderer-safe projection of GET /api/v1/update on the connected server. The
 // main process maps the wire snapshot; the renderer only ever sees this.
 
-export const ServerUpdateStatusSchema = z.enum([
+const ServerUpdateStatusSchema = z.enum([
   'idle',
   'checking',
   'up_to_date',
@@ -1134,13 +967,10 @@ export const ServerUpdateStatusSchema = z.enum([
   'restarting',
   'confirmed',
   'failed',
-  'unsupported',
   'disabled',
 ]);
-export type ServerUpdateStatus = z.output<typeof ServerUpdateStatusSchema>;
 
-export const ServerUpdatePolicySchema = z.enum(['off', 'notify', 'auto']);
-export type ServerUpdatePolicy = z.output<typeof ServerUpdatePolicySchema>;
+const ServerUpdatePolicySchema = z.enum(['off', 'notify', 'auto']);
 
 export const ServerUpdateStateSchema = z.strictObject({
   status: ServerUpdateStatusSchema,
@@ -1165,7 +995,7 @@ export const ServerUpdateStateSchema = z.strictObject({
 });
 export type ServerUpdateState = z.output<typeof ServerUpdateStateSchema>;
 
-export const ServerUpdateInstallRequestSchema = z.strictObject({
+const ServerUpdateInstallRequestSchema = z.strictObject({
   when: z.enum(['now', 'idle']),
   stopActiveWork: z.boolean().optional(),
 });
@@ -1176,13 +1006,13 @@ export type ServerUpdateInstallRequest = z.output<typeof ServerUpdateInstallRequ
 // not expose the app-owned diagnostics root path, file names, transcripts,
 // prompts, arguments, environment values, or arbitrary read/delete targets.
 
-export const DiagnosticLevelSchema = z.enum(['info', 'warn', 'error']);
+const DiagnosticLevelSchema = z.enum(['info', 'warn', 'error']);
 export type DiagnosticLevel = z.output<typeof DiagnosticLevelSchema>;
 
-export const DiagnosticSourceSchema = z.enum(['electron', 'server', 'update', 'crash']);
+const DiagnosticSourceSchema = z.enum(['electron', 'server', 'update', 'crash']);
 export type DiagnosticSource = z.output<typeof DiagnosticSourceSchema>;
 
-export const DiagnosticEntrySchema = z.strictObject({
+const DiagnosticEntrySchema = z.strictObject({
   id: z.string().min(1).max(80),
   time: z.string().datetime(),
   source: DiagnosticSourceSchema,
@@ -1192,7 +1022,7 @@ export const DiagnosticEntrySchema = z.strictObject({
 });
 export type DiagnosticEntry = z.output<typeof DiagnosticEntrySchema>;
 
-export const CrashMetadataSchema = z.strictObject({
+const CrashMetadataSchema = z.strictObject({
   id: z.string().min(1).max(80),
   time: z.string().datetime(),
   version: z.string().max(80),
@@ -1205,7 +1035,7 @@ export const CrashMetadataSchema = z.strictObject({
 });
 export type CrashMetadata = z.output<typeof CrashMetadataSchema>;
 
-export const DiagnosticsRetentionSchema = z.strictObject({
+const DiagnosticsRetentionSchema = z.strictObject({
   maxBytes: z.number().int().positive(),
   maxAgeDays: z.number().int().positive(),
   maxCrashRecords: z.number().int().positive(),
@@ -1215,7 +1045,7 @@ export const DiagnosticsRetentionSchema = z.strictObject({
 });
 export type DiagnosticsRetention = z.output<typeof DiagnosticsRetentionSchema>;
 
-export const DiagnosticsSnapshotSchema = z.strictObject({
+const DiagnosticsSnapshotSchema = z.strictObject({
   retention: DiagnosticsRetentionSchema,
   entries: z.array(DiagnosticEntrySchema).max(200),
   crashes: z.array(CrashMetadataSchema).max(10),
@@ -1238,7 +1068,7 @@ export const AbsolutePathSchema = z
   });
 
 /** Native directory-picker result; `path` is null when the user cancelled. */
-export const PickedDirectorySchema = z.strictObject({
+const PickedDirectorySchema = z.strictObject({
   path: AbsolutePathSchema.nullable(),
 });
 
@@ -1258,7 +1088,7 @@ export type InitRepositoryRequest = z.output<typeof InitRepositoryRequestSchema>
 // Authoritative snapshots of server-owned clone work. Only the server's
 // durable record decides state; the renderer never infers outcomes.
 
-export const CloneOperationStateSchema = z.enum([
+const CloneOperationStateSchema = z.enum([
   'accepted',
   'running',
   'finalizing',
@@ -1269,18 +1099,16 @@ export const CloneOperationStateSchema = z.enum([
   'interrupted',
   'cleanup_pending',
 ]);
-export type CloneOperationState = z.output<typeof CloneOperationStateSchema>;
 
-export const ClonePublicationSchema = z.strictObject({
+const ClonePublicationSchema = z.strictObject({
   repoKey: z.string(),
   path: z.string(),
   hasHead: z.boolean(),
   publishedAt: z.string(),
   identity: RepositoryIdentitySchema.optional(),
 });
-export type ClonePublication = z.output<typeof ClonePublicationSchema>;
 
-export const CloneOperationSchema = z.strictObject({
+const CloneOperationSchema = z.strictObject({
   id: z.string(),
   state: CloneOperationStateSchema,
   stage: z.string().optional(),
@@ -1311,7 +1139,7 @@ export const CloneStartRequestSchema = z.strictObject({
 });
 export type CloneStartRequest = z.output<typeof CloneStartRequestSchema>;
 
-export const CloneOperationsListSchema = z.strictObject({
+const CloneOperationsListSchema = z.strictObject({
   operations: z.array(CloneOperationSchema),
   nextPageToken: z.string().optional(),
 });
@@ -1331,7 +1159,7 @@ export const CreateRepositoryRequestSchema = z.strictObject({
 });
 export type CreateRepositoryRequest = z.output<typeof CreateRepositoryRequestSchema>;
 
-export const CreateRepositoryResultSchema = z.strictObject({
+const CreateRepositoryResultSchema = z.strictObject({
   repoKey: z.string(),
   path: z.string(),
   hasHead: z.boolean(),
@@ -1362,7 +1190,7 @@ export const InitializeRepositoryRequestSchema = z.strictObject({
 });
 export type InitializeRepositoryRequest = z.output<typeof InitializeRepositoryRequestSchema>;
 
-export const InitializeRepositoryResultSchema = z.strictObject({
+const InitializeRepositoryResultSchema = z.strictObject({
   // "initialized" when this request created the commit; "already_initialized"
   // when a competing actor had (refresh-only success, no second commit).
   result: z.enum(['initialized', 'already_initialized']),
@@ -1392,12 +1220,9 @@ export const FeatureIdSchema = z
   .max(128)
   .regex(/^[a-z0-9_-]+$/i);
 
-export type FeatureId = z.output<typeof FeatureIdSchema>;
-
 /** Durable-setup lifecycle states (server SetupStatus). */
-export const FEATURE_SETUP_STATUSES = ['queued', 'running', 'done', 'failed'] as const;
+const FEATURE_SETUP_STATUSES = ['queued', 'running', 'done', 'failed'] as const;
 export const FeatureSetupStatusSchema = z.enum(FEATURE_SETUP_STATUSES);
-export type FeatureSetupStatus = z.output<typeof FeatureSetupStatusSchema>;
 
 export const SetupTaskViewSchema = z.strictObject({
   key: z.string().min(1),
@@ -1423,7 +1248,7 @@ export const FeatureSetupViewSchema = z.strictObject({
 
 export type FeatureSetupView = z.output<typeof FeatureSetupViewSchema>;
 
-export const FeatureActionViewSchema = z.strictObject({
+const FeatureActionViewSchema = z.strictObject({
   id: z.string().min(1),
   enabled: z.boolean(),
   disabledReasons: z.array(z.strictObject({ code: z.string(), message: z.string() })),
@@ -1491,7 +1316,6 @@ export const RelationshipTransactionViewSchema = z.strictObject({
     .max(100)
     .optional(),
 });
-export type RelationshipTransactionView = z.output<typeof RelationshipTransactionViewSchema>;
 
 export const FeatureSummaryViewSchema = z.strictObject({
   id: FeatureIdSchema,
@@ -1542,22 +1366,24 @@ export const RepoStatusViewSchema = z.strictObject({
 export type RepoStatusView = z.output<typeof RepoStatusViewSchema>;
 
 /** Active plan or implementation/final-review gate state. */
-export const ReviewGateViewSchema = z.strictObject({
+const ReviewGateViewSchema = z.strictObject({
   reviewingGate: z.boolean(),
   reviewFixing: z.boolean(),
   validatingPlan: z.boolean(),
   validatorStatuses: z.record(z.string(), z.string()),
+  /** Last error of each failed or retrying validator, keyed like validatorStatuses. */
+  validatorErrors: z.record(z.string(), z.string()).optional(),
 });
 export type ReviewGateView = z.output<typeof ReviewGateViewSchema>;
 
 /** One harness-executed verification command and its current state. */
-export const VerificationItemViewSchema = z.strictObject({
+const VerificationItemViewSchema = z.strictObject({
   name: z.string(),
   state: z.string(),
 });
 export type VerificationItemView = z.output<typeof VerificationItemViewSchema>;
 
-export const AutomaticReviewModeSchema = z.enum([
+const AutomaticReviewModeSchema = z.enum([
   'default',
   'enabled',
   'disabled',
@@ -1565,14 +1391,13 @@ export const AutomaticReviewModeSchema = z.enum([
 ]);
 export type AutomaticReviewMode = z.output<typeof AutomaticReviewModeSchema>;
 
-export const AutomaticReviewStateSchema = z.strictObject({
+const AutomaticReviewStateSchema = z.strictObject({
   mode: AutomaticReviewModeSchema,
   enabled: z.boolean(),
   source: z.enum(['global', 'feature']),
 });
-export type AutomaticReviewState = z.output<typeof AutomaticReviewStateSchema>;
 
-export const ReviewFeedbackCommentViewSchema = z.strictObject({
+const ReviewFeedbackCommentViewSchema = z.strictObject({
   repo: z.string().min(1).max(200),
   id: z.number().int(),
   type: z.enum(['review', 'issue', 'review_body']),
@@ -1654,7 +1479,7 @@ export const FeatureSnapshotSchema = z.strictObject({
 export type FeatureSnapshot = z.output<typeof FeatureSnapshotSchema>;
 
 /** Renderer-visible feature actions limited to this audited server catalogue subset. */
-export const FeatureOperationalActionSchema = z.enum([
+const FeatureOperationalActionSchema = z.enum([
   'start',
   'pause-stop',
   'rewind',
@@ -1668,7 +1493,7 @@ export const FeatureOperationalActionSchema = z.enum([
   'cleanup',
   'delete',
 ]);
-export type FeatureOperationalAction = z.output<typeof FeatureOperationalActionSchema>;
+type FeatureOperationalAction = z.output<typeof FeatureOperationalActionSchema>;
 
 const CompletionSourceRevisionSchema = z.string().min(1).max(512);
 const CompletionRepoNameSchema = z.string().min(1).max(128);
@@ -1752,8 +1577,6 @@ export const FeatureActionResultSchema = z.strictObject({
   featureId: FeatureIdSchema,
   action: FeatureOperationalActionSchema,
   result: z.string().max(500),
-  phase: z.string().max(200).optional(),
-  sessionIds: z.array(z.string().min(1).max(200)).max(100),
   sourceRunNumber: z.number().int().nonnegative().optional(),
   newRunNumber: z.number().int().nonnegative().optional(),
   /** Canonical warning-class errors from the action, diagnostics redacted. */
@@ -1801,7 +1624,7 @@ export const CompletionPreflightRepoSchema = z.strictObject({
 });
 export type CompletionPreflightRepo = z.output<typeof CompletionPreflightRepoSchema>;
 
-export const CompletionPreflightResultSchema = z.strictObject({
+const CompletionPreflightResultSchema = z.strictObject({
   featureId: FeatureIdSchema,
   sourceRevision: z.string().max(512),
   canMarkDone: z.boolean(),
@@ -1826,7 +1649,6 @@ export const RepositoryDiffFileSchema = z.strictObject({
   binary: z.boolean().optional(),
   fingerprint: z.string().max(128).optional(),
 });
-export type RepositoryDiffFile = z.output<typeof RepositoryDiffFileSchema>;
 
 export const RepositoryDiffResultSchema = z.strictObject({
   featureId: FeatureIdSchema,
@@ -1847,9 +1669,9 @@ export const PublishDescriptionRequestSchema = z.strictObject({
   featureId: FeatureIdSchema,
   repos: z.array(CompletionRepoNameSchema).max(200).optional(),
 });
-export type PublishDescriptionRequest = z.output<typeof PublishDescriptionRequestSchema>;
+type PublishDescriptionRequest = z.output<typeof PublishDescriptionRequestSchema>;
 
-export const PublishDescriptionResultSchema = z.strictObject({
+const PublishDescriptionResultSchema = z.strictObject({
   featureId: FeatureIdSchema,
   title: z.string().max(200),
   body: z.string().max(4000),
@@ -1875,13 +1697,13 @@ export type RevealPathRequest = z.output<typeof RevealPathRequestSchema>;
  * clipboard (the path is treated as opaque display/copy text, never as a
  * local filesystem target). `path` is present only on that remote copy flow.
  */
-export const RevealPathResultSchema = z.strictObject({
+const RevealPathResultSchema = z.strictObject({
   ok: z.boolean(),
   path: z.string().min(1).max(4096).optional(),
 });
 export type RevealPathResult = z.output<typeof RevealPathResultSchema>;
 
-export const LaunchRebaseChildResultSchema = z.strictObject({
+const LaunchRebaseChildResultSchema = z.strictObject({
   childId: FeatureIdSchema,
   parentId: FeatureIdSchema,
   result: z.string().max(500),
@@ -1893,7 +1715,7 @@ export type LaunchRebaseChildResult = z.output<typeof LaunchRebaseChildResultSch
 
 export const DiscardRefactorChildRequestSchema = z.strictObject({ childId: FeatureIdSchema });
 export type DiscardRefactorChildRequest = z.output<typeof DiscardRefactorChildRequestSchema>;
-export const DiscardRefactorChildResultSchema = z.strictObject({
+const DiscardRefactorChildResultSchema = z.strictObject({
   childId: FeatureIdSchema,
   result: z.string().max(500),
   status: z.enum(['draining', 'attention', 'retry', 'completed']),
@@ -1908,7 +1730,7 @@ export type DiscardRefactorChildResult = z.output<typeof DiscardRefactorChildRes
  * hunks, paths, or authors. Free text is redacted at the boundary before
  * any view shape reaches the renderer.
  */
-export const ReviewFeedbackDraftCommentViewSchema = z.strictObject({
+const ReviewFeedbackDraftCommentViewSchema = z.strictObject({
   stableRef: z.string().min(1).max(512),
   selected: z.boolean(),
   repo: z.string().min(1).max(200),
@@ -1932,7 +1754,7 @@ export const ReviewFeedbackDraftCommentViewSchema = z.strictObject({
 });
 export type ReviewFeedbackDraftCommentView = z.output<typeof ReviewFeedbackDraftCommentViewSchema>;
 
-export const ReviewFeedbackRepoGroupSchema = z.strictObject({
+const ReviewFeedbackRepoGroupSchema = z.strictObject({
   repo: z.string().min(1).max(200),
   prUrl: z.string().max(2048),
   comments: z.array(ReviewFeedbackDraftCommentViewSchema).max(2000),
@@ -1941,7 +1763,7 @@ export type ReviewFeedbackRepoGroup = z.output<typeof ReviewFeedbackRepoGroupSch
 
 export const FetchReviewFeedbackRequestSchema = z.strictObject({ featureId: FeatureIdSchema });
 export type FetchReviewFeedbackRequest = z.output<typeof FetchReviewFeedbackRequestSchema>;
-export const FetchReviewFeedbackResultSchema = z.strictObject({
+const FetchReviewFeedbackResultSchema = z.strictObject({
   featureId: FeatureIdSchema,
   revision: z.number().int().nonnegative(),
   snapshotId: z.string().min(1).max(200),
@@ -1969,7 +1791,7 @@ export const UpdateReviewFeedbackSelectionRequestSchema = z.strictObject({
 export type UpdateReviewFeedbackSelectionRequest = z.output<
   typeof UpdateReviewFeedbackSelectionRequestSchema
 >;
-export const UpdateReviewFeedbackSelectionResultSchema = z.strictObject({
+const UpdateReviewFeedbackSelectionResultSchema = z.strictObject({
   featureId: FeatureIdSchema,
   revision: z.number().int().nonnegative(),
   repos: z.array(ReviewFeedbackRepoGroupSchema).max(200),
@@ -1986,7 +1808,7 @@ export const LaunchReviewFeedbackChildRequestSchema = z.strictObject({
 export type LaunchReviewFeedbackChildRequest = z.output<
   typeof LaunchReviewFeedbackChildRequestSchema
 >;
-export const LaunchReviewFeedbackChildResultSchema = z.strictObject({
+const LaunchReviewFeedbackChildResultSchema = z.strictObject({
   childId: FeatureIdSchema,
   parentId: FeatureIdSchema,
   result: z.string().max(500),
@@ -2000,7 +1822,7 @@ export type LaunchReviewFeedbackChildResult = z.output<
 
 export const DeleteFeatureCascadeRequestSchema = z.strictObject({ featureId: FeatureIdSchema });
 export type DeleteFeatureCascadeRequest = z.output<typeof DeleteFeatureCascadeRequestSchema>;
-export const DeleteFeatureCascadeResultSchema = z.strictObject({
+const DeleteFeatureCascadeResultSchema = z.strictObject({
   featureId: FeatureIdSchema,
   operationId: z.string(),
   status: z.enum(['completed', 'cleanup_pending', 'attention_required']),
@@ -2041,7 +1863,7 @@ export const RecoveryExecuteRequestSchema = z.strictObject({
 });
 export type RecoveryExecuteRequest = z.output<typeof RecoveryExecuteRequestSchema>;
 
-export const RecoveryExecuteResultSchema = z.strictObject({
+const RecoveryExecuteResultSchema = z.strictObject({
   result: z.string().max(500),
 });
 export type RecoveryExecuteResult = z.output<typeof RecoveryExecuteResultSchema>;
@@ -2059,7 +1881,7 @@ export const RecoveryLogReadRequestSchema = z.strictObject({
 });
 export type RecoveryLogReadRequest = z.output<typeof RecoveryLogReadRequestSchema>;
 
-export const RecoveryLogReadResultSchema = z.strictObject({
+const RecoveryLogReadResultSchema = z.strictObject({
   id: z.string(),
   offset: z.number().int().nonnegative(),
   limit: z.number().int().positive(),
@@ -2071,7 +1893,7 @@ export type RecoveryLogReadResult = z.output<typeof RecoveryLogReadResultSchema>
 
 // --- Bulk resume/retry preview ----------------------------------------------
 
-export const BulkPreviewRowSchema = z.strictObject({
+const BulkPreviewRowSchema = z.strictObject({
   featureId: FeatureIdSchema,
   featureName: z.string().optional(),
   action: z.enum(['resume', 'retry']),
@@ -2081,7 +1903,7 @@ export const BulkPreviewRowSchema = z.strictObject({
 });
 export type BulkPreviewRow = z.output<typeof BulkPreviewRowSchema>;
 
-export const BulkPreviewSchema = z.strictObject({
+const BulkPreviewSchema = z.strictObject({
   previewId: z.string().min(1).max(200),
   eligible: z.array(BulkPreviewRowSchema).max(500),
   excluded: z.array(BulkPreviewRowSchema).max(500),
@@ -2090,7 +1912,7 @@ export type BulkPreview = z.output<typeof BulkPreviewSchema>;
 
 // --- Run listing (GET /runs, GET /runs/{n}, GET /runs/{n}/sessions) ---------
 
-export const RunSummaryViewSchema = z.strictObject({
+const RunSummaryViewSchema = z.strictObject({
   runNumber: z.number().int().nonnegative(),
   startedAt: z.string().optional(),
   sealedAt: z.string().optional(),
@@ -2107,7 +1929,7 @@ export const RunSummaryViewSchema = z.strictObject({
 });
 export type RunSummaryView = z.output<typeof RunSummaryViewSchema>;
 
-export const RunDetailViewSchema = RunSummaryViewSchema.extend({
+const RunDetailViewSchema = RunSummaryViewSchema.extend({
   rewindTarget: z.string().optional(),
   rewindRoadmapPhase: z.number().int().nonnegative().optional(),
   carriedFromRun: z.number().int().nonnegative().optional(),
@@ -2123,7 +1945,7 @@ export const RunDetailViewSchema = RunSummaryViewSchema.extend({
 });
 export type RunDetailView = z.output<typeof RunDetailViewSchema>;
 
-export const RunListResultSchema = z.strictObject({
+const RunListResultSchema = z.strictObject({
   runs: z.array(RunSummaryViewSchema).max(10000),
   page: z.number().int().positive(),
   pageSize: z.number().int().positive(),
@@ -2137,13 +1959,13 @@ export const RunListRequestSchema = z.strictObject({
   page: z.number().int().positive().optional(),
   pageSize: z.number().int().positive().max(100).optional(),
 });
-export type RunListRequest = z.output<typeof RunListRequestSchema>;
+type RunListRequest = z.output<typeof RunListRequestSchema>;
 
 export const RunGetRequestSchema = z.strictObject({
   featureId: FeatureIdSchema,
   runNumber: z.number().int().positive(),
 });
-export type RunGetRequest = z.output<typeof RunGetRequestSchema>;
+type RunGetRequest = z.output<typeof RunGetRequestSchema>;
 
 // RunSessionsListResultSchema is declared after SessionSummarySchema below.
 
@@ -2151,9 +1973,9 @@ export const RunArtifactsListRequestSchema = z.strictObject({
   featureId: FeatureIdSchema,
   runNumber: z.number().int().positive(),
 });
-export type RunArtifactsListRequest = z.output<typeof RunArtifactsListRequestSchema>;
+type RunArtifactsListRequest = z.output<typeof RunArtifactsListRequestSchema>;
 
-export const RunArtifactViewSchema = z.strictObject({
+const RunArtifactViewSchema = z.strictObject({
   id: z.string().min(1).max(500),
   type: z.string().max(100).optional(),
   category: z.string().max(100).optional(),
@@ -2165,12 +1987,12 @@ export const RunArtifactViewSchema = z.strictObject({
 });
 export type RunArtifactView = z.output<typeof RunArtifactViewSchema>;
 
-export const RunArtifactsListResultSchema = z.strictObject({
+const RunArtifactsListResultSchema = z.strictObject({
   artifacts: z.array(RunArtifactViewSchema).max(10000),
 });
 export type RunArtifactsListResult = z.output<typeof RunArtifactsListResultSchema>;
 
-export const RunLogViewSchema = z.strictObject({
+const RunLogViewSchema = z.strictObject({
   id: z.string().min(1).max(200),
   path: z.string().min(1).max(1000),
   size: z.number().int().nonnegative(),
@@ -2178,7 +2000,7 @@ export const RunLogViewSchema = z.strictObject({
 });
 export type RunLogView = z.output<typeof RunLogViewSchema>;
 
-export const RunLogsListResultSchema = z.strictObject({
+const RunLogsListResultSchema = z.strictObject({
   logs: z.array(RunLogViewSchema).max(10000),
 });
 export type RunLogsListResult = z.output<typeof RunLogsListResultSchema>;
@@ -2193,9 +2015,9 @@ export const RunArtifactContentRequestSchema = z.strictObject({
   offset: z.number().int().nonnegative().optional(),
   limit: z.number().int().positive().max(MAX_RUN_CONTENT_BYTES).optional(),
 });
-export type RunArtifactContentRequest = z.output<typeof RunArtifactContentRequestSchema>;
+type RunArtifactContentRequest = z.output<typeof RunArtifactContentRequestSchema>;
 
-export const RunTextContentSchema = z.strictObject({
+const RunTextContentSchema = z.strictObject({
   id: z.string().min(1).max(500),
   offset: z.number().int().nonnegative(),
   limit: z.number().int().positive(),
@@ -2212,30 +2034,27 @@ export const RunLogContentRequestSchema = z.strictObject({
   offset: z.number().int().nonnegative().optional(),
   limit: z.number().int().positive().max(MAX_RUN_CONTENT_BYTES).optional(),
 });
-export type RunLogContentRequest = z.output<typeof RunLogContentRequestSchema>;
+type RunLogContentRequest = z.output<typeof RunLogContentRequestSchema>;
 
 // --- Rewind preview + execution --------------------------------------------
 
-export const RewindChoiceViewSchema = z.strictObject({
+const RewindChoiceViewSchema = z.strictObject({
   phase: z.string().min(1),
   escalatesTo: z.string().optional(),
   overridePhase: z.string().optional(),
 });
-export type RewindChoiceView = z.output<typeof RewindChoiceViewSchema>;
 
-export const RewindPRConsequenceViewSchema = z.strictObject({
+const RewindPRConsequenceViewSchema = z.strictObject({
   repo: z.string(),
   prUrl: z.string(),
 });
-export type RewindPRConsequenceView = z.output<typeof RewindPRConsequenceViewSchema>;
 
-export const RewindWorktreeConsequenceViewSchema = z.strictObject({
+const RewindWorktreeConsequenceViewSchema = z.strictObject({
   repo: z.string(),
   resetKind: z.enum(['anchor', 'base', 'base-local', 'none']),
 });
-export type RewindWorktreeConsequenceView = z.output<typeof RewindWorktreeConsequenceViewSchema>;
 
-export const RewindPreviewViewSchema = z.strictObject({
+const RewindPreviewViewSchema = z.strictObject({
   eligible: z.boolean(),
   sourceRunNumber: z.number().int().nonnegative(),
   sourceRevision: z.string(),
@@ -2261,7 +2080,7 @@ export const RewindPreviewRequestSchema = z.strictObject({
   roadmapPhase: z.number().int().positive().optional(),
   upgradePipeline: z.string().max(200).optional(),
 });
-export type RewindPreviewRequest = z.output<typeof RewindPreviewRequestSchema>;
+type RewindPreviewRequest = z.output<typeof RewindPreviewRequestSchema>;
 
 export const RewindExecuteRequestSchema = z.strictObject({
   featureId: FeatureIdSchema,
@@ -2271,7 +2090,7 @@ export const RewindExecuteRequestSchema = z.strictObject({
   sourceRunNumber: z.number().int().nonnegative().optional(),
   sourceRevision: z.string().max(512).optional(),
 });
-export type RewindExecuteRequest = z.output<typeof RewindExecuteRequestSchema>;
+type RewindExecuteRequest = z.output<typeof RewindExecuteRequestSchema>;
 
 // --- Blocking attention ----------------------------------------------------
 
@@ -2285,19 +2104,17 @@ const QuestionIndexKeySchema = z.string().regex(/^[1-9][0-9]{0,5}$/);
  * carries no feature id, its context label is "Supervisor", and opening it
  * navigates to the Supervisor page instead of a feature tab.
  */
-export const AttentionTargetSchema = z.enum(['supervisor']);
-export type AttentionTarget = z.output<typeof AttentionTargetSchema>;
+const AttentionTargetSchema = z.enum(['supervisor']);
 /** The context label renderer surfaces show for a supervisor-targeted item. */
 export const SUPERVISOR_CONTEXT_LABEL = 'Supervisor';
 /**
  * Who raised a supervisor permission or question: `root` is the
  * conversation's own agent, `child` one of its sub-agents.
  */
-export const RequestOriginSchema = z.enum(['root', 'child']);
-export type RequestOrigin = z.output<typeof RequestOriginSchema>;
+const RequestOriginSchema = z.enum(['root', 'child']);
 /** The tag renderer surfaces show on a request a sub-agent raised. */
 export const SUBAGENT_ORIGIN_LABEL = 'Sub-agent';
-export const AttentionOptionSchema = z.strictObject({
+const AttentionOptionSchema = z.strictObject({
   // The server preserves provider-visible option labels up to 1,000 chars.
   label: z.string().max(1000),
   description: AttentionTextSchema.optional(),
@@ -2313,7 +2130,7 @@ export const AttentionQuestionSchema = z.strictObject({
   multiSelect: z.boolean(),
   options: z.array(AttentionOptionSchema).max(100),
 });
-export const AttentionPermissionSchema = z.strictObject({
+const AttentionPermissionSchema = z.strictObject({
   kind: z.literal('permission'),
   id: AttentionIDSchema,
   featureId: FeatureIdSchema.optional(),
@@ -2351,9 +2168,9 @@ export const AttentionPermissionSchema = z.strictObject({
   /** The sub-agent's session id; set only when `origin` is `child`. */
   childSessionId: AttentionIDSchema.optional(),
 });
-export const AutoApproveScopeSchema = z.enum(['feature', 'workspace']);
+const AutoApproveScopeSchema = z.enum(['feature', 'workspace']);
 export type AutoApproveScope = z.output<typeof AutoApproveScopeSchema>;
-export const AttentionQuestionBundleSchema = z.strictObject({
+const AttentionQuestionBundleSchema = z.strictObject({
   kind: z.literal('questions'),
   id: AttentionIDSchema,
   featureId: FeatureIdSchema.optional(),
@@ -2370,7 +2187,7 @@ export const AttentionQuestionBundleSchema = z.strictObject({
   /** The sub-agent's session id; set only when `origin` is `child`. */
   childSessionId: AttentionIDSchema.optional(),
 });
-export const AttentionHelpSchema = z.strictObject({
+const AttentionHelpSchema = z.strictObject({
   kind: z.literal('help'),
   id: AttentionIDSchema,
   featureId: FeatureIdSchema.optional(),
@@ -2391,7 +2208,7 @@ export const VerificationGateActionSchema = z.enum([
   'ALLOW_SUBSTITUTE',
 ]);
 export type VerificationGateAction = z.output<typeof VerificationGateActionSchema>;
-export const AttentionGateSchema = z.strictObject({
+const AttentionGateSchema = z.strictObject({
   kind: z.literal('gate'),
   id: z.string().min(1).max(1000),
   featureId: FeatureIdSchema,
@@ -2431,7 +2248,7 @@ export const AttentionGateSchema = z.strictObject({
     .optional(),
 });
 /** A review is actionable only in the cockpit; the inbox is a deliberate jump. */
-export const AttentionReviewSchema = z.strictObject({
+const AttentionReviewSchema = z.strictObject({
   kind: z.literal('review'),
   id: AttentionIDSchema,
   featureId: FeatureIdSchema,
@@ -2441,7 +2258,7 @@ export const AttentionReviewSchema = z.strictObject({
 });
 /** Recovery items are renderer-synthesized from the recovery scan and sorted
  * ahead of all other attention so recovery receives contextual priority. */
-export const AttentionRecoverySchema = z.strictObject({
+const AttentionRecoverySchema = z.strictObject({
   kind: z.literal('recovery'),
   id: z.string().min(1).max(1000),
   waitingSince: z.string().max(100),
@@ -2454,7 +2271,7 @@ export const AttentionRecoverySchema = z.strictObject({
  * the row's kind label, and the title is the catalog title. Warning-class
  * errors never become items.
  */
-export const AttentionErrorSchema = z.strictObject({
+const AttentionErrorSchema = z.strictObject({
   kind: z.literal('error'),
   id: z.string().min(1).max(1000),
   /** The referenced feature — the child for child-scoped entries. */
@@ -2566,7 +2383,7 @@ export const HelpAnswerRequestSchema = z
     message: 'A feature or session is required.',
   });
 export type HelpAnswerRequest = z.output<typeof HelpAnswerRequestSchema>;
-export const GateTargetSchema = z.strictObject({
+const GateTargetSchema = z.strictObject({
   featureId: FeatureIdSchema,
   repoName: z.string().max(500).optional(),
 });
@@ -2579,7 +2396,7 @@ export const GateDraftRequestSchema = GateTargetSchema.extend({
 export type GateDraftRequest = z.output<typeof GateDraftRequestSchema>;
 export const GateResumeRequestSchema = GateTargetSchema;
 export type GateResumeRequest = z.output<typeof GateResumeRequestSchema>;
-export const AttentionActionResultSchema = z.strictObject({
+const AttentionActionResultSchema = z.strictObject({
   result: z.string().max(500),
   alreadyResolved: z.boolean().optional(),
   notice: z.string().max(500).optional(),
@@ -2610,7 +2427,7 @@ export type TestingContractWaiveResult = z.output<typeof TestingContractWaiveRes
 /** The current phase's compiled testing contract, read to drive the waiver checklist. */
 export const TestingContractRequestSchema = z.strictObject({ featureId: FeatureIdSchema });
 export type TestingContractRequest = z.output<typeof TestingContractRequestSchema>;
-export const TestingContractItemSchema = z.strictObject({
+const TestingContractItemSchema = z.strictObject({
   itemId: AttentionIDSchema,
   source: z.string().min(1).max(100),
   owner: z.string().min(1).max(100),
@@ -2648,7 +2465,7 @@ export type TestingContractSnapshot = z.output<typeof TestingContractSnapshotSch
 // --- Staged uploads ---------------------------------------------------------
 
 /** An opaque, single-use staged-upload handle the server returned. */
-export const UploadReferenceSchema = z.string().min(1).max(128);
+const UploadReferenceSchema = z.string().min(1).max(128);
 
 /** Per-submission caps on images and files, local paths and staged refs combined. */
 export const CREATION_IMAGE_LIMIT = 12;
@@ -2660,18 +2477,17 @@ export const CREATION_ATTACHMENT_LIMIT = 24;
 export const SESSION_ID_SEGMENT_PATTERN = '[a-z0-9._-]{1,200}';
 
 export const SessionIdSchema = z.string().regex(new RegExp(`^${SESSION_ID_SEGMENT_PATTERN}$`, 'i'));
-export type SessionId = z.output<typeof SessionIdSchema>;
 
 const BoundedTextSchema = z.string().max(1024 * 1024);
 const OptionalBoundedTextSchema = BoundedTextSchema.optional();
 
-export const SessionUsageSchema = z.strictObject({
+const SessionUsageSchema = z.strictObject({
   inputTokens: z.number().int().nonnegative().optional(),
   outputTokens: z.number().int().nonnegative().optional(),
   costUsd: z.number().nonnegative().optional(),
 });
 
-export const SessionTaskActivitySchema = z.strictObject({
+const SessionTaskActivitySchema = z.strictObject({
   taskId: z.string().max(500),
   toolUseId: z.string().max(500).optional(),
   childSessionId: z.string().max(500).optional(),
@@ -2712,20 +2528,19 @@ export const SessionSummarySchema = z.strictObject({
 });
 export type SessionSummary = z.output<typeof SessionSummarySchema>;
 
-export const RunSessionsListResultSchema = z.strictObject({
+const RunSessionsListResultSchema = z.strictObject({
   runNumber: z.number().int().positive(),
   sessions: z.array(SessionSummarySchema).max(1000),
 });
 export type RunSessionsListResult = z.output<typeof RunSessionsListResultSchema>;
 
-export const TranscriptCursorSchema = z.strictObject({
+const TranscriptCursorSchema = z.strictObject({
   total: z.number().int().nonnegative(),
   start: z.number().int().nonnegative(),
   end: z.number().int().nonnegative(),
 });
-export type TranscriptCursor = z.output<typeof TranscriptCursorSchema>;
 
-export const FileChangeSchema = z.strictObject({
+const FileChangeSchema = z.strictObject({
   path: OptionalBoundedTextSchema,
   oldPath: OptionalBoundedTextSchema,
   operation: z.string().max(200).optional(),
@@ -2735,12 +2550,12 @@ export const FileChangeSchema = z.strictObject({
   hasDiffPatch: z.boolean().optional(),
 });
 
-export const ToolCallSchema = z.strictObject({
+const ToolCallSchema = z.strictObject({
   summary: OptionalBoundedTextSchema,
   prompt: OptionalBoundedTextSchema,
 });
 
-export const TranscriptTaskSchema = z.strictObject({
+const TranscriptTaskSchema = z.strictObject({
   id: z.string().max(500).optional(),
   toolUseId: z.string().max(500).optional(),
   description: OptionalBoundedTextSchema,
@@ -2753,7 +2568,7 @@ export const TranscriptTaskSchema = z.strictObject({
 });
 
 /** Original validated source record retained for semantic timeline/raw inspection. */
-export const TranscriptMessageSchema = z.strictObject({
+const TranscriptMessageSchema = z.strictObject({
   index: z.number().int().nonnegative(),
   blockIndex: z.number().int().nonnegative().optional(),
   role: z.string().max(200),
@@ -2772,7 +2587,7 @@ export const TranscriptMessageSchema = z.strictObject({
 });
 export type TranscriptMessage = z.output<typeof TranscriptMessageSchema>;
 
-export const LivePreviewViewSchema = z.strictObject({
+const LivePreviewViewSchema = z.strictObject({
   featureId: FeatureIdSchema,
   activity: z.string().max(1000),
   session: SessionSummarySchema.optional(),
@@ -2814,20 +2629,15 @@ export const SessionOutputOpenRequestSchema = z.strictObject({
 });
 export type SessionOutputOpenRequest = z.output<typeof SessionOutputOpenRequestSchema>;
 
-export const SubscriptionIdSchema = z
+const SubscriptionIdSchema = z
   .string()
   .min(1)
   .max(100)
   .regex(/^[a-z0-9-]+$/i);
-export const SessionOutputOpenResultSchema = z.strictObject({
+const SessionOutputOpenResultSchema = z.strictObject({
   subscriptionId: SubscriptionIdSchema,
 });
 export type SessionOutputOpenResult = z.output<typeof SessionOutputOpenResultSchema>;
-
-export const SessionOutputCancelRequestSchema = z.strictObject({
-  subscriptionId: SubscriptionIdSchema,
-});
-export const SessionOutputCancelResultSchema = z.strictObject({ cancelled: z.boolean() });
 
 export const SessionOutputEventSchema = z.discriminatedUnion('type', [
   z.strictObject({
@@ -2861,7 +2671,7 @@ export type SessionOutputEvent = z.output<typeof SessionOutputEventSchema>;
 /** The supervisor's reserved feature id on session-manager reads. */
 export const SUPERVISOR_FEATURE_ID = '__supervisor__';
 /** Supervisor session ids are `__supervisor__.<conversation-uuid>.<generation>`. */
-export const SUPERVISOR_SESSION_ID_PREFIX = `${SUPERVISOR_FEATURE_ID}.`;
+const SUPERVISOR_SESSION_ID_PREFIX = `${SUPERVISOR_FEATURE_ID}.`;
 /** The session-manager kind string supervisor sessions report. */
 export const SUPERVISOR_SESSION_KIND = 'supervisor';
 
@@ -2883,7 +2693,7 @@ export const SupervisorStreamEpochSchema = z
   .max(200)
   .regex(/^[A-Za-z0-9._:~+/=-]*$/);
 
-export const SupervisorLifecycleSchema = z.enum([
+const SupervisorLifecycleSchema = z.enum([
   'stopped',
   'starting',
   'idle',
@@ -2893,38 +2703,33 @@ export const SupervisorLifecycleSchema = z.enum([
   'failed',
 ]);
 export type SupervisorLifecycle = z.output<typeof SupervisorLifecycleSchema>;
-export const SupervisorStartingStepSchema = z.enum(['rebuilding', 'launching', 'handshake']);
-export type SupervisorStartingStep = z.output<typeof SupervisorStartingStepSchema>;
-export const SupervisorTurnOutcomeSchema = z.enum(['none', 'completed', 'interrupted', 'failed']);
-export type SupervisorTurnOutcome = z.output<typeof SupervisorTurnOutcomeSchema>;
+const SupervisorStartingStepSchema = z.enum(['rebuilding', 'launching', 'handshake']);
+const SupervisorTurnOutcomeSchema = z.enum(['none', 'completed', 'interrupted', 'failed']);
 /** Who cut the most recent turn; meaningful when the outcome is `interrupted`. */
-export const SupervisorInterruptedBySchema = z.enum(['none', 'user', 'shutdown']);
-export type SupervisorInterruptedBy = z.output<typeof SupervisorInterruptedBySchema>;
+const SupervisorInterruptedBySchema = z.enum(['none', 'user', 'shutdown']);
 
 /** Permission mode asked for versus the one the running harness reported. */
-export const SupervisorPermissionModeSchema = z.strictObject({
+const SupervisorPermissionModeSchema = z.strictObject({
   requested: z.string().max(100),
   /** Empty until a process reports its mode. */
   effective: z.string().max(100),
   restrictedByPolicy: z.boolean(),
 });
-export type SupervisorPermissionMode = z.output<typeof SupervisorPermissionModeSchema>;
 
 /** Committed harness choice; empty harness or model means unset, empty effort the harness default. */
-export const SupervisorSettingsSchema = z.strictObject({
+const SupervisorSettingsSchema = z.strictObject({
   harness: z.string().max(100),
   model: z.string().max(200),
   effort: z.string().max(40),
 });
 export type SupervisorSettings = z.output<typeof SupervisorSettingsSchema>;
 
-export const SupervisorPendingChangeSchema = z.strictObject({
+const SupervisorPendingChangeSchema = z.strictObject({
   requestId: z.string().min(1).max(128),
   kind: z.enum(['model', 'effort', 'harness']),
   target: SupervisorSettingsSchema,
   requestedAt: z.string().max(100),
 });
-export type SupervisorPendingChange = z.output<typeof SupervisorPendingChangeSchema>;
 
 /**
  * One pending supervisor permission or question, in exactly the attention
@@ -2938,7 +2743,7 @@ export const SupervisorPendingRequestSchema = z.discriminatedUnion('kind', [
 ]);
 export type SupervisorPendingRequest = z.output<typeof SupervisorPendingRequestSchema>;
 
-export const SupervisorBackgroundTaskSchema = z.strictObject({
+const SupervisorBackgroundTaskSchema = z.strictObject({
   activity: z
     .array(z.strictObject({ at: z.string().max(100), detail: z.string().max(1000) }))
     .max(8)
@@ -2999,7 +2804,7 @@ export const SupervisorStateSchema = z.strictObject({
 });
 export type SupervisorState = z.output<typeof SupervisorStateSchema>;
 
-export const SupervisorRecordKindSchema = z.enum([
+const SupervisorRecordKindSchema = z.enum([
   'user',
   'assistant',
   'tool_use',
@@ -3010,9 +2815,7 @@ export const SupervisorRecordKindSchema = z.enum([
   'note',
   'checkpoint',
 ]);
-export type SupervisorRecordKind = z.output<typeof SupervisorRecordKindSchema>;
-export const SupervisorRecordVisibilitySchema = z.enum(['content', 'model_only', 'display_only']);
-export type SupervisorRecordVisibility = z.output<typeof SupervisorRecordVisibilitySchema>;
+const SupervisorRecordVisibilitySchema = z.enum(['content', 'model_only', 'display_only']);
 
 /** The request or verdict carried by `permission` and `question` records. */
 export const SupervisorRequestVerdictSchema = z.strictObject({
@@ -3026,9 +2829,8 @@ export const SupervisorRequestVerdictSchema = z.strictObject({
   /** The sub-agent's session id; set only when `origin` is `child`. */
   childSessionId: AttentionIDSchema.optional(),
 });
-export type SupervisorRequestVerdict = z.output<typeof SupervisorRequestVerdictSchema>;
 
-export const SupervisorMarkerKindSchema = z.enum([
+const SupervisorMarkerKindSchema = z.enum([
   'interrupted',
   'error',
   'history_not_restored',
@@ -3039,14 +2841,13 @@ export const SupervisorMarkerKindSchema = z.enum([
   'compacted',
   'transcript_recovered',
 ]);
-export type SupervisorMarkerKind = z.output<typeof SupervisorMarkerKindSchema>;
 
 /**
  * The display-only notice carried by `marker` records: a turn cut by a
  * server restart, a launch failure, history that could not be restored, or a
  * permission mode restricted by policy. `code` is an error marker's catalog code.
  */
-export const SupervisorMarkerSchema = z.strictObject({
+const SupervisorMarkerSchema = z.strictObject({
   marker: SupervisorMarkerKindSchema,
   text: AttentionTextSchema,
   code: z.string().max(200).optional(),
@@ -3058,7 +2859,7 @@ export const SupervisorMarkerSchema = z.strictObject({
 });
 export type SupervisorMarker = z.output<typeof SupervisorMarkerSchema>;
 
-export const SupervisorCheckpointSchema = z.strictObject({
+const SupervisorCheckpointSchema = z.strictObject({
   coversThroughSeq: SupervisorSeqSchema,
   reason: z.literal('native_auto'),
   model: z.string().max(200),
@@ -3071,7 +2872,7 @@ export const SupervisorCheckpointSchema = z.strictObject({
 const SUPERVISOR_ATTACHMENT_MAX = CREATION_IMAGE_LIMIT + CREATION_ATTACHMENT_LIMIT;
 
 /** One attachment of a committed user record: the server's conversation copy. */
-export const SupervisorAttachmentSchema = z.strictObject({
+const SupervisorAttachmentSchema = z.strictObject({
   /** Absolute server-local path of the copy (display and dedupe only). */
   path: z.string().min(1).max(4096),
   kind: z.enum(['image', 'file']),
@@ -3079,7 +2880,6 @@ export const SupervisorAttachmentSchema = z.strictObject({
   name: z.string().max(1024),
   size: z.number().int().nonnegative(),
 });
-export type SupervisorAttachment = z.output<typeof SupervisorAttachmentSchema>;
 
 /** One committed transcript record; its `messages` rows carry `index = seq`. */
 export const SupervisorRecordSchema = z.strictObject({
@@ -3189,7 +2989,7 @@ export const SupervisorMessageRequestSchema = z
   });
 
 /** How many images and files a supervisor message request carries. */
-export function supervisorAttachmentCount(request: {
+function supervisorAttachmentCount(request: {
   images?: readonly string[];
   attachments?: readonly string[];
   imageUploads?: readonly string[];
@@ -3231,13 +3031,12 @@ export const SupervisorResetResultSchema = z.strictObject({
 export type SupervisorResetResult = z.output<typeof SupervisorResetResultSchema>;
 
 /** Non-persisted streaming text for a provisional assistant row. */
-export const SupervisorDeltaSchema = z.strictObject({
+const SupervisorDeltaSchema = z.strictObject({
   turnId: SupervisorIdentifierSchema,
   streamMessageId: SupervisorIdentifierSchema,
   chunkIndex: z.number().int().nonnegative(),
   text: BoundedTextSchema,
 });
-export type SupervisorDelta = z.output<typeof SupervisorDeltaSchema>;
 
 const SupervisorEventEnvelopeShape = {
   conversationId: SupervisorIdentifierSchema,
@@ -3307,10 +3106,10 @@ export const RepositoryFileRefSchema = z.strictObject({
 });
 export type RepositoryFileRef = z.output<typeof RepositoryFileRefSchema>;
 
-export const EffortLevelSchema = z.enum(['auto', 'low', 'medium', 'high', 'xhigh', 'max', 'ultra']);
+const EffortLevelSchema = z.enum(['auto', 'low', 'medium', 'high', 'xhigh', 'max', 'ultra']);
 export type EffortLevel = z.output<typeof EffortLevelSchema>;
 
-export const RepositorySourceExpectationSchema = z.strictObject({
+const RepositorySourceExpectationSchema = z.strictObject({
   repoKey: z.string().min(1).max(512),
   identity: RepositoryIdentitySchema,
   mode: z.enum(['default', 'current']),
@@ -3377,7 +3176,7 @@ export const CreateFeatureInputSchema = z.strictObject({
 
 export type CreateFeatureInput = z.input<typeof CreateFeatureInputSchema>;
 
-export const CreateFeatureResultSchema = z.strictObject({
+const CreateFeatureResultSchema = z.strictObject({
   featureId: FeatureIdSchema,
   /** Canonical nonblocking warnings from best-effort remote collision probes. */
   warnings: z.array(CanonicalErrorSchema).max(32).optional(),
@@ -3420,14 +3219,14 @@ export const LaunchRefactorChildRequestSchema = z.strictObject({
 });
 export type LaunchRefactorChildRequest = z.output<typeof LaunchRefactorChildRequestSchema>;
 
-export const LaunchRefactorChildResultSchema = z.strictObject({
+const LaunchRefactorChildResultSchema = z.strictObject({
   childId: FeatureIdSchema,
   parentId: FeatureIdSchema,
   result: z.string().max(500),
 });
 export type LaunchRefactorChildResult = z.output<typeof LaunchRefactorChildResultSchema>;
 
-export const SetupDispatchResultSchema = z.strictObject({
+const SetupDispatchResultSchema = z.strictObject({
   result: z.string(),
 });
 
@@ -3437,7 +3236,7 @@ export type SetupDispatchResult = z.output<typeof SetupDispatchResultSchema>;
  * Fresh server-provided creation context: discovered repositories with
  * eligibility, and the defaults the creation contract applies server-side.
  */
-export const CreationDefaultsSchema = z.strictObject({
+const CreationDefaultsSchema = z.strictObject({
   repositories: z.array(RepositoryStateSchema),
   /** Workspace roots from the same readiness snapshot (clone eligibility). */
   workspaceRoots: z.array(WorkspaceRootStateSchema).default([]),
@@ -3489,7 +3288,7 @@ export const RepositoryOriginStatusRequestSchema = z.strictObject({
 });
 export type RepositoryOriginStatusRequest = z.output<typeof RepositoryOriginStatusRequestSchema>;
 
-export const OriginComparisonSchema = z.strictObject({
+const OriginComparisonSchema = z.strictObject({
   status: z.enum(['up_to_date', 'behind', 'ahead', 'diverged']),
   localSha: z.string().regex(/^[0-9a-f]{40,64}$/),
   fetchedSha: z.string().regex(/^[0-9a-f]{40,64}$/),
@@ -3498,9 +3297,8 @@ export const OriginComparisonSchema = z.strictObject({
   behindCount: z.number().int().min(0),
   checkedAt: z.string().min(1),
 });
-export type OriginComparison = z.output<typeof OriginComparisonSchema>;
 
-export const RepositoryOriginStatusSnapshotSchema = z.strictObject({
+const RepositoryOriginStatusSnapshotSchema = z.strictObject({
   repoKey: z.string().min(1),
   identity: RepositoryIdentitySchema,
   mode: z.enum(['default', 'current']),
@@ -3635,7 +3433,7 @@ export type RepositorySourceReconcileRequest = z.output<
   typeof RepositorySourceReconcileRequestSchema
 >;
 
-export const RepositorySourceReconcileCheckoutSchema = z.strictObject({
+const RepositorySourceReconcileCheckoutSchema = z.strictObject({
   state: z.enum(['clean', 'dirty', 'operation_in_progress', 'unobserved']),
   headRef: z.string().max(512).optional(),
   headSha: z
@@ -3643,9 +3441,6 @@ export const RepositorySourceReconcileCheckoutSchema = z.strictObject({
     .regex(/^[0-9a-f]{40,64}$/)
     .optional(),
 });
-export type RepositorySourceReconcileCheckout = z.output<
-  typeof RepositorySourceReconcileCheckoutSchema
->;
 
 export const RepositorySourceReconcileResultSchema = z.strictObject({
   outcome: z.enum([
@@ -3670,12 +3465,12 @@ export type RepositorySourceReconcileResult = z.output<
   typeof RepositorySourceReconcileResultSchema
 >;
 
-export const CreationFileKindSchema = z.enum(['image', 'attachment']);
+const CreationFileKindSchema = z.enum(['image', 'attachment']);
 export type CreationFileKind = z.output<typeof CreationFileKindSchema>;
-export const PickedCreationFilesSchema = z.strictObject({
+const PickedCreationFilesSchema = z.strictObject({
   paths: z.array(AbsolutePathSchema).max(CREATION_ATTACHMENT_LIMIT),
 });
-export type PickedCreationFiles = z.output<typeof PickedCreationFilesSchema>;
+type PickedCreationFiles = z.output<typeof PickedCreationFilesSchema>;
 
 // --- Main-process upload staging (POST /api/v1/uploads) ---------------------
 
@@ -3685,7 +3480,7 @@ export type PickedCreationFiles = z.output<typeof PickedCreationFilesSchema>;
  * connection can consume it. Never carries the local source path — retry
  * bookkeeping (source paths) stays in renderer-local state.
  */
-export const StagedUploadSchema = z.strictObject({
+const StagedUploadSchema = z.strictObject({
   reference: UploadReferenceSchema,
   kind: CreationFileKindSchema,
   name: z.string().min(1).max(255),
@@ -3700,12 +3495,12 @@ export type StagedUpload = z.output<typeof StagedUploadSchema>;
  * never fails wholesale, so the renderer can keep the chips that staged and
  * mark (and retry) only the ones that did not.
  */
-export const UploadedCreationFileSchema = z.strictObject({
+const UploadedCreationFileSchema = z.strictObject({
   ok: z.literal(true),
   name: z.string().max(255),
   upload: StagedUploadSchema,
 });
-export const FailedCreationFileUploadSchema = z.strictObject({
+const FailedCreationFileUploadSchema = z.strictObject({
   ok: z.literal(false),
   name: z.string().max(255),
   error: CanonicalErrorSchema,
@@ -3716,7 +3511,7 @@ export const CreationFileUploadResultSchema = z.union([
 ]);
 export type CreationFileUploadResult = z.output<typeof CreationFileUploadResultSchema>;
 
-export const UploadCreationFilesResultSchema = z.strictObject({
+const UploadCreationFilesResultSchema = z.strictObject({
   results: z.array(CreationFileUploadResultSchema).max(CREATION_ATTACHMENT_LIMIT),
 });
 export type UploadCreationFilesResult = z.output<typeof UploadCreationFilesResultSchema>;
@@ -3726,7 +3521,7 @@ export type UploadCreationFilesResult = z.output<typeof UploadCreationFilesResul
  * bound to that repository rather than to whoever currently holds the key;
  * identity is absent only for feature-inherited repositories.
  */
-export const CreationFileSearchRepositorySchema = z.strictObject({
+const CreationFileSearchRepositorySchema = z.strictObject({
   key: z.string().min(1).max(200),
   identity: RepositoryIdentitySchema.optional(),
 });
@@ -3738,7 +3533,7 @@ export const CreationFileSearchRequestSchema = z.strictObject({
   query: z.string().max(200),
 });
 export type CreationFileSearchRequest = z.output<typeof CreationFileSearchRequestSchema>;
-export const CreationFileSearchResultSchema = z.strictObject({
+const CreationFileSearchResultSchema = z.strictObject({
   requestId: z.string().uuid(),
   files: z.array(RepositoryFileRefSchema).max(CREATION_FILE_SEARCH_RESULT_LIMIT),
   truncated: z.boolean(),
@@ -3752,7 +3547,7 @@ export type CreationFileSearchResult = z.output<typeof CreationFileSearchResultS
 // attachment metadata only (identity key, name, base URL, runtime
 // dir, last-seen) — never a token.
 
-export const SETTINGS_SCHEMA_VERSION = 6;
+const SETTINGS_SCHEMA_VERSION = 6;
 
 /**
  * Hard bound on the persisted known-servers list. The list is ordered
@@ -3887,7 +3682,7 @@ export const ServersPatchSchema = z
     },
   );
 
-export type ServersPatch = z.output<typeof ServersPatchSchema>;
+type ServersPatch = z.output<typeof ServersPatchSchema>;
 
 /**
  * Applies a servers patch to the persisted section. An `upsertKnown` entry is
@@ -3951,7 +3746,7 @@ export const WizardPrefsSchema = z.object({
   collapsedHelp: z.boolean(),
 });
 
-export type WizardPrefs = z.output<typeof WizardPrefsSchema>;
+type WizardPrefs = z.output<typeof WizardPrefsSchema>;
 
 export function defaultWizardPrefs(): WizardPrefs {
   return { collapsedHelp: false };
@@ -3965,7 +3760,7 @@ export const NotificationPrefsSchema = z.strictObject({
   previewEnabled: z.boolean(),
 });
 
-export type NotificationPrefs = z.output<typeof NotificationPrefsSchema>;
+type NotificationPrefs = z.output<typeof NotificationPrefsSchema>;
 
 export function defaultNotificationPrefs(): NotificationPrefs {
   return { previewEnabled: false };
@@ -3983,7 +3778,7 @@ export function defaultNotificationPrefs(): NotificationPrefs {
  * ('__settings__') is dropped by the migration chain in settings.ts and must
  * never be stored in this map.
  */
-export const SidebarWidthSchema = z.number().int().min(200).max(520);
+const SidebarWidthSchema = z.number().int().min(200).max(520);
 
 export const ShellPrefsSchema = z.strictObject({
   featureByServer: z
@@ -4051,9 +3846,12 @@ export function applyShellPatch(current: ShellPrefs, patch: ShellPatch): ShellPr
   return {
     featureByServer,
     sidebarCollapsed: patch.sidebarCollapsed ?? current.sidebarCollapsed,
-    ...((patch.sidebarWidth ?? current.sidebarWidth) !== undefined
-      ? { sidebarWidth: patch.sidebarWidth ?? current.sidebarWidth }
-      : {}),
+    ...defined(
+      'sidebarWidth',
+      (patch.sidebarWidth ?? current.sidebarWidth) === undefined
+        ? undefined
+        : (patch.sidebarWidth ?? current.sidebarWidth),
+    ),
   };
 }
 
@@ -4070,7 +3868,7 @@ export function applyShellPatch(current: ShellPrefs, patch: ShellPatch): ShellPr
  * presentation-only: no feature names, statuses, or other server-domain data
  * cross this channel.
  */
-export const MainWindowUiStateSchema = z.strictObject({
+const MainWindowUiStateSchema = z.strictObject({
   activeFeatureId: FeatureIdSchema.nullable(),
   runtimeReady: z.boolean(),
   sidebarCollapsed: z.boolean(),
@@ -4144,7 +3942,7 @@ export const SETTINGS_PANES = [
   'workspace-defaults',
 ] as const;
 
-export const SettingsPaneIdSchema = z.enum(SETTINGS_PANES);
+const SettingsPaneIdSchema = z.enum(SETTINGS_PANES);
 export type SettingsPaneId = z.output<typeof SettingsPaneIdSchema>;
 
 /** The Settings window's default footprint and the smallest usable one. */
@@ -4171,7 +3969,7 @@ export const SettingsWindowPrefsSchema = z.strictObject({
   focus: SettingsFocusSchema.optional(),
 });
 
-export type SettingsWindowPrefs = z.output<typeof SettingsWindowPrefsSchema>;
+type SettingsWindowPrefs = z.output<typeof SettingsWindowPrefsSchema>;
 
 export function defaultSettingsWindowPrefs(): SettingsWindowPrefs {
   return { pane: 'workspace-roots' };
@@ -4191,12 +3989,12 @@ export const SettingsOpenRequestSchema = z.strictObject({
   focus: SettingsFocusSchema.optional(),
 });
 
-export type SettingsOpenRequest = z.output<typeof SettingsOpenRequestSchema>;
+type SettingsOpenRequest = z.output<typeof SettingsOpenRequestSchema>;
 
 /** `opened: false` when the runtime is not ready yet, matching ⌘,'s gating. */
-export const SettingsOpenResultSchema = z.strictObject({ opened: z.boolean() });
+const SettingsOpenResultSchema = z.strictObject({ opened: z.boolean() });
 
-export type SettingsOpenResult = z.output<typeof SettingsOpenResultSchema>;
+type SettingsOpenResult = z.output<typeof SettingsOpenResultSchema>;
 
 export const SettingsSchema = z.strictObject({
   schemaVersion: z.literal(SETTINGS_SCHEMA_VERSION),
@@ -4249,22 +4047,19 @@ export function defaultSettings(): Settings {
 // only a user's unsaved text, its lookup key, and a save timestamp so that a
 // renderer can honestly distinguish recovered local text from server state.
 
-export const LOCAL_DRAFT_STORE_SCHEMA_VERSION = 1;
+const LOCAL_DRAFT_STORE_SCHEMA_VERSION = 1;
 export const MAX_LOCAL_REVIEW_DRAFT_BYTES = 1024 * 1024;
 
-export const ReviewIdSchema = z
+const ReviewIdSchema = z
   .string()
   .min(1)
   .max(200)
   .regex(/^[a-z0-9._-]+$/i);
-export type ReviewId = z.output<typeof ReviewIdSchema>;
 
-export const DraftRevisionSchema = z.string().min(1).max(512);
-export type DraftRevision = z.output<typeof DraftRevisionSchema>;
+const DraftRevisionSchema = z.string().min(1).max(512);
 
 /** An opaque runtime identity, typically the selected runtime's state dir. */
-export const RuntimeIdSchema = z.string().min(1).max(4096);
-export type RuntimeId = z.output<typeof RuntimeIdSchema>;
+const RuntimeIdSchema = z.string().min(1).max(4096);
 
 /** Fallback runtime identity when no runtime is selected. */
 export const DEFAULT_RUNTIME_ID = 'default-runtime';
@@ -4280,7 +4075,7 @@ export function reviewKindLabel(reviewKind: string): string {
 }
 
 /** The identity of exactly one unsaved review buffer. */
-export const ReviewDraftKeySchema = z.strictObject({
+const ReviewDraftKeySchema = z.strictObject({
   runtimeId: RuntimeIdSchema,
   featureId: FeatureIdSchema,
   reviewId: ReviewIdSchema,
@@ -4288,7 +4083,7 @@ export const ReviewDraftKeySchema = z.strictObject({
 });
 export type ReviewDraftKey = z.output<typeof ReviewDraftKeySchema>;
 
-export const LocalReviewDraftSchema = ReviewDraftKeySchema.extend({
+const LocalReviewDraftSchema = ReviewDraftKeySchema.extend({
   text: z.string().max(MAX_LOCAL_REVIEW_DRAFT_BYTES),
   savedAt: z.string().datetime({ offset: true }),
 });
@@ -4300,27 +4095,23 @@ export const LocalReviewDraftSaveRequestSchema = ReviewDraftKeySchema.extend({
 export type LocalReviewDraftSaveRequest = z.output<typeof LocalReviewDraftSaveRequestSchema>;
 
 /** Finds the most recent unsaved buffer for one review, regardless of its base revision. */
-export const LocalReviewDraftLookupRequestSchema = ReviewDraftKeySchema.pick({
+const LocalReviewDraftLookupRequestSchema = ReviewDraftKeySchema.pick({
   runtimeId: true,
   featureId: true,
   reviewId: true,
 }).extend({ baseDraftRevision: DraftRevisionSchema.optional() });
 export type LocalReviewDraftLookupRequest = z.output<typeof LocalReviewDraftLookupRequestSchema>;
 
-export const LocalReviewDraftDiscardRequestSchema = ReviewDraftKeySchema;
-export type LocalReviewDraftDiscardRequest = z.output<typeof LocalReviewDraftDiscardRequestSchema>;
-
-export const LocalReviewDraftDiscardResultSchema = z.strictObject({ discarded: z.boolean() });
-export type LocalReviewDraftDiscardResult = z.output<typeof LocalReviewDraftDiscardResultSchema>;
+const LocalReviewDraftDiscardRequestSchema = ReviewDraftKeySchema;
+type LocalReviewDraftDiscardRequest = z.output<typeof LocalReviewDraftDiscardRequestSchema>;
 
 /** Disk-only envelope. Versioning keeps incompatible persisted content safe. */
 export const LocalReviewDraftStoreSchema = z.strictObject({
   schemaVersion: z.literal(LOCAL_DRAFT_STORE_SCHEMA_VERSION),
   drafts: z.array(LocalReviewDraftSchema).max(20),
 });
-export type LocalReviewDraftStore = z.output<typeof LocalReviewDraftStoreSchema>;
 
-export const ReviewSessionSchema = z.strictObject({
+const ReviewSessionSchema = z.strictObject({
   featureId: FeatureIdSchema,
   reviewId: ReviewIdSchema,
   reviewMode: z.string().min(1).max(200),
@@ -4334,8 +4125,8 @@ export const ReviewSessionSchema = z.strictObject({
 });
 export type ReviewSession = z.output<typeof ReviewSessionSchema>;
 
-export const ReviewReadRequestSchema = z.strictObject({ featureId: FeatureIdSchema });
-export type ReviewReadRequest = z.output<typeof ReviewReadRequestSchema>;
+const ReviewReadRequestSchema = z.strictObject({ featureId: FeatureIdSchema });
+type ReviewReadRequest = z.output<typeof ReviewReadRequestSchema>;
 export const ReviewSaveRequestSchema = ReviewReadRequestSchema.extend({
   reviewId: ReviewIdSchema,
   baseRevision: DraftRevisionSchema,
@@ -4353,7 +4144,7 @@ export const ReviewDecisionRequestSchema = ReviewReadRequestSchema.extend({
   decision: z.enum(['proceed', 'iterate']),
 });
 export type ReviewDecisionRequest = z.output<typeof ReviewDecisionRequestSchema>;
-export const ReviewValidationSchema = z.strictObject({
+const ReviewValidationSchema = z.strictObject({
   applicable: z.boolean(),
   valid: z.boolean(),
   revision: DraftRevisionSchema,
@@ -4362,24 +4153,24 @@ export const ReviewValidationSchema = z.strictObject({
     .max(100),
 });
 export type ReviewValidation = z.output<typeof ReviewValidationSchema>;
-export const ReviewConflictSchema = z.strictObject({
+const ReviewConflictSchema = z.strictObject({
   type: z.literal('conflict'),
 });
-export const ReviewSaveResultSchema = z.discriminatedUnion('type', [
+const ReviewSaveResultSchema = z.discriminatedUnion('type', [
   z.strictObject({ type: z.literal('saved'), session: ReviewSessionSchema }),
   ReviewConflictSchema,
 ]);
-export type ReviewSaveResult = z.output<typeof ReviewSaveResultSchema>;
-export const ReviewDecisionResultSchema = z.discriminatedUnion('type', [
+type ReviewSaveResult = z.output<typeof ReviewSaveResultSchema>;
+const ReviewDecisionResultSchema = z.discriminatedUnion('type', [
   z.strictObject({ type: z.literal('saved'), result: z.string().min(1).max(500) }),
   ReviewConflictSchema,
 ]);
-export type ReviewDecisionResult = z.output<typeof ReviewDecisionResultSchema>;
+type ReviewDecisionResult = z.output<typeof ReviewDecisionResultSchema>;
 
 // --- Structured configuration (feature config, workspace defaults, model catalogue) ---
 
 /** Per-phase model assignments. Empty/omitted means "use the default". */
-export const PhaseModelsSchema = z.strictObject({
+const PhaseModelsSchema = z.strictObject({
   inquiry: z.string().max(200).optional(),
   research: z.string().max(200).optional(),
   planning: z.string().max(200).optional(),
@@ -4391,7 +4182,7 @@ export const PhaseModelsSchema = z.strictObject({
 });
 export type PhaseModels = z.output<typeof PhaseModelsSchema>;
 
-export const PhaseEffortSchema = z.strictObject({
+const PhaseEffortSchema = z.strictObject({
   inquiry: EffortLevelSchema.optional(),
   research: EffortLevelSchema.optional(),
   planning: EffortLevelSchema.optional(),
@@ -4402,7 +4193,7 @@ export const PhaseEffortSchema = z.strictObject({
 });
 export type PhaseEffort = z.output<typeof PhaseEffortSchema>;
 
-export const CheckpointsSchema = z.strictObject({
+const CheckpointsSchema = z.strictObject({
   inquiryReview: z.boolean(),
   researchReview: z.boolean(),
   designReview: z.boolean(),
@@ -4414,13 +4205,13 @@ export const CheckpointsSchema = z.strictObject({
 });
 export type Checkpoints = z.output<typeof CheckpointsSchema>;
 
-export const InquirenessSchema = z.enum(['none', 'medium', 'high']);
+const InquirenessSchema = z.enum(['none', 'medium', 'high']);
 export type Inquireness = z.output<typeof InquirenessSchema>;
 
-export const InputNotificationsModeSchema = z.enum(['default', 'enabled', 'muted']);
+const InputNotificationsModeSchema = z.enum(['default', 'enabled', 'muted']);
 export type InputNotificationsMode = z.output<typeof InputNotificationsModeSchema>;
 
-export const FeatureConfigSchema = z.strictObject({
+const FeatureConfigSchema = z.strictObject({
   models: PhaseModelsSchema,
   effort: PhaseEffortSchema,
   inquireness: InquirenessSchema,
@@ -4431,7 +4222,7 @@ export const FeatureConfigSchema = z.strictObject({
 });
 export type FeatureConfig = z.output<typeof FeatureConfigSchema>;
 
-export const FeatureConfigSnapshotSchema = z.strictObject({
+const FeatureConfigSnapshotSchema = z.strictObject({
   featureId: z.string().min(1).max(200),
   current: FeatureConfigSchema,
   defaults: FeatureConfigSchema,
@@ -4446,7 +4237,7 @@ export const FeatureConfigUpdateRequestSchema = z.strictObject({
 });
 export type FeatureConfigUpdateRequest = z.output<typeof FeatureConfigUpdateRequestSchema>;
 
-export const WorkspaceDefaultsSchema = z.strictObject({
+const WorkspaceDefaultsSchema = z.strictObject({
   models: PhaseModelsSchema,
   effort: PhaseEffortSchema,
   inquireness: InquirenessSchema,
@@ -4460,7 +4251,7 @@ export const WorkspaceDefaultsSchema = z.strictObject({
 });
 export type WorkspaceDefaults = z.output<typeof WorkspaceDefaultsSchema>;
 
-export const CatalogueModelSchema = z.strictObject({
+const CatalogueModelSchema = z.strictObject({
   id: z.string().min(1).max(200),
   displayName: z.string().max(200).optional(),
   aliases: z.array(z.string().min(1).max(200)).max(20).optional(),
@@ -4470,7 +4261,7 @@ export const CatalogueModelSchema = z.strictObject({
 });
 export type CatalogueModel = z.output<typeof CatalogueModelSchema>;
 
-export const ModelCatalogueSchema = z.strictObject({
+const ModelCatalogueSchema = z.strictObject({
   providerOrder: z.array(z.string().max(100)).max(20),
   chatDefaultEffort: z.record(z.string().max(100), EffortLevelSchema).optional(),
   providerModels: z.record(z.string().max(100), z.array(CatalogueModelSchema).max(200)),
@@ -4484,13 +4275,13 @@ export const ModelCatalogueSchema = z.strictObject({
 });
 export type ModelCatalogue = z.output<typeof ModelCatalogueSchema>;
 
-export const ProviderNameSchema = z
+const ProviderNameSchema = z
   .string()
   .min(1)
   .max(100)
   .regex(/^[a-zA-Z0-9._-]+$/);
 
-export const ProviderModelRefreshResultSchema = z.strictObject({
+const ProviderModelRefreshResultSchema = z.strictObject({
   readiness: ReadinessSnapshotSchema,
   catalogue: ModelCatalogueSchema,
 });
@@ -4498,515 +4289,353 @@ export type ProviderModelRefreshResult = z.output<typeof ProviderModelRefreshRes
 
 // --- Per-channel contracts ---------------------------------------------------
 
-export interface IpcContract {
+interface IpcContract {
   /** Tuple schema for the invoke arguments. */
   request: z.ZodType<readonly unknown[]>;
   /** Schema for the successful response value. */
   response: z.ZodType;
 }
 
-export const ipcContracts: Record<IpcChannel, IpcContract> = {
-  [IPC_CHANNELS.connectionGetStatus]: {
-    request: z.tuple([]),
-    response: ConnectionStateSchema,
-  },
-  [IPC_CHANNELS.connectionRetry]: {
-    request: z.tuple([]),
-    response: ConnectionStateSchema,
-  },
-  [IPC_CHANNELS.connectionRestart]: {
-    request: z.tuple([]),
-    response: ConnectionStateSchema,
-  },
-  [IPC_CHANNELS.connectionChooseServer]: {
+export const ipcContracts = {
+  getConnectionStatus: { request: z.tuple([]), response: ConnectionStateSchema },
+  retryConnection: { request: z.tuple([]), response: ConnectionStateSchema },
+  restartConnection: { request: z.tuple([]), response: ConnectionStateSchema },
+  chooseConnectionServer: {
     request: z.tuple([ChooseServerRequestSchema]),
     response: ConnectionStateSchema,
   },
-  [IPC_CHANNELS.connectionSwitchServer]: {
+  switchConnectionServer: {
     request: z.tuple([SwitchServerRequestSchema]),
     response: ConnectionStateSchema,
   },
-  [IPC_CHANNELS.connectionStartLocal]: {
-    request: z.tuple([]),
-    response: ConnectionStateSchema,
-  },
-  [IPC_CHANNELS.serversList]: {
-    request: z.tuple([]),
-    response: ServerListSnapshotSchema,
-  },
-  [IPC_CHANNELS.serversProbe]: {
+  startLocalRuntime: { request: z.tuple([]), response: ConnectionStateSchema },
+  listServers: { request: z.tuple([]), response: ServerListSnapshotSchema },
+  probeServers: {
     request: z.tuple([ServersProbeRequestSchema]),
     response: ServerListSnapshotSchema,
   },
-  [IPC_CHANNELS.remoteServerAdd]: {
+  addRemoteServer: {
     request: z.tuple([RemoteServerAddRequestSchema]),
     response: RemoteServerAddResultSchema,
   },
-  [IPC_CHANNELS.serverRemove]: {
-    request: z.tuple([ServerRemoveRequestSchema]),
-    response: ConnectionStateSchema,
-  },
-  [IPC_CHANNELS.serverTokenStatus]: {
+  removeServer: { request: z.tuple([ServerRemoveRequestSchema]), response: ConnectionStateSchema },
+  getServerTokenStatus: {
     request: z.tuple([ServerTokenStatusRequestSchema]),
     response: ServerTokenStatusResultSchema,
   },
-  [IPC_CHANNELS.settingsGet]: {
-    request: z.tuple([]),
-    response: SettingsSchema,
-  },
-  [IPC_CHANNELS.settingsUpdate]: {
-    request: z.tuple([SettingsPatchSchema]),
-    response: SettingsSchema,
-  },
-  [IPC_CHANNELS.windowOpenSettings]: {
+  getSettings: { request: z.tuple([]), response: SettingsSchema },
+  updateSettings: { request: z.tuple([SettingsPatchSchema]), response: SettingsSchema },
+  openSettingsWindow: {
     request: z.tuple([SettingsOpenRequestSchema]),
     response: SettingsOpenResultSchema,
   },
-  [IPC_CHANNELS.themeGet]: {
-    request: z.tuple([]),
-    response: ThemeInfoSchema,
-  },
-  [IPC_CHANNELS.themeSet]: {
-    request: z.tuple([ThemePreferenceSchema]),
-    response: ThemeInfoSchema,
-  },
-  [IPC_CHANNELS.runtimeReadinessGet]: {
-    request: z.tuple([]),
-    response: RuntimeReadinessSnapshotSchema,
-  },
-  [IPC_CHANNELS.runtimeReadinessRefresh]: {
-    request: z.tuple([]),
-    response: RuntimeReadinessSnapshotSchema,
-  },
-  [IPC_CHANNELS.readinessGet]: {
-    request: z.tuple([]),
-    response: ReadinessSnapshotSchema,
-  },
-  [IPC_CHANNELS.readinessRefresh]: {
-    request: z.tuple([]),
-    response: ReadinessSnapshotSchema,
-  },
-  [IPC_CHANNELS.workspacePickDirectory]: {
-    request: z.tuple([]),
-    response: PickedDirectorySchema,
-  },
-  [IPC_CHANNELS.workspaceAddRoot]: {
+  getThemePreference: { request: z.tuple([]), response: ThemeInfoSchema },
+  setThemePreference: { request: z.tuple([ThemePreferenceSchema]), response: ThemeInfoSchema },
+  getRuntimeReadiness: { request: z.tuple([]), response: RuntimeReadinessSnapshotSchema },
+  refreshRuntimeReadiness: { request: z.tuple([]), response: RuntimeReadinessSnapshotSchema },
+  getReadiness: { request: z.tuple([]), response: ReadinessSnapshotSchema },
+  refreshReadiness: { request: z.tuple([]), response: ReadinessSnapshotSchema },
+  pickWorkspaceDirectory: { request: z.tuple([]), response: PickedDirectorySchema },
+  addWorkspaceRoot: { request: z.tuple([AbsolutePathSchema]), response: ReadinessSnapshotSchema },
+  removeWorkspaceRoot: {
     request: z.tuple([AbsolutePathSchema]),
     response: ReadinessSnapshotSchema,
   },
-  [IPC_CHANNELS.workspaceRemoveRoot]: {
-    request: z.tuple([AbsolutePathSchema]),
-    response: ReadinessSnapshotSchema,
-  },
-  [IPC_CHANNELS.workspaceReorderRoots]: {
+  reorderWorkspaceRoots: {
     request: z.tuple([z.array(AbsolutePathSchema).max(100)]),
     response: ReadinessSnapshotSchema,
   },
-  [IPC_CHANNELS.workspaceInitRepository]: {
+  initRepository: {
     request: z.tuple([InitRepositoryRequestSchema]),
     response: ReadinessSnapshotSchema,
   },
-  [IPC_CHANNELS.cloneStart]: {
-    request: z.tuple([CloneStartRequestSchema]),
-    response: CloneOperationSchema,
-  },
-  [IPC_CHANNELS.cloneOperationGet]: {
+  startClone: { request: z.tuple([CloneStartRequestSchema]), response: CloneOperationSchema },
+  getCloneOperation: {
     request: z.tuple([z.string().min(1).max(64)]),
     response: CloneOperationSchema,
   },
-  [IPC_CHANNELS.cloneOperationsList]: {
-    request: z.tuple([]),
-    response: CloneOperationsListSchema,
-  },
-  [IPC_CHANNELS.cloneOperationCancel]: {
+  listCloneOperations: { request: z.tuple([]), response: CloneOperationsListSchema },
+  cancelCloneOperation: {
     request: z.tuple([z.string().min(1).max(64)]),
     response: CloneOperationSchema,
   },
-  [IPC_CHANNELS.cloneOperationCleanup]: {
+  retryCloneCleanup: {
     request: z.tuple([z.string().min(1).max(64)]),
     response: CloneOperationSchema,
   },
-  [IPC_CHANNELS.cloneOperationRetry]: {
+  retryCloneOperation: {
     request: z.tuple([z.string().min(1).max(64)]),
     response: CloneOperationSchema,
   },
-  [IPC_CHANNELS.createRepository]: {
+  createRepository: {
     request: z.tuple([CreateRepositoryRequestSchema]),
     response: CreateRepositoryResultSchema,
   },
-  [IPC_CHANNELS.initializeRepository]: {
+  initializeRepository: {
     request: z.tuple([InitializeRepositoryRequestSchema]),
     response: InitializeRepositoryResultSchema,
   },
-  [IPC_CHANNELS.repositoriesList]: {
-    request: z.tuple([]),
-    response: z.array(RepositoryStateSchema),
-  },
-  [IPC_CHANNELS.featuresList]: {
-    request: z.tuple([]),
-    response: FeaturesListResultSchema,
-  },
-  [IPC_CHANNELS.featuresGet]: {
-    request: z.tuple([FeatureIdSchema]),
-    response: FeatureSnapshotSchema,
-  },
-  [IPC_CHANNELS.featuresCreate]: {
+  listRepositories: { request: z.tuple([]), response: z.array(RepositoryStateSchema) },
+  listFeatures: { request: z.tuple([]), response: FeaturesListResultSchema },
+  getFeature: { request: z.tuple([FeatureIdSchema]), response: FeatureSnapshotSchema },
+  createFeature: {
     request: z.tuple([CreateFeatureInputSchema]),
     response: CreateFeatureResultSchema,
   },
-  [IPC_CHANNELS.featuresSetup]: {
+  dispatchFeatureSetup: {
     request: z.tuple([FeatureIdSchema]),
     response: SetupDispatchResultSchema,
   },
-  [IPC_CHANNELS.featuresDispatchAction]: {
+  dispatchFeatureAction: {
     request: z.tuple([FeatureActionRequestSchema]),
     response: FeatureActionResultSchema,
   },
-  [IPC_CHANNELS.attentionGet]: { request: z.tuple([]), response: AttentionSnapshotSchema },
-  [IPC_CHANNELS.attentionAnswerPermission]: {
+  getAttention: { request: z.tuple([]), response: AttentionSnapshotSchema },
+  answerPermission: {
     request: z.tuple([PermissionDecisionRequestSchema]),
     response: AttentionActionResultSchema,
   },
-  [IPC_CHANNELS.attentionAnswerQuestions]: {
+  answerQuestions: {
     request: z.tuple([AskUserAnswerRequestSchema]),
     response: AttentionActionResultSchema,
   },
-  [IPC_CHANNELS.attentionSendHelp]: {
-    request: z.tuple([HelpAnswerRequestSchema]),
-    response: AttentionActionResultSchema,
-  },
-  [IPC_CHANNELS.attentionSaveGateDraft]: {
+  sendHelp: { request: z.tuple([HelpAnswerRequestSchema]), response: AttentionActionResultSchema },
+  saveGateDraft: {
     request: z.tuple([GateDraftRequestSchema]),
     response: AttentionActionResultSchema,
   },
-  [IPC_CHANNELS.attentionResolveGate]: {
+  resolveGate: {
     request: z.tuple([GateResumeRequestSchema]),
     response: AttentionActionResultSchema,
   },
-  [IPC_CHANNELS.attentionWaiveTestingContract]: {
+  waiveTestingContract: {
     request: z.tuple([TestingContractWaiveRequestSchema]),
     response: TestingContractWaiveResultSchema,
   },
-  [IPC_CHANNELS.attentionGetTestingContract]: {
+  getTestingContract: {
     request: z.tuple([TestingContractRequestSchema]),
     response: TestingContractSnapshotSchema,
   },
-  [IPC_CHANNELS.sessionsList]: {
-    request: z.tuple([]),
-    response: z.array(SessionSummarySchema).max(1000),
-  },
-  [IPC_CHANNELS.sessionsGet]: {
-    request: z.tuple([SessionIdSchema]),
-    response: SessionDetailSchema,
-  },
-  [IPC_CHANNELS.sessionsTranscript]: {
+  listSessions: { request: z.tuple([]), response: z.array(SessionSummarySchema).max(1000) },
+  getSession: { request: z.tuple([SessionIdSchema]), response: SessionDetailSchema },
+  getSessionTranscript: {
     request: z.tuple([SessionTranscriptRequestSchema]),
     response: SessionTranscriptSchema,
   },
-  [IPC_CHANNELS.sessionsOutputOpen]: {
+  openSessionOutput: {
     request: z.tuple([SessionOutputOpenRequestSchema]),
     response: SessionOutputOpenResultSchema,
   },
-  [IPC_CHANNELS.sessionsOutputCancel]: {
-    request: z.tuple([SessionOutputCancelRequestSchema]),
-    response: SessionOutputCancelResultSchema,
-  },
-  [IPC_CHANNELS.supervisorStateGet]: {
-    request: z.tuple([]),
-    response: SupervisorStateSchema,
-  },
-  [IPC_CHANNELS.supervisorSettingsUpdate]: {
+  cancelSessionOutput: { request: z.tuple([SubscriptionIdSchema]), response: z.boolean() },
+  getSupervisorState: { request: z.tuple([]), response: SupervisorStateSchema },
+  updateSupervisorSettings: {
     request: z.tuple([SupervisorSettingsRequestSchema]),
     response: SupervisorStateSchema,
   },
-  [IPC_CHANNELS.supervisorPendingChangeCancel]: {
+  cancelSupervisorPendingChange: {
     request: z.tuple([SupervisorPendingChangeCancelRequestSchema]),
     response: SupervisorStateSchema,
   },
-  [IPC_CHANNELS.supervisorPersistFailureDismiss]: {
-    request: z.tuple([]),
-    response: SupervisorStateSchema,
-  },
-  [IPC_CHANNELS.supervisorTranscriptGet]: {
+  dismissSupervisorPersistFailure: { request: z.tuple([]), response: SupervisorStateSchema },
+  getSupervisorTranscript: {
     request: z.tuple([SupervisorTranscriptRequestSchema]),
     response: SupervisorTranscriptPageSchema,
   },
-  [IPC_CHANNELS.supervisorMessageSend]: {
+  sendSupervisorMessage: {
     request: z.tuple([SupervisorMessageRequestSchema]),
     response: SupervisorMessageResultSchema,
   },
-  [IPC_CHANNELS.supervisorInterrupt]: {
-    request: z.tuple([]),
-    response: SupervisorActionResultSchema,
-  },
-  [IPC_CHANNELS.supervisorEnd]: {
-    request: z.tuple([]),
-    response: SupervisorActionResultSchema,
-  },
-  [IPC_CHANNELS.supervisorReset]: {
-    request: z.tuple([]),
-    response: SupervisorResetResultSchema,
-  },
-  [IPC_CHANNELS.creationDefaults]: {
-    request: z.tuple([]),
-    response: CreationDefaultsSchema,
-  },
-  [IPC_CHANNELS.creationSources]: {
+  interruptSupervisor: { request: z.tuple([]), response: SupervisorActionResultSchema },
+  endSupervisor: { request: z.tuple([]), response: SupervisorActionResultSchema },
+  resetSupervisor: { request: z.tuple([]), response: SupervisorResetResultSchema },
+  getCreationDefaults: { request: z.tuple([]), response: CreationDefaultsSchema },
+  inspectRepositorySources: {
     request: z.tuple([RepositorySourcesRequestSchema]),
     response: RepositorySourcesResultSchema,
   },
-  [IPC_CHANNELS.creationOriginStatus]: {
+  checkRepositoryOriginStatus: {
     request: z.tuple([RepositoryOriginStatusRequestSchema]),
     response: RepositoryOriginStatusResultSchema,
   },
-  [IPC_CHANNELS.creationUpdateSource]: {
+  updateRepositorySource: {
     request: z.tuple([RepositoryUpdateSourceRequestSchema]),
     response: RepositoryUpdateSourceResultSchema,
   },
-  [IPC_CHANNELS.creationReconcileSourceUpdate]: {
+  reconcileSourceUpdate: {
     request: z.tuple([RepositorySourceReconcileRequestSchema]),
     response: RepositorySourceReconcileResultSchema,
   },
-  [IPC_CHANNELS.creationPickFiles]: {
+  pickCreationFiles: {
     request: z.tuple([CreationFileKindSchema]),
     response: PickedCreationFilesSchema,
   },
-  [IPC_CHANNELS.creationUploadFiles]: {
+  uploadCreationFiles: {
     request: z.tuple([
       CreationFileKindSchema,
       z.array(AbsolutePathSchema).max(CREATION_ATTACHMENT_LIMIT),
     ]),
     response: UploadCreationFilesResultSchema,
   },
-  [IPC_CHANNELS.clipboardReadImage]: {
-    request: z.tuple([]),
-    response: PickedCreationFilesSchema,
-  },
-  [IPC_CHANNELS.creationSearchFiles]: {
+  readClipboardImage: { request: z.tuple([]), response: PickedCreationFilesSchema },
+  searchCreationFiles: {
     request: z.tuple([CreationFileSearchRequestSchema]),
     response: CreationFileSearchResultSchema,
   },
-  [IPC_CHANNELS.creationCancelFileSearch]: {
-    request: z.tuple([z.string().uuid()]),
-    response: z.strictObject({ cancelled: z.boolean() }),
-  },
-  [IPC_CHANNELS.reviewDraftsLoad]: {
+  cancelCreationFileSearch: { request: z.tuple([z.string().uuid()]), response: z.boolean() },
+  loadLocalReviewDraft: {
     request: z.tuple([LocalReviewDraftLookupRequestSchema]),
     response: LocalReviewDraftSchema.nullable(),
   },
-  [IPC_CHANNELS.reviewDraftsSave]: {
+  saveLocalReviewDraft: {
     request: z.tuple([LocalReviewDraftSaveRequestSchema]),
     response: LocalReviewDraftSchema,
   },
-  [IPC_CHANNELS.reviewDraftsDiscard]: {
+  discardLocalReviewDraft: {
     request: z.tuple([LocalReviewDraftDiscardRequestSchema]),
-    response: LocalReviewDraftDiscardResultSchema,
+    response: z.boolean(),
   },
-  [IPC_CHANNELS.reviewsRead]: {
-    request: z.tuple([ReviewReadRequestSchema]),
-    response: ReviewSessionSchema,
-  },
-  [IPC_CHANNELS.reviewsOpen]: {
-    request: z.tuple([ReviewReadRequestSchema]),
-    response: ReviewSessionSchema,
-  },
-  [IPC_CHANNELS.reviewsSave]: {
-    request: z.tuple([ReviewSaveRequestSchema]),
-    response: ReviewSaveResultSchema,
-  },
-  [IPC_CHANNELS.reviewsValidate]: {
+  readReview: { request: z.tuple([ReviewReadRequestSchema]), response: ReviewSessionSchema },
+  openReview: { request: z.tuple([ReviewReadRequestSchema]), response: ReviewSessionSchema },
+  saveReview: { request: z.tuple([ReviewSaveRequestSchema]), response: ReviewSaveResultSchema },
+  validateReview: {
     request: z.tuple([ReviewValidateRequestSchema]),
     response: ReviewValidationSchema,
   },
-  [IPC_CHANNELS.reviewsDecide]: {
+  decideReview: {
     request: z.tuple([ReviewDecisionRequestSchema]),
     response: ReviewDecisionResultSchema,
   },
-  [IPC_CHANNELS.configFeatureGet]: {
+  getFeatureConfig: {
     request: z.tuple([z.string().min(1).max(200)]),
     response: FeatureConfigSnapshotSchema,
   },
-  [IPC_CHANNELS.configFeatureUpdate]: {
+  updateFeatureConfig: {
     request: z.tuple([FeatureConfigUpdateRequestSchema]),
     response: FeatureConfigSnapshotSchema,
   },
-  [IPC_CHANNELS.configDefaultsGet]: {
-    request: z.tuple([]),
-    response: WorkspaceDefaultsSchema,
-  },
-  [IPC_CHANNELS.configDefaultsUpdate]: {
+  getWorkspaceDefaults: { request: z.tuple([]), response: WorkspaceDefaultsSchema },
+  updateWorkspaceDefaults: {
     request: z.tuple([WorkspaceDefaultsSchema]),
     response: WorkspaceDefaultsSchema,
   },
-  [IPC_CHANNELS.configModelCatalogue]: {
-    request: z.tuple([]),
-    response: ModelCatalogueSchema,
-  },
-  [IPC_CHANNELS.configProviderModelsRefresh]: {
+  getModelCatalogue: { request: z.tuple([]), response: ModelCatalogueSchema },
+  refreshProviderModels: {
     request: z.tuple([ProviderNameSchema]),
     response: ProviderModelRefreshResultSchema,
   },
-  [IPC_CHANNELS.runsList]: {
-    request: z.tuple([RunListRequestSchema]),
-    response: RunListResultSchema,
-  },
-  [IPC_CHANNELS.runsGet]: {
-    request: z.tuple([RunGetRequestSchema]),
-    response: RunDetailViewSchema,
-  },
-  [IPC_CHANNELS.runSessionsList]: {
+  listRuns: { request: z.tuple([RunListRequestSchema]), response: RunListResultSchema },
+  getRun: { request: z.tuple([RunGetRequestSchema]), response: RunDetailViewSchema },
+  listRunSessions: {
     request: z.tuple([RunGetRequestSchema]),
     response: RunSessionsListResultSchema,
   },
-  [IPC_CHANNELS.livePreviewGet]: {
-    request: z.tuple([FeatureIdSchema]),
-    response: LivePreviewViewSchema,
-  },
-  [IPC_CHANNELS.runArtifactsList]: {
+  getLivePreview: { request: z.tuple([FeatureIdSchema]), response: LivePreviewViewSchema },
+  listRunArtifacts: {
     request: z.tuple([RunArtifactsListRequestSchema]),
     response: RunArtifactsListResultSchema,
   },
-  [IPC_CHANNELS.runLogsList]: {
+  listRunLogs: {
     request: z.tuple([RunArtifactsListRequestSchema]),
     response: RunLogsListResultSchema,
   },
-  [IPC_CHANNELS.runArtifactContent]: {
+  getRunArtifactContent: {
     request: z.tuple([RunArtifactContentRequestSchema]),
     response: RunTextContentSchema,
   },
-  [IPC_CHANNELS.runLogContent]: {
+  getRunLogContent: {
     request: z.tuple([RunLogContentRequestSchema]),
     response: RunTextContentSchema,
   },
-  [IPC_CHANNELS.rewindPreview]: {
+  getRewindPreview: {
     request: z.tuple([RewindPreviewRequestSchema]),
     response: RewindPreviewViewSchema,
   },
-  [IPC_CHANNELS.rewindExecute]: {
+  executeRewind: {
     request: z.tuple([RewindExecuteRequestSchema]),
     response: FeatureActionResultSchema,
   },
-  [IPC_CHANNELS.completionPreflight]: {
+  preflightCompletion: {
     request: z.tuple([CompletionPreflightRequestSchema]),
     response: CompletionPreflightResultSchema,
   },
-  [IPC_CHANNELS.repositoryDiff]: {
+  getRepositoryDiff: {
     request: z.tuple([RepositoryDiffRequestSchema]),
     response: RepositoryDiffResultSchema,
   },
-  [IPC_CHANNELS.publishDescription]: {
+  generatePublishDescription: {
     request: z.tuple([PublishDescriptionRequestSchema]),
     response: PublishDescriptionResultSchema,
   },
-  [IPC_CHANNELS.openExternal]: {
+  openExternal: {
     request: z.tuple([OpenExternalRequestSchema]),
     response: z.strictObject({ ok: z.boolean() }),
   },
-  [IPC_CHANNELS.revealPath]: {
-    request: z.tuple([RevealPathRequestSchema]),
-    response: RevealPathResultSchema,
-  },
-  [IPC_CHANNELS.clipboardWriteText]: {
+  revealPath: { request: z.tuple([RevealPathRequestSchema]), response: RevealPathResultSchema },
+  writeClipboardText: {
     request: z.tuple([z.string().min(1).max(4096)]),
     response: z.strictObject({ ok: z.boolean() }),
   },
-  [IPC_CHANNELS.uiStatePublish]: {
+  publishUiState: {
     request: z.tuple([MainWindowUiStateSchema]),
     response: z.strictObject({ accepted: z.boolean() }),
   },
-  [IPC_CHANNELS.featuresRebase]: {
+  launchRebaseChild: {
     request: z.tuple([LaunchRebaseChildRequestSchema]),
     response: LaunchRebaseChildResultSchema,
   },
-  [IPC_CHANNELS.featuresRefactor]: {
+  launchRefactorChild: {
     request: z.tuple([LaunchRefactorChildRequestSchema]),
     response: LaunchRefactorChildResultSchema,
   },
-  [IPC_CHANNELS.featuresRefactorDiscard]: {
+  discardRefactorChild: {
     request: z.tuple([DiscardRefactorChildRequestSchema]),
     response: DiscardRefactorChildResultSchema,
   },
-  [IPC_CHANNELS.featuresReviewFeedbackFetch]: {
+  fetchReviewFeedback: {
     request: z.tuple([FetchReviewFeedbackRequestSchema]),
     response: FetchReviewFeedbackResultSchema,
   },
-  [IPC_CHANNELS.featuresReviewFeedbackSelection]: {
+  updateReviewFeedbackSelection: {
     request: z.tuple([UpdateReviewFeedbackSelectionRequestSchema]),
     response: UpdateReviewFeedbackSelectionResultSchema,
   },
-  [IPC_CHANNELS.featuresReviewFeedbackLaunch]: {
+  launchReviewFeedbackChild: {
     request: z.tuple([LaunchReviewFeedbackChildRequestSchema]),
     response: LaunchReviewFeedbackChildResultSchema,
   },
-  [IPC_CHANNELS.featuresDeleteCascade]: {
+  deleteFeatureCascade: {
     request: z.tuple([DeleteFeatureCascadeRequestSchema]),
     response: DeleteFeatureCascadeResultSchema,
   },
-  [IPC_CHANNELS.recoveryScan]: {
-    request: z.tuple([]),
-    response: RecoverySnapshotSchema,
-  },
-  [IPC_CHANNELS.recoveryExecute]: {
+  scanRecovery: { request: z.tuple([]), response: RecoverySnapshotSchema },
+  executeRecovery: {
     request: z.tuple([RecoveryExecuteRequestSchema]),
     response: RecoveryExecuteResultSchema,
   },
-  [IPC_CHANNELS.recoveryLogRead]: {
+  readRecoveryLog: {
     request: z.tuple([RecoveryLogReadRequestSchema]),
     response: RecoveryLogReadResultSchema,
   },
-  [IPC_CHANNELS.bulkPreview]: {
-    request: z.tuple([]),
-    response: BulkPreviewSchema,
-  },
-  [IPC_CHANNELS.updatesGet]: {
-    request: z.tuple([]),
-    response: UpdateStateSchema,
-  },
-  [IPC_CHANNELS.updatesCheck]: {
-    request: z.tuple([]),
-    response: UpdateStateSchema,
-  },
-  [IPC_CHANNELS.updatesInstallWhenIdle]: {
-    request: z.tuple([]),
-    response: UpdateStateSchema,
-  },
-  [IPC_CHANNELS.updatesInstallNow]: {
+  bulkPreview: { request: z.tuple([]), response: BulkPreviewSchema },
+  getUpdates: { request: z.tuple([]), response: UpdateStateSchema },
+  checkForUpdates: { request: z.tuple([]), response: UpdateStateSchema },
+  installUpdateWhenIdle: { request: z.tuple([]), response: UpdateStateSchema },
+  installUpdateNow: {
     request: z.tuple([UpdateInstallNowRequestSchema]),
     response: UpdateStateSchema,
   },
-  [IPC_CHANNELS.updatesRestart]: {
-    request: z.tuple([]),
-    response: UpdateStateSchema,
-  },
-  [IPC_CHANNELS.serverUpdatesGet]: {
-    request: z.tuple([]),
-    response: ServerUpdateStateSchema,
-  },
-  [IPC_CHANNELS.serverUpdatesCheck]: {
-    request: z.tuple([]),
-    response: ServerUpdateStateSchema,
-  },
-  [IPC_CHANNELS.serverUpdatesInstall]: {
+  restartToUpdate: { request: z.tuple([]), response: UpdateStateSchema },
+  getServerUpdate: { request: z.tuple([]), response: ServerUpdateStateSchema },
+  checkServerUpdate: { request: z.tuple([]), response: ServerUpdateStateSchema },
+  installServerUpdate: {
     request: z.tuple([ServerUpdateInstallRequestSchema]),
     response: ServerUpdateStateSchema,
   },
-  [IPC_CHANNELS.serverUpdatesCancel]: {
-    request: z.tuple([]),
-    response: ServerUpdateStateSchema,
-  },
-  [IPC_CHANNELS.diagnosticsGet]: {
-    request: z.tuple([]),
-    response: DiagnosticsSnapshotSchema,
-  },
-  [IPC_CHANNELS.diagnosticsReveal]: {
-    request: z.tuple([]),
-    response: z.strictObject({ ok: z.boolean() }),
-  },
-  [IPC_CHANNELS.diagnosticsClear]: {
-    request: z.tuple([]),
-    response: DiagnosticsSnapshotSchema,
-  },
-};
+  cancelServerUpdate: { request: z.tuple([]), response: ServerUpdateStateSchema },
+  getDiagnostics: { request: z.tuple([]), response: DiagnosticsSnapshotSchema },
+  revealDiagnostics: { request: z.tuple([]), response: z.strictObject({ ok: z.boolean() }) },
+  clearDiagnostics: { request: z.tuple([]), response: DiagnosticsSnapshotSchema },
+} satisfies Record<IpcMethod, IpcContract>;
 
 // --- The narrow window API the preload exposes -------------------------------
 
@@ -5277,3 +4906,21 @@ export interface AgenticoApi {
   clearDiagnostics(): Promise<DiagnosticsSnapshot>;
   onAppEvent(listener: (event: AppEvent) => void): () => void;
 }
+
+type ApiChannelMethods = Exclude<
+  {
+    [Method in keyof AgenticoApi]: AgenticoApi[Method] extends (
+      ...args: never[]
+    ) => Promise<unknown>
+      ? Method
+      : never;
+  }[keyof AgenticoApi],
+  'importDroppedCreationFiles'
+>;
+
+const contractKeysMatchApi: [ApiChannelMethods] extends [IpcMethod]
+  ? [IpcMethod] extends [ApiChannelMethods]
+    ? true
+    : false
+  : false = true;
+void contractKeysMatchApi;

@@ -24,6 +24,7 @@ import (
 
 	"github.com/doordash-oss/agentic-orchestrator/internal/llm"
 	"github.com/doordash-oss/agentic-orchestrator/internal/llm/askuser"
+	"github.com/doordash-oss/agentic-orchestrator/internal/llm/claude"
 )
 
 // stdinDenyWatcher returns a channel that fires if anything resembling a
@@ -375,8 +376,9 @@ func TestRespondToAskUser_OnlyClearsMatching(t *testing.T) {
 		t.Error("HasPendingAskUserQuestion should remain true while ask-B is outstanding")
 	}
 
-	// A failed answer write (no subprocess attached here) must leave the
-	// request pending so it can be answered again.
+	// A failed answer write (a protocol whose stdin was never set here)
+	// must leave the request pending so it can be answered again.
+	s.protocol = claude.NewProtocol(llm.ProtocolOpts{})
 	if err := s.RespondToAskUser("ask-B", askuser.Resolved{}); err == nil {
 		t.Fatal("RespondToAskUser should fail without a provider pipe")
 	}

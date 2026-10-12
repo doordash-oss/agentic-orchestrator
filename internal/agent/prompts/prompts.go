@@ -43,13 +43,45 @@ var tmpl = template.Must(
 	template.New("agentic").Funcs(funcs).ParseFS(fs, "templates/*.tmpl", "partials/*.tmpl"),
 )
 
-// Render executes the named template against data and returns the result.
-// Templates are referenced by the name registered via {{ define "name" }};
-// see the .tmpl files under this package.
-func Render(name string, data any) (string, error) {
+// templateKey names a template or partial registered via {{ define "name" }}
+// in the .tmpl files under this package. Every template Go code renders has
+// exactly one constant below; the constant's value is the define name.
+type templateKey string
+
+const (
+	TemplateAutoReviewFormatRetry        templateKey = "autoreview.format_retry"
+	TemplateAutoReviewUser               templateKey = "autoreview.user"
+	TemplateDesignUser                   templateKey = "design.user"
+	TemplateFinalFixUser                 templateKey = "final_fix.user"
+	TemplateImplementUser                templateKey = "implement.user"
+	templateImplementationReviewAxisUser templateKey = "implementation_review_axis.user"
+	TemplateInquireUser                  templateKey = "inquire.user"
+	TemplateKBBuildUser                  templateKey = "kb_build.user"
+	TemplatePhasePlanUser                templateKey = "phase_plan.user"
+	TemplatePhasePlanRevisionUser        templateKey = "phase_plan_revision.user"
+	TemplatePRDescriptionUser            templateKey = "pr_description.user"
+	TemplateResearchFromQuestionsUser    templateKey = "research_from_questions.user"
+	templateReviewUser                   templateKey = "review.user"
+	TemplateRoadmapUser                  templateKey = "roadmap.user"
+	TemplateRoadmapRevisionUser          templateKey = "roadmap_revision.user"
+	templateScoutUser                    templateKey = "scout.user"
+	templateSummaryUser                  templateKey = "summary.user"
+	templateSupervisorSystem             templateKey = "supervisor.system"
+	TemplateSystem                       templateKey = "system"
+	TemplateValidateSpecializedUser      templateKey = "validate_specialized.user"
+
+	// Partials rendered directly from Go.
+	TemplateAutonomousInquireness templateKey = "autonomous_inquireness"
+	TemplateDeferralsDue          templateKey = "deferrals_due"
+	TemplateGrillMeInquireness    templateKey = "grillme_inquireness"
+	TemplateVisualReferences      templateKey = "visual_references"
+)
+
+// render executes the keyed template against data and returns the result.
+func render(key templateKey, data any) (string, error) {
 	var buf bytes.Buffer
-	if err := tmpl.ExecuteTemplate(&buf, name, data); err != nil {
-		return "", fmt.Errorf("rendering template %q: %w", name, err)
+	if err := tmpl.ExecuteTemplate(&buf, string(key), data); err != nil {
+		return "", fmt.Errorf("rendering template %q: %w", key, err)
 	}
 	return buf.String(), nil
 }
@@ -57,8 +89,8 @@ func Render(name string, data any) (string, error) {
 // MustRender is the panicking variant. Use it only when the inputs are
 // statically known to be valid (e.g. constant directives) so a failure is
 // genuinely a programmer error.
-func MustRender(name string, data any) string {
-	out, err := Render(name, data)
+func MustRender(key templateKey, data any) string {
+	out, err := render(key, data)
 	if err != nil {
 		panic(err)
 	}

@@ -111,12 +111,12 @@ func TestCheckAncestorDistinguishesNonAncestorFromFailure(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
-			got, err := CheckAncestor(repo, tt.ancestor, tt.descendant)
+			got, err := checkAncestor(repo, tt.ancestor, tt.descendant)
 			if (err != nil) != tt.wantErr {
-				t.Fatalf("CheckAncestor() error = %v, wantErr %v", err, tt.wantErr)
+				t.Fatalf("checkAncestor() error = %v, wantErr %v", err, tt.wantErr)
 			}
 			if got != tt.want {
-				t.Fatalf("CheckAncestor() = %v, want %v", got, tt.want)
+				t.Fatalf("checkAncestor() = %v, want %v", got, tt.want)
 			}
 		})
 	}

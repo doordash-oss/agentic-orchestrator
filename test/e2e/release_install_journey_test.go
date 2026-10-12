@@ -73,7 +73,7 @@ func releaseFixtureSign(t *testing.T, payload []byte) string {
 		t.Fatalf("parse fixture key: %v", err)
 	}
 	key := keyAny.(ed25519.PrivateKey)
-	return selfupdate.SignaturePrefix + base64.StdEncoding.EncodeToString(ed25519.Sign(key, payload))
+	return "agentico-ed25519:" + base64.StdEncoding.EncodeToString(ed25519.Sign(key, payload))
 }
 
 // releaseServeMode selects the hostile mutation one published release
@@ -157,7 +157,7 @@ func (f *releaseServeFixture) publishRelease(t *testing.T, spec releaseServeSpec
 	defer f.mu.Unlock()
 
 	version := strings.TrimPrefix(spec.tag, "v")
-	tarballName := selfupdate.ReleaseTarballName(version, runtime.GOOS, runtime.GOARCH)
+	tarballName := fmt.Sprintf("agentic-orchestrator_%s_%s_%s.tar.gz", version, runtime.GOOS, runtime.GOARCH)
 	executable := spec.executable
 	if executable == "" {
 		executable = updateAvailTestBinaries(t).higher
@@ -197,7 +197,7 @@ func (f *releaseServeFixture) publishRelease(t *testing.T, spec releaseServeSpec
 		if err != nil {
 			t.Fatal(err)
 		}
-		signature = selfupdate.SignaturePrefix + base64.StdEncoding.EncodeToString(ed25519.Sign(foreign, manifest))
+		signature = "agentico-ed25519:" + base64.StdEncoding.EncodeToString(ed25519.Sign(foreign, manifest))
 	}
 	if spec.mode == releaseServeTamperManifest {
 		// Flip the first digest character after signing: only signature
@@ -354,7 +354,7 @@ func newReleaseInstallJourney(t *testing.T) (*selfupdateJourney, *selfupdateBina
 // releaseLeaseTxDirs lists the tx-* staging directories currently present.
 func releaseLeaseTxDirs(t *testing.T, j *selfupdateJourney) []string {
 	t.Helper()
-	entries, err := os.ReadDir(selfupdate.LeaseDir(j.installPath))
+	entries, err := os.ReadDir(selfupdateLeaseDir(j.installPath))
 	if err != nil {
 		if os.IsNotExist(err) {
 			return nil
@@ -434,9 +434,9 @@ func TestReleaseInstallJourneySignedFixture(t *testing.T) {
 		t.Fatalf("post-exec authenticated features status = %d", code)
 	}
 
-	receipt := j.waitReceiptOutcome(selfupdate.OutcomeConfirmed, 30*time.Second)
-	if receipt.Phase != selfupdate.PhaseReplacementComplete {
-		t.Fatalf("receipt phase = %q; want %q", receipt.Phase, selfupdate.PhaseReplacementComplete)
+	receipt := j.waitReceiptOutcome(string(selfupdate.OutcomeConfirmed), 30*time.Second)
+	if receipt.Phase != "replacement-complete" {
+		t.Fatalf("receipt phase = %q; want %q", receipt.Phase, "replacement-complete")
 	}
 	if receipt.FromVersion != releaseInstallLower || receipt.ToVersion != releaseInstallTarget {
 		t.Fatalf("receipt versions = %q -> %q", receipt.FromVersion, receipt.ToVersion)
@@ -447,12 +447,12 @@ func TestReleaseInstallJourneySignedFixture(t *testing.T) {
 	// Both staging areas are gone: the install transaction dir after the
 	// confirmed cleanup, and the release download staging after the driver's
 	// validated cleanup.
-	j.waitPathGone(filepath.Join(selfupdate.LeaseDir(j.installPath), "tx-"+receipt.TransactionID), "install transaction dir", 15*time.Second)
+	j.waitPathGone(filepath.Join(selfupdateLeaseDir(j.installPath), "tx-"+receipt.TransactionID), "install transaction dir", 15*time.Second)
 	releaseWaitNoStaging(t, j, 15*time.Second)
-	if _, err := os.Stat(selfupdate.LeasePath(j.installPath)); err != nil {
+	if _, err := os.Stat(selfupdateLeaseLockPath(j.installPath)); err != nil {
 		t.Fatalf("lease file must never be unlinked: %v", err)
 	}
-	if _, err := os.Stat(selfupdate.OwnershipRecordPath(j.installPath)); err != nil {
+	if _, err := os.Stat(selfupdateOwnershipRecordPath(j.installPath)); err != nil {
 		t.Fatalf("ownership record must never be unlinked: %v", err)
 	}
 	if got := j.installDigest(); got != bins.higherDigest {

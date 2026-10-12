@@ -110,9 +110,9 @@ func TestResolveStartupSettingsInvalidValues(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			_, err := ResolveStartupSettings(tt.src)
-			var invalid *SettingsError
+			var invalid *settingsError
 			if !errors.As(err, &invalid) {
-				t.Fatalf("want SettingsError, got %v", err)
+				t.Fatalf("want settingsError, got %v", err)
 			}
 			if invalid.Field != tt.field {
 				t.Fatalf("field = %q, want %q", invalid.Field, tt.field)

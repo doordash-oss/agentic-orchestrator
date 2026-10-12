@@ -32,7 +32,7 @@ type usageState struct {
 	seen                  bool
 	source                string
 	creditsMicros         *int64
-	last                  TokenUsageBreakdown
+	last                  tokenUsageBreakdown
 }
 
 type usageRead struct {
@@ -74,7 +74,6 @@ func (p *Protocol) requestUsageRead() {
 			p.finishUsageReadLocked()
 		}
 		p.mu.Unlock()
-		p.logDebug("[codex] optional usage lookup unavailable: %v", err)
 	}
 }
 
@@ -154,7 +153,7 @@ func (p *Protocol) ReconciledUsage(ctx context.Context) *llm.Usage {
 	return &usage
 }
 
-func (p *Protocol) updateTokenUsageLocked(usage ThreadTokenUsage) {
+func (p *Protocol) updateTokenUsageLocked(usage threadTokenUsage) {
 	total := usage.Total
 	inputDelta := total.InputTokens - p.inputTokens
 	cachedDelta := total.CachedInputTokens - p.cachedInputTokens

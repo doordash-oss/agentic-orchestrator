@@ -33,9 +33,10 @@ import (
 	"github.com/doordash-oss/agentic-orchestrator/internal/selfupdate"
 	"github.com/doordash-oss/agentic-orchestrator/internal/supervisor"
 	"github.com/doordash-oss/agentic-orchestrator/internal/workadmission"
+	"github.com/doordash-oss/agentic-orchestrator/test/testutil/mocks"
 )
 
-// recordingSupervisor is a SupervisorService double that records calls and
+// recordingSupervisor is a supervisorService double that records calls and
 // returns scripted results.
 type recordingSupervisor struct {
 	mu        sync.Mutex
@@ -223,7 +224,7 @@ func (s *recordingSupervisor) Subscribe(int64, bool, string) (*supervisor.Subscr
 
 func (s *recordingSupervisor) Unsubscribe(*supervisor.Subscription) {}
 
-func newSupervisorTestHandler(svc SupervisorService, admission *workadmission.Coordinator) http.Handler {
+func newSupervisorTestHandler(svc supervisorService, admission *workadmission.Coordinator) http.Handler {
 	return NewHandler(HandlerOptions{AuthToken: testAuthToken, DisableHostValidation: true, Supervisor: svc, Admission: admission})
 }
 
@@ -415,7 +416,7 @@ func TestSupervisorRoutes_MessagesTranscriptInterruptEnd(t *testing.T) {
 
 // newSupervisorErrorReferenceHandler serves the supervisor routes over a
 // feature store holding one run failure an error reference can address.
-func newSupervisorErrorReferenceHandler(t *testing.T, svc SupervisorService) http.Handler {
+func newSupervisorErrorReferenceHandler(t *testing.T, svc supervisorService) http.Handler {
 	t.Helper()
 	store := feature.NewStore(t.TempDir())
 	chatContextSeedRunFailure(t, store)
@@ -579,7 +580,7 @@ func TestUpdateReportsSupervisorActivity(t *testing.T) {
 	summary := func() UpdateActiveWorkSummary {
 		t.Helper()
 		w := httptest.NewRecorder()
-		h.routes().ServeHTTP(w, authorizedUpdateRequest(http.MethodGet, apiPathUpdate, nil))
+		h.ServeHTTP(w, authorizedUpdateRequest(http.MethodGet, apiPathUpdate, nil))
 		if w.Code != http.StatusOK {
 			t.Fatalf("GET update status = %d body=%s", w.Code, w.Body.String())
 		}
@@ -606,7 +607,7 @@ func TestUpdateReportsSupervisorActivity(t *testing.T) {
 	svc.mu.Unlock()
 
 	w := httptest.NewRecorder()
-	h.routes().ServeHTTP(w, trustedInstallRequest(http.MethodPost, []byte(`{"consent":true,"when":"now"}`)))
+	h.ServeHTTP(w, trustedInstallRequest(http.MethodPost, []byte(`{"consent":true,"when":"now"}`)))
 	if w.Code != http.StatusConflict {
 		t.Fatalf("install status = %d body=%s, want 409", w.Code, w.Body.String())
 	}
@@ -663,14 +664,14 @@ func TestUpdateIdleInstallProceedsPastWaitingSupervisor(t *testing.T) {
 			h.updates.performCheck(context.Background(), "explicit")
 
 			w := httptest.NewRecorder()
-			h.routes().ServeHTTP(w, authorizedUpdateRequest(http.MethodGet, apiPathUpdate, nil))
+			h.ServeHTTP(w, authorizedUpdateRequest(http.MethodGet, apiPathUpdate, nil))
 			summary := decodeUpdateSnapshot(t, w.Result()).ActiveWorkSummary
 			if !summary.SupervisorActive || summary.SupervisorWaiting != !tc.waits {
 				t.Fatalf("summary = %+v, want supervisor_active and supervisor_waiting=%v", summary, !tc.waits)
 			}
 
 			w = httptest.NewRecorder()
-			h.routes().ServeHTTP(w, trustedInstallRequest(http.MethodPost, []byte(`{"consent":true,"when":"idle"}`)))
+			h.ServeHTTP(w, trustedInstallRequest(http.MethodPost, []byte(`{"consent":true,"when":"idle"}`)))
 			if w.Code != http.StatusAccepted {
 				t.Fatalf("idle install status = %d body=%s", w.Code, w.Body.String())
 			}
@@ -683,7 +684,13 @@ func TestUpdateIdleInstallProceedsPastWaitingSupervisor(t *testing.T) {
 				svc.mu.Lock()
 				svc.lifecycle = supervisor.LifecycleIdle
 				svc.mu.Unlock()
-				boundary.NotifyChanged()
+				// Wake the idle waiter through the public operation that
+				// signals activity change: a reservation settling.
+				if r, err := boundary.Acquire(workadmission.CategoryRepository); err != nil {
+					t.Fatalf("Acquire() error = %v", err)
+				} else {
+					r.Release()
+				}
 			}
 			waitInstallCond(t, 5*time.Second, func() bool { return lifecycle.beginCallsN() >= 1 }, "the idle install never began")
 			if !boundary.Closed() {
@@ -836,7 +843,13 @@ func TestSupervisorCheckpointProjectionHidesBaselineAndBoundsSummary(t *testing.
 }
 
 func TestSupervisorRequestOriginProjectsOnStateAndRecords(t *testing.T) {
-	sess := &fakeSessionView{id: supervisor.SessionID("c1", 1), featureID: supervisor.FeatureID, status: ports.SessionWaitingPermission}
+	sess := &fakeSessionView{
+		MockSessionView: &mocks.MockSessionView{
+			IDVal:        supervisor.SessionID("c1", 1),
+			FeatureIDVal: supervisor.FeatureID,
+			StatusVal:    ports.SessionWaitingPermission,
+		},
+	}
 	child := &llm.ControlRequestMessage{
 		RequestID: "req-child",
 		Request:   llm.ControlRequest{Subtype: controlSubtypeCanUseTool, ToolName: "Bash", Input: json.RawMessage(`{"command":"ls"}`)},

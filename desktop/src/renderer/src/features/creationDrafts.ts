@@ -168,7 +168,7 @@ export interface CloneAssociation {
 }
 
 /** One server's draft entry: whether the sheet is open and its live state. */
-export interface CreationDraftEntry {
+interface CreationDraftEntry {
   open: boolean;
   state: CreationDraftState;
 }

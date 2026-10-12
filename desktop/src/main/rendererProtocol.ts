@@ -18,7 +18,7 @@ import { pathToFileURL } from 'node:url';
 import { resolveWithinRoot } from './security';
 
 export const RENDERER_SCHEME = 'agentico-app';
-export const RENDERER_HOST = 'bundle';
+const RENDERER_HOST = 'bundle';
 export const RENDERER_ORIGIN = `${RENDERER_SCHEME}://${RENDERER_HOST}`;
 export const RENDERER_ENTRY_URL = `${RENDERER_ORIGIN}/index.html`;
 

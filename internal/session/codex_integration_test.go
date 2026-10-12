@@ -32,6 +32,18 @@ func codexAvailable() bool {
 	return err == nil
 }
 
+// closeStdinForEOF closes the session's stdin pipe, signalling EOF to the
+// subprocess so a live codex run does not block waiting for input.
+func closeStdinForEOF(s *Session) {
+	s.mu.Lock()
+	w := s.stdin
+	s.stdin = nil
+	s.mu.Unlock()
+	if w != nil {
+		_ = w.Close()
+	}
+}
+
 // TestCodexSessionExecLeavesStderrOutOfAssistantLog verifies that non-protocol
 // codex exec output on stderr no longer leaks into the interactive assistant log.
 func TestCodexSessionExecLeavesStderrOutOfAssistantLog(t *testing.T) {
@@ -69,7 +81,7 @@ func TestCodexSessionExecLeavesStderrOutOfAssistantLog(t *testing.T) {
 	if err != nil {
 		t.Fatalf("start codex session: %v", err)
 	}
-	s.CloseStdin() // Signal EOF so codex doesn't block waiting for input
+	closeStdinForEOF(s) // Signal EOF so codex doesn't block waiting for input
 
 	// Wait for codex to complete (should be fast for simple prompt)
 	select {
@@ -128,7 +140,7 @@ func TestCodexSessionExecCanLogStderrToFile(t *testing.T) {
 	if err != nil {
 		t.Fatalf("start codex session: %v", err)
 	}
-	s.CloseStdin() // Signal EOF so codex doesn't block waiting for input
+	closeStdinForEOF(s) // Signal EOF so codex doesn't block waiting for input
 
 	select {
 	case <-s.Done():
@@ -266,7 +278,7 @@ func TestCodexSessionANSIStripping(t *testing.T) {
 	if err != nil {
 		t.Fatalf("start: %v", err)
 	}
-	s.CloseStdin() // Signal EOF so codex doesn't block waiting for input
+	closeStdinForEOF(s) // Signal EOF so codex doesn't block waiting for input
 
 	select {
 	case <-s.Done():

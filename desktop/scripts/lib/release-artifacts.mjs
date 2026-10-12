@@ -36,7 +36,7 @@ const GO_LINUX_TARBALLS = Object.freeze({
 });
 const RELEASE_TAG = /^v(\d+\.\d+\.\d+)$/;
 const LINUX_ARCHITECTURES = new Set(['x64', 'arm64']);
-export const PACKAGE_VERIFICATION_RECEIPT_SCHEMA_VERSION = 2;
+const PACKAGE_VERIFICATION_RECEIPT_SCHEMA_VERSION = 2;
 
 /** Build the sole schema-v2 target receipt used by package verification and release fixtures. */
 export function createPackageVerificationReceipt({

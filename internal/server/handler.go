@@ -39,20 +39,27 @@ import (
 	"github.com/doordash-oss/agentic-orchestrator/internal/workadmission"
 )
 
+// NewHandler builds the API handler the runtime server serves. The returned
+// value is the concrete handler, which serves through the mux it builds once
+// at construction.
 func NewHandler(opts HandlerOptions) http.Handler {
-	return newAPIHandler(opts).routes()
+	return newAPIHandler(opts)
 }
 
 type apiHandler struct {
+	// mux is the routing tree built once at construction; ServeHTTP serves
+	// through it.
+	mux http.Handler
+
 	runtime   RuntimeIdentity
 	policy    LaunchPolicy
 	startedAt time.Time
 	owner     instancelock.Owner
 	authToken string
 	name      string
-	features  FeatureLister
-	store     FeatureReader
-	freshness RepoFreshnessProvider
+	features  featureLister
+	store     featureReader
+	freshness repoFreshnessProvider
 	worktrees feature.WorktreeOps
 	// cleanliness serves worktree dirtiness to read projections from a
 	// deduplicated background cache. worktrees stays the uncached authority
@@ -107,7 +114,7 @@ type apiHandler struct {
 	admission *workadmission.Coordinator
 	// supervisor owns the supervisor conversation behind
 	// /api/v1/supervisor; nil serves 503 on that namespace.
-	supervisor SupervisorService
+	supervisor supervisorService
 	// featureDetectFail is the test-only detection-failure seam from
 	// UpdateOptions.DetectFailHook: when set, the feature-activity detector
 	// reports a detection failure instead of probing the store. Nil in
@@ -132,6 +139,9 @@ type apiHandler struct {
 	readinessMu       sync.Mutex
 	providerReadiness []ProviderReadiness
 	readinessProbedAt time.Time
+	// endpoints caches the background provider-endpoint reachability
+	// checks merged into provider readiness as non-blocking warnings.
+	endpoints         endpointChecks
 	providerRefreshMu sync.Mutex
 	creationMu        sync.Mutex
 	creationResults   map[string]creationResult
@@ -148,11 +158,6 @@ func newAPIHandler(opts HandlerOptions) *apiHandler {
 		startedAt = time.Now().UTC()
 	}
 	store := opts.FeatureStore
-	if store == nil {
-		if reader, ok := opts.Features.(FeatureReader); ok {
-			store = reader
-		}
-	}
 	features := opts.Features
 	if features == nil && store != nil {
 		features = store
@@ -247,7 +252,13 @@ func newAPIHandler(opts HandlerOptions) *apiHandler {
 			handler.clones = svc
 		}
 	}
+	handler.mux = handler.routes()
 	return handler
+}
+
+// ServeHTTP serves r through the mux built at construction.
+func (h *apiHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	h.mux.ServeHTTP(w, r)
 }
 
 // topLevelRoute is one top-level mux registration. topLevelServerRoutes is
@@ -404,13 +415,10 @@ func (h *apiHandler) handleFeatureList(w http.ResponseWriter, r *http.Request) {
 	}
 	// One relationship pass for the whole list; the per-parent scan re-reads
 	// the entire store and turns the list O(N²) in disk reads.
-	var bulkChildren map[string]*feature.RelationshipChildren
-	if reader, ok := h.store.(bulkRelationshipReader); ok {
-		bulkChildren, err = reader.AllRelationshipChildren()
-		if err != nil {
-			writeAPIError(w, http.StatusInternalServerError, errcat.RelationshipReadFailed, errcat.WithDiagnostics("read relationship history"))
-			return
-		}
+	bulkChildren, err := h.store.AllRelationshipChildren()
+	if err != nil {
+		writeAPIError(w, http.StatusInternalServerError, errcat.RelationshipReadFailed, errcat.WithDiagnostics("read relationship history"))
+		return
 	}
 	summaries := make([]FeatureSummary, 0, len(features))
 	for _, f := range features {
@@ -418,19 +426,9 @@ func (h *apiHandler) handleFeatureList(w http.ResponseWriter, r *http.Request) {
 			continue
 		}
 		summary := summarizeFeature(f)
-		var children *feature.RelationshipChildren
-		if bulkChildren != nil {
-			if children = bulkChildren[f.ID]; children == nil {
-				children = &feature.RelationshipChildren{}
-			}
-		} else {
-			var relationshipErr error
-			children, relationshipErr = h.relationshipChildrenOf(f.ID, features)
-			if relationshipErr != nil {
-				writeAPIError(w, http.StatusInternalServerError, errcat.RelationshipReadFailed,
-					errcat.WithDiagnostics(fmt.Sprintf("read relationship history for parent %q", f.ID)))
-				return
-			}
+		children := bulkChildren[f.ID]
+		if children == nil {
+			children = &feature.RelationshipChildren{}
 		}
 		summary.ActiveChild = relationshipChildSummaryDTO(children.Active)
 		summary.ChildHistory, summary.ChildHistoryTotal, summary.ChildHistoryTruncated = listChildHistory(children.Closed)
@@ -644,7 +642,7 @@ func requireMethod(w http.ResponseWriter, r *http.Request, method string) bool {
 	return false
 }
 
-func listFeatures(lister FeatureLister) ([]*feature.Feature, []Error, error) {
+func listFeatures(lister featureLister) ([]*feature.Feature, []Error, error) {
 	if lister == nil {
 		return nil, nil, nil
 	}
@@ -882,13 +880,6 @@ func writeAPIError(w http.ResponseWriter, status int, code errcat.Code, opts ...
 		APIVersion: APIVersion,
 		Error:      wireError(errcat.New(code, opts...)),
 	})
-}
-
-// WireCanonicalError projects a rendered canonical error onto the generated
-// wire model for adapters outside this package (the mutation target), so
-// every boundary renders canonical objects through one projection.
-func WireCanonicalError(rendered errcat.Error) Error {
-	return wireError(rendered)
 }
 
 // wireError projects a rendered canonical error onto the generated model.

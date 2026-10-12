@@ -15,6 +15,7 @@
 package session
 
 import (
+	"context"
 	"os/exec"
 	"path/filepath"
 	"syscall"
@@ -50,7 +51,8 @@ func startProcessGroup(t *testing.T) (int, *exec.Cmd) {
 func TestScanForRecoveryEmpty(t *testing.T) {
 	dir := t.TempDir()
 	// No PID files — should return empty
-	items, err := ScanForRecovery(dir, nil)
+	adapter := NewRecoveryAdapter(dir, nil)
+	items, err := adapter.ScanForRecovery(context.Background())
 	if err != nil {
 		t.Fatalf("scan: %v", err)
 	}
@@ -66,7 +68,8 @@ func TestScanForRecoveryWithStale(t *testing.T) {
 	feat1Dir := filepath.Join(dir, "feat-1")
 	_ = WritePIDFile(feat1Dir, PIDFile{PID: 999999999, FeatureID: "feat-1", Phase: "implement"})
 
-	items, err := ScanForRecovery(dir, nil)
+	adapter := NewRecoveryAdapter(dir, nil)
+	items, err := adapter.ScanForRecovery(context.Background())
 	if err != nil {
 		t.Fatalf("scan: %v", err)
 	}
@@ -75,25 +78,6 @@ func TestScanForRecoveryWithStale(t *testing.T) {
 	}
 	if items[0].ProcessAlive {
 		t.Error("expected process to not be alive")
-	}
-}
-
-func TestCleanupStalePIDFiles(t *testing.T) {
-	dir := t.TempDir()
-
-	// Create a stale PID file
-	feat1Dir := filepath.Join(dir, "feat-1")
-	_ = WritePIDFile(feat1Dir, PIDFile{PID: 999999999, FeatureID: "feat-1"})
-
-	err := cleanupStalePIDFiles(dir)
-	if err != nil {
-		t.Fatalf("cleanup: %v", err)
-	}
-
-	// PID file should be removed
-	pids, _ := FindPIDFiles(dir)
-	if len(pids) != 0 {
-		t.Errorf("expected 0 PID files after cleanup, got %d", len(pids))
 	}
 }
 
@@ -128,19 +112,19 @@ func TestExecuteRecoveryKill(t *testing.T) {
 		"feat-kill": ports.RecoveryKill,
 	}
 
-	err := ExecuteRecovery(items, actions, fm)
+	err := NewRecoveryAdapter(dir, fm).ExecuteRecovery(context.Background(), items, actions)
 	if err != nil {
 		t.Fatalf("execute recovery: %v", err)
 	}
 
 	// Feature should be Interrupted
-	updated, _ := fm.Get("feat-kill")
+	updated, _ := fm.Store.Load("feat-kill")
 	if updated.Status != feature.StatusInterrupted {
 		t.Errorf("status = %v, want Interrupted", updated.Status)
 	}
 
 	// PID file should be removed
-	pids, _ := FindPIDFiles(dir)
+	pids, _ := findPIDFiles(dir)
 	if len(pids) != 0 {
 		t.Errorf("expected 0 PID files after kill, got %d", len(pids))
 	}
@@ -177,20 +161,20 @@ func TestExecuteRecoveryResume(t *testing.T) {
 		"feat-resume": ports.RecoveryResume,
 	}
 
-	err := ExecuteRecovery(items, actions, fm)
+	err := NewRecoveryAdapter(dir, fm).ExecuteRecovery(context.Background(), items, actions)
 	if err != nil {
 		t.Fatalf("execute recovery: %v", err)
 	}
 
 	// Feature should be transitioned back to Implementing for restart
 	// (via Interrupted → Implementing two-step)
-	updated, _ := fm.Get("feat-resume")
+	updated, _ := fm.Store.Load("feat-resume")
 	if updated.Status != feature.StatusImplementing {
 		t.Errorf("status = %v, want Implementing", updated.Status)
 	}
 
 	// PID file should be removed
-	pids, _ := FindPIDFiles(dir)
+	pids, _ := findPIDFiles(dir)
 	if len(pids) != 0 {
 		t.Errorf("expected 0 PID files after resume, got %d", len(pids))
 	}
@@ -213,13 +197,13 @@ func TestExecuteRecoverySkipDeadProcess(t *testing.T) {
 		"feat-skip": ports.RecoverySkip,
 	}
 
-	err := ExecuteRecovery(items, actions, nil)
+	err := NewRecoveryAdapter(dir, nil).ExecuteRecovery(context.Background(), items, actions)
 	if err != nil {
 		t.Fatalf("execute recovery: %v", err)
 	}
 
 	// PID file should be removed since process is dead
-	pids, _ := FindPIDFiles(dir)
+	pids, _ := findPIDFiles(dir)
 	if len(pids) != 0 {
 		t.Errorf("expected 0 PID files after skip (dead process), got %d", len(pids))
 	}
@@ -254,7 +238,8 @@ func TestScanForRecoveryMultipleRepoSessions(t *testing.T) {
 	_ = WritePIDFile(featDir, PIDFile{PID: 999999999, FeatureID: "feat-multi", Phase: "implement", RepoName: "service-a"})
 	_ = WritePIDFile(featDir, PIDFile{PID: 999999998, FeatureID: "feat-multi", Phase: "implement", RepoName: "service-b"})
 
-	items, err := ScanForRecovery(dir, nil)
+	adapter := NewRecoveryAdapter(dir, nil)
+	items, err := adapter.ScanForRecovery(context.Background())
 	if err != nil {
 		t.Fatalf("scan: %v", err)
 	}
@@ -309,13 +294,13 @@ func TestExecuteRecoveryKillMultiRepo(t *testing.T) {
 		ports.RecoveryActionKey("feat-mr-kill", "service-a"): ports.RecoveryKill,
 	}
 
-	err := ExecuteRecovery(items, actions, fm)
+	err := NewRecoveryAdapter(dir, fm).ExecuteRecovery(context.Background(), items, actions)
 	if err != nil {
 		t.Fatalf("execute recovery: %v", err)
 	}
 
 	// service-a PID file should be removed, service-b should still exist
-	pids, _ := FindPIDFiles(dir)
+	pids, _ := findPIDFiles(dir)
 	if len(pids) != 1 {
 		t.Fatalf("expected 1 PID file remaining, got %d", len(pids))
 	}
@@ -360,7 +345,7 @@ func TestExecuteRecoveryKillLiveProcess(t *testing.T) {
 		"feat-live-kill": ports.RecoveryKill,
 	}
 
-	err := ExecuteRecovery(items, actions, fm)
+	err := NewRecoveryAdapter(dir, fm).ExecuteRecovery(context.Background(), items, actions)
 	if err != nil {
 		t.Fatalf("execute recovery: %v", err)
 	}
@@ -374,13 +359,13 @@ func TestExecuteRecoveryKillLiveProcess(t *testing.T) {
 	}
 
 	// Feature should be Interrupted.
-	updated, _ := fm.Get("feat-live-kill")
+	updated, _ := fm.Store.Load("feat-live-kill")
 	if updated.Status != feature.StatusInterrupted {
 		t.Errorf("status = %v, want Interrupted", updated.Status)
 	}
 
 	// PID file should be removed.
-	pids, _ := FindPIDFiles(dir)
+	pids, _ := findPIDFiles(dir)
 	if len(pids) != 0 {
 		t.Errorf("expected 0 PID files after kill, got %d", len(pids))
 	}
@@ -466,25 +451,5 @@ func TestTerminateProcessGroup_ChildOutlivesLeader(t *testing.T) {
 	// Entire process group must be dead — no orphaned children.
 	if err := syscall.Kill(-pgid, 0); err == nil {
 		t.Error("process group should be dead after terminateProcessGroup, but kill(-pgid, 0) succeeded")
-	}
-}
-
-func TestCleanupStalePIDFilesMultiRepo(t *testing.T) {
-	dir := t.TempDir()
-
-	// Create stale PID files for two repos
-	featDir := filepath.Join(dir, "feat-cleanup")
-	_ = WritePIDFile(featDir, PIDFile{PID: 999999999, FeatureID: "feat-cleanup", RepoName: "service-a"})
-	_ = WritePIDFile(featDir, PIDFile{PID: 999999998, FeatureID: "feat-cleanup", RepoName: "service-b"})
-
-	err := cleanupStalePIDFiles(dir)
-	if err != nil {
-		t.Fatalf("cleanup: %v", err)
-	}
-
-	// Both PID files should be removed
-	pids, _ := FindPIDFiles(dir)
-	if len(pids) != 0 {
-		t.Errorf("expected 0 PID files after cleanup, got %d", len(pids))
 	}
 }

@@ -29,9 +29,9 @@ import (
 	"github.com/doordash-oss/agentic-orchestrator/internal/github"
 )
 
-// PushFunc is the function used by Push. Tests can replace it to avoid real
+// pushFunc is the function used by Push. Tests can replace it to avoid real
 // git-push operations (e.g. when corporate hooks block pushes to local repos).
-var PushFunc = defaultPush
+var pushFunc = defaultPush
 
 var (
 	indexLockRetryWindow       = 5 * time.Second
@@ -42,14 +42,14 @@ var (
 
 var gitLockPathPattern = regexp.MustCompile(`(?i)'([^']+\.lock)'`)
 
-// GitLockContentionError reports a Git mutation that exhausted its retry
+// gitLockContentionError reports a Git mutation that exhausted its retry
 // window while a known lock remained in place.
-type GitLockContentionError struct {
+type gitLockContentionError struct {
 	LockPath string
 	Age      time.Duration
 }
 
-func (e *GitLockContentionError) Error() string {
+func (e *gitLockContentionError) Error() string {
 	age := e.Age.Round(time.Second)
 	if e.Age > gitLockStaleAfter {
 		return fmt.Sprintf("stale git lock (%s old) at %s", age, e.LockPath)
@@ -61,7 +61,7 @@ var worktreeMutationLocks sync.Map
 
 // Push pushes a worktree's branch to origin.
 func Push(worktreePath, branch string) error {
-	return PushFunc(worktreePath, branch)
+	return pushFunc(worktreePath, branch)
 }
 
 func defaultPush(worktreePath, branch string) error {
@@ -93,7 +93,7 @@ func syncRemoteTrackingRef(worktreePath, branch, pushed string) error {
 // for the branch, the existing PR URL is returned instead of an error
 // (the push already updated the remote branch).
 func CreatePR(repoPath, branch, title, body string, draft bool, baseBranch ...string) (string, error) {
-	body = InjectPRSignature(body)
+	body = injectPRSignature(body)
 	host, owner, repo, err := originRepo(repoPath)
 	if err != nil {
 		return "", fmt.Errorf("creating PR: %w", err)
@@ -259,7 +259,7 @@ func CommitAll(worktreePath, message string) error {
 		return fmt.Errorf("staging changes: %s: %w", strings.TrimSpace(string(out)), err)
 	}
 	// Append Agentic signature trailer
-	message = message + "\n\n" + CommitSignatureTrailer
+	message = message + "\n\n" + commitSignatureTrailer
 	if out, err := runGitMutationWithLockRetry(worktreePath, "commit", "-m", message); err != nil {
 		return fmt.Errorf("creating commit: %s: %w", strings.TrimSpace(string(out)), err)
 	}
@@ -285,7 +285,7 @@ func CommitAllAndGetHead(worktreePath, message string) (string, error) {
 	if strings.TrimSpace(string(out)) == "" {
 		return CurrentHeadSHA(worktreePath)
 	}
-	message = message + "\n\n" + CommitSignatureTrailer
+	message = message + "\n\n" + commitSignatureTrailer
 	if out, err := runGitMutationWithLockRetry(worktreePath, "commit", "-m", message); err != nil {
 		return "", fmt.Errorf("creating commit: %s: %w", strings.TrimSpace(string(out)), err)
 	}
@@ -409,7 +409,7 @@ func runGitMutationWithLockRetryStdin(worktreePath, stdin string, args ...string
 		}
 		if !time.Now().Before(deadline) {
 			if lockPath != "" {
-				return out, &GitLockContentionError{LockPath: lockPath, Age: lockAge}
+				return out, &gitLockContentionError{LockPath: lockPath, Age: lockAge}
 			}
 			return out, err
 		}
@@ -455,7 +455,7 @@ func CurrentHeadSHA(worktreePath string) (string, error) {
 // ClosePR closes a GitHub PR by URL.
 // Errors are returned but callers should treat them as non-fatal.
 func ClosePR(prURL string) error {
-	owner, repo, number, err := ParsePRURL(prURL)
+	owner, repo, number, err := parsePRURL(prURL)
 	if err != nil {
 		return err
 	}

@@ -36,7 +36,7 @@ type scriptedThreads struct {
 	steps []struct{ id, outcome string }
 }
 
-func (s *scriptedThreads) next(req LaunchRequest) *llm.SystemInitMessage {
+func (s *scriptedThreads) next(req launchRequest) *llm.SystemInitMessage {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	step := s.steps[0]

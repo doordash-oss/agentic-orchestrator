@@ -261,20 +261,14 @@ func (roadmapIDGen) NewSpanID(context.Context, trace.TraceID) trace.SpanID {
 	return sid
 }
 
-// newOtelBridge creates an otelBridge. When enabled is false, all methods no-op.
-// When enabled, it creates an OTLP gRPC exporter (reading OTEL_EXPORTER_OTLP_ENDPOINT
-// from the environment) and configures a TracerProvider with the service.name resource
-// attribute. Optional grpcOpts are forwarded to the exporter constructor, allowing
-// callers to override endpoint/TLS settings. If exporter creation fails, it degrades
-// gracefully to a bare provider.
-func newOtelBridge(enabled bool, endpoint string, insecure bool, serviceName string, grpcOpts ...otlptracegrpc.Option) *otelBridge {
-	if serviceName == "" {
-		serviceName = "agentico"
-	}
-	res := resource.NewSchemaless(semconv.ServiceNameKey.String(serviceName))
-	return newOtelBridgeWithResource(enabled, endpoint, insecure, serviceName, res, grpcOpts...)
-}
-
+// newOtelBridgeWithResource creates an otelBridge. When enabled is false,
+// all methods no-op. When enabled, it creates an OTLP gRPC exporter (reading
+// OTEL_EXPORTER_OTLP_ENDPOINT from the environment) and configures a
+// TracerProvider with the given resource (a nil resource is built from the
+// environment plus the service.name attribute). Optional grpcOpts are
+// forwarded to the exporter constructor, allowing callers to override
+// endpoint/TLS settings. If exporter creation fails, it degrades gracefully
+// to a bare provider.
 func newOtelBridgeWithResource(enabled bool, endpoint string, insecure bool, serviceName string, res *resource.Resource, grpcOpts ...otlptracegrpc.Option) *otelBridge {
 	if !enabled {
 		otelStartupLogf("otel: trace export disabled (observability.otel_enabled is off)")

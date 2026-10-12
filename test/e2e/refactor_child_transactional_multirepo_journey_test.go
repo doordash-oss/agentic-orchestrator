@@ -132,7 +132,7 @@ func (fx *multiRepoE2EFixture) orchestrator() *orchestrator.Orchestrator {
 
 func (fx *multiRepoE2EFixture) orchestratorWithWorktrees(wt feature.WorktreeOps) *orchestrator.Orchestrator {
 	return orchestrator.New(orchestrator.Deps{
-		Lifecycle: fx.mgr, Store: fx.store,
+		Manager: fx.mgr, Store: fx.store,
 		Worktrees: wt,
 	}, orchestrator.Hooks{})
 }
@@ -178,14 +178,11 @@ func (fx *multiRepoE2EFixture) manualPrepare(t *testing.T) *feature.TransactionJ
 		parentRepo := parent.Repos[i]
 		childHead := multiRepoGit(t, childRepo.WorktreePath, "rev-parse", "HEAD")
 		parentTip := multiRepoGit(t, parentRepo.Path, "rev-parse", "refs/heads/feature/parent")
-		result, err := git.CreateMergeCandidate(parentRepo.Path, parentTip, childHead, "test merge")
-		if err != nil {
-			t.Fatalf("create merge candidate repo %d: %v", i, err)
-		}
+		candidateSHA := createMergeCandidateViaGit(t, parentRepo.Path, parentTip, childHead, "test merge")
 		journal.Entries = append(journal.Entries, feature.RepoTransactionEntry{
 			Repo: childRepo.Name, ParentBranch: parentRepo.Branch,
 			ParentAnchorSHA: parentTip, ExpectedRefSHA: parentTip,
-			ChildHeadSHA: childHead, CandidateSHA: result.CandidateSHA,
+			ChildHeadSHA: childHead, CandidateSHA: candidateSHA,
 			PrepState: feature.RepoPrepPrepared,
 		})
 	}
@@ -198,9 +195,7 @@ func (fx *multiRepoE2EFixture) manualPrepare(t *testing.T) *feature.TransactionJ
 func (fx *multiRepoE2EFixture) manualApplyRef(t *testing.T, idx int, entry *feature.RepoTransactionEntry) {
 	t.Helper()
 	ref := "refs/heads/" + entry.ParentBranch
-	if err := git.UpdateRefCAS(fx.repoDirs[idx], ref, entry.ExpectedRefSHA, entry.CandidateSHA); err != nil {
-		t.Fatalf("manual apply repo %d: %v", idx, err)
-	}
+	updateRefCASViaGit(t, fx.repoDirs[idx], ref, entry.ExpectedRefSHA, entry.CandidateSHA)
 	multiRepoGit(t, fx.repoDirs[idx], "checkout", "feature/parent")
 	multiRepoGit(t, fx.repoDirs[idx], "reset", "--hard", entry.CandidateSHA)
 }
@@ -211,9 +206,7 @@ func (fx *multiRepoE2EFixture) manualApplyRef(t *testing.T, idx int, entry *feat
 func (fx *multiRepoE2EFixture) manualApplyRefNoSync(t *testing.T, idx int, entry *feature.RepoTransactionEntry) {
 	t.Helper()
 	ref := "refs/heads/" + entry.ParentBranch
-	if err := git.UpdateRefCAS(fx.repoDirs[idx], ref, entry.ExpectedRefSHA, entry.CandidateSHA); err != nil {
-		t.Fatalf("manual apply no sync repo %d: %v", idx, err)
-	}
+	updateRefCASViaGit(t, fx.repoDirs[idx], ref, entry.ExpectedRefSHA, entry.CandidateSHA)
 }
 
 // manualRollbackRef moves a repo's parent ref back to the anchor SHA without
@@ -222,9 +215,37 @@ func (fx *multiRepoE2EFixture) manualApplyRefNoSync(t *testing.T, idx int, entry
 func (fx *multiRepoE2EFixture) manualRollbackRef(t *testing.T, idx int, entry *feature.RepoTransactionEntry) {
 	t.Helper()
 	ref := "refs/heads/" + entry.ParentBranch
-	if err := git.UpdateRefCAS(fx.repoDirs[idx], ref, entry.CandidateSHA, entry.ParentAnchorSHA); err != nil {
-		t.Fatalf("manual rollback repo %d: %v", idx, err)
+	updateRefCASViaGit(t, fx.repoDirs[idx], ref, entry.CandidateSHA, entry.ParentAnchorSHA)
+}
+
+// createMergeCandidateViaGit builds the two-parent candidate merge commit
+// through plain git commands in a disposable detached worktree, mirroring the
+// merge-candidate entry point's contract, and returns the candidate SHA.
+func createMergeCandidateViaGit(t *testing.T, repoPath, parentTip, childHead, message string) string {
+	t.Helper()
+	tmpDir := t.TempDir()
+	tmpWorktree := filepath.Join(tmpDir, "wt")
+	multiRepoGit(t, repoPath, "worktree", "add", "--detach", tmpWorktree, parentTip)
+	t.Cleanup(func() {
+		cleanup := exec.Command("git", "-C", repoPath, "worktree", "remove", "--force", tmpWorktree)
+		cleanup.Env = append(os.Environ(), "GIT_TERMINAL_PROMPT=0")
+		_ = cleanup.Run()
+	})
+	multiRepoGit(t, tmpWorktree, "merge", "--no-ff", "-m", message, childHead)
+	candidateSHA := multiRepoGit(t, tmpWorktree, "rev-parse", "HEAD")
+	parents := multiRepoGit(t, tmpWorktree, "rev-list", "--parents", "-n", "1", "HEAD")
+	if len(strings.Fields(parents)) != 3 {
+		t.Fatalf("merge candidate has %d parents, want 2: %s", len(strings.Fields(parents))-1, parents)
 	}
+	return candidateSHA
+}
+
+// updateRefCASViaGit advances ref from oldSHA to newSHA through plain git's
+// expected-old-value update-ref, the same compare-and-swap the ref-CAS entry
+// point performs.
+func updateRefCASViaGit(t *testing.T, dir, ref, oldSHA, newSHA string) {
+	t.Helper()
+	multiRepoGit(t, dir, "update-ref", ref, newSHA, oldSHA)
 }
 
 func multiRepoGit(t *testing.T, dir string, args ...string) string {
@@ -310,62 +331,18 @@ func (w *resetFailingWorktrees) ResetToCommit(worktreePath, commitSHA string) er
 	return w.WorktreeManager.ResetToCommit(worktreePath, commitSHA)
 }
 
-// failingStoreWrapper wraps *feature.Store and fails on the Nth Modify
-// call, simulating a persistence failure (crash) at a specific transaction
-// boundary. All other methods delegate to the embedded Store.
-type failingStoreWrapper struct {
-	*feature.Store
-	counter *sharedModifyCounter
-}
-
-func (s *failingStoreWrapper) Modify(id string, fn func(f *feature.Feature) error) error {
-	if s.counter.fail() {
-		return fmt.Errorf("simulated persistence failure at write %d", s.counter.counter)
-	}
-	return s.Store.Modify(id, fn)
-}
-
-// failingLifecycleWrapper wraps *feature.Manager and fails on the Nth
-// call to MarkCodeReady (which internally calls Store.Modify). The shared
-// counter ensures the failure index aligns across both wrappers.
-type failingLifecycleWrapper struct {
-	*feature.Manager
-	counter *sharedModifyCounter
-}
-
-func (w *failingLifecycleWrapper) MarkCodeReady(featureID string) error {
-	if w.counter.fail() {
-		return fmt.Errorf("simulated persistence failure at MarkCodeReady")
-	}
-	return w.Manager.MarkCodeReady(featureID)
-}
-
-type sharedModifyCounter struct {
-	counter int32
-	failAt  int32
-}
-
-func (c *sharedModifyCounter) fail() bool {
-	return atomic.AddInt32(&c.counter, 1) == c.failAt
-}
-
-func (fx *multiRepoE2EFixture) orchestratorWithFailingStore(failAt int32) *orchestrator.Orchestrator {
-	return fx.orchestratorWithFailingStoreAndWorktree(failAt, fx.wm)
-}
-
-func (fx *multiRepoE2EFixture) orchestratorWithFailingStoreAndWorktree(failAt int32, wt feature.WorktreeOps) *orchestrator.Orchestrator {
-	counter := &sharedModifyCounter{failAt: failAt}
-	// Create a new Store with the same BaseDir so both the failing and
-	// fresh orchestrators read/write the same feature files.
-	failStore := feature.NewStore(fx.store.BaseDir)
-	fs := &failingStoreWrapper{Store: failStore, counter: counter}
-	mgr := feature.NewManager(failStore, config.NewDefault())
-	mgr.Worktrees = fx.wm
-	fl := &failingLifecycleWrapper{Manager: mgr, counter: counter}
-	return orchestrator.New(orchestrator.Deps{
-		Lifecycle: fl, Store: fs,
-		Worktrees: wt,
-	}, orchestrator.Hooks{})
+// failOnSave injects a crash at the Nth feature write. Returning its reset
+// function makes each restart use the real store without the failed write.
+func (fx *multiRepoE2EFixture) failOnSave(failAt int32) func() {
+	var count int32
+	fx.store.SetSaveInterceptor(func(f *feature.Feature) error {
+		count++
+		if count == failAt {
+			return fmt.Errorf("simulated persistence failure at write %d", count)
+		}
+		return nil
+	})
+	return func() { fx.store.SetSaveInterceptor(nil) }
 }
 
 // --- Tests ---
@@ -725,10 +702,7 @@ func TestRefactorChildTransactionalMultiRepoCrashCutPointConvergence(t *testing.
 		// Prepare the first repo's candidate only.
 		childHead0 := multiRepoGit(t, child.Repos[0].WorktreePath, "rev-parse", "HEAD")
 		parentTip0 := multiRepoGit(t, parent.Repos[0].Path, "rev-parse", "refs/heads/feature/parent")
-		result0, err := git.CreateMergeCandidate(parent.Repos[0].Path, parentTip0, childHead0, "merge 0")
-		if err != nil {
-			t.Fatalf("create merge candidate repo 0: %v", err)
-		}
+		candidateSHA0 := createMergeCandidateViaGit(t, parent.Repos[0].Path, parentTip0, childHead0, "merge 0")
 		childHead1 := multiRepoGit(t, child.Repos[1].WorktreePath, "rev-parse", "HEAD")
 		parentTip1 := multiRepoGit(t, parent.Repos[1].Path, "rev-parse", "refs/heads/feature/parent")
 
@@ -738,7 +712,7 @@ func TestRefactorChildTransactionalMultiRepoCrashCutPointConvergence(t *testing.
 				{
 					Repo: child.Repos[0].Name, ParentBranch: parent.Repos[0].Branch,
 					ParentAnchorSHA: parentTip0, ExpectedRefSHA: parentTip0,
-					ChildHeadSHA: childHead0, CandidateSHA: result0.CandidateSHA,
+					ChildHeadSHA: childHead0, CandidateSHA: candidateSHA0,
 					PrepState: feature.RepoPrepPrepared,
 				},
 				{
@@ -1092,13 +1066,15 @@ func TestRefactorChildTransactionalMultiRepoCrashCutPointConvergence(t *testing.
 	for _, tc := range persistenceCrashCases {
 		t.Run(tc.name, func(t *testing.T) {
 			fx := newMultiRepoE2EFixture(t, 2)
-			failO := fx.orchestratorWithFailingStore(tc.failAt)
+			resetSave := fx.failOnSave(tc.failAt)
+			failO := fx.orchestrator()
 
 			// Run the transaction — it should fail at the injected
 			// persistence boundary, unless the failure is caught as a
 			// cleanup warning (in which case RunChildIntegration returns
 			// nil and the transaction is already complete with a warning).
 			err := failO.RunChildIntegration(fx.child.ID)
+			resetSave()
 			if err != nil {
 				// Create a fresh orchestrator with the original
 				// (non-failing) store reading from the same on-disk
@@ -1183,11 +1159,13 @@ func TestRefactorChildTransactionalMultiRepoCrashCutPointConvergence(t *testing.
 				raceRepoDir:     fx.repoDirs[2],
 				raceBranch:      "feature/parent",
 			}
-			failO := fx.orchestratorWithFailingStoreAndWorktree(tc.failAt, raceWT)
+			resetSave := fx.failOnSave(tc.failAt)
+			failO := fx.orchestratorWithWorktrees(raceWT)
 
 			// Run the transaction — it should fail at the injected
 			// rollback persistence boundary.
 			err := failO.RunChildIntegration(fx.child.ID)
+			resetSave()
 			if err == nil {
 				t.Fatalf("expected error at rollback boundary %d, got nil", tc.failAt)
 			}

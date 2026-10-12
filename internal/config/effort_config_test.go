@@ -12,22 +12,19 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package config_test
+package config
 
 import (
 	"os"
 	"path/filepath"
 	"testing"
 
-	"github.com/doordash-oss/agentic-orchestrator/internal/config"
 	"gopkg.in/yaml.v3"
 )
 
-var allEffortRoles = []string{"Inquiry", "Research", "Planning", "Implementation", "Review", "Utilities", "KBBuild"}
-
 func TestEffortConfigMissingLegacyLoadsAsAuto(t *testing.T) {
 	dir := t.TempDir()
-	path := filepath.Join(dir, "config.yaml")
+	path := filepath.Join(dir, "yaml")
 	oldConfig := `defaults:
   models:
     implementation: sonnet[200K]
@@ -37,35 +34,35 @@ func TestEffortConfigMissingLegacyLoadsAsAuto(t *testing.T) {
 	if err := os.WriteFile(path, []byte(oldConfig), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	cfg, err := config.Load(path)
+	cfg, err := Load(path)
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, role := range allEffortRoles {
-		got := config.EffortConfigFieldByName(cfg.Defaults.Effort, role)
+	for _, role := range Roles {
+		got := *role.Effort(&cfg.Defaults.Effort)
 		if got != "" {
-			t.Errorf("missing effort.%s should load as empty (Auto), got %q", role, got)
+			t.Errorf("missing effort.%s should load as empty (Auto), got %q", role.Name, got)
 		}
 	}
 }
 
 func TestEffortConfigExplicitAutoRoundTrips(t *testing.T) {
-	for _, role := range allEffortRoles {
-		t.Run(role, func(t *testing.T) {
+	for _, role := range Roles {
+		t.Run(role.Name, func(t *testing.T) {
 			dir := t.TempDir()
-			path := filepath.Join(dir, "config.yaml")
-			cfg := config.NewDefault()
-			config.SetEffortConfigFieldByName(&cfg.Defaults.Effort, role, "auto")
-			if err := config.Save(path, cfg); err != nil {
+			path := filepath.Join(dir, "yaml")
+			cfg := NewDefault()
+			*role.Effort(&cfg.Defaults.Effort) = "auto"
+			if err := Save(path, cfg); err != nil {
 				t.Fatal(err)
 			}
-			loaded, err := config.Load(path)
+			loaded, err := Load(path)
 			if err != nil {
 				t.Fatal(err)
 			}
-			got := config.EffortConfigFieldByName(loaded.Defaults.Effort, role)
+			got := *role.Effort(&loaded.Defaults.Effort)
 			if got != "auto" {
-				t.Errorf("explicit auto round-trip %s: got %q, want %q", role, got, "auto")
+				t.Errorf("explicit auto round-trip %s: got %q, want %q", role.Name, got, "auto")
 			}
 		})
 	}
@@ -73,23 +70,23 @@ func TestEffortConfigExplicitAutoRoundTrips(t *testing.T) {
 
 func TestEffortConfigEveryExplicitLevelRoundTrips(t *testing.T) {
 	levels := []string{"low", "medium", "high", "xhigh", "max", "ultra"}
-	for _, role := range allEffortRoles {
+	for _, role := range Roles {
 		for _, level := range levels {
-			t.Run(role+"_"+level, func(t *testing.T) {
+			t.Run(role.Name+"_"+level, func(t *testing.T) {
 				dir := t.TempDir()
-				path := filepath.Join(dir, "config.yaml")
-				cfg := config.NewDefault()
-				config.SetEffortConfigFieldByName(&cfg.Defaults.Effort, role, level)
-				if err := config.Save(path, cfg); err != nil {
+				path := filepath.Join(dir, "yaml")
+				cfg := NewDefault()
+				*role.Effort(&cfg.Defaults.Effort) = level
+				if err := Save(path, cfg); err != nil {
 					t.Fatal(err)
 				}
-				loaded, err := config.Load(path)
+				loaded, err := Load(path)
 				if err != nil {
 					t.Fatal(err)
 				}
-				got := config.EffortConfigFieldByName(loaded.Defaults.Effort, role)
+				got := *role.Effort(&loaded.Defaults.Effort)
 				if got != level {
-					t.Errorf("round-trip %s=%s: got %q, want %q", role, level, got, level)
+					t.Errorf("round-trip %s=%s: got %q, want %q", role.Name, level, got, level)
 				}
 			})
 		}
@@ -98,17 +95,17 @@ func TestEffortConfigEveryExplicitLevelRoundTrips(t *testing.T) {
 
 func TestEffortConfigNoCrossRoleLeakage(t *testing.T) {
 	dir := t.TempDir()
-	path := filepath.Join(dir, "config.yaml")
-	cfg := config.NewDefault()
-	cfg.Defaults.Effort = config.EffortConfig{
+	path := filepath.Join(dir, "yaml")
+	cfg := NewDefault()
+	cfg.Defaults.Effort = EffortConfig{
 		Inquiry:        "high",
 		Implementation: "low",
 		KBBuild:        "max",
 	}
-	if err := config.Save(path, cfg); err != nil {
+	if err := Save(path, cfg); err != nil {
 		t.Fatal(err)
 	}
-	loaded, err := config.Load(path)
+	loaded, err := Load(path)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -136,9 +133,9 @@ func TestEffortConfigNoCrossRoleLeakage(t *testing.T) {
 }
 
 func TestEffortConfigYAMLShape(t *testing.T) {
-	cfg := config.DefaultsConfig{
-		Models: config.ModelConfig{Implementation: "sonnet[200K]"},
-		Effort: config.EffortConfig{
+	cfg := DefaultsConfig{
+		Models: ModelConfig{Implementation: "sonnet[200K]"},
+		Effort: EffortConfig{
 			Inquiry:        "low",
 			Research:       "medium",
 			Planning:       "high",
@@ -152,33 +149,33 @@ func TestEffortConfigYAMLShape(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	var decoded config.DefaultsConfig
+	var decoded DefaultsConfig
 	if err := yaml.Unmarshal(data, &decoded); err != nil {
 		t.Fatal(err)
 	}
 	want := map[string]string{
-		"Inquiry": "low", "Research": "medium", "Planning": "high",
-		"Implementation": "max", "Review": "high", "Utilities": "low", "KBBuild": "medium",
+		"inquiry": "low", "research": "medium", "planning": "high",
+		"implementation": "max", "review": "high", "chat": "low", "kb_build": "medium",
 	}
-	for _, role := range allEffortRoles {
-		got := config.EffortConfigFieldByName(decoded.Effort, role)
-		if got != want[role] {
-			t.Errorf("YAML round-trip %s: got %q, want %q", role, got, want[role])
+	for _, role := range Roles {
+		got := *role.Effort(&decoded.Effort)
+		if got != want[role.Name] {
+			t.Errorf("YAML round-trip %s: got %q, want %q", role.Name, got, want[role.Name])
 		}
 	}
 }
 
 func TestPipelinePreferenceEffortOverlay(t *testing.T) {
-	d := config.DefaultsConfig{
-		Models: config.ModelConfig{Implementation: "sonnet[200K]"},
-		Effort: config.EffortConfig{
+	d := DefaultsConfig{
+		Models: ModelConfig{Implementation: "sonnet[200K]"},
+		Effort: EffortConfig{
 			Implementation: "auto",
 			Inquiry:        "high",
 		},
-		PipelinePreferences: map[string]config.PipelinePreference{
+		PipelinePreferences: map[string]PipelinePreference{
 			"moonshot": {
-				Models: config.ModelConfig{Implementation: "opus[200K]"},
-				Effort: config.EffortConfig{
+				Models: ModelConfig{Implementation: "opus[200K]"},
+				Effort: EffortConfig{
 					Implementation: "high",
 					Inquiry:        "low",
 				},
@@ -202,15 +199,15 @@ func TestPipelinePreferenceEffortOverlay(t *testing.T) {
 }
 
 func TestPipelinePreferenceEffortPartialOverlayKeepsGlobal(t *testing.T) {
-	d := config.DefaultsConfig{
-		Effort: config.EffortConfig{
+	d := DefaultsConfig{
+		Effort: EffortConfig{
 			Implementation: "high",
 			Inquiry:        "medium",
 		},
-		PipelinePreferences: map[string]config.PipelinePreference{
+		PipelinePreferences: map[string]PipelinePreference{
 			"large": {
-				Models: config.ModelConfig{Implementation: "sonnet[200K]"},
-				Effort: config.EffortConfig{Inquiry: "low"},
+				Models: ModelConfig{Implementation: "sonnet[200K]"},
+				Effort: EffortConfig{Inquiry: "low"},
 			},
 		},
 	}

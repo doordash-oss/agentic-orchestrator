@@ -34,14 +34,14 @@ func eligibleTarballInputs() ClassifyInputs {
 		FileUID:          1000,
 		FileMode:         0o755,
 		DirWritable:      true,
-		Lease:            LeaseHeld,
+		Lease:            leaseHeld,
 	}
 }
 
 func TestClassifyInstallationEligibleTarballAndGoInstall(t *testing.T) {
 	t.Parallel()
 	tarball := eligibleTarballInputs()
-	if got := ClassifyInstallation(tarball); !got.Supported || got.Install != InstallTarball {
+	if got := ClassifyInstallation(tarball); !got.Supported || got.Install != installTarball {
 		t.Fatalf("tarball classification = %+v", got)
 	}
 
@@ -50,7 +50,7 @@ func TestClassifyInstallationEligibleTarballAndGoInstall(t *testing.T) {
 	goInstall.BuildInfoVersion = "v1.4.0"
 	goInstall.BinaryDir = "/home/user/go/bin"
 	goInstall.GoBinDir = "/home/user/go/bin"
-	if got := ClassifyInstallation(goInstall); !got.Supported || got.Install != InstallGoInstall {
+	if got := ClassifyInstallation(goInstall); !got.Supported || got.Install != installGoInstall {
 		t.Fatalf("go-install classification = %+v", got)
 	}
 
@@ -60,7 +60,7 @@ func TestClassifyInstallationEligibleTarballAndGoInstall(t *testing.T) {
 	makeInstall.InjectedVersion = "1.2.3"
 	makeInstall.BinaryDir = "/home/user/go/bin"
 	makeInstall.GoBinDir = "/home/user/go/bin"
-	if got := ClassifyInstallation(makeInstall); !got.Supported || got.Install != InstallGoInstall {
+	if got := ClassifyInstallation(makeInstall); !got.Supported || got.Install != installGoInstall {
 		t.Fatalf("make-install classification = %+v", got)
 	}
 }
@@ -75,7 +75,7 @@ func TestClassifyInstallationBundledWinsBeforeOtherClassifiers(t *testing.T) {
 	bundled.BinaryDir = "/Applications/Agentico.app/Contents/Resources/bin"
 	bundled.BuildInfoVersion = "v1.4.0"
 	got := ClassifyInstallation(bundled)
-	if got.Supported || got.Install != InstallAppBundle || got.Reason != UnsupportedBundled {
+	if got.Supported || got.Install != installAppBundle || got.Reason != unsupportedBundled {
 		t.Fatalf("bundled classification = %+v", got)
 	}
 	if got.Remediation == "" {
@@ -88,7 +88,7 @@ func TestClassifyInstallationBundledWinsBeforeOtherClassifiers(t *testing.T) {
 	linuxBundled.BinaryDir = "/opt/agentico/resources/bin"
 	linuxBundled.GOOS = "linux"
 	got = ClassifyInstallation(linuxBundled)
-	if got.Supported || got.Reason != UnsupportedBundled {
+	if got.Supported || got.Reason != unsupportedBundled {
 		t.Fatalf("linux bundled classification = %+v", got)
 	}
 
@@ -97,7 +97,7 @@ func TestClassifyInstallationBundledWinsBeforeOtherClassifiers(t *testing.T) {
 	direct.ExecPath = "/opt/agentico/resources/agentico"
 	direct.BinaryDir = "/opt/agentico/resources"
 	got = ClassifyInstallation(direct)
-	if got.Supported || got.Reason != UnsupportedBundled {
+	if got.Supported || got.Reason != unsupportedBundled {
 		t.Fatalf("direct resources classification = %+v", got)
 	}
 
@@ -116,14 +116,14 @@ func TestClassifyInstallationHomebrew(t *testing.T) {
 	cellar.ExecPath = "/opt/homebrew/Cellar/agentico/1.2.3/bin/agentico"
 	cellar.BinaryDir = "/opt/homebrew/Cellar/agentico/1.2.3/bin"
 	got := ClassifyInstallation(cellar)
-	if got.Supported || got.Install != InstallHomebrew || got.Reason != UnsupportedHomebrew {
+	if got.Supported || got.Install != installHomebrew || got.Reason != unsupportedHomebrew {
 		t.Fatalf("cellar classification = %+v", got)
 	}
 
 	caskroom := eligibleTarballInputs()
 	caskroom.ExecPath = "/usr/local/Caskroom/agentico/1.2.3/agentico"
 	caskroom.BinaryDir = "/usr/local/Caskroom/agentico/1.2.3"
-	if got := ClassifyInstallation(caskroom); got.Supported || got.Reason != UnsupportedHomebrew {
+	if got := ClassifyInstallation(caskroom); got.Supported || got.Reason != unsupportedHomebrew {
 		t.Fatalf("caskroom classification = %+v", got)
 	}
 }
@@ -134,7 +134,7 @@ func TestClassifyInstallationDevelopmentAndPseudoVersions(t *testing.T) {
 	dev.InjectedVersion = "dev"
 	dev.BuildInfoVersion = "(devel)"
 	got := ClassifyInstallation(dev)
-	if got.Supported || got.Reason != UnsupportedDevelopmentVersion {
+	if got.Supported || got.Reason != unsupportedDevelopmentVersion {
 		t.Fatalf("dev classification = %+v", got)
 	}
 
@@ -145,7 +145,7 @@ func TestClassifyInstallationDevelopmentAndPseudoVersions(t *testing.T) {
 	pseudo.BinaryDir = "/home/user/go/bin"
 	pseudo.GoBinDir = "/home/user/go/bin"
 	got = ClassifyInstallation(pseudo)
-	if got.Supported || got.Reason != UnsupportedDevelopmentVersion {
+	if got.Supported || got.Reason != unsupportedDevelopmentVersion {
 		t.Fatalf("pseudo-version classification = %+v", got)
 	}
 }
@@ -154,12 +154,12 @@ func TestClassifyInstallationPlatformAndReplaceability(t *testing.T) {
 	t.Parallel()
 	windows := eligibleTarballInputs()
 	windows.GOOS = "windows"
-	if got := ClassifyInstallation(windows); got.Supported || got.Reason != UnsupportedPlatform {
+	if got := ClassifyInstallation(windows); got.Supported || got.Reason != unsupportedPlatform {
 		t.Fatalf("windows classification = %+v", got)
 	}
 	riscv := eligibleTarballInputs()
 	riscv.GOARCH = "riscv64"
-	if got := ClassifyInstallation(riscv); got.Supported || got.Reason != UnsupportedPlatform {
+	if got := ClassifyInstallation(riscv); got.Supported || got.Reason != unsupportedPlatform {
 		t.Fatalf("riscv64 classification = %+v", got)
 	}
 	for _, goos := range []string{"darwin", "linux"} {
@@ -175,19 +175,19 @@ func TestClassifyInstallationPlatformAndReplaceability(t *testing.T) {
 	// Root-owned binary under an unprivileged runtime is not replaceable.
 	rootOwned := eligibleTarballInputs()
 	rootOwned.FileUID = 0
-	if got := ClassifyInstallation(rootOwned); got.Supported || got.Reason != UnsupportedNonReplaceable {
+	if got := ClassifyInstallation(rootOwned); got.Supported || got.Reason != unsupportedNonReplaceable {
 		t.Fatalf("root-owned classification = %+v", got)
 	}
 	// World/group-writable binary is not replaceable.
 	worldWritable := eligibleTarballInputs()
 	worldWritable.FileMode = 0o777
-	if got := ClassifyInstallation(worldWritable); got.Supported || got.Reason != UnsupportedNonReplaceable {
+	if got := ClassifyInstallation(worldWritable); got.Supported || got.Reason != unsupportedNonReplaceable {
 		t.Fatalf("world-writable classification = %+v", got)
 	}
 	// Read-only containing directory blocks the atomic rename swap.
 	readonlyDir := eligibleTarballInputs()
 	readonlyDir.DirWritable = false
-	if got := ClassifyInstallation(readonlyDir); got.Supported || got.Reason != UnsupportedNonReplaceable {
+	if got := ClassifyInstallation(readonlyDir); got.Supported || got.Reason != unsupportedNonReplaceable {
 		t.Fatalf("read-only dir classification = %+v", got)
 	}
 }
@@ -197,49 +197,49 @@ func TestClassifyInstallationLeaseStates(t *testing.T) {
 	// Ownership contention (a live secondary runtime) is distinct from other
 	// lease failures.
 	contended := eligibleTarballInputs()
-	contended.Lease = LeaseContended
+	contended.Lease = leaseContended
 	got := ClassifyInstallation(contended)
-	if got.Supported || got.Reason != UnsupportedOwnershipContention {
+	if got.Supported || got.Reason != unsupportedOwnershipContention {
 		t.Fatalf("contention classification = %+v", got)
 	}
 	unavailable := eligibleTarballInputs()
-	unavailable.Lease = LeaseUnavailable
-	if got := ClassifyInstallation(unavailable); got.Supported || got.Reason != UnsupportedLeaseUnavailable {
+	unavailable.Lease = leaseUnavailable
+	if got := ClassifyInstallation(unavailable); got.Supported || got.Reason != unsupportedLeaseUnavailable {
 		t.Fatalf("lease-unavailable classification = %+v", got)
 	}
 	noExec := eligibleTarballInputs()
 	noExec.HasExec = false
 	noExec.ExecPath = ""
-	if got := ClassifyInstallation(noExec); got.Supported || got.Reason != UnsupportedLeaseUnavailable {
+	if got := ClassifyInstallation(noExec); got.Supported || got.Reason != unsupportedLeaseUnavailable {
 		t.Fatalf("no-exec classification = %+v", got)
 	}
 }
 
 func TestLeaseStateFromErrorDistinguishesContention(t *testing.T) {
 	t.Parallel()
-	if got := LeaseStateFromError(true, nil); got != LeaseHeld {
+	if got := LeaseStateFromError(true, nil); got != leaseHeld {
 		t.Fatalf("held = %v", got)
 	}
-	if got := LeaseStateFromError(false, &LeaseHeldError{}); got != LeaseContended {
+	if got := LeaseStateFromError(false, &leaseHeldError{}); got != leaseContended {
 		t.Fatalf("contention = %v", got)
 	}
-	if got := LeaseStateFromError(false, os.ErrPermission); got != LeaseUnavailable {
+	if got := LeaseStateFromError(false, os.ErrPermission); got != leaseUnavailable {
 		t.Fatalf("other failure = %v", got)
 	}
-	if got := LeaseStateFromError(false, nil); got != LeaseUnavailable {
+	if got := LeaseStateFromError(false, nil); got != leaseUnavailable {
 		t.Fatalf("no lease no error = %v", got)
 	}
 }
 
 func TestCurrentReleaseVersionPrefersInjectedRelease(t *testing.T) {
 	t.Parallel()
-	if got := CurrentReleaseVersion("v0.9.0-rc1", "1.2.3"); got != "1.2.3" {
+	if got := currentReleaseVersion("v0.9.0-rc1", "1.2.3"); got != "1.2.3" {
 		t.Fatalf("current = %q, want 1.2.3", got)
 	}
-	if got := CurrentReleaseVersion("v1.4.0", ""); got != "1.4.0" {
+	if got := currentReleaseVersion("v1.4.0", ""); got != "1.4.0" {
 		t.Fatalf("current = %q, want 1.4.0", got)
 	}
-	if got := CurrentReleaseVersion("(devel)", "dev"); got != "" {
+	if got := currentReleaseVersion("(devel)", "dev"); got != "" {
 		t.Fatalf("current = %q, want empty", got)
 	}
 }
@@ -263,7 +263,7 @@ func TestIsBundledAppResourcePathSymlinkedCanonicalPaths(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !IsBundledAppResourcePath(resolved) {
+	if !isBundledAppResourcePath(resolved) {
 		t.Fatalf("canonical resolved path %q should classify as bundled", resolved)
 	}
 }

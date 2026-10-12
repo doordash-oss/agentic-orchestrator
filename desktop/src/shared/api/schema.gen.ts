@@ -52,7 +52,7 @@ export interface paths {
         put?: never;
         /**
          * Create a feature.
-         * @description Queues server-owned durable setup for the new feature. While mandatory readiness is not satisfied (no usable provider, invalid configuration), creation is rejected with a structured `not_ready` error whose target carries the outstanding readiness issues.
+         * @description Queues server-owned durable setup for the new feature but does not dispatch it. The created feature reads `SettingUpWorktrees` with `setup.status` `queued`, no `setup.started_at`, every setup task `queued`, and the `setup` action enabled; nothing runs until the client dispatches the `setup` action (setup only, leaving the feature `Created`) or the `start` action (setup, then the first phase). While mandatory readiness is not satisfied (no usable provider, invalid configuration), creation is rejected with a structured `not_ready` error whose target carries the outstanding readiness issues.
          */
         post: operations["createFeature"];
         delete?: never;
@@ -353,26 +353,6 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/api/v1/features/{feature_id}/actions/rebase": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /**
-         * Launch a rebase child feature that merge-reconciles behind repositories.
-         * @description Zero-input child launch: the handler accepts and ignores any JSON body, including the legacy source_revision payload. The orchestrator resolves each repository's merge target (PR base branch, recorded base branch, or repository default branch), fetches, and computes behind-ness. If every repository is up to date, returns the typed rebase_already_up_to_date error naming each resolved target. If any repository fails target resolution or fetch, the whole action fails atomically with a distinct stable code naming the failing repo; no child and no relationship event are created. On success a rebase child of kind "rebase" is created with a pinned medium pipeline, fork-point- pinned worktrees, and persisted resolved targets and behind set. Failure machine codes: 404 parent_not_found; 409 parent_is_child, parent_status_ineligible, active_child_exists, parent_worktrees_dirty, rebase_target_resolution_failed, rebase_fetch_failed, and rebase_already_up_to_date.
-         */
-        post: operations["rebaseFeature"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
     "/api/v1/features/{feature_id}/actions/{action}/{subaction}": {
         parameters: {
             query?: never;
@@ -382,7 +362,10 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        /** Run a named feature subaction. */
+        /**
+         * Run a named feature subaction.
+         * @description The flat response applies to description actions. Review-feedback fetch and selection have typed static operations at their exact URLs.
+         */
         post: operations["runFeatureSubaction"];
         delete?: never;
         options?: never;
@@ -1191,7 +1174,7 @@ export interface paths {
         };
         /**
          * Stream ordered runtime events as SSE.
-         * @description Emits envelope JSON under SSE `data:` lines. Every non-control event includes a monotonic `seq`, `epoch`, resource identity, and resource version. Clients resume with `Last-Event-ID` or `after`.
+         * @description Emits envelope JSON under SSE `data:` lines. Every non-control event includes a monotonic `seq`, `epoch`, resource identity, and resource version. Clients resume with `Last-Event-ID` or `after` (for example a snapshot's `meta.as_of_seq`): retained events after the cursor replay in order. The server retains the most recent 4096 events; a cursor older than that window, beyond the head, or paired with an `epoch` that no longer matches yields one `stream.reset` with `snapshot_required`. A cursor without `epoch` is read in the current epoch, so pass the `epoch` from a previously received event to have a server restart detected. With no cursor the stream starts with `connected`.
          */
         get: operations["streamEvents"];
         put?: never;
@@ -1435,7 +1418,7 @@ export interface components {
             error: components["schemas"]["Error"];
         };
         /**
-         * @description Feature lifecycle action identifier.
+         * @description Feature lifecycle action identifier. `setup` dispatches a feature's queued durable setup (required after create unless the client dispatches `start`) or reruns only the unfinished tasks of a failed setup, asynchronously and without starting orchestration; the feature becomes `Created` when setup completes.
          * @enum {string}
          */
         FeatureAction: "setup" | "start" | "resume" | "pause-stop" | "restart" | "publish" | "merge" | "rewind" | "retry" | "rebase" | "need-user-input" | "need-user-input-draft" | "testing-contract-waive" | "mark-done" | "cleanup" | "delete" | "refactor" | "review-feedback" | "discard";
@@ -1610,6 +1593,10 @@ export interface components {
             version?: string;
             ready: boolean;
             issue?: components["schemas"]["Error"];
+            /** @description Result of a bounded, unauthenticated reachability probe of the custom API endpoint(s) the provider CLI is configured to call (any HTTP response counts as reachable). Absent when the provider has no custom endpoint or the background check has not finished. Never affects `ready`. */
+            endpoint_reachable?: boolean;
+            /** @description Non-blocking warning (provider_endpoint_unreachable) for a provider whose configured endpoint is unreachable. */
+            warning?: components["schemas"]["Error"];
         };
         ModelReadiness: {
             available: boolean;
@@ -2179,31 +2166,6 @@ export interface components {
             items: components["schemas"]["RecoveryItem"][];
         };
         ActionBaseResponse: components["schemas"]["JSONResponse"];
-        ActionResponse: components["schemas"]["ActionBaseResponse"] & {
-            create_feature_response?: components["schemas"]["CreateFeatureResponse"];
-            feature_setup_response?: components["schemas"]["FeatureSetupResponse"];
-            feature_start_response?: components["schemas"]["FeatureStartResponse"];
-            feature_stop_response?: components["schemas"]["FeatureStopResponse"];
-            feature_restart_response?: components["schemas"]["FeatureRestartResponse"];
-            feature_config_update_response?: components["schemas"]["FeatureConfigUpdateResponse"];
-            need_user_input_resume_response?: components["schemas"]["NeedUserInputResumeResponse"];
-            need_user_input_draft_response?: components["schemas"]["NeedUserInputDraftResponse"];
-            testing_contract_waive_response?: components["schemas"]["TestingContractWaiveResponse"];
-            permission_answer_response?: components["schemas"]["PermissionAnswerResponse"];
-            ask_user_answer_response?: components["schemas"]["AskUserAnswerResponse"];
-            help_send_response?: components["schemas"]["HelpSendResponse"];
-            runtime_config_update_response?: components["schemas"]["RuntimeConfigUpdateResponse"];
-            publish_feature_response?: components["schemas"]["PublishFeatureResponse"];
-            publish_description_response?: components["schemas"]["PublishDescriptionResponse"];
-            merge_feature_response?: components["schemas"]["MergeFeatureResponse"];
-            rewind_feature_response?: components["schemas"]["RewindFeatureResponse"];
-            retry_feature_response?: components["schemas"]["RetryFeatureResponse"];
-            mark_done_response?: components["schemas"]["MarkDoneResponse"];
-            cleanup_feature_response?: components["schemas"]["CleanupFeatureResponse"];
-            delete_feature_response?: components["schemas"]["DeleteFeatureResponse"];
-            discard_child_response?: components["schemas"]["DiscardChildResponse"];
-            recovery_action_response?: components["schemas"]["RecoveryActionResponse"];
-        };
         CreateFeatureResponse: components["schemas"]["ActionBaseResponse"] & components["schemas"]["FeatureActionResult"] & {
             /** @description Canonical nonblocking warnings from best-effort feature-branch collision checks. They do not assert source freshness or remote branch availability. */
             warnings?: components["schemas"]["Error"][];
@@ -2237,21 +2199,7 @@ export interface components {
             /** Format: int64 */
             size: number;
         };
-        /** @description Result of the setup action: durable server-owned setup (fresh run or retry of unfinished tasks) has been dispatched without starting orchestration. Progress is reported through the feature detail setup state and SSE invalidation events; on success the feature reaches a startable pre-orchestration state. */
-        FeatureSetupResponse: components["schemas"]["ActionBaseResponse"] & components["schemas"]["FeatureActionResult"];
-        FeatureStartResponse: components["schemas"]["ActionBaseResponse"] & components["schemas"]["FeatureActionResult"] & {
-            phase?: string;
-            session_ids?: string[];
-        };
-        FeatureStopResponse: components["schemas"]["ActionBaseResponse"] & components["schemas"]["FeatureActionResult"];
-        FeatureRestartResponse: components["schemas"]["ActionBaseResponse"] & components["schemas"]["FeatureActionResult"] & {
-            phase?: string;
-            dispatch?: string;
-            session_ids?: string[];
-        };
-        FeatureConfigUpdateResponse: components["schemas"]["ActionBaseResponse"] & components["schemas"]["FeatureActionResult"];
-        NeedUserInputResumeResponse: components["schemas"]["ActionBaseResponse"] & components["schemas"]["FeatureActionResult"];
-        NeedUserInputDraftResponse: components["schemas"]["ActionBaseResponse"] & components["schemas"]["FeatureActionResult"];
+        FeatureActionResponse: components["schemas"]["ActionBaseResponse"] & components["schemas"]["FeatureActionResult"];
         TestingContractWaiveResponse: components["schemas"]["ActionBaseResponse"] & components["schemas"]["FeatureActionResult"] & {
             contract_revision: number;
             waived_items: string[];
@@ -2290,12 +2238,10 @@ export interface components {
             error: components["schemas"]["Error"];
         };
         RuntimeConfigUpdateResponse: components["schemas"]["ActionBaseResponse"] & components["schemas"]["ActionResult"];
-        PublishFeatureResponse: components["schemas"]["ActionBaseResponse"] & components["schemas"]["FeatureActionResult"];
         PublishDescriptionResponse: components["schemas"]["ActionBaseResponse"] & components["schemas"]["FeatureActionResult"] & {
             title: string;
             body: string;
         };
-        MergeFeatureResponse: components["schemas"]["ActionBaseResponse"] & components["schemas"]["FeatureActionResult"];
         RewindFeatureResponse: components["schemas"]["ActionBaseResponse"] & components["schemas"]["FeatureActionResult"] & {
             target_phase?: string;
             effective_phase?: string;
@@ -2342,7 +2288,6 @@ export interface components {
             /** @enum {string} */
             reset_kind: "anchor" | "base" | "base-local" | "none";
         };
-        RetryFeatureResponse: components["schemas"]["ActionBaseResponse"] & components["schemas"]["FeatureActionResult"];
         RefactorFeatureRequest: {
             name: string;
             description?: string;
@@ -2359,11 +2304,8 @@ export interface components {
             /** @enum {string} */
             inquireness?: "none" | "medium" | "high";
         };
-        RefactorFeatureResponse: components["schemas"]["ActionBaseResponse"] & components["schemas"]["FeatureActionResult"] & {
-            parent_id: string;
-        };
         /** @description Common child reference returned by typed child-launch actions. */
-        ChildFeatureResponse: components["schemas"]["ActionBaseResponse"] & components["schemas"]["FeatureActionResult"] & {
+        ChildLaunchResponse: components["schemas"]["ActionBaseResponse"] & components["schemas"]["FeatureActionResult"] & {
             parent_id: string;
         };
         /** @description Intentionally empty: review feedback is always fetched across every parent repository with a PR URL and has no mode selector. */
@@ -2432,8 +2374,7 @@ export interface components {
             /** @description When present, sets both Roadmap review and Phase plan review on the parent and child. When omitted, inherits the parent's Roadmap review value. */
             gate?: boolean;
         };
-        ReviewFeedbackFeatureResponse: components["schemas"]["ActionBaseResponse"] & components["schemas"]["FeatureActionResult"] & {
-            parent_id: string;
+        ReviewFeedbackFeatureResponse: components["schemas"]["ChildLaunchResponse"] & {
             /** @description Identity of the created review-feedback child. */
             child_id?: string;
             /** @description Selected reviewed references still present at launch whose child-visible content changed since the reviewed snapshot. */
@@ -2443,14 +2384,6 @@ export interface components {
             /** @description Comments first observed after the reviewed snapshot, deferred to a future pass. */
             deferred?: number;
         };
-        /** @description Zero-input request. Any JSON body (including the legacy source_revision payload) is accepted and ignored; the rebase child launch takes no user input. */
-        RebaseFeatureRequest: {
-            [key: string]: unknown;
-        };
-        RebaseFeatureResponse: components["schemas"]["ActionBaseResponse"] & components["schemas"]["FeatureActionResult"] & {
-            parent_id: string;
-        };
-        MarkDoneResponse: components["schemas"]["ActionBaseResponse"] & components["schemas"]["FeatureActionResult"];
         CompletionPreflightResponse: components["schemas"]["JSONResponse"] & {
             feature_id: string;
             /** @description Authoritative revision of the repository state this preflight observed. Publish/merge/mark-done mutations reject a stale preflight before any side effect. */
@@ -2537,6 +2470,7 @@ export interface components {
             operation_id: string;
             /** @enum {string} */
             status: "completed" | "cleanup_pending" | "attention_required";
+            retryable?: boolean;
             diagnostics?: components["schemas"]["CascadeDiagnostic"][];
         };
         CascadeDiagnostic: {
@@ -2548,7 +2482,6 @@ export interface components {
             candidate_sha?: string;
             observed_sha?: string;
         };
-        DiscardChildResponse: components["schemas"]["ActionBaseResponse"] & components["schemas"]["FeatureActionResult"];
         RecoveryActionResponse: components["schemas"]["ActionBaseResponse"] & components["schemas"]["ActionResult"];
         ActionResult: {
             result: string;
@@ -2684,9 +2617,13 @@ export interface components {
             allowed_actions: string[];
         };
         Setup: {
+            /** @description `queued` (created, awaiting the `setup` or `start` action), `running` (dispatched), `done`, or `failed`. */
             status: string;
             attempt?: number;
-            /** Format: date-time */
+            /**
+             * Format: date-time
+             * @description Start of the latest dispatched attempt; absent while setup is queued.
+             */
             started_at?: string;
             /** Format: date-time */
             completed_at?: string;
@@ -2755,6 +2692,7 @@ export interface components {
             /** Format: double */
             auto_pick_confidence?: number;
             file_change?: components["schemas"]["FileChange"];
+            /** @description Sanitized tool call detail on tool_use and tool_progress rows. On tool_progress rows only summary is set: one line (at most 200 characters) naming what the tool acts on (title, path, pattern, or command), never its output; absent when the provider reports nothing beyond the tool name. */
             tool_call?: components["schemas"]["ToolCall"];
             task?: components["schemas"]["Task"];
         };
@@ -3148,7 +3086,12 @@ export interface components {
             reviewing_gate: boolean;
             review_fixing: boolean;
             validating_plan: boolean;
+            /** @description Live state per validator: running, retrying, interrupted, error, or its verdict. */
             validator_statuses?: {
+                [key: string]: string;
+            };
+            /** @description Last error of each validator that failed or is retrying, keyed like validator_statuses. */
+            validator_errors?: {
                 [key: string]: string;
             };
         };
@@ -3229,6 +3172,14 @@ export interface components {
             committing?: boolean;
             timing: components["schemas"]["Timing"];
             cost: components["schemas"]["Cost"];
+            sandbox?: components["schemas"]["RunSandbox"];
+        };
+        /** @description Present only when this run executed harness verification commands or launched review validators while the OS verification sandbox was unavailable (for example nested macOS sandbox-exec); those commands ran unconfined. */
+        RunSandbox: {
+            /** @description Always false when present. */
+            available: boolean;
+            /** @description Why the sandbox probe failed. */
+            reason?: string;
         };
         RunListResponse: components["schemas"]["JSONResponse"] & {
             runs: components["schemas"]["RunSummary"][];
@@ -4025,12 +3976,66 @@ export interface components {
             };
         };
         /** @description Mutation result. */
-        ActionResponse: {
+        FeatureActionResponse: {
             headers: {
                 [name: string]: unknown;
             };
             content: {
-                "application/json": components["schemas"]["ActionResponse"];
+                "application/json": components["schemas"]["FeatureActionResponse"];
+            };
+        };
+        /** @description Mutation result. */
+        CreateFeatureResponse: {
+            headers: {
+                [name: string]: unknown;
+            };
+            content: {
+                "application/json": components["schemas"]["CreateFeatureResponse"];
+            };
+        };
+        /** @description Mutation result. */
+        RuntimeConfigUpdateResponse: {
+            headers: {
+                [name: string]: unknown;
+            };
+            content: {
+                "application/json": components["schemas"]["RuntimeConfigUpdateResponse"];
+            };
+        };
+        /** @description Mutation result. */
+        AskUserAnswerResponse: {
+            headers: {
+                [name: string]: unknown;
+            };
+            content: {
+                "application/json": components["schemas"]["AskUserAnswerResponse"];
+            };
+        };
+        /** @description Mutation result. */
+        HelpSendResponse: {
+            headers: {
+                [name: string]: unknown;
+            };
+            content: {
+                "application/json": components["schemas"]["HelpSendResponse"];
+            };
+        };
+        /** @description Mutation result. */
+        PermissionAnswerResponse: {
+            headers: {
+                [name: string]: unknown;
+            };
+            content: {
+                "application/json": components["schemas"]["PermissionAnswerResponse"];
+            };
+        };
+        /** @description Mutation result. */
+        RecoveryActionResponse: {
+            headers: {
+                [name: string]: unknown;
+            };
+            content: {
+                "application/json": components["schemas"]["RecoveryActionResponse"];
             };
         };
         /** @description Structured API error. */
@@ -4142,7 +4147,7 @@ export interface components {
         LogID: string;
         SessionID: string;
         FeatureAction: components["schemas"]["FeatureAction"];
-        FeatureSubaction: "description" | "fetch";
+        FeatureSubaction: "description" | "fetch" | "selection";
         Offset: number;
         Limit: number;
         /** @description 1-indexed page number for run-history pagination. */
@@ -4223,7 +4228,7 @@ export interface operations {
             };
         };
         responses: {
-            201: components["responses"]["ActionResponse"];
+            201: components["responses"]["CreateFeatureResponse"];
             400: components["responses"]["ErrorResponse"];
             401: components["responses"]["Unauthorized"];
             409: components["responses"]["ErrorResponse"];
@@ -4276,7 +4281,7 @@ export interface operations {
         };
         requestBody: components["requestBodies"]["JSONMutation"];
         responses: {
-            200: components["responses"]["ActionResponse"];
+            200: components["responses"]["FeatureActionResponse"];
             401: components["responses"]["Unauthorized"];
         };
     };
@@ -4490,14 +4495,14 @@ export interface operations {
         };
         requestBody: components["requestBodies"]["JSONMutation"];
         responses: {
-            200: components["responses"]["ActionResponse"];
-            /** @description Child launched. The typed contracts are documented by the static refactorFeature and reviewFeedbackFeature operations at their exact action URLs. */
+            200: components["responses"]["FeatureActionResponse"];
+            /** @description Child launched. Refactor and review-feedback have typed static operations at their exact action URLs; rebase uses this generic route. The 200 response is the flat feature-action shape for lifecycle actions. RewindFeatureResponse, TestingContractWaiveResponse, CleanupFeatureResponse, DeleteFeatureResponse, and PublishDescriptionResponse describe action-specific bodies. */
             201: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["ChildFeatureResponse"];
+                    "application/json": components["schemas"]["ChildLaunchResponse"];
                 };
             };
             401: components["responses"]["Unauthorized"];
@@ -4528,7 +4533,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["RefactorFeatureResponse"];
+                    "application/json": components["schemas"]["ChildLaunchResponse"];
                 };
             };
             401: components["responses"]["Unauthorized"];
@@ -4635,38 +4640,6 @@ export interface operations {
             409: components["responses"]["ErrorResponse"];
         };
     };
-    rebaseFeature: {
-        parameters: {
-            query?: never;
-            header: {
-                /** @description CSRF defense-in-depth for local browser-origin mutations. Bearer auth is still required. */
-                "X-Agentico-Client": components["parameters"]["TrustedMutationHeader"];
-            };
-            path: {
-                feature_id: components["parameters"]["FeatureID"];
-            };
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["RebaseFeatureRequest"];
-            };
-        };
-        responses: {
-            /** @description Rebase child launched and setup queued. */
-            201: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["RebaseFeatureResponse"];
-                };
-            };
-            401: components["responses"]["Unauthorized"];
-            404: components["responses"]["ErrorResponse"];
-            409: components["responses"]["ErrorResponse"];
-        };
-    };
     runFeatureSubaction: {
         parameters: {
             query?: never;
@@ -4683,7 +4656,7 @@ export interface operations {
         };
         requestBody: components["requestBodies"]["JSONMutation"];
         responses: {
-            200: components["responses"]["ActionResponse"];
+            200: components["responses"]["FeatureActionResponse"];
             401: components["responses"]["Unauthorized"];
         };
     };
@@ -4852,7 +4825,7 @@ export interface operations {
         };
         requestBody: components["requestBodies"]["JSONMutation"];
         responses: {
-            200: components["responses"]["ActionResponse"];
+            200: components["responses"]["RuntimeConfigUpdateResponse"];
             400: components["responses"]["ErrorResponse"];
             401: components["responses"]["Unauthorized"];
         };
@@ -4990,7 +4963,7 @@ export interface operations {
         };
         requestBody: components["requestBodies"]["JSONMutation"];
         responses: {
-            200: components["responses"]["ActionResponse"];
+            200: components["responses"]["AskUserAnswerResponse"];
             401: components["responses"]["Unauthorized"];
         };
     };
@@ -5006,7 +4979,7 @@ export interface operations {
         };
         requestBody: components["requestBodies"]["JSONMutation"];
         responses: {
-            200: components["responses"]["ActionResponse"];
+            200: components["responses"]["HelpSendResponse"];
             401: components["responses"]["Unauthorized"];
         };
     };
@@ -5039,7 +5012,7 @@ export interface operations {
             };
         };
         responses: {
-            200: components["responses"]["ActionResponse"];
+            200: components["responses"]["PermissionAnswerResponse"];
             401: components["responses"]["Unauthorized"];
         };
     };
@@ -5404,7 +5377,7 @@ export interface operations {
         };
         requestBody: components["requestBodies"]["JSONMutation"];
         responses: {
-            200: components["responses"]["ActionResponse"];
+            200: components["responses"]["RecoveryActionResponse"];
             401: components["responses"]["Unauthorized"];
         };
     };

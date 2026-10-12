@@ -24,68 +24,68 @@ import (
 )
 
 func TestValidateVerificationReport_SchemaChecks(t *testing.T) {
-	required := []RequiredVerificationItem{
+	required := []requiredVerificationItem{
 		{Name: "Unit tests", Requirement: "go test ./..."},
 		{Name: "Lint", Requirement: "go vet ./..."},
 	}
 
 	tests := []struct {
 		name           string
-		report         *VerificationReport
+		report         *verificationReport
 		rootSuccess    bool
 		wantRejected   bool
-		wantCategories []ReportGateCategory
+		wantCategories []reportGateCategory
 		wantDetailHas  []string
 	}{
 		{
 			name: "missing_required_check",
-			report: &VerificationReport{
+			report: &verificationReport{
 				Version: 1,
-				RequiredChecks: []VerificationCheckResult{
-					{Name: "Unit tests", Requirement: "go test ./...", Status: VerificationStatusPassed, Evidence: "ok 100 packages"},
+				RequiredChecks: []verificationCheckResult{
+					{Name: "Unit tests", Requirement: "go test ./...", Status: verificationStatusPassed, Evidence: "ok 100 packages"},
 					// Lint check intentionally omitted.
 				},
 			},
 			rootSuccess:    true,
 			wantRejected:   true,
-			wantCategories: []ReportGateCategory{GateCategorySchema},
+			wantCategories: []reportGateCategory{gateCategorySchema},
 			wantDetailHas:  []string{"missing from the report", "go vet ./..."},
 		},
 		{
 			name: "passed_with_empty_evidence",
-			report: &VerificationReport{
+			report: &verificationReport{
 				Version: 1,
-				RequiredChecks: []VerificationCheckResult{
-					{Name: "Unit tests", Requirement: "go test ./...", Status: VerificationStatusPassed, Evidence: ""},
-					{Name: "Lint", Requirement: "go vet ./...", Status: VerificationStatusPassed, Evidence: "clean"},
+				RequiredChecks: []verificationCheckResult{
+					{Name: "Unit tests", Requirement: "go test ./...", Status: verificationStatusPassed, Evidence: ""},
+					{Name: "Lint", Requirement: "go vet ./...", Status: verificationStatusPassed, Evidence: "clean"},
 				},
 			},
 			rootSuccess:    true,
 			wantRejected:   true,
-			wantCategories: []ReportGateCategory{GateCategorySchema},
+			wantCategories: []reportGateCategory{gateCategorySchema},
 			wantDetailHas:  []string{"evidence is empty"},
 		},
 		{
 			name: "not_run_when_root_reports_success",
-			report: &VerificationReport{
+			report: &verificationReport{
 				Version: 1,
-				RequiredChecks: []VerificationCheckResult{
-					{Name: "Unit tests", Requirement: "go test ./...", Status: VerificationStatusPassed, Evidence: "ok"},
-					{Name: "Lint", Requirement: "go vet ./...", Status: VerificationStatusNotRun},
+				RequiredChecks: []verificationCheckResult{
+					{Name: "Unit tests", Requirement: "go test ./...", Status: verificationStatusPassed, Evidence: "ok"},
+					{Name: "Lint", Requirement: "go vet ./...", Status: verificationStatusNotRun},
 				},
 			},
 			rootSuccess:    true,
 			wantRejected:   true,
-			wantCategories: []ReportGateCategory{GateCategorySchema},
+			wantCategories: []reportGateCategory{gateCategorySchema},
 			wantDetailHas:  []string{"not_run", "root outcome reports success"},
 		},
 		{
 			name: "not_run_without_root_success_is_ok",
-			report: &VerificationReport{
+			report: &verificationReport{
 				Version: 1,
-				RequiredChecks: []VerificationCheckResult{
-					{Name: "Unit tests", Requirement: "go test ./...", Status: VerificationStatusNotRun},
-					{Name: "Lint", Requirement: "go vet ./...", Status: VerificationStatusNotRun},
+				RequiredChecks: []verificationCheckResult{
+					{Name: "Unit tests", Requirement: "go test ./...", Status: verificationStatusNotRun},
+					{Name: "Lint", Requirement: "go vet ./...", Status: verificationStatusNotRun},
 				},
 			},
 			rootSuccess:  false,
@@ -93,25 +93,25 @@ func TestValidateVerificationReport_SchemaChecks(t *testing.T) {
 		},
 		{
 			name: "unknown_status_value",
-			report: &VerificationReport{
+			report: &verificationReport{
 				Version: 1,
-				RequiredChecks: []VerificationCheckResult{
-					{Name: "Unit tests", Requirement: "go test ./...", Status: VerificationRunStatus("maybe"), Evidence: "sort of"},
-					{Name: "Lint", Requirement: "go vet ./...", Status: VerificationStatusPassed, Evidence: "clean"},
+				RequiredChecks: []verificationCheckResult{
+					{Name: "Unit tests", Requirement: "go test ./...", Status: verificationRunStatus("maybe"), Evidence: "sort of"},
+					{Name: "Lint", Requirement: "go vet ./...", Status: verificationStatusPassed, Evidence: "clean"},
 				},
 			},
 			rootSuccess:    true,
 			wantRejected:   true,
-			wantCategories: []ReportGateCategory{GateCategorySchema},
+			wantCategories: []reportGateCategory{gateCategorySchema},
 			wantDetailHas:  []string{"\"maybe\""},
 		},
 		{
 			name: "raw_pass_short_form_is_normalized",
-			report: &VerificationReport{
+			report: &verificationReport{
 				Version: 1,
-				RequiredChecks: []VerificationCheckResult{
-					{Name: "Unit tests", Requirement: "go test ./...", Status: VerificationRunStatus("pass"), Evidence: "ok"},
-					{Name: "Lint", Requirement: "go vet ./...", Status: VerificationRunStatus("pass"), Evidence: "clean"},
+				RequiredChecks: []verificationCheckResult{
+					{Name: "Unit tests", Requirement: "go test ./...", Status: verificationRunStatus("pass"), Evidence: "ok"},
+					{Name: "Lint", Requirement: "go vet ./...", Status: verificationRunStatus("pass"), Evidence: "clean"},
 				},
 			},
 			rootSuccess:  true,
@@ -119,11 +119,11 @@ func TestValidateVerificationReport_SchemaChecks(t *testing.T) {
 		},
 		{
 			name: "clean_report_passes",
-			report: &VerificationReport{
+			report: &verificationReport{
 				Version: 1,
-				RequiredChecks: []VerificationCheckResult{
-					{Name: "Unit tests", Requirement: "go test ./...", Status: VerificationStatusPassed, Evidence: "ok 100 packages, 0 failures"},
-					{Name: "Lint", Requirement: "go vet ./...", Status: VerificationStatusPassed, Evidence: "no issues"},
+				RequiredChecks: []verificationCheckResult{
+					{Name: "Unit tests", Requirement: "go test ./...", Status: verificationStatusPassed, Evidence: "ok 100 packages, 0 failures"},
+					{Name: "Lint", Requirement: "go vet ./...", Status: verificationStatusPassed, Evidence: "no issues"},
 				},
 			},
 			rootSuccess:  true,
@@ -131,11 +131,11 @@ func TestValidateVerificationReport_SchemaChecks(t *testing.T) {
 		},
 		{
 			name: "failed_status_does_not_reject",
-			report: &VerificationReport{
+			report: &verificationReport{
 				Version: 1,
-				RequiredChecks: []VerificationCheckResult{
-					{Name: "Unit tests", Requirement: "go test ./...", Status: VerificationStatusPassed, Evidence: "ok"},
-					{Name: "Lint", Requirement: "go vet ./...", Status: VerificationStatusFailed, Evidence: "3 issues found"},
+				RequiredChecks: []verificationCheckResult{
+					{Name: "Unit tests", Requirement: "go test ./...", Status: verificationStatusPassed, Evidence: "ok"},
+					{Name: "Lint", Requirement: "go vet ./...", Status: verificationStatusFailed, Evidence: "3 issues found"},
 				},
 			},
 			rootSuccess:  true,
@@ -147,14 +147,14 @@ func TestValidateVerificationReport_SchemaChecks(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			// Normalize statuses the way ReadVerificationReport would.
 			for i := range tt.report.RequiredChecks {
-				tt.report.RequiredChecks[i].Status = NormalizeStatus(tt.report.RequiredChecks[i].Status)
+				tt.report.RequiredChecks[i].Status = normalizeStatus(tt.report.RequiredChecks[i].Status)
 			}
-			result := ValidateVerificationReport(tt.report, required, nil, tt.rootSuccess)
+			result := validateVerificationReportWithContext(tt.report, required, tt.rootSuccess, verificationReportValidationContext{})
 			if result.Rejected != tt.wantRejected {
 				t.Fatalf("Rejected=%v, want %v; findings=%+v", result.Rejected, tt.wantRejected, result.Findings)
 			}
 			if tt.wantRejected {
-				gotCats := make(map[ReportGateCategory]bool)
+				gotCats := make(map[reportGateCategory]bool)
 				for _, f := range result.Findings {
 					gotCats[f.Category] = true
 				}
@@ -178,7 +178,7 @@ func TestValidateVerificationReport_SchemaChecks(t *testing.T) {
 }
 
 func TestValidateVerificationReport_HedgePhrasesBlockPassClaims(t *testing.T) {
-	required := []RequiredVerificationItem{{Name: "Lint", Requirement: "task lint"}}
+	required := []requiredVerificationItem{{Name: "Lint", Requirement: "task lint"}}
 	phrases := []string{
 		"CAVEAT",
 		"pre-existing bug",
@@ -190,24 +190,24 @@ func TestValidateVerificationReport_HedgePhrasesBlockPassClaims(t *testing.T) {
 
 	for _, phrase := range phrases {
 		t.Run(phrase, func(t *testing.T) {
-			report := &VerificationReport{
+			report := &verificationReport{
 				Version: 1,
-				RequiredChecks: []VerificationCheckResult{
+				RequiredChecks: []verificationCheckResult{
 					{
 						Name:        "Lint",
 						Requirement: "task lint",
-						Status:      VerificationStatusPassed,
+						Status:      verificationStatusPassed,
 						Evidence:    "linter exits 0 — " + phrase,
 					},
 				},
 			}
-			result := ValidateVerificationReport(report, required, nil, true)
+			result := validateVerificationReportWithContext(report, required, true, verificationReportValidationContext{})
 			if !result.Rejected {
 				t.Fatalf("expected rejection for hedge phrase %q, got clean; evidence=%q", phrase, report.RequiredChecks[0].Evidence)
 			}
 			found := false
 			for _, f := range result.Findings {
-				if f.Category == GateCategoryHedge {
+				if f.Category == gateCategoryHedge {
 					found = true
 				}
 			}
@@ -220,28 +220,28 @@ func TestValidateVerificationReport_HedgePhrasesBlockPassClaims(t *testing.T) {
 
 func TestValidateVerificationReport_ManualPendingHumanRequiresContext(t *testing.T) {
 	contract := CompileTestingContract("### Manual Verification\n- [ ] Exercise the primary workflow.\n", "/tmp/phase-01/plan.md", "collapsed")
-	report := BuildContractVerificationReportStub(&contract, "/tmp/phase-01/testing-contract.yaml")
+	report := buildContractVerificationReportStub(&contract, "/tmp/phase-01/testing-contract.yaml")
 	for i := range report.Results {
-		if report.Results[i].Mode == VerificationModeManual {
-			report.Results[i].Status = VerificationStatusPendingHuman
+		if report.Results[i].Mode == verificationModeManual {
+			report.Results[i].Status = verificationStatusPendingHuman
 			continue
 		}
-		report.Results[i].Status = VerificationStatusPassed
+		report.Results[i].Status = verificationStatusPassed
 		exitCode := 0
-		report.Results[i].EvidenceData = VerificationEvidence{ExitCode: &exitCode, Summary: "passed"}
+		report.Results[i].EvidenceData = verificationEvidence{ExitCode: &exitCode, Summary: "passed"}
 	}
 
-	result := ValidateVerificationReport(&report, nil, &contract, true)
+	result := validateVerificationReportWithContext(&report, nil, true, verificationReportValidationContext{Contract: &contract})
 	if !result.Rejected {
 		t.Fatalf("pending_human manual row without context should be rejected")
 	}
 
 	for i := range report.Results {
-		if report.Results[i].Mode == VerificationModeManual {
+		if report.Results[i].Mode == verificationModeManual {
 			report.Results[i].BlockedReason = "Requires a signed production account owned by release QA."
 		}
 	}
-	result = ValidateVerificationReport(&report, nil, &contract, true)
+	result = validateVerificationReportWithContext(&report, nil, true, verificationReportValidationContext{Contract: &contract})
 	if result.Rejected {
 		t.Fatalf("pending_human manual row with owner should pass gate: %+v", result.Findings)
 	}
@@ -249,16 +249,16 @@ func TestValidateVerificationReport_ManualPendingHumanRequiresContext(t *testing
 
 func TestValidateVerificationReport_PendingHumanNonManualRejected(t *testing.T) {
 	contract := CompileTestingContract("### Automated Verification\n- [ ] Agent tests: `go test ./internal/agent/... -count=1`\n", "/tmp/phase-01/plan.md", "collapsed")
-	report := BuildContractVerificationReportStub(&contract, "/tmp/phase-01/testing-contract.yaml")
+	report := buildContractVerificationReportStub(&contract, "/tmp/phase-01/testing-contract.yaml")
 	for i := range report.Results {
-		report.Results[i].Status = VerificationStatusPassed
+		report.Results[i].Status = verificationStatusPassed
 		exitCode := 0
-		report.Results[i].EvidenceData = VerificationEvidence{ExitCode: &exitCode, Summary: "passed"}
+		report.Results[i].EvidenceData = verificationEvidence{ExitCode: &exitCode, Summary: "passed"}
 	}
-	report.Results[len(report.Results)-1].Status = VerificationStatusPendingHuman
-	report.Results[len(report.Results)-1].EvidenceData = VerificationEvidence{}
+	report.Results[len(report.Results)-1].Status = verificationStatusPendingHuman
+	report.Results[len(report.Results)-1].EvidenceData = verificationEvidence{}
 
-	result := ValidateVerificationReport(&report, nil, &contract, true)
+	result := validateVerificationReportWithContext(&report, nil, true, verificationReportValidationContext{Contract: &contract})
 	if !result.Rejected {
 		t.Fatalf("pending_human command row should be rejected")
 	}
@@ -272,13 +272,13 @@ func TestValidateVerificationReport_EvidenceModesSchemaOnly(t *testing.T) {
 		"### Behavioral Evidence",
 		"- [ ] Attach the workflow transcript.",
 	}, "\n"), "/tmp/phase-01/plan.md", "collapsed")
-	report := BuildContractVerificationReportStub(&contract, "/tmp/phase-01/testing-contract.yaml")
+	report := buildContractVerificationReportStub(&contract, "/tmp/phase-01/testing-contract.yaml")
 	for i := range report.Results {
-		report.Results[i].Status = VerificationStatusPassed
-		report.Results[i].EvidenceData = VerificationEvidence{Summary: "artifact path recorded in the implementation log"}
+		report.Results[i].Status = verificationStatusPassed
+		report.Results[i].EvidenceData = verificationEvidence{Summary: "artifact path recorded in the implementation log"}
 	}
 
-	result := ValidateVerificationReport(&report, nil, &contract, true)
+	result := validateVerificationReportWithContext(&report, nil, true, verificationReportValidationContext{Contract: &contract})
 	if result.Rejected {
 		t.Fatalf("visual/behavioral evidence modes should only receive schema validation in this phase: %+v", result.Findings)
 	}
@@ -299,16 +299,16 @@ func TestValidateVerificationReportWithContext_EvidenceFiles(t *testing.T) {
 	mustWriteEvidenceFile(t, iterDir, "behaviors/workflow.log")
 
 	report := passedArtifactReportForTest(&contract, filepath.Join(iterDir, "testing-contract.yaml"))
-	setArtifactEvidenceForTest(&report, VerificationModeVisual, VerificationEvidence{
+	setArtifactEvidenceForTest(&report, verificationModeVisual, verificationEvidence{
 		Primary:     "screenshots/dashboard.png",
 		Attachments: []string{"screenshots/dashboard-detail.png"},
 	})
-	setArtifactEvidenceForTest(&report, VerificationModeBehavioral, VerificationEvidence{
+	setArtifactEvidenceForTest(&report, verificationModeBehavioral, verificationEvidence{
 		Summary: "workflow completed",
 		Primary: "behaviors/workflow.log",
 	})
 
-	result := ValidateVerificationReportWithContext(&report, nil, true, VerificationReportValidationContext{
+	result := validateVerificationReportWithContext(&report, nil, true, verificationReportValidationContext{
 		IterationDir: iterDir,
 		Contract:     &contract,
 	})
@@ -318,41 +318,41 @@ func TestValidateVerificationReportWithContext_EvidenceFiles(t *testing.T) {
 
 	tests := []struct {
 		name       string
-		mutate     func(*VerificationReport)
+		mutate     func(*verificationReport)
 		wantDetail string
 	}{
 		{
 			name: "missing_primary",
-			mutate: func(report *VerificationReport) {
-				setArtifactEvidenceForTest(report, VerificationModeVisual, VerificationEvidence{})
+			mutate: func(report *verificationReport) {
+				setArtifactEvidenceForTest(report, verificationModeVisual, verificationEvidence{})
 			},
 			wantDetail: "evidence.primary",
 		},
 		{
 			name: "wrong_root",
-			mutate: func(report *VerificationReport) {
-				setArtifactEvidenceForTest(report, VerificationModeVisual, VerificationEvidence{Primary: "behaviors/dashboard.png"})
+			mutate: func(report *verificationReport) {
+				setArtifactEvidenceForTest(report, verificationModeVisual, verificationEvidence{Primary: "behaviors/dashboard.png"})
 			},
 			wantDetail: "screenshots/",
 		},
 		{
 			name: "traversal",
-			mutate: func(report *VerificationReport) {
-				setArtifactEvidenceForTest(report, VerificationModeBehavioral, VerificationEvidence{Primary: "behaviors/../workflow.log"})
+			mutate: func(report *verificationReport) {
+				setArtifactEvidenceForTest(report, verificationModeBehavioral, verificationEvidence{Primary: "behaviors/../workflow.log"})
 			},
 			wantDetail: "traversal",
 		},
 		{
 			name: "absolute",
-			mutate: func(report *VerificationReport) {
-				setArtifactEvidenceForTest(report, VerificationModeBehavioral, VerificationEvidence{Primary: filepath.Join(iterDir, "behaviors/workflow.log")})
+			mutate: func(report *verificationReport) {
+				setArtifactEvidenceForTest(report, verificationModeBehavioral, verificationEvidence{Primary: filepath.Join(iterDir, "behaviors/workflow.log")})
 			},
 			wantDetail: "absolute",
 		},
 		{
 			name: "missing_attachment",
-			mutate: func(report *VerificationReport) {
-				setArtifactEvidenceForTest(report, VerificationModeVisual, VerificationEvidence{
+			mutate: func(report *verificationReport) {
+				setArtifactEvidenceForTest(report, verificationModeVisual, verificationEvidence{
 					Primary:     "screenshots/dashboard.png",
 					Attachments: []string{"screenshots/missing.png"},
 				})
@@ -364,9 +364,9 @@ func TestValidateVerificationReportWithContext_EvidenceFiles(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			candidate := report
-			candidate.Results = append([]VerificationCheckResult(nil), report.Results...)
+			candidate.Results = append([]verificationCheckResult(nil), report.Results...)
 			tt.mutate(&candidate)
-			result := ValidateVerificationReportWithContext(&candidate, nil, true, VerificationReportValidationContext{
+			result := validateVerificationReportWithContext(&candidate, nil, true, verificationReportValidationContext{
 				IterationDir: iterDir,
 				Contract:     &contract,
 			})
@@ -386,14 +386,14 @@ func TestValidateVerificationReportWithContext_EvidenceFilesSkippedForBlockedRow
 	contract := CompileTestingContract("## Success Criteria\n### Visual Evidence\n- [ ] Capture the dashboard screenshot.\n", filepath.Join(iterDir, "plan.md"), "collapsed")
 	report := passedArtifactReportForTest(&contract, filepath.Join(iterDir, "testing-contract.yaml"))
 	for i := range report.Results {
-		if report.Results[i].Mode == VerificationModeVisual {
-			report.Results[i].Status = VerificationStatusBlocked
+		if report.Results[i].Mode == verificationModeVisual {
+			report.Results[i].Status = verificationStatusBlocked
 			report.Results[i].BlockedReason = "external screenshot runner unavailable"
-			report.Results[i].EvidenceData = VerificationEvidence{}
+			report.Results[i].EvidenceData = verificationEvidence{}
 		}
 	}
 
-	result := ValidateVerificationReportWithContext(&report, nil, true, VerificationReportValidationContext{
+	result := validateVerificationReportWithContext(&report, nil, true, verificationReportValidationContext{
 		IterationDir: iterDir,
 		Contract:     &contract,
 	})
@@ -409,20 +409,20 @@ func TestValidateVerificationReportWithContext_EvidenceFilesSkippedForBlockedRow
 // into one actionable bullet that names the affected checks and points
 // the agent at the progress.md `## Iteration State: RETRY` protocol.
 func TestFormatGateFeedback_ConsolidatesRepetitiveFindings(t *testing.T) {
-	report := &VerificationReport{
+	report := &verificationReport{
 		Version: 1,
-		RequiredChecks: []VerificationCheckResult{
-			{Name: "**Headless build works on Linux**: `go build ./...` exits 0.", Requirement: "go build ./...", Status: VerificationStatusNotRun},
-			{Name: "**GUI build compiles**: `make build BUILD_TAGS=gui` succeeds.", Requirement: "make build BUILD_TAGS=gui", Status: VerificationStatusNotRun},
-			{Name: "**Backend tests green on no-tag build**: `make test` exits 0.", Requirement: "make test", Status: VerificationStatusNotRun},
-			{Name: "**Smoke test passes on macOS**: `bash test/e2e/smoke.sh` exits 0.", Requirement: "bash test/e2e/smoke.sh", Status: VerificationStatusNotRun},
+		RequiredChecks: []verificationCheckResult{
+			{Name: "**Headless build works on Linux**: `go build ./...` exits 0.", Requirement: "go build ./...", Status: verificationStatusNotRun},
+			{Name: "**GUI build compiles**: `make build BUILD_TAGS=gui` succeeds.", Requirement: "make build BUILD_TAGS=gui", Status: verificationStatusNotRun},
+			{Name: "**Backend tests green on no-tag build**: `make test` exits 0.", Requirement: "make test", Status: verificationStatusNotRun},
+			{Name: "**Smoke test passes on macOS**: `bash test/e2e/smoke.sh` exits 0.", Requirement: "bash test/e2e/smoke.sh", Status: verificationStatusNotRun},
 		},
 	}
-	result := ValidateVerificationReport(report, nil, nil, true)
+	result := validateVerificationReportWithContext(report, nil, true, verificationReportValidationContext{})
 	if !result.Rejected {
 		t.Fatalf("expected rejection; findings=%+v", result.Findings)
 	}
-	feedback := FormatGateFeedback(result)
+	feedback := formatGateFeedback(result)
 
 	// Consolidated: one bullet, not four.
 	notRunLines := strings.Count(feedback, "status: not_run")
@@ -454,16 +454,16 @@ func TestFormatGateFeedback_ConsolidatesRepetitiveFindings(t *testing.T) {
 }
 
 func TestFormatGateFeedback_ConsolidatesEmptyEvidence(t *testing.T) {
-	report := &VerificationReport{
+	report := &verificationReport{
 		Version: 1,
-		RequiredChecks: []VerificationCheckResult{
-			{Name: "Compile", Requirement: "go build ./...", Status: VerificationStatusPassed, Evidence: ""},
-			{Name: "Test", Requirement: "go test ./...", Status: VerificationStatusPassed, Evidence: "  "},
-			{Name: "Lint", Requirement: "go vet ./...", Status: VerificationStatusPassed, Evidence: "clean"},
+		RequiredChecks: []verificationCheckResult{
+			{Name: "Compile", Requirement: "go build ./...", Status: verificationStatusPassed, Evidence: ""},
+			{Name: "Test", Requirement: "go test ./...", Status: verificationStatusPassed, Evidence: "  "},
+			{Name: "Lint", Requirement: "go vet ./...", Status: verificationStatusPassed, Evidence: "clean"},
 		},
 	}
-	result := ValidateVerificationReport(report, nil, nil, true)
-	feedback := FormatGateFeedback(result)
+	result := validateVerificationReportWithContext(report, nil, true, verificationReportValidationContext{})
+	feedback := formatGateFeedback(result)
 	if strings.Count(feedback, "evidence is empty") > 1 {
 		t.Errorf("expected consolidated empty_evidence guidance; feedback:\n%s", feedback)
 	}
@@ -473,24 +473,24 @@ func TestFormatGateFeedback_ConsolidatesEmptyEvidence(t *testing.T) {
 }
 
 func TestValidateVerificationReport_KnownCaveatsSurfacedNotRejected(t *testing.T) {
-	required := []RequiredVerificationItem{{Name: "Lint", Requirement: "task lint"}}
-	report := &VerificationReport{
+	required := []requiredVerificationItem{{Name: "Lint", Requirement: "task lint"}}
+	report := &verificationReport{
 		Version: 1,
-		RequiredChecks: []VerificationCheckResult{
-			{Name: "Lint", Requirement: "task lint", Status: VerificationStatusPassed, Evidence: "exit 0, 0 issues"},
+		RequiredChecks: []verificationCheckResult{
+			{Name: "Lint", Requirement: "task lint", Status: verificationStatusPassed, Evidence: "exit 0, 0 issues"},
 		},
 		KnownCaveats: map[string]string{
 			"stream_error_mapping": "Adding a StreamErrorInterceptor is orthogonal to Phase 3 scope.",
 		},
 	}
-	result := ValidateVerificationReport(report, required, nil, true)
+	result := validateVerificationReportWithContext(report, required, true, verificationReportValidationContext{})
 	if result.Rejected {
 		t.Fatalf("unexpected rejection; findings=%+v", result.Findings)
 	}
 	if len(result.KnownCaveats) != 1 {
 		t.Fatalf("want 1 known caveat surfaced, got %d", len(result.KnownCaveats))
 	}
-	addendum := KnownCaveatsReviewAddendum(result)
+	addendum := knownCaveatsReviewAddendum(result)
 	if !strings.Contains(addendum, "stream_error_mapping") {
 		t.Errorf("addendum missing caveat key; got:\n%s", addendum)
 	}
@@ -538,16 +538,16 @@ known_caveats:
 		t.Fatalf("write fixture: %v", err)
 	}
 
-	report, err := ReadVerificationReport(path)
+	report, err := readVerificationReport(path)
 	if err != nil {
 		t.Fatalf("ReadVerificationReport: %v", err)
 	}
 
-	required := []RequiredVerificationItem{
+	required := []requiredVerificationItem{
 		{Name: "Compiles", Requirement: "go build ./..."},
 		{Name: "Lint clean", Requirement: "task lint"},
 	}
-	result := ValidateVerificationReport(report, required, nil, true)
+	result := validateVerificationReportWithContext(report, required, true, verificationReportValidationContext{})
 	if !result.Rejected {
 		t.Fatalf("expected gate to reject the real-world iter-1 report; findings=%+v", result.Findings)
 	}
@@ -555,7 +555,7 @@ known_caveats:
 	// Must flag the lint check as a hedge finding.
 	foundLintHedge := false
 	for _, f := range result.Findings {
-		if f.Category == GateCategoryHedge && strings.Contains(f.CheckName, "Lint") {
+		if f.Category == gateCategoryHedge && strings.Contains(f.CheckName, "Lint") {
 			foundLintHedge = true
 		}
 	}
@@ -568,7 +568,7 @@ known_caveats:
 		t.Errorf("expected stream_error_mapping caveat to be surfaced; got %+v", result.KnownCaveats)
 	}
 
-	feedback := FormatGateFeedback(result)
+	feedback := formatGateFeedback(result)
 	if !strings.Contains(feedback, agentStatusChangesRequested) {
 		t.Errorf("feedback missing CHANGES_REQUESTED marker; got:\n%s", feedback)
 	}
@@ -579,31 +579,31 @@ known_caveats:
 
 func TestValidateVerificationReport_ContractBackedChecks(t *testing.T) {
 	contract := CompileTestingContract("#### Automated Verification:\n- [ ] Agent tests: `go test ./internal/agent/... -count=1`\n", "/tmp/phase-01/plan.md", "tracer-bullet")
-	report := BuildContractVerificationReportStub(&contract, "/tmp/phase-01/testing-contract.yaml")
+	report := buildContractVerificationReportStub(&contract, "/tmp/phase-01/testing-contract.yaml")
 	exitCode := 0
 	for i := range report.Results {
-		report.Results[i].Status = VerificationStatusPassed
+		report.Results[i].Status = verificationStatusPassed
 		report.Results[i].Evidence = "ok"
-		report.Results[i].EvidenceData = VerificationEvidence{ExitCode: &exitCode, Summary: "ok"}
+		report.Results[i].EvidenceData = verificationEvidence{ExitCode: &exitCode, Summary: "ok"}
 	}
 
-	result := ValidateVerificationReport(&report, nil, &contract, true)
+	result := validateVerificationReportWithContext(&report, nil, true, verificationReportValidationContext{Contract: &contract})
 	if result.Rejected {
 		t.Fatalf("expected clean contract-backed report, got findings=%+v", result.Findings)
 	}
 
 	report.Results = report.Results[:len(report.Results)-1]
-	result = ValidateVerificationReport(&report, nil, &contract, true)
+	result = validateVerificationReportWithContext(&report, nil, true, verificationReportValidationContext{Contract: &contract})
 	if !result.Rejected {
 		t.Fatal("expected missing contract item to reject")
 	}
 
-	report = BuildContractVerificationReportStub(&contract, "/tmp/phase-01/testing-contract.yaml")
+	report = buildContractVerificationReportStub(&contract, "/tmp/phase-01/testing-contract.yaml")
 	report.Results[0].ItemID = "bogus"
-	report.Results[0].Status = VerificationStatusPassed
+	report.Results[0].Status = verificationStatusPassed
 	report.Results[0].Evidence = "ok"
-	report.Results[0].EvidenceData = VerificationEvidence{ExitCode: &exitCode, Summary: "ok"}
-	result = ValidateVerificationReport(&report, nil, &contract, true)
+	report.Results[0].EvidenceData = verificationEvidence{ExitCode: &exitCode, Summary: "ok"}
+	result = validateVerificationReportWithContext(&report, nil, true, verificationReportValidationContext{Contract: &contract})
 	if !result.Rejected {
 		t.Fatal("expected unknown item_id to reject")
 	}
@@ -612,9 +612,9 @@ func TestValidateVerificationReport_ContractBackedChecks(t *testing.T) {
 func TestValidateVerificationReport_ContractContextDoesNotRequireReportContractPath(t *testing.T) {
 	contract := CompileTestingContract("## Success Criteria\n### Visual Evidence\n- [ ] Capture the dashboard screenshot.\n", "/tmp/phase-01/plan.md", "collapsed")
 	report := passedArtifactReportForTest(&contract, "")
-	setArtifactEvidenceForTest(&report, VerificationModeVisual, VerificationEvidence{Summary: "screenshot exists"})
+	setArtifactEvidenceForTest(&report, verificationModeVisual, verificationEvidence{Summary: "screenshot exists"})
 
-	result := ValidateVerificationReportWithContext(&report, nil, true, VerificationReportValidationContext{
+	result := validateVerificationReportWithContext(&report, nil, true, verificationReportValidationContext{
 		IterationDir: t.TempDir(),
 		Contract:     &contract,
 	})
@@ -629,67 +629,67 @@ func TestValidateVerificationReport_ContractContextDoesNotRequireReportContractP
 
 func TestValidateVerificationReport_ContractRevisionAndBlockedRules(t *testing.T) {
 	contract := CompileTestingContract("#### Automated Verification:\n- [ ] Agent tests: `go test ./internal/agent/... -count=1`\n", "/tmp/phase-02/plan.md", "tdd-fill-in")
-	report := BuildContractVerificationReportStub(&contract, "/tmp/phase-02/testing-contract.yaml")
+	report := buildContractVerificationReportStub(&contract, "/tmp/phase-02/testing-contract.yaml")
 	exitCode := 0
 	for i := range report.Results {
-		report.Results[i].Status = VerificationStatusPassed
+		report.Results[i].Status = verificationStatusPassed
 		report.Results[i].Evidence = "ok"
-		report.Results[i].EvidenceData = VerificationEvidence{ExitCode: &exitCode, Summary: "ok"}
+		report.Results[i].EvidenceData = verificationEvidence{ExitCode: &exitCode, Summary: "ok"}
 	}
 
 	report.ContractRevision = contract.Revision - 1
-	result := ValidateVerificationReport(&report, nil, &contract, true)
+	result := validateVerificationReportWithContext(&report, nil, true, verificationReportValidationContext{Contract: &contract})
 	if !result.Rejected {
 		t.Fatal("expected stale contract revision to reject")
 	}
 
-	report = BuildContractVerificationReportStub(&contract, "/tmp/phase-02/testing-contract.yaml")
+	report = buildContractVerificationReportStub(&contract, "/tmp/phase-02/testing-contract.yaml")
 	for i := range report.Results {
-		report.Results[i].Status = VerificationStatusPassed
+		report.Results[i].Status = verificationStatusPassed
 		report.Results[i].Evidence = "ok"
-		report.Results[i].EvidenceData = VerificationEvidence{ExitCode: &exitCode, Summary: "ok"}
+		report.Results[i].EvidenceData = verificationEvidence{ExitCode: &exitCode, Summary: "ok"}
 	}
-	report.Results[0].Status = VerificationStatusBlocked
+	report.Results[0].Status = verificationStatusBlocked
 	report.Results[0].Evidence = ""
-	report.Results[0].EvidenceData = VerificationEvidence{}
-	result = ValidateVerificationReport(&report, nil, &contract, true)
+	report.Results[0].EvidenceData = verificationEvidence{}
+	result = validateVerificationReportWithContext(&report, nil, true, verificationReportValidationContext{Contract: &contract})
 	if !result.Rejected {
 		t.Fatal("expected blocked item without blocked_reason to reject")
 	}
 
-	report = BuildContractVerificationReportStub(&contract, "/tmp/phase-02/testing-contract.yaml")
+	report = buildContractVerificationReportStub(&contract, "/tmp/phase-02/testing-contract.yaml")
 	for i := range report.Results {
-		report.Results[i].Status = VerificationStatusPassed
+		report.Results[i].Status = verificationStatusPassed
 		report.Results[i].Evidence = "ok"
-		report.Results[i].EvidenceData = VerificationEvidence{ExitCode: &exitCode, Summary: "ok"}
+		report.Results[i].EvidenceData = verificationEvidence{ExitCode: &exitCode, Summary: "ok"}
 	}
-	report.Results[len(report.Results)-1].Status = VerificationStatusBlocked
+	report.Results[len(report.Results)-1].Status = verificationStatusBlocked
 	report.Results[len(report.Results)-1].BlockedReason = "sandbox lacks network access"
 	report.Results[len(report.Results)-1].SubstituteItemID = "missing"
 	report.Results[len(report.Results)-1].Evidence = ""
-	report.Results[len(report.Results)-1].EvidenceData = VerificationEvidence{}
-	result = ValidateVerificationReport(&report, nil, &contract, true)
+	report.Results[len(report.Results)-1].EvidenceData = verificationEvidence{}
+	result = validateVerificationReportWithContext(&report, nil, true, verificationReportValidationContext{Contract: &contract})
 	if !result.Rejected {
 		t.Fatal("expected missing substitute item row to reject")
 	}
 }
 
-func passedArtifactReportForTest(contract *TestingContract, contractPath string) VerificationReport {
-	report := BuildContractVerificationReportStub(contract, contractPath)
+func passedArtifactReportForTest(contract *TestingContract, contractPath string) verificationReport {
+	report := buildContractVerificationReportStub(contract, contractPath)
 	exitCode := 0
 	for i := range report.Results {
-		report.Results[i].Status = VerificationStatusPassed
-		report.Results[i].EvidenceData = VerificationEvidence{ExitCode: &exitCode, Summary: "passed"}
+		report.Results[i].Status = verificationStatusPassed
+		report.Results[i].EvidenceData = verificationEvidence{ExitCode: &exitCode, Summary: "passed"}
 	}
 	return report
 }
 
-func setArtifactEvidenceForTest(report *VerificationReport, mode VerificationMode, evidence VerificationEvidence) {
+func setArtifactEvidenceForTest(report *verificationReport, mode verificationMode, evidence verificationEvidence) {
 	for i := range report.Results {
 		if report.Results[i].Mode != mode {
 			continue
 		}
-		report.Results[i].Status = VerificationStatusPassed
+		report.Results[i].Status = verificationStatusPassed
 		report.Results[i].Evidence = evidence.Summary
 		report.Results[i].EvidenceData = evidence
 	}
@@ -706,7 +706,7 @@ func mustWriteEvidenceFile(t *testing.T, iterDir, rel string) {
 	}
 }
 
-func reportGateDetailsForTest(result ReportGateResult) string {
+func reportGateDetailsForTest(result reportGateResult) string {
 	var b strings.Builder
 	for _, finding := range result.Findings {
 		b.WriteString(finding.Detail)
@@ -720,20 +720,20 @@ func TestValidateVerificationReportRejectsForgedWaiverAndAcceptsContractWaiver(t
 		ID: "check", Source: testingContractPlanSource, Name: "check", Command: "go test ./...",
 		Policy: TestingContractItemPolicy{Required: true, AllowWaiver: true},
 	}}}
-	report := BuildContractVerificationReportStub(&contract, "/tmp/testing-contract.yaml")
-	report.Results[0].Status = VerificationStatusWaived
+	report := buildContractVerificationReportStub(&contract, "/tmp/testing-contract.yaml")
+	report.Results[0].Status = verificationStatusWaived
 	report.Results[0].EvidenceData.Summary = "claimed waiver"
 
-	result := ValidateVerificationReport(&report, nil, &contract, true)
+	result := validateVerificationReportWithContext(&report, nil, true, verificationReportValidationContext{Contract: &contract})
 	if !result.Rejected || !strings.Contains(reportGateDetailsForTest(result), "no user-authorized waiver") {
 		t.Fatalf("forged waiver result = %+v, want policy violation", result)
 	}
 
-	contract.Items[0].Disposition = TestingContractItemDisposition{
-		Status: TestingContractDispositionWaived, Reason: "user approved", ChangedBy: "user",
+	contract.Items[0].Disposition = testingContractItemDisposition{
+		Status: testingContractDispositionWaived, Reason: "user approved", ChangedBy: "user",
 	}
-	report = BuildContractVerificationReportStub(&contract, "/tmp/testing-contract.yaml")
-	result = ValidateVerificationReport(&report, nil, &contract, true)
+	report = buildContractVerificationReportStub(&contract, "/tmp/testing-contract.yaml")
+	result = validateVerificationReportWithContext(&report, nil, true, verificationReportValidationContext{Contract: &contract})
 	if result.Rejected {
 		t.Fatalf("authorized waiver rejected: %+v", result.Findings)
 	}
@@ -758,31 +758,31 @@ func TestValidateVerificationReportRejectsDuplicateEvidenceAcrossRows(t *testing
 
 	contract := &TestingContract{Version: testingContractVersion, Revision: 1, Items: []TestingContractItem{
 		{
-			ID: "visual_light", Source: testingContractVisualSource, Owner: TestingContractOwnerAgent,
+			ID: "visual_light", Source: testingContractVisualSource, Owner: testingContractOwnerAgent,
 			Name: "Config editor, light theme", Command: "visual: Config editor, light theme",
-			ExpectedEvidence: TestingContractExpectedEvidence{Kind: testingContractVisualKind, Path: "screenshots/config-light.png"},
+			ExpectedEvidence: testingContractExpectedEvidence{Kind: testingContractVisualKind, Path: "screenshots/config-light.png"},
 			Policy:           TestingContractItemPolicy{Required: true},
 		},
 		{
-			ID: "visual_dark", Source: testingContractVisualSource, Owner: TestingContractOwnerAgent,
+			ID: "visual_dark", Source: testingContractVisualSource, Owner: testingContractOwnerAgent,
 			Name: "Config editor, dark theme", Command: "visual: Config editor, dark theme",
-			ExpectedEvidence: TestingContractExpectedEvidence{Kind: testingContractVisualKind, Path: "screenshots/config-dark.png"},
+			ExpectedEvidence: testingContractExpectedEvidence{Kind: testingContractVisualKind, Path: "screenshots/config-dark.png"},
 			Policy:           TestingContractItemPolicy{Required: true},
 		},
 	}}
-	passed := func(itemID, name, primary, digest string) VerificationCheckResult {
-		return VerificationCheckResult{
-			ItemID: itemID, Name: name, Mode: VerificationModeVisual, Status: VerificationStatusPassed,
-			EvidenceData: VerificationEvidence{Summary: "captured", Primary: primary, Sha256: digest},
+	passed := func(itemID, name, primary, digest string) verificationCheckResult {
+		return verificationCheckResult{
+			ItemID: itemID, Name: name, Mode: verificationModeVisual, Status: verificationStatusPassed,
+			EvidenceData: verificationEvidence{Summary: "captured", Primary: primary, Sha256: digest},
 		}
 	}
-	report := &VerificationReport{Version: 2, ContractRevision: 1, Results: []VerificationCheckResult{
+	report := &verificationReport{Version: 2, ContractRevision: 1, Results: []verificationCheckResult{
 		passed("visual_light", "Config editor, light theme", "screenshots/config-light.png", lightDigest),
 		passed("visual_dark", "Config editor, dark theme", "screenshots/config-dark.png", darkDigest),
 	}}
-	ctx := VerificationReportValidationContext{IterationDir: iterDir, Contract: contract}
+	ctx := verificationReportValidationContext{IterationDir: iterDir, Contract: contract}
 
-	if gate := ValidateVerificationReportWithContext(report, nil, true, ctx); gate.Rejected {
+	if gate := validateVerificationReportWithContext(report, nil, true, ctx); gate.Rejected {
 		t.Fatalf("distinct captures must pass, got %+v", gate.Findings)
 	}
 
@@ -791,18 +791,18 @@ func TestValidateVerificationReportRejectsDuplicateEvidenceAcrossRows(t *testing
 	dupDigest := writeShot("screenshots/config-dark.png", lightBytes)
 	report.Results[1] = passed("visual_dark", "Config editor, dark theme", "screenshots/config-dark.png", dupDigest)
 
-	gate := ValidateVerificationReportWithContext(report, nil, true, ctx)
+	gate := validateVerificationReportWithContext(report, nil, true, ctx)
 	if !gate.Rejected {
 		t.Fatal("two rows sharing one image must reject")
 	}
 	found := false
 	for _, f := range gate.Findings {
-		if f.Kind == KindEvidenceDuplicate {
+		if f.Kind == kindEvidenceDuplicate {
 			found = true
 		}
 	}
 	if !found {
-		t.Fatalf("want a %s finding, got %+v", KindEvidenceDuplicate, gate.Findings)
+		t.Fatalf("want a %s finding, got %+v", kindEvidenceDuplicate, gate.Findings)
 	}
 }
 
@@ -818,37 +818,37 @@ func TestValidateVerificationReportRejectsChangedEvidence(t *testing.T) {
 	}
 	sum := sha256.Sum256(original)
 	contract := &TestingContract{Version: testingContractVersion, Revision: 1, Items: []TestingContractItem{{
-		ID: "visual_abc123def456", Source: testingContractVisualSource, Owner: TestingContractOwnerAgent,
+		ID: "visual_abc123def456", Source: testingContractVisualSource, Owner: testingContractOwnerAgent,
 		Name: "Home populated", Command: "visual: Home populated",
-		ExpectedEvidence: TestingContractExpectedEvidence{Kind: testingContractVisualKind, Path: "screenshots/visual_abc123def456.png"},
+		ExpectedEvidence: testingContractExpectedEvidence{Kind: testingContractVisualKind, Path: "screenshots/visual_abc123def456.png"},
 		Policy:           TestingContractItemPolicy{Required: true},
 	}}}
-	report := &VerificationReport{Version: 2, ContractRevision: 1, Results: []VerificationCheckResult{{
-		ItemID: "visual_abc123def456", Name: "Home populated", Mode: VerificationModeVisual,
-		Status: VerificationStatusPassed,
-		EvidenceData: VerificationEvidence{
+	report := &verificationReport{Version: 2, ContractRevision: 1, Results: []verificationCheckResult{{
+		ItemID: "visual_abc123def456", Name: "Home populated", Mode: verificationModeVisual,
+		Status: verificationStatusPassed,
+		EvidenceData: verificationEvidence{
 			Summary: "captured", Primary: "screenshots/visual_abc123def456.png",
 			Sha256: hex.EncodeToString(sum[:]),
 		},
 	}}}
-	ctx := VerificationReportValidationContext{IterationDir: iterDir, Contract: contract}
-	if gate := ValidateVerificationReportWithContext(report, nil, true, ctx); gate.Rejected {
+	ctx := verificationReportValidationContext{IterationDir: iterDir, Contract: contract}
+	if gate := validateVerificationReportWithContext(report, nil, true, ctx); gate.Rejected {
 		t.Fatalf("unchanged evidence must pass, got %+v", gate.Findings)
 	}
 	if err := os.WriteFile(path, []byte("clobbered"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	gate := ValidateVerificationReportWithContext(report, nil, true, ctx)
+	gate := validateVerificationReportWithContext(report, nil, true, ctx)
 	if !gate.Rejected {
 		t.Fatal("changed evidence must reject")
 	}
 	found := false
 	for _, f := range gate.Findings {
-		if f.Kind == KindEvidenceIntegrity {
+		if f.Kind == kindEvidenceIntegrity {
 			found = true
 		}
 	}
 	if !found {
-		t.Fatalf("want a %s finding, got %+v", KindEvidenceIntegrity, gate.Findings)
+		t.Fatalf("want a %s finding, got %+v", kindEvidenceIntegrity, gate.Findings)
 	}
 }

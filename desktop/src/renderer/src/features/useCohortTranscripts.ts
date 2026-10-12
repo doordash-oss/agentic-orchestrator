@@ -24,7 +24,7 @@ import {
   resolveCohortSelection,
 } from './liveCohort';
 
-export interface CohortTranscripts {
+interface CohortTranscripts {
   /** Ordered cohort sessions to render as tabs. */
   cohort: SessionSummary[];
   /** Live, per-session transcript rows keyed by session id. */

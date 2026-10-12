@@ -66,7 +66,7 @@ func TestReadinessProberReportsHeadExecutionFailure(t *testing.T) {
 }
 
 func TestReadinessProberBoundsSubprocessOutput(t *testing.T) {
-	prober := &ReadinessProber{executable: "/bin/sh"}
+	prober := &readinessProber{executable: "/bin/sh"}
 	output, err := prober.run(context.Background(), "-c", "printf '%20000s' x")
 	if err != nil {
 		t.Fatal(err)

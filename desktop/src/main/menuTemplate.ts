@@ -33,6 +33,7 @@ import {
   type FeatureCommandId,
 } from '../shared/commands';
 import type { AppRouteEvent, MainWindowUiState } from '../shared/ipc';
+import { defined } from '../shared/defined';
 
 export interface MenuTemplateDeps {
   /** The app's display name, which titles the leading app menu. */
@@ -89,9 +90,9 @@ function routedItem(
   return {
     id,
     label: options.label ?? command.label,
-    ...(command.accelerator === undefined ? {} : { accelerator: command.accelerator }),
+    ...defined('accelerator', command.accelerator),
     ...(command.rendererAccelerator === true ? { registerAccelerator: false } : {}),
-    ...(options.enabled === undefined ? {} : { enabled: options.enabled }),
+    ...defined('enabled', options.enabled),
     click: () => deps.route({ target }),
   };
 }

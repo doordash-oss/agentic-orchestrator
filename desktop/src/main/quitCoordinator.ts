@@ -93,11 +93,11 @@ export interface QuitCoordinatorDeps<TParent> {
   log?(line: string): void;
 }
 
-export const DEFAULT_SHUTDOWN_TIMEOUT_MS = 30_000;
-export const DEFAULT_EXIT_WATCHDOG_MS = 10_000;
-export const DEFAULT_HARD_EXIT_MARGIN_MS = 5_000;
+const DEFAULT_SHUTDOWN_TIMEOUT_MS = 30_000;
+const DEFAULT_EXIT_WATCHDOG_MS = 10_000;
+const DEFAULT_HARD_EXIT_MARGIN_MS = 5_000;
 
-export interface QuitCoordinatorOptions {
+interface QuitCoordinatorOptions {
   /** Upper bound on deps.shutdown before quitting regardless. */
   shutdownTimeoutMs?: number;
   /** Delay after quitApplication() before exitApplication() is forced. */
@@ -336,7 +336,7 @@ export function supervisorGrade(lifecycle: SupervisorLifecycle): SupervisorGrade
 }
 
 /** The grade an active-work check implies. */
-export function supervisorGradeOf(active: {
+function supervisorGradeOf(active: {
   supervisorActive: boolean;
   supervisorWaiting: boolean;
 }): SupervisorGrade {
@@ -419,8 +419,8 @@ async function detectStoppableFeatures(
 
 export const SUPERVISOR_UNRESOLVED_ID = 'supervisor';
 export const SUPERVISOR_UNRESOLVED_LABEL = 'Supervisor';
-export const DEFAULT_STOP_TIMEOUT_MS = 10_000;
-export const DEFAULT_STOP_POLL_INTERVAL_MS = 250;
+const QUIT_WORK_STOP_TIMEOUT_MS = 10_000;
+const DEFAULT_STOP_POLL_INTERVAL_MS = 250;
 
 export interface StopActiveWorkDeps {
   /** Sends the feature's pause-stop action. */
@@ -465,7 +465,7 @@ export async function stopActiveWork(
   }
   await Promise.all(stops);
 
-  const deadline = now() + (deps.timeoutMs ?? DEFAULT_STOP_TIMEOUT_MS);
+  const deadline = now() + (deps.timeoutMs ?? QUIT_WORK_STOP_TIMEOUT_MS);
   let latest = await deps.detectActiveWork();
   while (!latest.detectionFailed && hasActiveWork(latest) && now() < deadline) {
     await sleep(deps.pollIntervalMs ?? DEFAULT_STOP_POLL_INTERVAL_MS);
@@ -535,7 +535,7 @@ export async function endWaitingSupervisor(
   } catch (error) {
     return { ended: false, reason: deps.describeStopFailure(error) };
   }
-  const deadline = now() + (deps.timeoutMs ?? DEFAULT_STOP_TIMEOUT_MS);
+  const deadline = now() + (deps.timeoutMs ?? QUIT_WORK_STOP_TIMEOUT_MS);
   let latest = await deps.detectActiveWork();
   while ((latest.detectionFailed || latest.supervisorActive) && now() < deadline) {
     await sleep(deps.pollIntervalMs ?? DEFAULT_STOP_POLL_INTERVAL_MS);

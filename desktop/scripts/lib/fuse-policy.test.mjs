@@ -20,7 +20,6 @@ import {
   PRODUCTION_FUSE_POLICY,
   auditElectronBuilderFuseConfig,
   auditFuseWire,
-  expectedElectronBuilderFuses,
   parseElectronBuilderFuses,
 } from './fuse-policy.mjs';
 
@@ -40,7 +39,9 @@ describe('production fuse policy', () => {
       'npmRebuild: false',
     ].join('\n');
 
-    expect(parseElectronBuilderFuses(config)).toEqual(expectedElectronBuilderFuses());
+    expect(parseElectronBuilderFuses(config)).toEqual(
+      Object.fromEntries(PRODUCTION_FUSE_POLICY.map((fuse) => [fuse.configKey, fuse.expected])),
+    );
     expect(auditElectronBuilderFuseConfig(config)).toEqual([]);
   });
 

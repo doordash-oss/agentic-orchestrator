@@ -16,6 +16,7 @@ package orchestrator_test
 
 import (
 	"bufio"
+	"context"
 	"encoding/json"
 	"errors"
 	"os"
@@ -23,6 +24,7 @@ import (
 	"reflect"
 	"testing"
 
+	"github.com/doordash-oss/agentic-orchestrator/internal/config"
 	"github.com/doordash-oss/agentic-orchestrator/internal/errcat"
 	"github.com/doordash-oss/agentic-orchestrator/internal/feature"
 	"github.com/doordash-oss/agentic-orchestrator/internal/observe"
@@ -30,12 +32,21 @@ import (
 	"github.com/doordash-oss/agentic-orchestrator/internal/permission"
 	"github.com/doordash-oss/agentic-orchestrator/internal/ports"
 	"github.com/doordash-oss/agentic-orchestrator/test/testutil/mocks"
+	"go.uber.org/fx"
 	"gopkg.in/yaml.v3"
 )
 
-var errTestLifecycleFailed = errors.New("lifecycle delete failed")
-
-func errorsIs(err, target error) bool { return errors.Is(err, target) }
+func newHookStore(t *testing.T, f *feature.Feature) *feature.Store {
+	t.Helper()
+	store := feature.NewStore(t.TempDir())
+	if f != nil {
+		f.SchemaVersion = feature.SchemaVersionCurrent
+		if err := store.Save(f); err != nil {
+			t.Fatal(err)
+		}
+	}
+	return store
+}
 
 // writeClaudeSettings writes a minimal .claude/settings.json into repoPath so
 // ImportRepoSettings has rules to consume.
@@ -58,10 +69,34 @@ func writeClaudeSettings(t *testing.T, repoPath string, allow []string) {
 	}
 }
 
-// newTestObserver returns an enabled observer rooted at dir. The emitter writes
-// JSONL to dir/<featureID>/events.jsonl.
-func newTestObserver(dir string) *observe.Observer {
-	return observe.New(true, dir, false, "", false, "")
+// newTestObserver returns an enabled observer rooted at dir, built through
+// the fx module (the production construction path). The emitter writes JSONL
+// to dir/<featureID>/events.jsonl. The returned stop function runs the
+// module's shutdown lifecycle once.
+func newTestObserver(t *testing.T, dir string) (*observe.Observer, func()) {
+	t.Helper()
+	cfg := config.NewDefault()
+	var obs *observe.Observer
+	app := fx.New(
+		fx.Supply(cfg, fx.Annotate(dir, fx.ResultTags(`name:"stateDir"`))),
+		observe.Module,
+		fx.Populate(&obs),
+		fx.NopLogger,
+	)
+	if err := app.Err(); err != nil {
+		t.Fatalf("build observer: %v", err)
+	}
+	var stopped bool
+	stop := func() {
+		if !stopped {
+			stopped = true
+			if err := app.Stop(context.Background()); err != nil {
+				t.Errorf("stop observer: %v", err)
+			}
+		}
+	}
+	t.Cleanup(stop)
+	return obs, stop
 }
 
 // readEvents returns all JSONL events from the given path. The file may not
@@ -105,10 +140,41 @@ func containsEventType(events []map[string]any, t string) bool {
 // T12. OnFeatureCreated fires permission import for each repo.
 // ---------------------------------------------------------------------------
 
+// assertImportedRules decodes the frozen on-disk permission scope file
+// (<scope>.json with a rules array) and requires at least minRules rules.
+func assertImportedRules(t *testing.T, path string, minRules int) {
+	t.Helper()
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read permission scope file %s: %v", path, err)
+	}
+	var persisted struct {
+		Rules []struct {
+			ToolPattern string `json:"tool_pattern"`
+			Effect      string `json:"effect"`
+		} `json:"rules"`
+	}
+	if err := json.Unmarshal(data, &persisted); err != nil {
+		t.Fatalf("decode permission scope file %s: %v", path, err)
+	}
+	if len(persisted.Rules) < minRules {
+		t.Errorf("%s: expected at least %d imported rules, got %d", path, minRules, len(persisted.Rules))
+	}
+}
+
 func TestBuildHooks_OnFeatureCreated_FiresPermissionImport(t *testing.T) {
 	tmp := t.TempDir()
-	storeDir := filepath.Join(tmp, "perm-store")
-	store := permission.NewStore(storeDir)
+	var store *permission.Store
+	app := fx.New(
+		fx.Supply(fx.Annotate(filepath.Join(tmp, "state"), fx.ResultTags(`name:"stateDir"`))),
+		permission.Module,
+		fx.Populate(&store),
+		fx.NopLogger,
+	)
+	if err := app.Err(); err != nil {
+		t.Fatalf("build permission store: %v", err)
+	}
+	permStoreDir := filepath.Join(tmp, "permissions")
 
 	repo1 := filepath.Join(tmp, "repo1")
 	repo2 := filepath.Join(tmp, "repo2")
@@ -123,26 +189,14 @@ func TestBuildHooks_OnFeatureCreated_FiresPermissionImport(t *testing.T) {
 		},
 	}
 
-	h := orchestrator.BuildHooks(nil, store, nil)
+	h := orchestrator.BuildHooks(nil, store, newHookStore(t, nil))
 	if h.OnFeatureCreated == nil {
 		t.Fatal("OnFeatureCreated hook is nil")
 	}
 	h.OnFeatureCreated(f)
 
-	r1, err := store.Load("repo1")
-	if err != nil {
-		t.Fatalf("Load repo1 rules: %v", err)
-	}
-	r2, err := store.Load("repo2")
-	if err != nil {
-		t.Fatalf("Load repo2 rules: %v", err)
-	}
-	if len(r1) == 0 {
-		t.Errorf("expected at least one rule imported for repo1, got 0")
-	}
-	if len(r2) == 0 {
-		t.Errorf("expected at least one rule imported for repo2, got 0")
-	}
+	assertImportedRules(t, filepath.Join(permStoreDir, "repo1.json"), 1)
+	assertImportedRules(t, filepath.Join(permStoreDir, "repo2.json"), 1)
 }
 
 // ---------------------------------------------------------------------------
@@ -151,14 +205,13 @@ func TestBuildHooks_OnFeatureCreated_FiresPermissionImport(t *testing.T) {
 
 func TestBuildHooks_OnFeatureStarted_FiresObserver(t *testing.T) {
 	tmp := t.TempDir()
-	obs := newTestObserver(tmp)
-	defer obs.Shutdown()
+	obs, stop := newTestObserver(t, tmp)
+	defer stop()
 
 	if err := os.MkdirAll(filepath.Join(tmp, "f1"), 0o755); err != nil {
 		t.Fatalf("mkdir feature dir: %v", err)
 	}
 
-	fs := mocks.NewMockFeatureStore()
 	f := &feature.Feature{
 		ID:   "f1",
 		Name: "My feature",
@@ -166,9 +219,7 @@ func TestBuildHooks_OnFeatureStarted_FiresObserver(t *testing.T) {
 			{Name: "repoA", Path: "/tmp/repoA"},
 		},
 	}
-	fs.LoadFn = func(id string) (*feature.Feature, error) {
-		return f, nil
-	}
+	fs := newHookStore(t, f)
 
 	h := orchestrator.BuildHooks(obs, nil, fs)
 	if h.OnFeatureStarted == nil {
@@ -178,7 +229,7 @@ func TestBuildHooks_OnFeatureStarted_FiresObserver(t *testing.T) {
 
 	// Force the emitter to flush by shutting the observer down. The defer
 	// above will call it again but Shutdown is idempotent.
-	obs.Shutdown()
+	stop()
 	events := readEvents(t, filepath.Join(tmp, "f1", "events.jsonl"))
 	if !containsEventType(events, "feature.started") {
 		t.Errorf("expected feature.started event, got events: %+v", events)
@@ -191,8 +242,8 @@ func TestBuildHooks_OnFeatureStarted_FiresObserver(t *testing.T) {
 
 func TestBuildHooks_PopulatedHooksEmit(t *testing.T) {
 	tmp := t.TempDir()
-	obs := newTestObserver(tmp)
-	defer obs.Shutdown()
+	obs, stop := newTestObserver(t, tmp)
+	defer stop()
 
 	if err := os.MkdirAll(filepath.Join(tmp, "f2"), 0o755); err != nil {
 		t.Fatalf("mkdir feature dir: %v", err)
@@ -206,8 +257,7 @@ func TestBuildHooks_PopulatedHooksEmit(t *testing.T) {
 			{Name: "r", Path: "/tmp/r"},
 		},
 	}
-	fs := mocks.NewMockFeatureStore()
-	fs.LoadFn = func(id string) (*feature.Feature, error) { return f, nil }
+	fs := newHookStore(t, f)
 
 	h := orchestrator.BuildHooks(obs, nil, fs)
 
@@ -261,7 +311,7 @@ func TestBuildHooks_PopulatedHooksEmit(t *testing.T) {
 	}
 
 	// Flush and check events.
-	obs.Shutdown()
+	stop()
 	events := readEvents(t, filepath.Join(tmp, "f2", "events.jsonl"))
 	for _, tc := range cases {
 		if !containsEventType(events, tc.wantEvType) {
@@ -271,13 +321,13 @@ func TestBuildHooks_PopulatedHooksEmit(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// T15. All hook fields populated and nil-safe.
+// T15. All hook fields populated with observability and permissions disabled.
 // ---------------------------------------------------------------------------
 
 func TestBuildHooks_AllFieldsPopulated_AndNilSafe(t *testing.T) {
-	// Build with nil collaborators. Every field must be non-nil (no
-	// accidental omission) and every hook must be safely invokable.
-	h := orchestrator.BuildHooks(nil, nil, nil)
+	// Every field must be non-nil and safely invokable with optional
+	// observability and permission collaborators disabled.
+	h := orchestrator.BuildHooks(nil, nil, newHookStore(t, nil))
 
 	v := reflect.ValueOf(h)
 	typ := v.Type()
@@ -321,21 +371,18 @@ func TestBuildHooks_AllFieldsPopulated_AndNilSafe(t *testing.T) {
 // to events.jsonl with the before/after snapshots.
 func TestBuildHooks_OnFeatureConfigChanged_FiresObserver(t *testing.T) {
 	tmp := t.TempDir()
-	obs := newTestObserver(tmp)
-	defer obs.Shutdown()
+	obs, stop := newTestObserver(t, tmp)
+	defer stop()
 
 	if err := os.MkdirAll(filepath.Join(tmp, "f1"), 0o755); err != nil {
 		t.Fatalf("mkdir feature dir: %v", err)
 	}
 
-	fs := mocks.NewMockFeatureStore()
 	f := &feature.Feature{
 		ID:   "f1",
 		Name: "My feature",
 	}
-	fs.LoadFn = func(id string) (*feature.Feature, error) {
-		return f, nil
-	}
+	fs := newHookStore(t, f)
 
 	h := orchestrator.BuildHooks(obs, nil, fs)
 	if h.OnFeatureConfigChanged == nil {
@@ -345,7 +392,7 @@ func TestBuildHooks_OnFeatureConfigChanged_FiresObserver(t *testing.T) {
 	after := feature.ConfigSnapshot{Inquireness: feature.InquirenessHigh}
 	h.OnFeatureConfigChanged("f1", before, after)
 
-	obs.Shutdown()
+	stop()
 	events := readEvents(t, filepath.Join(tmp, "f1", "events.jsonl"))
 	if !containsEventType(events, "feature.config_changed") {
 		t.Errorf("expected feature.config_changed event, got events: %+v", events)
@@ -358,32 +405,15 @@ func TestBuildHooks_OnFeatureRewound_FiresObserver(t *testing.T) {
 	if err := os.MkdirAll(filepath.Join(tmp, featureID), 0o755); err != nil {
 		t.Fatalf("mkdir feature dir: %v", err)
 	}
-	obs := newTestObserver(tmp)
-	fs := mocks.NewMockFeatureStore()
-	fs.LoadFn = func(id string) (*feature.Feature, error) {
-		if id != featureID {
-			return nil, nil
-		}
-		return &feature.Feature{
-			ID:                 featureID,
-			Name:               "rewind hook",
-			TraceID:            "1234567890abcdef1234567890abcdef",
-			FeatureSpanID:      "1234567890abcdef",
-			ActiveRun:          2,
-			TotalRoadmapPhases: 4,
-		}, nil
-	}
-	fs.LoadRunFn = func(id string, runNumber int) (*feature.Run, error) {
-		switch runNumber {
-		case 1:
-			return &feature.Run{RunNumber: 1, BackupBranches: map[string]string{repoName: "feature/hook-backup"}}, nil
-		case 2:
-			return &feature.Run{RunNumber: 2, CarriedPhases: []string{"roadmap", "phase-01/plan"}}, nil
-		default:
-			return nil, nil
-		}
-	}
-
+	obs, _ := newTestObserver(t, tmp)
+	fs := newHookStore(t, &feature.Feature{
+		ID:                 featureID,
+		Name:               "rewind hook",
+		TraceID:            "1234567890abcdef1234567890abcdef",
+		FeatureSpanID:      "1234567890abcdef",
+		ActiveRun:          2,
+		TotalRoadmapPhases: 4,
+	})
 	h := orchestrator.BuildHooks(obs, nil, fs)
 	h.OnFeatureRewound(featureID, feature.RewindRequest{
 		TargetPhase:  feature.PhaseImplement,
@@ -417,31 +447,40 @@ func TestBuildHooks_OnFeatureRewound_FiresObserver(t *testing.T) {
 // failure record into the summary input: a failed feature's
 // observe-summary.yaml carries the record's catalog code and class, while a
 // healthy feature's summary leaves both empty.
+// featureSummaryMirror decodes the frozen observe-summary.yaml feature block
+// (observe's summary artifact shape) for assertions in this package's tests.
+type featureSummaryMirror struct {
+	Feature struct {
+		ID         string `yaml:"id"`
+		ErrorCode  string `yaml:"error_code,omitempty"`
+		ErrorClass string `yaml:"error_class,omitempty"`
+	} `yaml:"feature"`
+}
+
 func TestBuildHooks_OnFeatureSummaryNeeded_BuildsInputFromRunFailureRecord(t *testing.T) {
-	writeSummary := func(t *testing.T, f *feature.Feature) observe.SummaryArtifact {
+	writeSummary := func(t *testing.T, f *feature.Feature) featureSummaryMirror {
 		t.Helper()
 		tmp := t.TempDir()
 		if err := os.MkdirAll(filepath.Join(tmp, f.ID), 0o755); err != nil {
 			t.Fatalf("mkdir feature dir: %v", err)
 		}
-		obs := newTestObserver(tmp)
-		defer obs.Shutdown()
+		obs, stop := newTestObserver(t, tmp)
+		defer stop()
 
-		fs := mocks.NewMockFeatureStore()
-		fs.LoadFn = func(id string) (*feature.Feature, error) { return f, nil }
+		fs := newHookStore(t, f)
 
 		h := orchestrator.BuildHooks(obs, nil, fs, tmp)
 		if h.OnFeatureSummaryNeeded == nil {
 			t.Fatal("OnFeatureSummaryNeeded hook is nil")
 		}
 		h.OnFeatureSummaryNeeded(f.ID, f)
-		obs.Shutdown()
+		stop()
 
 		data, err := os.ReadFile(filepath.Join(tmp, f.ID, "observe-summary.yaml"))
 		if err != nil {
 			t.Fatalf("read observe-summary.yaml: %v", err)
 		}
-		var summary observe.SummaryArtifact
+		var summary featureSummaryMirror
 		if err := yaml.Unmarshal(data, &summary); err != nil {
 			t.Fatalf("unmarshal observe-summary.yaml: %v\n%s", err, data)
 		}
@@ -494,64 +533,33 @@ func TestBuildHooks_OnFeatureSummaryNeeded_BuildsInputFromRunFailureRecord(t *te
 // T10. Orchestrator.Delete — stops sessions then calls lifecycle.
 // ---------------------------------------------------------------------------
 
-func TestOrchestrator_Delete_StopsSessionsAndCallsLifecycle(t *testing.T) {
-	t.Run("happy_path", func(t *testing.T) {
-		lifecycle := mocks.NewMockFeatureLifecycle()
-		sessions := mocks.NewMockSessionManager()
-		sessions.FeatureSessionsFn = func(featureID string) []ports.SessionView {
-			return []ports.SessionView{
-				mocks.NewMockSessionView("s1", featureID),
-				mocks.NewMockSessionView("s2", featureID),
-			}
+func TestOrchestrator_Delete_StopsSessionsAndDeletesStoredFeature(t *testing.T) {
+	f := &feature.Feature{ID: "f1", Name: "Delete me"}
+	store, manager := newStoredFeatureFixture(t, f)
+	sessions := mocks.NewMockSessionManager()
+	sessions.FeatureSessionsFn = func(featureID string) []ports.SessionView {
+		return []ports.SessionView{
+			mocks.NewMockSessionView("s1", featureID),
+			mocks.NewMockSessionView("s2", featureID),
 		}
+	}
+	o := orchestrator.New(orchestrator.Deps{Manager: manager, Store: store, Sessions: sessions}, orchestrator.Hooks{})
+	defer o.Shutdown()
 
-		o := orchestrator.New(orchestrator.Deps{
-			Lifecycle: lifecycle,
-			Sessions:  sessions,
-		}, orchestrator.Hooks{})
-
-		if _, err := o.Delete("f1"); err != nil {
-			t.Fatalf("Delete: %v", err)
-		}
-
-		if len(sessions.StopCalls) != 2 {
-			t.Errorf("StopSession calls = %d, want 2", len(sessions.StopCalls))
-		}
-		seen := map[string]bool{}
-		for _, id := range sessions.StopCalls {
-			seen[id] = true
-		}
-		if !seen["s1"] || !seen["s2"] {
-			t.Errorf("StopSession ids = %v, want both s1 and s2", sessions.StopCalls)
-		}
-
-		foundDelete := false
-		for _, c := range lifecycle.Calls {
-			if c.Method == "Delete" && len(c.Args) == 1 && c.Args[0] == "f1" {
-				foundDelete = true
-			}
-		}
-		if !foundDelete {
-			t.Errorf("Lifecycle.Delete(\"f1\") not recorded; calls = %+v", lifecycle.Calls)
-		}
-	})
-
-	t.Run("lifecycle_error_wrapped", func(t *testing.T) {
-		lifecycle := mocks.NewMockFeatureLifecycle()
-		lifecycle.DeleteFn = func(featureID string) error {
-			return errTestLifecycleFailed
-		}
-
-		o := orchestrator.New(orchestrator.Deps{
-			Lifecycle: lifecycle,
-		}, orchestrator.Hooks{})
-
-		_, err := o.Delete("f1")
-		if err == nil {
-			t.Fatal("Delete returned nil error, want wrapped")
-		}
-		if !errorsIs(err, errTestLifecycleFailed) {
-			t.Errorf("error chain does not contain lifecycle error; got %v", err)
-		}
-	})
+	if _, err := o.Delete(f.ID); err != nil {
+		t.Fatalf("Delete: %v", err)
+	}
+	if len(sessions.StopCalls) != 2 {
+		t.Errorf("StopSession calls = %d, want 2", len(sessions.StopCalls))
+	}
+	seen := map[string]bool{}
+	for _, id := range sessions.StopCalls {
+		seen[id] = true
+	}
+	if !seen["s1"] || !seen["s2"] {
+		t.Errorf("StopSession ids = %v, want both s1 and s2", sessions.StopCalls)
+	}
+	if _, err := store.Load(f.ID); !errors.Is(err, os.ErrNotExist) {
+		t.Errorf("Load after delete = %v, want not exist", err)
+	}
 }

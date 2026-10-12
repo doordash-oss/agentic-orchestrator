@@ -41,8 +41,9 @@ func TestAPIClientCodesPinShape(t *testing.T) {
 }
 
 // TestAPIClientCodesNameRuntimeDir pins that summary and remediation name
-// the runtime directory the helper searched, and that zero-value params
-// degrade to the authored static text.
+// the runtime directory the helper searched, that the remediation offers the
+// runtime-directory environment variable (never the removed --runtime-dir
+// flag), and that zero-value params degrade to the authored static text.
 func TestAPIClientCodesNameRuntimeDir(t *testing.T) {
 	const dir = "/home/me/.agentic-orchestrator"
 	for _, code := range []Code{DiscoveryMissing, DiscoveryUntrusted, ServerUnreachable} {
@@ -55,6 +56,13 @@ func TestAPIClientCodesNameRuntimeDir(t *testing.T) {
 		}
 
 		entry, _ := Lookup(code)
+		if strings.Contains(entry.Remediation, "--runtime-dir") {
+			t.Errorf("%s: remediation %q still offers the removed --runtime-dir flag", code, entry.Remediation)
+		}
+		if code == DiscoveryMissing && !strings.Contains(entry.Remediation, "AGENTICO_RUNTIME_DIR") {
+			t.Errorf("%s: remediation %q must name AGENTICO_RUNTIME_DIR as the alternative", code, entry.Remediation)
+		}
+
 		zero := New(code, WithParams(RuntimeDirParams{}))
 		if zero.Summary != entry.Summary || zero.Remediation == nil || zero.Remediation.Hint != entry.Remediation {
 			t.Errorf("%s: zero-value render = %#v; want the authored static text", code, zero)

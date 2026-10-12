@@ -137,7 +137,7 @@ func requirePermissionDeferred(t *testing.T, handler ports.PermissionHandler, in
 func TestCreateWithinRootsHandler_AllowsPlainTouchInsideRoot(t *testing.T) {
 	root := t.TempDir()
 	artifact := filepath.Join(root, "artifact.txt")
-	handler := &CreateWithinRootsHandler{Inner: &AcceptEditsHandler{}, Roots: []string{root}}
+	handler := &createWithinRootsHandler{Inner: &AcceptEditsHandler{}, Roots: []string{root}}
 
 	requirePermissionAllowed(t, handler, toolNameBash, `{"command":"touch `+artifact+`"}`)
 	// Multiple targets, all inside a root, still qualify.
@@ -150,7 +150,7 @@ func TestCreateWithinRootsHandler_AllowsPlainTouchInsideRoot(t *testing.T) {
 func TestCreateWithinRootsHandler_DefersOutsideRoot(t *testing.T) {
 	root := t.TempDir()
 	outside := t.TempDir()
-	handler := &CreateWithinRootsHandler{Inner: &AcceptEditsHandler{}, Roots: []string{root}}
+	handler := &createWithinRootsHandler{Inner: &AcceptEditsHandler{}, Roots: []string{root}}
 
 	requirePermissionDeferred(t, handler, `{"command":"touch `+filepath.Join(outside, "artifact.txt")+`"}`)
 	// One target outside the root is enough to defer, even if another is inside.
@@ -161,7 +161,7 @@ func TestCreateWithinRootsHandler_DefersOutsideRoot(t *testing.T) {
 func TestCreateWithinRootsHandler_DefersOnFlagsChainingAndSubstitution(t *testing.T) {
 	root := t.TempDir()
 	artifact := filepath.Join(root, "artifact.txt")
-	handler := &CreateWithinRootsHandler{Inner: &AcceptEditsHandler{}, Roots: []string{root}}
+	handler := &createWithinRootsHandler{Inner: &AcceptEditsHandler{}, Roots: []string{root}}
 
 	requirePermissionDeferred(t, handler, `{"command":"touch -r `+artifact+` `+artifact+`"}`)
 	requirePermissionDeferred(t, handler, `{"command":"touch `+artifact+` && rm -rf /"}`)
@@ -179,7 +179,7 @@ func TestCreateWithinRootsHandler_DefersOnFlagsChainingAndSubstitution(t *testin
 func TestCreateWithinRootsHandler_AllowsPlainMkdirInsideRoot(t *testing.T) {
 	root := t.TempDir()
 	runDir := filepath.Join(root, "runs", "run-001", "research")
-	handler := &CreateWithinRootsHandler{Inner: &AcceptEditsHandler{}, Roots: []string{root}}
+	handler := &createWithinRootsHandler{Inner: &AcceptEditsHandler{}, Roots: []string{root}}
 
 	requirePermissionAllowed(t, handler, toolNameBash, `{"command":"mkdir -p `+runDir+`"}`)
 	// Bare mkdir (no -p) on an in-root target still qualifies.
@@ -192,7 +192,7 @@ func TestCreateWithinRootsHandler_MkdirDefersOutsideRootOrOnOtherFlags(t *testin
 	root := t.TempDir()
 	outside := t.TempDir()
 	inRoot := filepath.Join(root, "runs", "run-001", "research")
-	handler := &CreateWithinRootsHandler{Inner: &AcceptEditsHandler{}, Roots: []string{root}}
+	handler := &createWithinRootsHandler{Inner: &AcceptEditsHandler{}, Roots: []string{root}}
 
 	requirePermissionDeferred(t, handler, `{"command":"mkdir -p `+filepath.Join(outside, "research")+`"}`)
 	requirePermissionDeferred(t, handler,
@@ -210,7 +210,7 @@ func TestWrapGeneralPhaseHandlerWithSafeCreate_WrapsAcceptEditsAndCaching(t *tes
 	for _, inner := range []ports.PermissionHandler{
 		&AutoApproveHandler{},
 		&AcceptEditsHandler{},
-		&CachingHandler{Inner: &AcceptEditsHandler{}, Cache: NewCache(nil)},
+		&CachingHandler{Inner: &AcceptEditsHandler{}, Cache: newCache(nil)},
 		Guarded(&AcceptEditsHandler{}),
 	} {
 		wrapped := WrapGeneralPhaseHandlerWithSafeCreate(inner, []string{root})
@@ -226,7 +226,7 @@ func TestWrapGeneralPhaseHandlerWithSafeCreate_LeavesNarrowerHandlersUnwrapped(t
 		"BoundedHelperArtifactHandler":        &BoundedHelperArtifactHandler{AllowedPaths: []string{artifact}},
 		"BoundedHelperArtifactHandlerGuarded": Guarded(&BoundedHelperArtifactHandler{AllowedPaths: []string{artifact}}),
 		"SupervisorHandler":                   &SupervisorHandler{},
-		"ReadOnlyHandler":                     &ReadOnlyHandler{},
+		"UnknownHandler":                      &mockHandler{behavior: decisionDeny},
 	} {
 		t.Run(name, func(t *testing.T) {
 			wrapped := WrapGeneralPhaseHandlerWithSafeCreate(inner, []string{root})
@@ -250,11 +250,11 @@ func TestIsAutomaticReviewHandler_IncludesSupervisorWithoutBroadeningGeneralPoli
 		})
 	}
 
-	if IsGeneralPhaseHandler(&SupervisorHandler{}) {
-		t.Fatal("IsGeneralPhaseHandler(SupervisorHandler) = true, want false")
+	if isGeneralPhaseHandler(&SupervisorHandler{}) {
+		t.Fatal("isGeneralPhaseHandler(SupervisorHandler) = true, want false")
 	}
-	if IsAutomaticReviewHandler(&ReadOnlyHandler{}) {
-		t.Fatal("IsAutomaticReviewHandler(ReadOnlyHandler) = true, want false")
+	if IsAutomaticReviewHandler(&mockHandler{behavior: decisionDeny}) {
+		t.Fatal("IsAutomaticReviewHandler(unknown handler) = true, want false")
 	}
 }
 
@@ -306,7 +306,7 @@ func requirePermissionDenied(t *testing.T, handler ports.PermissionHandler, tool
 	if err != nil {
 		t.Fatalf("CanUseTool(%q, %q) error = %v", toolName, input, err)
 	}
-	if decision.Behavior != DecisionDeny {
+	if decision.Behavior != decisionDeny {
 		t.Fatalf("CanUseTool(%q, %q).Behavior = %q, want deny", toolName, input, decision.Behavior)
 	}
 	if strings.TrimSpace(decision.Reason) == "" {
@@ -315,17 +315,17 @@ func requirePermissionDenied(t *testing.T, handler ports.PermissionHandler, tool
 }
 
 // ---------------------------------------------------------------------------
-// Rule tests
+// rule tests
 // ---------------------------------------------------------------------------
 
 // ---------------------------------------------------------------------------
-// Rule.Match() comprehensive tests
+// rule.match() comprehensive tests
 // ---------------------------------------------------------------------------
 
 func TestRule_Match(t *testing.T) {
 	tests := []struct {
 		name      string
-		pattern   string // Rule.ToolPattern
+		pattern   string // rule.ToolPattern
 		toolName  string
 		toolInput string
 		want      bool
@@ -395,10 +395,10 @@ func TestRule_Match(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			r := Rule{ToolPattern: tt.pattern, Effect: DecisionAllow}
-			got := r.Match(tt.toolName, tt.toolInput)
+			r := rule{ToolPattern: tt.pattern, Effect: DecisionAllow}
+			got := r.match(tt.toolName, tt.toolInput)
 			if got != tt.want {
-				t.Errorf("Rule{%q}.Match(%q, %q) = %v, want %v",
+				t.Errorf("rule{%q}.match(%q, %q) = %v, want %v",
 					tt.pattern, tt.toolName, tt.toolInput, got, tt.want)
 			}
 		})
@@ -406,7 +406,7 @@ func TestRule_Match(t *testing.T) {
 }
 
 func TestDefaultGlobalRules_MatchReadOnlyCommands(t *testing.T) {
-	cache := NewCache(nil)
+	cache := newCache(nil)
 	cache.mu.Lock()
 	cache.rules = append(cache.rules, defaultGlobalRules()...)
 	cache.mu.Unlock()
@@ -434,36 +434,36 @@ func TestDefaultGlobalRules_MatchReadOnlyCommands(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			rule, found := cache.Check(toolNameBash, tt.command, "any-repo")
+			rule, found := cache.check(toolNameBash, tt.command, "any-repo")
 			if !found {
-				t.Errorf("cache.Check(%q) found = false, want true", tt.command)
+				t.Errorf("cache.check(%q) found = false, want true", tt.command)
 				return
 			}
 			if rule.Effect != DecisionAllow {
-				t.Errorf("cache.Check(%q) effect = %q, want allow", tt.command, rule.Effect)
+				t.Errorf("cache.check(%q) effect = %q, want allow", tt.command, rule.Effect)
 			}
 		})
 	}
 }
 
 func TestDefaultGlobalRules_MatchAgenticoValidateArtifacts(t *testing.T) {
-	cache := NewCache(nil)
+	cache := newCache(nil)
 	cache.mu.Lock()
 	cache.rules = append(cache.rules, defaultGlobalRules()...)
 	cache.mu.Unlock()
 
 	command := `{"command":"\"$AGENTICO_BIN\" validate-artifacts --phase review --role final_reviewer --dir /tmp/iteration-01"}`
-	rule, found := cache.Check(toolNameBash, command, "any-repo")
+	rule, found := cache.check(toolNameBash, command, "any-repo")
 	if !found {
-		t.Fatalf("cache.Check(%q) found = false, want true", command)
+		t.Fatalf("cache.check(%q) found = false, want true", command)
 	}
 	if rule.Effect != DecisionAllow {
-		t.Fatalf("cache.Check(%q) effect = %q, want allow", command, rule.Effect)
+		t.Fatalf("cache.check(%q) effect = %q, want allow", command, rule.Effect)
 	}
 }
 
 func TestDefaultGlobalRules_DoNotMatchMutatingCommands(t *testing.T) {
-	cache := NewCache(nil)
+	cache := newCache(nil)
 	cache.mu.Lock()
 	cache.rules = append(cache.rules, defaultGlobalRules()...)
 	cache.mu.Unlock()
@@ -481,9 +481,9 @@ func TestDefaultGlobalRules_DoNotMatchMutatingCommands(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			rule, found := cache.Check(toolNameBash, tt.command, "any-repo")
+			rule, found := cache.check(toolNameBash, tt.command, "any-repo")
 			if found {
-				t.Errorf("cache.Check(%q) = %+v, want no match", tt.command, rule)
+				t.Errorf("cache.check(%q) = %+v, want no match", tt.command, rule)
 			}
 		})
 	}
@@ -593,19 +593,19 @@ func TestInferBashPattern(t *testing.T) {
 func TestCacheRememberAllowPatternPersistsBeforeMemory(t *testing.T) {
 	t.Parallel()
 
-	store := NewStore(t.TempDir())
-	cache := NewCache(store)
-	result, err := cache.RememberAllowPattern(patternBashGoTest, testRepoA)
+	store := newStore(t.TempDir())
+	cache := newCache(store)
+	result, err := cache.rememberAllowPattern(patternBashGoTest, testRepoA)
 	if err != nil {
 		t.Fatalf("RememberAllowPattern() error = %v", err)
 	}
 	if !result.Persisted || result.AlreadyExisted {
 		t.Fatalf("result = %+v, want persisted new rule", result)
 	}
-	if _, ok := cache.Check(toolNameBash, `{"command":"go test ./internal/server"}`, testRepoA); !ok {
+	if _, ok := cache.check(toolNameBash, `{"command":"go test ./internal/server"}`, testRepoA); !ok {
 		t.Fatal("cache does not match remembered rule after persistence")
 	}
-	rules, err := store.Load(scopeFor(testRepoA))
+	rules, err := store.load(scopeFor(testRepoA))
 	if err != nil {
 		t.Fatalf("Load(repo-a): %v", err)
 	}
@@ -617,12 +617,12 @@ func TestCacheRememberAllowPatternPersistsBeforeMemory(t *testing.T) {
 func TestCacheRememberAllowPatternExactScopeDuplicateSkipsWrite(t *testing.T) {
 	t.Parallel()
 
-	store := NewStore(t.TempDir())
-	cache := NewCache(store)
-	if _, err := cache.RememberAllowPattern(patternBashGoTest, testRepoA); err != nil {
+	store := newStore(t.TempDir())
+	cache := newCache(store)
+	if _, err := cache.rememberAllowPattern(patternBashGoTest, testRepoA); err != nil {
 		t.Fatalf("initial remember: %v", err)
 	}
-	result, err := cache.RememberAllowPattern(patternBashGoTest, testRepoA)
+	result, err := cache.rememberAllowPattern(patternBashGoTest, testRepoA)
 	if err != nil {
 		t.Fatalf("duplicate remember: %v", err)
 	}
@@ -640,8 +640,8 @@ func TestCacheRememberAllowPatternPersistenceErrorDoesNotMutateMemory(t *testing
 		t.Fatalf("WriteFile(%s): %v", storePath, err)
 	}
 
-	cache := NewCache(NewStore(storePath))
-	result, err := cache.RememberAllowPattern(patternBashGoTest, testRepoA)
+	cache := newCache(newStore(storePath))
+	result, err := cache.rememberAllowPattern(patternBashGoTest, testRepoA)
 	if err == nil {
 		t.Fatal("RememberAllowPattern() error = nil, want persistence error")
 	}
@@ -651,24 +651,24 @@ func TestCacheRememberAllowPatternPersistenceErrorDoesNotMutateMemory(t *testing
 	if rules := cache.Rules(); len(rules) != 0 {
 		t.Fatalf("cache.Rules() = %+v, want empty after persistence error", rules)
 	}
-	if _, ok := cache.Check(toolNameBash, `{"command":"go test ./internal/server"}`, testRepoA); ok {
+	if _, ok := cache.check(toolNameBash, `{"command":"go test ./internal/server"}`, testRepoA); ok {
 		t.Fatal("cache matches remembered rule after persistence error")
 	}
 }
 
 func TestCache_Check_Empty(t *testing.T) {
-	c := NewCache(nil)
-	_, found := c.Check(toolNameBash, "ls", "repo")
+	c := newCache(nil)
+	_, found := c.check(toolNameBash, "ls", "repo")
 	if found {
 		t.Errorf("expected no match in empty cache")
 	}
 }
 
 func TestCache_Check_AllowMatch(t *testing.T) {
-	c := NewCache(nil)
+	c := newCache(nil)
 	c.RememberAllow(toolNameBash, "ls", "repo")
 
-	rule, found := c.Check(toolNameBash, "ls", "repo")
+	rule, found := c.check(toolNameBash, "ls", "repo")
 	if !found {
 		t.Fatal("expected match for allow rule")
 	}
@@ -678,85 +678,85 @@ func TestCache_Check_AllowMatch(t *testing.T) {
 }
 
 func TestCache_Check_DenyMatch(t *testing.T) {
-	c := NewCache(nil)
+	c := newCache(nil)
 	// Manually add a deny rule since RememberAllow only adds allow rules.
 	c.mu.Lock()
-	c.rules = append(c.rules, Rule{
+	c.rules = append(c.rules, rule{
 		ToolPattern: "Bash(rm -rf /)",
-		Effect:      DecisionDeny,
+		Effect:      decisionDeny,
 		RepoName:    "repo",
 	})
 	c.mu.Unlock()
 
-	rule, found := c.Check(toolNameBash, testRmRfRoot, "repo")
+	rule, found := c.check(toolNameBash, testRmRfRoot, "repo")
 	if !found {
 		t.Fatal("expected match for deny rule")
 	}
-	if rule.Effect != DecisionDeny {
+	if rule.Effect != decisionDeny {
 		t.Errorf("effect = %q, want deny", rule.Effect)
 	}
 }
 
 func TestCache_Check_DenyWinsOverAllow(t *testing.T) {
-	c := NewCache(nil)
+	c := newCache(nil)
 	// Add an allow rule.
 	c.RememberAllow(toolNameBash, testNpmTest, "repo")
 	// Add a deny rule for the same pattern.
 	c.mu.Lock()
-	c.rules = append(c.rules, Rule{
+	c.rules = append(c.rules, rule{
 		ToolPattern: "Bash(npm test)",
-		Effect:      DecisionDeny,
+		Effect:      decisionDeny,
 		RepoName:    "repo",
 	})
 	c.mu.Unlock()
 
-	rule, found := c.Check(toolNameBash, testNpmTest, "repo")
+	rule, found := c.check(toolNameBash, testNpmTest, "repo")
 	if !found {
 		t.Fatal("expected match")
 	}
-	if rule.Effect != DecisionDeny {
+	if rule.Effect != decisionDeny {
 		t.Errorf("effect = %q, want deny (deny should win over allow)", rule.Effect)
 	}
 }
 
 func TestCache_Check_RepoScope(t *testing.T) {
-	c := NewCache(nil)
+	c := newCache(nil)
 	c.RememberAllow(toolNameBash, "make build", testRepoA)
 
 	// Should match the correct repo.
-	_, found := c.Check(toolNameBash, "make build", testRepoA)
+	_, found := c.check(toolNameBash, "make build", testRepoA)
 	if !found {
 		t.Errorf("expected match for repo-a")
 	}
 
 	// Should NOT match a different repo.
-	_, found = c.Check(toolNameBash, "make build", "repo-b")
+	_, found = c.check(toolNameBash, "make build", "repo-b")
 	if found {
 		t.Errorf("expected no match for repo-b (rule is scoped to repo-a)")
 	}
 }
 
 func TestCache_Check_GlobalScope(t *testing.T) {
-	c := NewCache(nil)
+	c := newCache(nil)
 	// Add a global rule (empty repo name).
 	c.RememberAllow(toolNameBash, "echo hello", "")
 
 	// Should match any repo.
-	_, found := c.Check(toolNameBash, "echo hello", "repo-x")
+	_, found := c.check(toolNameBash, "echo hello", "repo-x")
 	if !found {
 		t.Errorf("expected global rule to match repo-x")
 	}
-	_, found = c.Check(toolNameBash, "echo hello", "repo-y")
+	_, found = c.check(toolNameBash, "echo hello", "repo-y")
 	if !found {
 		t.Errorf("expected global rule to match repo-y")
 	}
 }
 
 func TestCache_RememberAllow(t *testing.T) {
-	c := NewCache(nil)
+	c := newCache(nil)
 	c.RememberAllow(toolNameBash, testGoTestDotDotDot, testMyRepo)
 
-	rule, found := c.Check(toolNameBash, testGoTestDotDotDot, testMyRepo)
+	rule, found := c.check(toolNameBash, testGoTestDotDotDot, testMyRepo)
 	if !found {
 		t.Fatal("expected match after RememberAllow")
 	}
@@ -769,7 +769,7 @@ func TestCache_RememberAllow(t *testing.T) {
 }
 
 func TestCache_RememberAllow_CrossSession(t *testing.T) {
-	c := NewCache(nil)
+	c := newCache(nil)
 
 	// Add a rule via the shared cache.
 	c.RememberAllow(toolNameBash, "pytest", "shared-repo")
@@ -801,7 +801,7 @@ func TestCache_RememberAllow_CrossSession(t *testing.T) {
 func TestCachingHandler_Passthrough(t *testing.T) {
 	h := &CachingHandler{
 		Inner:    &mockHandler{behavior: DecisionAllow},
-		Cache:    NewCache(nil),
+		Cache:    newCache(nil),
 		RepoName: "repo",
 	}
 	req := ports.ToolPermissionRequest{
@@ -820,8 +820,8 @@ func TestCachingHandler_Passthrough(t *testing.T) {
 
 func TestCachingHandler_InnerDeny(t *testing.T) {
 	h := &CachingHandler{
-		Inner:    &mockHandler{behavior: DecisionDeny},
-		Cache:    NewCache(nil),
+		Inner:    &mockHandler{behavior: decisionDeny},
+		Cache:    newCache(nil),
 		RepoName: "repo",
 	}
 	req := ports.ToolPermissionRequest{
@@ -833,7 +833,7 @@ func TestCachingHandler_InnerDeny(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CanUseTool: %v", err)
 	}
-	if decision.Behavior != DecisionDeny {
+	if decision.Behavior != decisionDeny {
 		t.Errorf("behavior = %q, want deny (inner handler deny passthrough)", decision.Behavior)
 	}
 }
@@ -842,7 +842,7 @@ func TestCachingHandler_InnerError(t *testing.T) {
 	innerErr := errors.New("something went wrong")
 	h := &CachingHandler{
 		Inner:    &mockHandler{behavior: "", err: innerErr},
-		Cache:    NewCache(nil),
+		Cache:    newCache(nil),
 		RepoName: "repo",
 	}
 	req := ports.ToolPermissionRequest{
@@ -860,7 +860,7 @@ func TestCachingHandler_InnerError(t *testing.T) {
 }
 
 func TestCachingHandler_CacheHit(t *testing.T) {
-	cache := NewCache(nil)
+	cache := newCache(nil)
 	cache.RememberAllow(toolNameBash, testNpmTest, "repo")
 
 	h := &CachingHandler{
@@ -885,7 +885,7 @@ func TestCachingHandler_CacheHit(t *testing.T) {
 func TestCachingHandler_CacheMiss(t *testing.T) {
 	h := &CachingHandler{
 		Inner:    &mockHandler{behavior: ""}, // inner defers
-		Cache:    NewCache(nil),              // empty cache
+		Cache:    newCache(nil),              // empty cache
 		RepoName: "repo",
 	}
 	req := ports.ToolPermissionRequest{
@@ -903,14 +903,14 @@ func TestCachingHandler_CacheMiss(t *testing.T) {
 }
 
 func TestCachingHandler_DenyWins(t *testing.T) {
-	cache := NewCache(nil)
+	cache := newCache(nil)
 	// Add an allow rule.
 	cache.RememberAllow(toolNameBash, testNpmTest, "repo")
 	// Add a deny rule for the same pattern.
 	cache.mu.Lock()
-	cache.rules = append(cache.rules, Rule{
+	cache.rules = append(cache.rules, rule{
 		ToolPattern: "Bash(npm test)",
-		Effect:      DecisionDeny,
+		Effect:      decisionDeny,
 		RepoName:    "repo",
 	})
 	cache.mu.Unlock()
@@ -929,7 +929,7 @@ func TestCachingHandler_DenyWins(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CanUseTool: %v", err)
 	}
-	if decision.Behavior != DecisionDeny {
+	if decision.Behavior != decisionDeny {
 		t.Errorf("behavior = %q, want deny (deny wins over allow)", decision.Behavior)
 	}
 }
@@ -940,7 +940,7 @@ func TestCachingHandler_DenyWins(t *testing.T) {
 // cfg.RepoName is empty (PID naming compat) but the feature's first repo
 // name is used for permission scoping.
 func TestSingleRepoPermissionScoping(t *testing.T) {
-	cache := NewCache(nil)
+	cache := newCache(nil)
 
 	// Simulate single-repo feature: cfg.RepoName is "" but the feature has a repo.
 	cfgRepoName := "" // empty for single-repo features (PID naming compat)
@@ -1008,7 +1008,7 @@ func TestSingleRepoPermissionScoping(t *testing.T) {
 // to be written under a repo name the global-scope handler would never
 // match.
 func TestGlobalScopeSessionRememberAllow(t *testing.T) {
-	cache := NewCache(nil)
+	cache := newCache(nil)
 
 	// Handler created for a non-implementation session uses global scope ("").
 	handler := &CachingHandler{
@@ -1067,13 +1067,13 @@ func TestGlobalScopeSessionRememberAllow(t *testing.T) {
 
 func TestCache_LoadAndMerge_GlobalOnly(t *testing.T) {
 	dir := t.TempDir()
-	s := NewStore(dir)
-	rules := []Rule{{ToolPattern: patternBashEcho, Effect: DecisionAllow}}
-	if err := s.Save(globalScope, rules); err != nil {
+	s := newStore(dir)
+	rules := []rule{{ToolPattern: patternBashEcho, Effect: DecisionAllow}}
+	if err := s.save(globalScope, rules); err != nil {
 		t.Fatalf("Save: %v", err)
 	}
 
-	c := NewCache(s)
+	c := newCache(s)
 	c.LoadAndMerge("")
 
 	cached := c.Rules()
@@ -1090,15 +1090,15 @@ func TestCache_LoadAndMerge_GlobalOnly(t *testing.T) {
 
 func TestCache_LoadAndMerge_GlobalAndRepo(t *testing.T) {
 	dir := t.TempDir()
-	s := NewStore(dir)
-	if err := s.Save(globalScope, []Rule{{ToolPattern: patternBashEcho, Effect: DecisionAllow}}); err != nil {
+	s := newStore(dir)
+	if err := s.save(globalScope, []rule{{ToolPattern: patternBashEcho, Effect: DecisionAllow}}); err != nil {
 		t.Fatalf("Save global: %v", err)
 	}
-	if err := s.Save(testMyRepo, []Rule{{ToolPattern: patternBashGoTest, Effect: DecisionAllow, RepoName: testMyRepo}}); err != nil {
+	if err := s.save(testMyRepo, []rule{{ToolPattern: patternBashGoTest, Effect: DecisionAllow, RepoName: testMyRepo}}); err != nil {
 		t.Fatalf("Save repo: %v", err)
 	}
 
-	c := NewCache(s)
+	c := newCache(s)
 	c.LoadAndMerge(testMyRepo)
 
 	cached := c.Rules()
@@ -1109,15 +1109,15 @@ func TestCache_LoadAndMerge_GlobalAndRepo(t *testing.T) {
 
 func TestCache_LoadAndMerge_Additive(t *testing.T) {
 	dir := t.TempDir()
-	s := NewStore(dir)
-	if err := s.Save(testRepoA, []Rule{{ToolPattern: "Bash(make *)", Effect: DecisionAllow, RepoName: testRepoA}}); err != nil {
+	s := newStore(dir)
+	if err := s.save(testRepoA, []rule{{ToolPattern: "Bash(make *)", Effect: DecisionAllow, RepoName: testRepoA}}); err != nil {
 		t.Fatalf("Save repo-a: %v", err)
 	}
-	if err := s.Save("repo-b", []Rule{{ToolPattern: "Bash(cargo *)", Effect: DecisionAllow, RepoName: "repo-b"}}); err != nil {
+	if err := s.save("repo-b", []rule{{ToolPattern: "Bash(cargo *)", Effect: DecisionAllow, RepoName: "repo-b"}}); err != nil {
 		t.Fatalf("Save repo-b: %v", err)
 	}
 
-	c := NewCache(s)
+	c := newCache(s)
 	c.LoadAndMerge(testRepoA)
 	c.LoadAndMerge("repo-b")
 
@@ -1129,12 +1129,12 @@ func TestCache_LoadAndMerge_Additive(t *testing.T) {
 
 func TestCache_LoadAndMerge_Deduplicates(t *testing.T) {
 	dir := t.TempDir()
-	s := NewStore(dir)
-	if err := s.Save(testMyRepo, []Rule{{ToolPattern: patternBashGoTest, Effect: DecisionAllow, RepoName: testMyRepo}}); err != nil {
+	s := newStore(dir)
+	if err := s.save(testMyRepo, []rule{{ToolPattern: patternBashGoTest, Effect: DecisionAllow, RepoName: testMyRepo}}); err != nil {
 		t.Fatalf("Save: %v", err)
 	}
 
-	c := NewCache(s)
+	c := newCache(s)
 	// Pre-load the same rule into the cache
 	c.RememberAllow(toolNameBash, testGoTestDotDotDot, testMyRepo)
 	// Now load from disk — should deduplicate
@@ -1147,7 +1147,7 @@ func TestCache_LoadAndMerge_Deduplicates(t *testing.T) {
 }
 
 func TestCache_LoadAndMerge_NoStore(t *testing.T) {
-	c := NewCache(nil)
+	c := newCache(nil)
 	// Should not panic
 	c.LoadAndMerge(testMyRepo)
 	if len(c.Rules()) != 0 {
@@ -1161,13 +1161,13 @@ func TestCache_LoadAndMerge_NoStore(t *testing.T) {
 
 func TestCache_RememberAllow_Persists(t *testing.T) {
 	dir := t.TempDir()
-	s := NewStore(dir)
-	c := NewCache(s)
+	s := newStore(dir)
+	c := newCache(s)
 
 	c.RememberAllow(toolNameBash, testGoTestDotDotDot, testMyRepo)
 
 	// Load directly from store to verify persistence
-	loaded, err := s.Load(testMyRepo)
+	loaded, err := s.load(testMyRepo)
 	if err != nil {
 		t.Fatalf("Load: %v", err)
 	}
@@ -1181,8 +1181,8 @@ func TestCache_RememberAllow_Persists(t *testing.T) {
 
 func TestCache_RememberAllow_ConcurrentSafety(t *testing.T) {
 	dir := t.TempDir()
-	s := NewStore(dir)
-	c := NewCache(s)
+	s := newStore(dir)
+	c := newCache(s)
 
 	done := make(chan struct{})
 	for i := 0; i < 10; i++ {
@@ -1201,7 +1201,7 @@ func TestCache_RememberAllow_ConcurrentSafety(t *testing.T) {
 	}
 
 	// Verify all rules reached disk
-	loaded, err := s.Load("repo")
+	loaded, err := s.load("repo")
 	if err != nil {
 		t.Fatalf("Load: %v", err)
 	}
@@ -1217,8 +1217,8 @@ func TestCache_RememberAllow_ConcurrentSafety(t *testing.T) {
 // produces a deterministic post-condition (every write op persists a rule).
 func TestCacheCheckConcurrentSafety(t *testing.T) {
 	dir := t.TempDir()
-	s := NewStore(dir)
-	c := NewCache(s)
+	s := newStore(dir)
+	c := newCache(s)
 
 	// Pre-seed some rules so Check has matchable patterns to look up.
 	for i := 0; i < 5; i++ {
@@ -1237,7 +1237,7 @@ func TestCacheCheckConcurrentSafety(t *testing.T) {
 				if op%4 == 0 {
 					c.RememberAllow(toolNameBash, fmt.Sprintf("g%d-op%d", g, op), "repo")
 				} else {
-					_, _ = c.Check(toolNameBash, fmt.Sprintf("seed-%d", op%5), "repo")
+					_, _ = c.check(toolNameBash, fmt.Sprintf("seed-%d", op%5), "repo")
 				}
 			}
 		}(g)
@@ -1277,7 +1277,7 @@ func TestSessionGuardHandler_BlocksOversizedClaudeWrite(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if decision.Behavior != DecisionDeny {
+	if decision.Behavior != decisionDeny {
 		t.Fatalf("Behavior = %q, want deny", decision.Behavior)
 	}
 	if decision.Reason == "" {
@@ -1361,7 +1361,7 @@ func TestSessionGuardHandler_DisabledWhenMaxWriteBytesZero(t *testing.T) {
 func TestSessionGuardHandler_DelegatesOnMalformedInput(t *testing.T) {
 	// If the input is not valid JSON or lacks a content field, the guard should
 	// defer to the inner handler rather than block (fail-open on parse errors).
-	inner := &mockHandler{behavior: DecisionDeny}
+	inner := &mockHandler{behavior: decisionDeny}
 	h := &SessionGuardHandler{Inner: inner, MaxWriteBytes: 10}
 
 	req := ports.ToolPermissionRequest{
@@ -1373,7 +1373,7 @@ func TestSessionGuardHandler_DelegatesOnMalformedInput(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if decision.Behavior != DecisionDeny {
+	if decision.Behavior != decisionDeny {
 		t.Errorf("Behavior = %q, want deny from inner handler (guard should delegate on parse failure)", decision.Behavior)
 	}
 }
@@ -1417,7 +1417,7 @@ func TestSessionGuardHandler_DeniesHarnessReceiptMutationForEveryProvider(t *tes
 				if err != nil {
 					t.Fatalf("CanUseTool() error = %v", err)
 				}
-				if decision.Behavior != DecisionDeny {
+				if decision.Behavior != decisionDeny {
 					t.Fatalf("Behavior = %q, want deny", decision.Behavior)
 				}
 				if !strings.Contains(decision.Reason, "harness-owned") {
@@ -1451,7 +1451,7 @@ func TestSessionGuardHandler_DeniesTestingContractMutationForEveryProvider(t *te
 				if err != nil {
 					t.Fatalf("CanUseTool() error = %v", err)
 				}
-				if decision.Behavior != DecisionDeny {
+				if decision.Behavior != decisionDeny {
 					t.Fatalf("Behavior = %q, want deny", decision.Behavior)
 				}
 				if !strings.Contains(decision.Reason, "harness-owned") {
@@ -1480,8 +1480,8 @@ func TestGuarded_UsesDefaultThreshold(t *testing.T) {
 	if !ok {
 		t.Fatalf("Guarded returned %T, want *SessionGuardHandler", guard)
 	}
-	if guard.MaxWriteBytes != DefaultWriteGuardBytes {
-		t.Errorf("MaxWriteBytes = %d, want %d", guard.MaxWriteBytes, DefaultWriteGuardBytes)
+	if guard.MaxWriteBytes != defaultWriteGuardBytes {
+		t.Errorf("MaxWriteBytes = %d, want %d", guard.MaxWriteBytes, defaultWriteGuardBytes)
 	}
 	if guard.Inner != inner {
 		t.Error("Guarded did not preserve inner handler")
@@ -1492,15 +1492,15 @@ func TestSessionGuardHandler_AllowsBareHarnessCLIAgainstContract(t *testing.T) {
 	contract := filepath.Join(t.TempDir(), testingContractFilename)
 	handler := Guarded(&AutoApproveHandler{})
 	for _, cmd := range []string{
-		`"$AGENTICO_BIN" verify-evidence --contract "` + contract + `" --dir /tmp/iter`,
+		`"$AGENTICO_BIN" validate-artifacts --phase implement --role implementer --dir /tmp/iter`,
 		`"$AGENTICO_BIN" report-blocker --contract "` + contract + `" --dir /tmp/iter --items visual_1,manual_2 --capability authenticated-browser(slack.com) --reason "no signed-in session"`,
-		`/usr/local/bin/agentico capability-probe authenticated-browser(slack.com)`,
+		`/usr/local/bin/agentico validate-artifacts --phase implement --role implementer --dir /tmp/iter`,
 	} {
 		requirePermissionAllowed(t, handler, toolNameBash, `{"command":`+strconv.Quote(cmd)+`}`)
 	}
 	for _, cmd := range []string{
 		`"$AGENTICO_BIN" report-blocker --contract ` + contract + ` --dir /tmp/iter; echo x > ` + contract,
-		`"$AGENTICO_BIN" verify-evidence --contract ` + contract + ` && sed -i s/waived// ` + contract,
+		`"$AGENTICO_BIN" report-blocker --contract ` + contract + ` && sed -i s/waived// ` + contract,
 		`"$AGENTICO_BIN" server --contract ` + contract,
 		`cp "$AGENTICO_BIN" ` + contract,
 		`"$AGENTICO_BIN" report-blocker --contract $(echo ` + contract + `)`,
@@ -1510,7 +1510,7 @@ func TestSessionGuardHandler_AllowsBareHarnessCLIAgainstContract(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if decision.Behavior != DecisionDeny {
+		if decision.Behavior != decisionDeny {
 			t.Fatalf("command %q allowed; want deny", cmd)
 		}
 	}
@@ -1535,9 +1535,9 @@ func TestSessionGuardHandler_ExplainsMalformedHarnessCLIDenial(t *testing.T) {
 			wantReasonPart: "agentico report-blocker must be invoked as a single bare command",
 		},
 		{
-			name:           "verify-evidence piped",
-			command:        `"$AGENTICO_BIN" verify-evidence --contract /work/testing-contract.yaml --dir /work/iter|tail`,
-			wantReasonPart: "agentico verify-evidence must be invoked as a single bare command",
+			name:           "validate-artifacts piped",
+			command:        `"$AGENTICO_BIN" validate-artifacts --phase implement --role implementer --dir /work/iter|tail /work/testing-contract.yaml`,
+			wantReasonPart: "agentico validate-artifacts must be invoked as a single bare command",
 		},
 		{
 			name:        "well-formed bare call",
@@ -1573,7 +1573,7 @@ func TestSessionGuardHandler_ExplainsMalformedHarnessCLIDenial(t *testing.T) {
 				}
 				return
 			}
-			if decision.Behavior != DecisionDeny {
+			if decision.Behavior != decisionDeny {
 				t.Fatalf("Behavior = %q, want deny", decision.Behavior)
 			}
 			if !strings.Contains(decision.Reason, tc.wantReasonPart) {

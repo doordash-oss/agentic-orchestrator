@@ -56,8 +56,8 @@ func EncodeHandoff(m HandoffMetadata) string {
 	return string(data)
 }
 
-// ParseHandoff parses handoff metadata from its JSON form.
-func ParseHandoff(value string) (HandoffMetadata, error) {
+// parseHandoff parses handoff metadata from its JSON form.
+func parseHandoff(value string) (HandoffMetadata, error) {
 	var m HandoffMetadata
 	if err := json.Unmarshal([]byte(value), &m); err != nil {
 		return HandoffMetadata{}, fmt.Errorf("parse handoff metadata: %w", err)
@@ -74,7 +74,7 @@ func ParseHandoffEnv(env []string) (HandoffMetadata, bool) {
 		if !strings.HasPrefix(entry, prefix) {
 			continue
 		}
-		m, err := ParseHandoff(strings.TrimPrefix(entry, prefix))
+		m, err := parseHandoff(strings.TrimPrefix(entry, prefix))
 		if err != nil {
 			return HandoffMetadata{}, false
 		}
@@ -83,37 +83,28 @@ func ParseHandoffEnv(env []string) (HandoffMetadata, bool) {
 	return HandoffMetadata{}, false
 }
 
-// ClearCLOEXEC marks fd inheritable across exec. Only the binary lease fd
+// clearCLOEXEC marks fd inheritable across exec. Only the binary lease fd
 // may ever be marked this way, and only inside the final handoff window.
-func ClearCLOEXEC(fd int) error {
+func clearCLOEXEC(fd int) error {
 	if _, err := unix.FcntlInt(uintptr(fd), unix.F_SETFD, 0); err != nil {
 		return fmt.Errorf("clear CLOEXEC on fd %d: %w", fd, err)
 	}
 	return nil
 }
 
-// SetCLOEXEC marks fd close-on-exec again.
-func SetCLOEXEC(fd int) error {
+// setCLOEXEC marks fd close-on-exec again.
+func setCLOEXEC(fd int) error {
 	if _, err := unix.FcntlInt(uintptr(fd), unix.F_SETFD, unix.FD_CLOEXEC); err != nil {
 		return fmt.Errorf("set CLOEXEC on fd %d: %w", fd, err)
 	}
 	return nil
 }
 
-// IsCLOEXEC reports the close-on-exec state of fd.
-func IsCLOEXEC(fd int) (bool, error) {
-	flags, err := unix.FcntlInt(uintptr(fd), unix.F_GETFD, 0)
-	if err != nil {
-		return false, fmt.Errorf("inspect fd %d flags: %w", fd, err)
-	}
-	return flags&unix.FD_CLOEXEC != 0, nil
-}
-
 // ExecFunc is the exec seam, replaceable in tests.
 type ExecFunc func(path string, argv, env []string) error
 
-// SysExec is the real exec(2).
-var SysExec ExecFunc = func(path string, argv, env []string) error {
+// sysExec is the real exec(2).
+var sysExec ExecFunc = func(path string, argv, env []string) error {
 	return unix.Exec(path, argv, env)
 }
 
@@ -123,9 +114,9 @@ var SysExec ExecFunc = func(path string, argv, env []string) error {
 // close-on-exec again before returning so no later child inherits it.
 func ExecReplace(installedPath string, argv []string, env []string, extraEnvEntry string, leaseFD int, execFn ExecFunc) error {
 	if execFn == nil {
-		execFn = SysExec
+		execFn = sysExec
 	}
-	if err := ClearCLOEXEC(leaseFD); err != nil {
+	if err := clearCLOEXEC(leaseFD); err != nil {
 		return err
 	}
 	// Copy without any inherited handoff entry so metadata never
@@ -141,7 +132,7 @@ func ExecReplace(installedPath string, argv []string, env []string, extraEnvEntr
 		execEnv = append(execEnv, extraEnvEntry)
 	}
 	if err := execFn(installedPath, argv, execEnv); err != nil {
-		_ = SetCLOEXEC(leaseFD)
+		_ = setCLOEXEC(leaseFD)
 		return err
 	}
 	return nil
@@ -171,14 +162,14 @@ type RecoveryGuard struct {
 	AuthTokenPath string       `json:"auth_token_path,omitempty"`
 }
 
-// EncodeRecoveryGuard marshals the guard to its JSON form.
-func EncodeRecoveryGuard(g RecoveryGuard) string {
+// encodeRecoveryGuard marshals the guard to its JSON form.
+func encodeRecoveryGuard(g RecoveryGuard) string {
 	data, _ := json.Marshal(g)
 	return string(data)
 }
 
-// ParseRecoveryGuard parses guard metadata from its JSON form.
-func ParseRecoveryGuard(value string) (RecoveryGuard, error) {
+// parseRecoveryGuard parses guard metadata from its JSON form.
+func parseRecoveryGuard(value string) (RecoveryGuard, error) {
 	var g RecoveryGuard
 	if err := json.Unmarshal([]byte(value), &g); err != nil {
 		return RecoveryGuard{}, fmt.Errorf("parse recovery guard: %w", err)
@@ -195,7 +186,7 @@ func ParseRecoveryGuardEnv(env []string) (RecoveryGuard, bool, error) {
 		if !strings.HasPrefix(entry, prefix) {
 			continue
 		}
-		g, err := ParseRecoveryGuard(strings.TrimPrefix(entry, prefix))
+		g, err := parseRecoveryGuard(strings.TrimPrefix(entry, prefix))
 		if err != nil {
 			return RecoveryGuard{}, true, err
 		}
@@ -217,7 +208,7 @@ func BuildRecoveryEnv(env []string, guard RecoveryGuard) []string {
 		}
 		out = append(out, entry)
 	}
-	return append(out, guardPrefix+EncodeRecoveryGuard(guard))
+	return append(out, guardPrefix+encodeRecoveryGuard(guard))
 }
 
 // ExecRecovery performs the recovery exec onto the installed path — never a
@@ -227,7 +218,7 @@ func BuildRecoveryEnv(env []string, guard RecoveryGuard) []string {
 // actionable metadata retained.
 func ExecRecovery(installedPath string, argv, env []string, execFn ExecFunc) error {
 	if execFn == nil {
-		execFn = SysExec
+		execFn = sysExec
 	}
 	return execFn(installedPath, argv, env)
 }
@@ -244,7 +235,7 @@ func AdoptHandoff(m HandoffMetadata, installedExec Executable) (*Lease, Receipt,
 	if m.SchemaVersion != handoffSchemaVersion {
 		return nil, Receipt{}, fmt.Errorf("handoff schema version %d is not supported", m.SchemaVersion)
 	}
-	receipt, err := ReadReceipt(m.ReceiptPath)
+	receipt, err := readReceipt(m.ReceiptPath)
 	if err != nil {
 		return nil, Receipt{}, err
 	}
@@ -266,8 +257,8 @@ func AdoptHandoff(m HandoffMetadata, installedExec Executable) (*Lease, Receipt,
 	if receipt.NewDigest != m.NewDigest || m.NewDigest != installedExec.Digest {
 		return nil, Receipt{}, fmt.Errorf("handoff digest does not match receipt %q or installed %q", receipt.NewDigest, installedExec.Digest)
 	}
-	if receipt.Phase != PhaseReplacementComplete {
-		return nil, Receipt{}, fmt.Errorf("receipt phase %q is not %q", receipt.Phase, PhaseReplacementComplete)
+	if receipt.Phase != phaseReplacementComplete {
+		return nil, Receipt{}, fmt.Errorf("receipt phase %q is not %q", receipt.Phase, phaseReplacementComplete)
 	}
 	if receipt.Outcome != OutcomePending {
 		return nil, Receipt{}, fmt.Errorf("receipt outcome %q is not %q", receipt.Outcome, OutcomePending)
@@ -283,7 +274,7 @@ func AdoptHandoff(m HandoffMetadata, installedExec Executable) (*Lease, Receipt,
 	if err := unix.Fstat(m.LeaseFD, &fst); err != nil {
 		return nil, Receipt{}, fmt.Errorf("fstat handoff lease fd: %w", err)
 	}
-	leaseID, err := StatFile(m.LeasePath)
+	leaseID, err := statFile(m.LeasePath)
 	if err != nil {
 		return nil, Receipt{}, err
 	}
@@ -305,11 +296,11 @@ func AdoptHandoff(m HandoffMetadata, installedExec Executable) (*Lease, Receipt,
 		ExecutableIno:    installedExec.ID.Ino,
 		TransactionID:    m.TransactionID,
 	}
-	lease, err := AdoptLease(m.LeaseFD, rec)
+	lease, err := adoptLease(m.LeaseFD, rec)
 	if err != nil {
 		return nil, Receipt{}, err
 	}
-	if err := SetCLOEXEC(m.LeaseFD); err != nil {
+	if err := setCLOEXEC(m.LeaseFD); err != nil {
 		_ = lease.Close()
 		return nil, Receipt{}, err
 	}

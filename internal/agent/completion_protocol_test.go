@@ -69,11 +69,11 @@ func TestCommitPhaseOutcome_RejectsIntentThatDisagreesWithProgress(t *testing.T)
 	if err := os.MkdirAll(iterDir, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	writeValidProgress(t, filepath.Join(phaseDir, "progress.md"), "", StateRetry)
+	writeValidProgress(t, filepath.Join(phaseDir, "progress.md"), "", stateRetry)
 
 	outcome, _, violations, err := CommitPhaseOutcome(CompletionCommitInput{
 		Phase:       feature.PhaseImplement,
-		Role:        RoleImplementer,
+		Role:        roleImplementer,
 		ArtifactDir: iterDir,
 		SessionID:   "root-session-1",
 		Intent: llm.CompletionIntent{
@@ -90,7 +90,7 @@ func TestCommitPhaseOutcome_RejectsIntentThatDisagreesWithProgress(t *testing.T)
 	if len(violations) != 1 || violations[0].Artifact != "agentico-outcome" {
 		t.Fatalf("violations = %+v, want intent/progress mismatch", violations)
 	}
-	if _, err := ReadCompletionReceipt(iterDir); err == nil {
+	if _, err := readCompletionReceipt(iterDir); err == nil {
 		t.Fatal("phase_complete written for mismatched root intent and progress state")
 	}
 }
@@ -100,7 +100,7 @@ func TestReadCompletionReceiptRejectsAgentAuthoredPlainFile(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(dir, PhaseCompleteFile), []byte("done\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := ReadCompletionReceipt(dir); err == nil {
+	if _, err := readCompletionReceipt(dir); err == nil {
 		t.Fatal("ReadCompletionReceipt() accepted a plain file")
 	}
 }
@@ -121,16 +121,16 @@ func TestHasCommittedPhaseOutcomeRevalidatesContractAndIdentity(t *testing.T) {
 	if err != nil || len(violations) != 0 {
 		t.Fatalf("CommitPhaseOutcome() err=%v violations=%+v", err, violations)
 	}
-	if !HasCommittedPhaseOutcome(dir, feature.PhaseKnowledgeBase, RoleKnowledgeBaseBuilder) {
+	if !hasCommittedPhaseOutcome(dir, feature.PhaseKnowledgeBase, RoleKnowledgeBaseBuilder) {
 		t.Fatal("valid committed outcome was not reusable")
 	}
-	if HasCommittedPhaseOutcome(dir, feature.PhaseResearch, RoleResearcher) {
+	if hasCommittedPhaseOutcome(dir, feature.PhaseResearch, RoleResearcher) {
 		t.Fatal("receipt was reusable for a different phase and role")
 	}
 	if err := os.Remove(indexPath); err != nil {
 		t.Fatal(err)
 	}
-	if HasCommittedPhaseOutcome(dir, feature.PhaseKnowledgeBase, RoleKnowledgeBaseBuilder) {
+	if hasCommittedPhaseOutcome(dir, feature.PhaseKnowledgeBase, RoleKnowledgeBaseBuilder) {
 		t.Fatal("receipt remained reusable after its required artifact was removed")
 	}
 }
@@ -154,5 +154,36 @@ func TestCommitPhaseOutcome_InvalidIntentClearsPriorReceipt(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(dir, PhaseCompleteFile)); !os.IsNotExist(err) {
 		t.Fatalf("prior receipt survived rejected commit: %v", err)
+	}
+}
+
+func TestRemoveCompletionReceiptOnlyRemovesReceipt(t *testing.T) {
+	dir := t.TempDir()
+	files := map[string]string{
+		PhaseCompleteFile:        "",
+		"artifact.md":            "# artifact\n",
+		protocolRetrySidecarFile: "role: researcher\n",
+		"qa-answers.md":          "Q: x\nA: y\n",
+	}
+	for name, body := range files {
+		if err := os.WriteFile(filepath.Join(dir, name), []byte(body), 0o644); err != nil {
+			t.Fatalf("write %s: %v", name, err)
+		}
+	}
+
+	if err := removeCompletionReceipt(dir); err != nil {
+		t.Fatalf("RemoveCompletionReceipt() error = %v", err)
+	}
+	if err := removeCompletionReceipt(dir); err != nil {
+		t.Fatalf("RemoveCompletionReceipt() second call error = %v", err)
+	}
+
+	if _, err := os.Stat(filepath.Join(dir, PhaseCompleteFile)); !os.IsNotExist(err) {
+		t.Fatalf("phase_complete stat err = %v, want not exist", err)
+	}
+	for _, name := range []string{"artifact.md", protocolRetrySidecarFile, "qa-answers.md"} {
+		if _, err := os.Stat(filepath.Join(dir, name)); err != nil {
+			t.Fatalf("%s was removed, want preserved: %v", name, err)
+		}
 	}
 }

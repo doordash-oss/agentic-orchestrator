@@ -46,6 +46,16 @@ func initRunGit(t *testing.T, dir string, args ...string) string {
 	return strings.TrimSpace(out)
 }
 
+// initializeRepo drives the production identity-fenced initializer with the
+// repository's currently resolved identity.
+func initializeRepo(ctx context.Context, dir string) (InitializeOutcome, error) {
+	identity, ok := ResolveRepoIdentity(dir)
+	if !ok {
+		return InitializeOutcome{}, ErrInitializeNotARepository
+	}
+	return InitializeRepositoryAtIdentity(ctx, dir, identity)
+}
+
 func assertAgenticoCommit(t *testing.T, repo, wantBranch string) (string, string) {
 	t.Helper()
 	branch := initRunGit(t, repo, "symbolic-ref", "--short", "HEAD")
@@ -79,7 +89,7 @@ func assertAgenticoCommit(t *testing.T, repo, wantBranch string) (string, string
 func TestInitializeCreatesOneEmptyCommitPreservingBranchAndOrigin(t *testing.T) {
 	repo := initTestRepo(t, "feature/seed")
 
-	outcome, err := InitializeRepository(context.Background(), repo)
+	outcome, err := initializeRepo(context.Background(), repo)
 	if err != nil {
 		t.Fatalf("InitializeRepository: %v", err)
 	}
@@ -108,7 +118,7 @@ func TestInitializeUsesMainOnlyWithoutValidSymbolicBranch(t *testing.T) {
 		t.Fatalf("write HEAD: %v", err)
 	}
 
-	outcome, err := InitializeRepository(context.Background(), repo)
+	outcome, err := initializeRepo(context.Background(), repo)
 	if err != nil {
 		t.Fatalf("InitializeRepository: %v", err)
 	}
@@ -123,7 +133,7 @@ func TestInitializeRefusesUntrackedAndStagedContentAndPreservesIt(t *testing.T) 
 	if err := os.WriteFile(filepath.Join(untracked, "notes.txt"), []byte("user content"), 0o644); err != nil {
 		t.Fatalf("write untracked file: %v", err)
 	}
-	if _, err := InitializeRepository(context.Background(), untracked); !errors.Is(err, ErrInitializeContentPresent) {
+	if _, err := initializeRepo(context.Background(), untracked); !errors.Is(err, ErrInitializeContentPresent) {
 		t.Fatalf("untracked content: err = %v, want ErrInitializeContentPresent", err)
 	}
 	if _, err := os.Stat(filepath.Join(untracked, "notes.txt")); err != nil {
@@ -138,7 +148,7 @@ func TestInitializeRefusesUntrackedAndStagedContentAndPreservesIt(t *testing.T) 
 		t.Fatalf("write staged file: %v", err)
 	}
 	initRunGit(t, staged, "add", "staged.txt")
-	if _, err := InitializeRepository(context.Background(), staged); !errors.Is(err, ErrInitializeContentPresent) {
+	if _, err := initializeRepo(context.Background(), staged); !errors.Is(err, ErrInitializeContentPresent) {
 		t.Fatalf("staged content: err = %v, want ErrInitializeContentPresent", err)
 	}
 	stagedStatus := initRunGit(t, staged, "status", "--porcelain")
@@ -156,7 +166,7 @@ func TestInitializeAllowsIgnoredFilesAndPreservesThem(t *testing.T) {
 		t.Fatalf("write .gitignore: %v", err)
 	}
 	// .gitignore itself is untracked user content, so this must refuse.
-	if _, err := InitializeRepository(context.Background(), repo); !errors.Is(err, ErrInitializeContentPresent) {
+	if _, err := initializeRepo(context.Background(), repo); !errors.Is(err, ErrInitializeContentPresent) {
 		t.Fatalf("untracked .gitignore: err = %v, want ErrInitializeContentPresent", err)
 	}
 	initRunGit(t, repo, "add", ".gitignore")
@@ -169,7 +179,7 @@ func TestInitializeAllowsIgnoredFilesAndPreservesThem(t *testing.T) {
 		t.Fatalf("write ignored file: %v", err)
 	}
 
-	outcome, err := InitializeRepository(context.Background(), repo)
+	outcome, err := initializeRepo(context.Background(), repo)
 	if err != nil {
 		t.Fatalf("InitializeRepository with ignored files: %v", err)
 	}
@@ -192,7 +202,7 @@ func TestInitializeRefreshOnlySuccessWithLocalChanges(t *testing.T) {
 		t.Fatalf("write local file: %v", err)
 	}
 
-	outcome, err := InitializeRepository(context.Background(), repo)
+	outcome, err := initializeRepo(context.Background(), repo)
 	if err != nil {
 		t.Fatalf("InitializeRepository on initialized repository: %v", err)
 	}
@@ -219,7 +229,7 @@ func TestInitializeRefreshOnlySuccessWithActiveOperationMarker(t *testing.T) {
 		t.Fatalf("write operation marker: %v", err)
 	}
 
-	outcome, err := InitializeRepository(context.Background(), repo)
+	outcome, err := initializeRepo(context.Background(), repo)
 	if err != nil {
 		t.Fatalf("InitializeRepository on initialized repository: %v", err)
 	}
@@ -240,8 +250,8 @@ func TestInitializeBranchProbeFailureDoesNotFallBackToMain(t *testing.T) {
 	cancel()
 
 	branch, hasSymbolic, err := initializeBranchName(ctx, repo)
-	if !errors.Is(err, ErrInitializeProbeFailed) {
-		t.Fatalf("initializeBranchName() error = %v; want ErrInitializeProbeFailed", err)
+	if !errors.Is(err, errInitializeProbeFailed) {
+		t.Fatalf("initializeBranchName() error = %v; want errInitializeProbeFailed", err)
 	}
 	if branch != "" || hasSymbolic {
 		t.Fatalf("initializeBranchName() = (%q, %v); want zero values on probe failure", branch, hasSymbolic)
@@ -274,7 +284,7 @@ func TestInitializeRefusesActiveGitOperations(t *testing.T) {
 			if err != nil {
 				t.Fatalf("plant %s: %v", tc.marker, err)
 			}
-			if _, err := InitializeRepository(context.Background(), repo); !errors.Is(err, ErrInitializeOperationActive) {
+			if _, err := initializeRepo(context.Background(), repo); !errors.Is(err, ErrInitializeOperationActive) {
 				t.Fatalf("err = %v, want ErrInitializeOperationActive", err)
 			}
 			if _, statErr := os.Stat(target); statErr != nil {
@@ -292,7 +302,7 @@ func TestInitializeRefusesNonRepositoryAndKeepsData(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(dir, "user.txt"), []byte("data"), 0o644); err != nil {
 		t.Fatalf("write user file: %v", err)
 	}
-	if _, err := InitializeRepository(context.Background(), dir); !errors.Is(err, ErrInitializeNotARepository) {
+	if _, err := initializeRepo(context.Background(), dir); !errors.Is(err, ErrInitializeNotARepository) {
 		t.Fatalf("err = %v, want ErrInitializeNotARepository", err)
 	}
 	if _, err := os.Stat(filepath.Join(dir, "user.txt")); err != nil {
@@ -337,7 +347,7 @@ func TestInitializeConcurrentAttemptsCreateExactlyOneCommit(t *testing.T) {
 		go func(i int) {
 			defer wg.Done()
 			<-start
-			results[i], errs[i] = InitializeRepository(context.Background(), repo)
+			results[i], errs[i] = initializeRepo(context.Background(), repo)
 		}(i)
 	}
 	close(start)
@@ -399,13 +409,13 @@ func TestInitializeRespectsFreshGitLocks(t *testing.T) {
 	initializeRefLockRetryWindow = 100 * time.Millisecond
 	defer func() { initializeRefLockRetryWindow = original }()
 
-	_, err := InitializeRepository(context.Background(), repo)
-	if !errors.Is(err, ErrInitializeProbeFailed) {
-		t.Fatalf("err = %v, want ErrInitializeProbeFailed", err)
+	_, err := initializeRepo(context.Background(), repo)
+	if !errors.Is(err, errInitializeProbeFailed) {
+		t.Fatalf("err = %v, want errInitializeProbeFailed", err)
 	}
-	var lockErr *GitLockContentionError
+	var lockErr *gitLockContentionError
 	if !errors.As(err, &lockErr) {
-		t.Fatalf("err = %v, want GitLockContentionError inside", err)
+		t.Fatalf("err = %v, want gitLockContentionError inside", err)
 	}
 	// The fresh lock is never removed by the initializer.
 	if _, statErr := os.Stat(lockPath); statErr != nil {
@@ -419,7 +429,7 @@ func TestInitializeRespectsFreshGitLocks(t *testing.T) {
 	if err := os.Remove(lockPath); err != nil {
 		t.Fatalf("remove lock: %v", err)
 	}
-	outcome, err := InitializeRepository(context.Background(), repo)
+	outcome, err := initializeRepo(context.Background(), repo)
 	if err != nil {
 		t.Fatalf("InitializeRepository after lock cleared: %v", err)
 	}
@@ -443,7 +453,7 @@ func TestInitializeRemovesProvablyStaleGitLock(t *testing.T) {
 		t.Fatalf("age lock: %v", err)
 	}
 
-	outcome, err := InitializeRepository(context.Background(), repo)
+	outcome, err := initializeRepo(context.Background(), repo)
 	if err != nil {
 		t.Fatalf("InitializeRepository with stale lock: %v", err)
 	}
@@ -461,9 +471,9 @@ func TestInitializeFailsClosedWhenDeadlineExpires(t *testing.T) {
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	_, err := InitializeRepository(ctx, repo)
-	if !errors.Is(err, ErrInitializeProbeFailed) {
-		t.Fatalf("err = %v, want ErrInitializeProbeFailed", err)
+	_, err := initializeRepo(ctx, repo)
+	if !errors.Is(err, errInitializeProbeFailed) {
+		t.Fatalf("err = %v, want errInitializeProbeFailed", err)
 	}
 	if HasHead(repo) {
 		t.Fatal("timed-out attempt created a commit")
@@ -491,7 +501,7 @@ func TestInitializeIgnoresHostileGlobalConfiguration(t *testing.T) {
 	t.Setenv("HOME", home)
 
 	repo := initTestRepo(t, "main")
-	outcome, err := InitializeRepository(context.Background(), repo)
+	outcome, err := initializeRepo(context.Background(), repo)
 	if err != nil {
 		t.Fatalf("InitializeRepository under hostile config: %v", err)
 	}

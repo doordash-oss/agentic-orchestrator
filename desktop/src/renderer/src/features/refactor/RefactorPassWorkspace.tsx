@@ -81,7 +81,7 @@ type ChildState = LoadState<{ phase: 'loaded'; child: FeatureSnapshot }>;
  * attention result) or a rejected server action carried as the parsed error
  * for the canonical error surface.
  */
-export type PassNotice = { kind: 'info'; text: string } | { kind: 'error'; error: CanonicalError };
+type PassNotice = { kind: 'info'; text: string } | { kind: 'error'; error: CanonicalError };
 
 export interface RefactorPassController {
   view: RelationshipChildView | undefined;
@@ -252,7 +252,7 @@ export function useRefactorPass(
   };
 }
 
-export interface RefactorPassWorkspaceProps {
+interface RefactorPassWorkspaceProps {
   parent: FeatureSnapshot;
   pass: RefactorPassController;
   /** Whether retained live pass effects may fetch or subscribe. */
@@ -603,11 +603,13 @@ export function RefactorPassWorkspace({
                 catalogErrorAction(
                   child,
                   actionId,
-                  actionId === 'setup' ? 'Retry setup' : 'Restart',
+                  actionId === 'setup' ? 'Retry setup' : actionId === 'retry' ? 'Retry' : 'Restart',
                 )
               }
               onAction={(actionId) => {
-                if (actionId === 'restart' || actionId === 'setup') void pass.dispatch(actionId);
+                if (actionId === 'restart' || actionId === 'retry' || actionId === 'setup') {
+                  void pass.dispatch(actionId);
+                }
               }}
               explain={{
                 reference: { scope: 'run', code: runFailure.code, featureId: child.id },

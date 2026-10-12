@@ -25,24 +25,19 @@ import (
 	"time"
 )
 
-const (
-	ProbeTimeout        = 10 * time.Second
-	ProbeMaxOutputBytes = 4096 // bounded captured stdout and stderr
-)
-
-// probeTimeout and probeMaxOutputBytes are test seams over the exported
-// bounds; production always uses the constants.
+// Probe bounds. Tests shrink the working copies to exercise the boundary
+// checks cheaply.
 var (
-	probeTimeout        = ProbeTimeout
-	probeMaxOutputBytes = ProbeMaxOutputBytes
+	probeTimeout        = 10 * time.Second
+	probeMaxOutputBytes = 4096 // bounded captured stdout and stderr
 )
 
 // probeWaitDelay bounds how long the probe's capture pipes may outlive the
 // probed child (an orphaned grandchild can inherit the write end).
 const probeWaitDelay = 250 * time.Millisecond
 
-// ProbeResult is the outcome of one successful staged-executable probe.
-type ProbeResult struct {
+// probeResult is the outcome of one successful staged-executable probe.
+type probeResult struct {
 	// Version is the exact version token parsed from the banner.
 	Version string
 	// Banner is the exact single-line stdout banner.
@@ -62,14 +57,14 @@ type ProbeResult struct {
 // never inherits credentials, provider variables, fixture hooks, or handoff
 // metadata. It also never inherits update leases or runtime/listener
 // descriptors: no extra file descriptors are passed to the child.
-func ProbeStagedExecutable(ctx context.Context, path, expectedVersion string) (ProbeResult, error) {
+func ProbeStagedExecutable(ctx context.Context, path, expectedVersion string) (probeResult, error) {
 	if ctx == nil {
-		return ProbeResult{}, errors.New("probe requires a non-nil context")
+		return probeResult{}, errors.New("probe requires a non-nil context")
 	}
 
 	preDigest, err := DigestFile(path)
 	if err != nil {
-		return ProbeResult{}, fmt.Errorf("probe pre-digest %s: %w", path, err)
+		return probeResult{}, fmt.Errorf("probe pre-digest %s: %w", path, err)
 	}
 
 	// Best effort with every error ignored: a missing or unsupported
@@ -79,7 +74,7 @@ func ProbeStagedExecutable(ctx context.Context, path, expectedVersion string) (P
 
 	tmpDir, err := os.MkdirTemp("", "agentico-probe-")
 	if err != nil {
-		return ProbeResult{}, fmt.Errorf("create probe working dir: %w", err)
+		return probeResult{}, fmt.Errorf("create probe working dir: %w", err)
 	}
 	defer os.RemoveAll(tmpDir)
 
@@ -94,7 +89,7 @@ func ProbeStagedExecutable(ctx context.Context, path, expectedVersion string) (P
 
 	devNull, err := os.Open(os.DevNull)
 	if err != nil {
-		return ProbeResult{}, fmt.Errorf("open probe stdin: %w", err)
+		return probeResult{}, fmt.Errorf("open probe stdin: %w", err)
 	}
 	defer devNull.Close()
 
@@ -117,50 +112,50 @@ func ProbeStagedExecutable(ctx context.Context, path, expectedVersion string) (P
 	cmd.WaitDelay = probeWaitDelay
 
 	if err := cmd.Start(); err != nil {
-		return ProbeResult{}, fmt.Errorf("start probe %s: %w", path, err)
+		return probeResult{}, fmt.Errorf("start probe %s: %w", path, err)
 	}
 	waitErr := cmd.Wait()
 
 	if err := probeCtx.Err(); err != nil {
-		return ProbeResult{}, fmt.Errorf("probe %s --version was terminated before completion: %w", path, err)
+		return probeResult{}, fmt.Errorf("probe %s --version was terminated before completion: %w", path, err)
 	}
 	if stdoutCap.overflow || stderrCap.overflow {
-		return ProbeResult{}, fmt.Errorf("probe output exceeded the %d-byte output limit", probeMaxOutputBytes)
+		return probeResult{}, fmt.Errorf("probe output exceeded the %d-byte output limit", probeMaxOutputBytes)
 	}
 	if waitErr != nil {
 		var exitErr *exec.ExitError
 		if errors.As(waitErr, &exitErr) {
-			return ProbeResult{}, fmt.Errorf("probe exited with code %d", exitErr.ExitCode())
+			return probeResult{}, fmt.Errorf("probe exited with code %d", exitErr.ExitCode())
 		}
 		if errors.Is(waitErr, exec.ErrWaitDelay) {
-			return ProbeResult{}, errors.New("probe output streams did not close after exit")
+			return probeResult{}, errors.New("probe output streams did not close after exit")
 		}
-		return ProbeResult{}, fmt.Errorf("probe %s --version: %w", path, waitErr)
+		return probeResult{}, fmt.Errorf("probe %s --version: %w", path, waitErr)
 	}
 	if stderrCap.buf.Len() != 0 {
-		return ProbeResult{}, fmt.Errorf("probe stderr was not empty: %q", stderrCap.buf.String())
+		return probeResult{}, fmt.Errorf("probe stderr was not empty: %q", stderrCap.buf.String())
 	}
 
 	banner, ok := probeBannerLine(stdoutCap.buf.String())
 	if !ok {
 		if stdoutCap.buf.Len() == 0 {
-			return ProbeResult{}, errors.New("probe stdout was empty; want a version banner")
+			return probeResult{}, errors.New("probe stdout was empty; want a version banner")
 		}
-		return ProbeResult{}, fmt.Errorf("probe stdout %q is not a single line", stdoutCap.buf.String())
+		return probeResult{}, fmt.Errorf("probe stdout %q is not a single line", stdoutCap.buf.String())
 	}
 	version, ok := matchProbeBanner(banner, expectedVersion)
 	if !ok {
-		return ProbeResult{}, fmt.Errorf("probe stdout banner %q does not report expected version %q", banner, expectedVersion)
+		return probeResult{}, fmt.Errorf("probe stdout banner %q does not report expected version %q", banner, expectedVersion)
 	}
 
 	postDigest, err := DigestFile(path)
 	if err != nil {
-		return ProbeResult{}, fmt.Errorf("probe post-digest %s: %w", path, err)
+		return probeResult{}, fmt.Errorf("probe post-digest %s: %w", path, err)
 	}
 	if postDigest != preDigest {
-		return ProbeResult{}, fmt.Errorf("probed executable %s changed during the probe: pre-digest %s, post-digest %s", path, preDigest, postDigest)
+		return probeResult{}, fmt.Errorf("probed executable %s changed during the probe: pre-digest %s, post-digest %s", path, preDigest, postDigest)
 	}
-	return ProbeResult{Version: version, Banner: banner, ExecutableDigest: postDigest}, nil
+	return probeResult{Version: version, Banner: banner, ExecutableDigest: postDigest}, nil
 }
 
 // errProbeOutputOverflow marks a captured stream that wrote past its bound.

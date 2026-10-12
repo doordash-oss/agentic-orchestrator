@@ -22,6 +22,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"runtime/debug"
 	"strconv"
 	"strings"
 	"time"
@@ -35,6 +36,37 @@ import (
 // split out so classification tests can pin them.
 func runtimeGOOS() string   { return runtime.GOOS }
 func runtimeGOARCH() string { return runtime.GOARCH }
+
+// buildInfoMainVersion returns the build-info Main.Version, or "" when build
+// info is unavailable.
+func buildInfoMainVersion() string {
+	if info, ok := debug.ReadBuildInfo(); ok {
+		return info.Main.Version
+	}
+	return ""
+}
+
+// resolveGoBinDir resolves the Go bin directory from the environment without
+// invoking the `go` toolchain. Thin legacy adapter over the shared
+// selfupdate helper.
+func resolveGoBinDir(getenv func(string) string, homeDir func() (string, error)) string {
+	return selfupdate.ResolveGoBinDir(getenv, homeDir)
+}
+
+// normalizeDir best-effort resolves symlinks and normalizes a directory path
+// so the eligibility classifier's pure comparison sees canonical forms. When
+// the path does not exist (EvalSymlinks fails — common for a Go bin dir on a
+// release machine), it falls back to filepath.Clean. An empty input stays
+// empty.
+func normalizeDir(dir string) string {
+	if dir == "" {
+		return ""
+	}
+	if resolved, err := filepath.EvalSymlinks(dir); err == nil {
+		return resolved
+	}
+	return filepath.Clean(dir)
+}
 
 // updatesBuildInfoVersion and updatesInjectedVersion are the version signals
 // feeding eligibility classification, split out for the same reason.

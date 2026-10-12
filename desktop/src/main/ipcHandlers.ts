@@ -27,307 +27,31 @@ limitations under the License.
 import { buildCanonicalError, toCanonicalError, type CanonicalError } from '../shared/errors';
 import { validateWithSchema } from '../shared/api/parse';
 import { assertNoPrototypePollution, assertWithinByteSize } from '../shared/sanitize';
+import type { z } from 'zod';
+import { IPC_CHANNELS, IPC_EVENTS, type IpcMethod } from '../shared/ipcChannels';
 import {
-  IPC_CHANNELS,
-  IPC_EVENTS,
-  type ChooseServerRequest,
-  type ConnectionState,
-  type ServerListSnapshot,
-  type ServersProbeRequest,
-  type RemoteServerAddRequest,
-  type RemoteServerAddResult,
-  type ServerRemoveRequest,
-  type ServerTokenStatusRequest,
-  type ServerTokenStatusResult,
-  type SwitchServerRequest,
-  type CreateFeatureInput,
-  type CreateFeatureResult,
-  type CreationDefaults,
-  type RepositorySourcesRequest,
-  type RepositorySourcesResult,
-  type RepositoryOriginStatusRequest,
-  type RepositoryOriginStatusResult,
-  type RepositoryUpdateSourceRequest,
-  type RepositorySourceReconcileRequest,
-  type RepositorySourceReconcileResult,
-  type RepositoryUpdateSourceResult,
-  type CreationFileKind,
-  type CreationFileSearchRequest,
-  type CreationFileSearchResult,
-  type PickedCreationFiles,
-  type UploadCreationFilesResult,
-  type FeatureSnapshot,
-  type FeaturesListResult,
-  type FeatureActionRequest,
-  type FeatureActionResult,
-  type InitRepositoryRequest,
-  type CloneStartRequest,
-  type CloneOperation,
-  type CreateRepositoryRequest,
-  type CreateRepositoryResult,
-  type InitializeRepositoryRequest,
-  type InitializeRepositoryResult,
-  type CloneOperationsList,
-  type IpcChannel,
-  type IpcEnvelope,
-  type PickedDirectory,
-  type ReadinessSnapshot,
-  type RuntimeReadinessSnapshot,
-  type RepositoryState,
-  type Settings,
-  type SettingsOpenRequest,
-  type SettingsOpenResult,
-  type SettingsPatch,
-  type SetupDispatchResult,
-  type ThemeInfo,
-  type ThemePreference,
-  type SessionSummary,
-  type SessionDetail,
-  type SessionTranscriptRequest,
-  type SessionTranscript,
-  type SessionOutputOpenRequest,
-  type SessionOutputEvent,
-  type SupervisorActionResult,
-  type SupervisorResetResult,
-  type SupervisorMessageRequest,
-  type SupervisorMessageResult,
-  type SupervisorSettingsRequest,
-  type SupervisorPendingChangeCancelRequest,
-  type SupervisorState,
-  type SupervisorTranscriptPage,
-  type SupervisorTranscriptRequest,
-  type AttentionSnapshot,
-  type PermissionDecisionRequest,
-  type AskUserAnswerRequest,
-  type HelpAnswerRequest,
-  type GateDraftRequest,
-  type GateResumeRequest,
-  type TestingContractRequest,
-  type TestingContractSnapshot,
-  type TestingContractWaiveRequest,
-  type TestingContractWaiveResult,
-  type AttentionActionResult,
-  type LocalReviewDraft,
-  type LocalReviewDraftSaveRequest,
-  type LocalReviewDraftLookupRequest,
-  type LocalReviewDraftDiscardRequest,
-  type ReviewReadRequest,
-  type ReviewSaveRequest,
-  type ReviewValidateRequest,
-  type ReviewDecisionRequest,
-  type ReviewSession,
-  type ReviewSaveResult,
-  type ReviewValidation,
-  type ReviewDecisionResult,
-  type FeatureConfigSnapshot,
-  type FeatureConfigUpdateRequest,
-  type WorkspaceDefaults,
-  type ModelCatalogue,
-  type ProviderModelRefreshResult,
-  type RunListRequest,
-  type RunListResult,
-  type RunGetRequest,
-  type RunDetailView,
-  type RunSessionsListResult,
-  type LivePreviewView,
-  type RunArtifactsListRequest,
-  type RunArtifactsListResult,
-  type RunLogsListResult,
-  type RunArtifactContentRequest,
-  type RunTextContent,
-  type RunLogContentRequest,
-  type RewindPreviewRequest,
-  type RewindPreviewView,
-  type RewindExecuteRequest,
-  type LaunchRebaseChildRequest,
-  type LaunchRebaseChildResult,
-  type LaunchRefactorChildRequest,
-  type LaunchRefactorChildResult,
-  type DiscardRefactorChildRequest,
-  type DiscardRefactorChildResult,
-  type DeleteFeatureCascadeRequest,
-  type DeleteFeatureCascadeResult,
-  type FetchReviewFeedbackRequest,
-  type FetchReviewFeedbackResult,
-  type UpdateReviewFeedbackSelectionRequest,
-  type UpdateReviewFeedbackSelectionResult,
-  type LaunchReviewFeedbackChildRequest,
-  type LaunchReviewFeedbackChildResult,
-  type RecoverySnapshot,
-  type RecoveryExecuteRequest,
-  type RecoveryExecuteResult,
-  type RecoveryLogReadRequest,
-  type RecoveryLogReadResult,
-  type BulkPreview,
-  type CompletionPreflightRequest,
-  type CompletionPreflightResult,
-  type PublishDescriptionRequest,
-  type PublishDescriptionResult,
-  type RepositoryDiffRequest,
-  type RepositoryDiffResult,
-  type OpenExternalRequest,
-  type RevealPathRequest,
-  type RevealPathResult,
-  type MainWindowUiState,
-  type UpdateInstallNowRequest,
-  type ServerUpdateInstallRequest,
-  type ServerUpdateState,
-  type UpdateState,
-  type DiagnosticsSnapshot,
   ipcContracts,
+  type IpcEnvelope,
+  type SessionOutputEvent,
+  type SessionOutputOpenRequest,
 } from '../shared/ipc';
 import { isTrustedSender, type SenderLikeEvent, type TrustedSender } from './security';
 
-export interface IpcServices {
-  getConnectionStatus(): ConnectionState;
-  retryConnection(): Promise<ConnectionState> | ConnectionState;
-  restartConnection(): Promise<ConnectionState> | ConnectionState;
-  chooseConnectionServer(request: ChooseServerRequest): Promise<ConnectionState> | ConnectionState;
-  switchConnectionServer(request: SwitchServerRequest): Promise<ConnectionState> | ConnectionState;
-  startLocalRuntime(): Promise<ConnectionState> | ConnectionState;
-  listServers(): ServerListSnapshot;
-  probeServers(request: ServersProbeRequest): ServerListSnapshot;
-  addRemoteServer(request: RemoteServerAddRequest): Promise<RemoteServerAddResult>;
-  removeServer(request: ServerRemoveRequest): Promise<ConnectionState> | ConnectionState;
-  getServerTokenStatus(
-    request: ServerTokenStatusRequest,
-  ): Promise<ServerTokenStatusResult> | ServerTokenStatusResult;
-  getSettings(): Settings;
-  updateSettings(patch: SettingsPatch): Settings;
-  openSettingsWindow(request: SettingsOpenRequest): SettingsOpenResult;
-  getTheme(): ThemeInfo;
-  setTheme(preference: ThemePreference): ThemeInfo;
-  getRuntimeReadiness(): Promise<RuntimeReadinessSnapshot>;
-  refreshRuntimeReadiness(): Promise<RuntimeReadinessSnapshot>;
-  getReadiness(): Promise<ReadinessSnapshot>;
-  refreshReadiness(): Promise<ReadinessSnapshot>;
-  pickWorkspaceDirectory(): Promise<PickedDirectory>;
-  addWorkspaceRoot(path: string): Promise<ReadinessSnapshot>;
-  removeWorkspaceRoot(path: string): Promise<ReadinessSnapshot>;
-  reorderWorkspaceRoots(paths: string[]): Promise<ReadinessSnapshot>;
-  initRepository(request: InitRepositoryRequest): Promise<ReadinessSnapshot>;
-  startClone(request: CloneStartRequest): Promise<CloneOperation>;
-  getCloneOperation(operationId: string): Promise<CloneOperation>;
-  listCloneOperations(): Promise<CloneOperationsList>;
-  cancelCloneOperation(operationId: string): Promise<CloneOperation>;
-  retryCloneCleanup(operationId: string): Promise<CloneOperation>;
-  retryCloneOperation(operationId: string): Promise<CloneOperation>;
-  createRepository(request: CreateRepositoryRequest): Promise<CreateRepositoryResult>;
-  initializeRepository(request: InitializeRepositoryRequest): Promise<InitializeRepositoryResult>;
-  listRepositories(): Promise<RepositoryState[]>;
-  listFeatures(): Promise<FeaturesListResult>;
-  getFeature(featureId: string): Promise<FeatureSnapshot>;
-  createFeature(input: CreateFeatureInput): Promise<CreateFeatureResult>;
-  dispatchFeatureSetup(featureId: string): Promise<SetupDispatchResult>;
-  dispatchFeatureAction(request: FeatureActionRequest): Promise<FeatureActionResult>;
-  listSessions(): Promise<SessionSummary[]>;
-  getSession(sessionId: string): Promise<SessionDetail>;
-  getSessionTranscript(request: SessionTranscriptRequest): Promise<SessionTranscript>;
+/** Service signatures derive from the validated request and response schemas. */
+export type IpcServices = {
+  [Method in Exclude<IpcMethod, 'openSessionOutput'>]: (
+    ...args: z.output<(typeof ipcContracts)[Method]['request']>
+  ) =>
+    | z.input<(typeof ipcContracts)[Method]['response']>
+    | Promise<z.input<(typeof ipcContracts)[Method]['response']>>;
+} & {
   openSessionOutput(
     request: SessionOutputOpenRequest,
     emit: (event: SessionOutputEvent) => void,
   ): string;
-  cancelSessionOutput(subscriptionId: string): boolean;
-  getSupervisorState(): Promise<SupervisorState>;
-  updateSupervisorSettings(request: SupervisorSettingsRequest): Promise<SupervisorState>;
-  cancelSupervisorPendingChange(
-    request: SupervisorPendingChangeCancelRequest,
-  ): Promise<SupervisorState>;
-  dismissSupervisorPersistFailure(): Promise<SupervisorState>;
-  getSupervisorTranscript(request: SupervisorTranscriptRequest): Promise<SupervisorTranscriptPage>;
-  sendSupervisorMessage(request: SupervisorMessageRequest): Promise<SupervisorMessageResult>;
-  interruptSupervisor(): Promise<SupervisorActionResult>;
-  endSupervisor(): Promise<SupervisorActionResult>;
-  resetSupervisor(): Promise<SupervisorResetResult>;
-  getCreationDefaults(): Promise<CreationDefaults>;
-  inspectRepositorySources(request: RepositorySourcesRequest): Promise<RepositorySourcesResult>;
-  checkRepositoryOriginStatus(
-    request: RepositoryOriginStatusRequest,
-  ): Promise<RepositoryOriginStatusResult>;
-  updateRepositorySource(
-    request: RepositoryUpdateSourceRequest,
-  ): Promise<RepositoryUpdateSourceResult>;
-  reconcileSourceUpdate(
-    request: RepositorySourceReconcileRequest,
-  ): Promise<RepositorySourceReconcileResult>;
-  pickCreationFiles(kind: CreationFileKind): Promise<PickedCreationFiles>;
-  uploadCreationFiles(
-    kind: CreationFileKind,
-    paths: readonly string[],
-  ): Promise<UploadCreationFilesResult>;
-  readClipboardImage(): Promise<PickedCreationFiles>;
-  searchCreationFiles(request: CreationFileSearchRequest): Promise<CreationFileSearchResult>;
-  cancelCreationFileSearch(requestId: string): Promise<boolean> | boolean;
-  getAttention(): Promise<AttentionSnapshot>;
-  answerPermission(request: PermissionDecisionRequest): Promise<AttentionActionResult>;
-  answerQuestions(request: AskUserAnswerRequest): Promise<AttentionActionResult>;
-  sendHelp(request: HelpAnswerRequest): Promise<AttentionActionResult>;
-  saveGateDraft(request: GateDraftRequest): Promise<AttentionActionResult>;
-  resolveGate(request: GateResumeRequest): Promise<AttentionActionResult>;
-  waiveTestingContract(request: TestingContractWaiveRequest): Promise<TestingContractWaiveResult>;
-  getTestingContract(request: TestingContractRequest): Promise<TestingContractSnapshot>;
-  loadLocalReviewDraft(request: LocalReviewDraftLookupRequest): LocalReviewDraft | null;
-  saveLocalReviewDraft(request: LocalReviewDraftSaveRequest): LocalReviewDraft;
-  discardLocalReviewDraft(request: LocalReviewDraftDiscardRequest): boolean;
-  readReview(request: ReviewReadRequest): Promise<ReviewSession>;
-  openReview(request: ReviewReadRequest): Promise<ReviewSession>;
-  saveReview(request: ReviewSaveRequest): Promise<ReviewSaveResult>;
-  validateReview(request: ReviewValidateRequest): Promise<ReviewValidation>;
-  decideReview(request: ReviewDecisionRequest): Promise<ReviewDecisionResult>;
-  getFeatureConfig(featureId: string): Promise<FeatureConfigSnapshot>;
-  updateFeatureConfig(request: FeatureConfigUpdateRequest): Promise<FeatureConfigSnapshot>;
-  getWorkspaceDefaults(): Promise<WorkspaceDefaults>;
-  updateWorkspaceDefaults(defaults: WorkspaceDefaults): Promise<WorkspaceDefaults>;
-  getModelCatalogue(): Promise<ModelCatalogue>;
-  refreshProviderModels(provider: string): Promise<ProviderModelRefreshResult>;
-  listRuns(request: RunListRequest): Promise<RunListResult>;
-  getRun(request: RunGetRequest): Promise<RunDetailView>;
-  listRunSessions(request: RunGetRequest): Promise<RunSessionsListResult>;
-  getLivePreview(featureId: string): Promise<LivePreviewView>;
-  listRunArtifacts(request: RunArtifactsListRequest): Promise<RunArtifactsListResult>;
-  listRunLogs(request: RunArtifactsListRequest): Promise<RunLogsListResult>;
-  getRunArtifactContent(request: RunArtifactContentRequest): Promise<RunTextContent>;
-  getRunLogContent(request: RunLogContentRequest): Promise<RunTextContent>;
-  getRewindPreview(request: RewindPreviewRequest): Promise<RewindPreviewView>;
-  executeRewind(request: RewindExecuteRequest): Promise<FeatureActionResult>;
-  launchRebaseChild(request: LaunchRebaseChildRequest): Promise<LaunchRebaseChildResult>;
-  launchRefactorChild(request: LaunchRefactorChildRequest): Promise<LaunchRefactorChildResult>;
-  discardRefactorChild(request: DiscardRefactorChildRequest): Promise<DiscardRefactorChildResult>;
-  deleteFeatureCascade(request: DeleteFeatureCascadeRequest): Promise<DeleteFeatureCascadeResult>;
-  fetchReviewFeedback(request: FetchReviewFeedbackRequest): Promise<FetchReviewFeedbackResult>;
-  updateReviewFeedbackSelection(
-    request: UpdateReviewFeedbackSelectionRequest,
-  ): Promise<UpdateReviewFeedbackSelectionResult>;
-  launchReviewFeedbackChild(
-    request: LaunchReviewFeedbackChildRequest,
-  ): Promise<LaunchReviewFeedbackChildResult>;
-  scanRecovery(): Promise<RecoverySnapshot>;
-  executeRecovery(request: RecoveryExecuteRequest): Promise<RecoveryExecuteResult>;
-  readRecoveryLog(request: RecoveryLogReadRequest): Promise<RecoveryLogReadResult>;
-  bulkPreview(): Promise<BulkPreview>;
-  preflightCompletion(request: CompletionPreflightRequest): Promise<CompletionPreflightResult>;
-  getRepositoryDiff(request: RepositoryDiffRequest): Promise<RepositoryDiffResult>;
-  generatePublishDescription(request: PublishDescriptionRequest): Promise<PublishDescriptionResult>;
-  openExternal(request: OpenExternalRequest): Promise<{ ok: boolean }>;
-  revealPath(request: RevealPathRequest): Promise<RevealPathResult>;
-  writeClipboardText(text: string): Promise<{ ok: boolean }>;
-  getUpdates(): Promise<UpdateState> | UpdateState;
-  checkForUpdates(): Promise<UpdateState>;
-  installUpdateWhenIdle(): Promise<UpdateState>;
-  installUpdateNow(request: UpdateInstallNowRequest): Promise<UpdateState>;
-  restartToUpdate(): Promise<UpdateState> | UpdateState;
-  getServerUpdate(): Promise<ServerUpdateState>;
-  checkServerUpdate(): Promise<ServerUpdateState>;
-  installServerUpdate(request: ServerUpdateInstallRequest): Promise<ServerUpdateState>;
-  cancelServerUpdate(): Promise<ServerUpdateState>;
-  getDiagnostics(): Promise<DiagnosticsSnapshot> | DiagnosticsSnapshot;
-  revealDiagnostics(): Promise<{ ok: boolean }>;
-  clearDiagnostics(): Promise<DiagnosticsSnapshot> | DiagnosticsSnapshot;
-  /** Accepts the main window's coarse UI-state summary for the native menu. */
-  publishUiState(state: MainWindowUiState): { accepted: boolean };
-}
+};
 
-export interface IpcMainLike {
+interface IpcMainLike {
   handle(
     channel: string,
     listener: (event: SenderLikeEvent, ...args: unknown[]) => Promise<unknown>,
@@ -348,11 +72,11 @@ function envelopeError(err: unknown): CanonicalError {
 }
 
 function makeHandler(
-  channel: IpcChannel,
+  method: IpcMethod,
   trusted: TrustedSender,
   invoke: (event: SenderLikeEvent, ...args: never[]) => unknown,
 ): (event: SenderLikeEvent, ...args: unknown[]) => Promise<IpcEnvelope> {
-  const contract = ipcContracts[channel];
+  const contract = ipcContracts[method];
   return async (event, ...args) => {
     if (!isTrustedSender(event, trusted)) {
       return UNTRUSTED;
@@ -377,233 +101,22 @@ export function registerIpcHandlers(
   trusted: TrustedSender,
   services: IpcServices,
 ): void {
-  const bindings: Record<IpcChannel, (event: SenderLikeEvent, ...args: never[]) => unknown> = {
-    [IPC_CHANNELS.connectionGetStatus]: () => services.getConnectionStatus(),
-    [IPC_CHANNELS.connectionRetry]: () => services.retryConnection(),
-    [IPC_CHANNELS.connectionRestart]: () => services.restartConnection(),
-    [IPC_CHANNELS.connectionChooseServer]: (_event, request: ChooseServerRequest) =>
-      services.chooseConnectionServer(request),
-    [IPC_CHANNELS.connectionSwitchServer]: (_event, request: SwitchServerRequest) =>
-      services.switchConnectionServer(request),
-    [IPC_CHANNELS.connectionStartLocal]: () => services.startLocalRuntime(),
-    [IPC_CHANNELS.serversList]: () => services.listServers(),
-    [IPC_CHANNELS.serversProbe]: (_event, request: ServersProbeRequest) =>
-      services.probeServers(request),
-    [IPC_CHANNELS.remoteServerAdd]: (_event, request: RemoteServerAddRequest) =>
-      services.addRemoteServer(request),
-    [IPC_CHANNELS.serverRemove]: (_event, request: ServerRemoveRequest) =>
-      services.removeServer(request),
-    [IPC_CHANNELS.serverTokenStatus]: (_event, request: ServerTokenStatusRequest) =>
-      services.getServerTokenStatus(request),
-    [IPC_CHANNELS.settingsGet]: () => services.getSettings(),
-    [IPC_CHANNELS.settingsUpdate]: (_event, patch: SettingsPatch) => services.updateSettings(patch),
-    [IPC_CHANNELS.windowOpenSettings]: (_event, request: SettingsOpenRequest) =>
-      services.openSettingsWindow(request),
-    [IPC_CHANNELS.themeGet]: () => services.getTheme(),
-    [IPC_CHANNELS.themeSet]: (_event, preference: ThemePreference) => services.setTheme(preference),
-    [IPC_CHANNELS.runtimeReadinessGet]: () => services.getRuntimeReadiness(),
-    [IPC_CHANNELS.runtimeReadinessRefresh]: () => services.refreshRuntimeReadiness(),
-    [IPC_CHANNELS.readinessGet]: () => services.getReadiness(),
-    [IPC_CHANNELS.readinessRefresh]: () => services.refreshReadiness(),
-    [IPC_CHANNELS.workspacePickDirectory]: () => services.pickWorkspaceDirectory(),
-    [IPC_CHANNELS.workspaceAddRoot]: (_event, path: string) => services.addWorkspaceRoot(path),
-    [IPC_CHANNELS.workspaceRemoveRoot]: (_event, path: string) =>
-      services.removeWorkspaceRoot(path),
-    [IPC_CHANNELS.workspaceReorderRoots]: (_event, paths: string[]) =>
-      services.reorderWorkspaceRoots(paths),
-    [IPC_CHANNELS.workspaceInitRepository]: (_event, request: InitRepositoryRequest) =>
-      services.initRepository(request),
-    [IPC_CHANNELS.cloneStart]: (_event, request: CloneStartRequest) => services.startClone(request),
-    [IPC_CHANNELS.cloneOperationGet]: (_event, operationId: string) =>
-      services.getCloneOperation(operationId),
-    [IPC_CHANNELS.cloneOperationsList]: () => services.listCloneOperations(),
-    [IPC_CHANNELS.cloneOperationCancel]: (_event, operationId: string) =>
-      services.cancelCloneOperation(operationId),
-    [IPC_CHANNELS.cloneOperationCleanup]: (_event, operationId: string) =>
-      services.retryCloneCleanup(operationId),
-    [IPC_CHANNELS.cloneOperationRetry]: (_event, operationId: string) =>
-      services.retryCloneOperation(operationId),
-    [IPC_CHANNELS.createRepository]: (_event, request: CreateRepositoryRequest) =>
-      services.createRepository(request),
-    [IPC_CHANNELS.initializeRepository]: (_event, request: InitializeRepositoryRequest) =>
-      services.initializeRepository(request),
-    [IPC_CHANNELS.repositoriesList]: () => services.listRepositories(),
-    [IPC_CHANNELS.featuresList]: () => services.listFeatures(),
-    [IPC_CHANNELS.featuresGet]: (_event, featureId: string) => services.getFeature(featureId),
-    [IPC_CHANNELS.featuresCreate]: (_event, input: CreateFeatureInput) =>
-      services.createFeature(input),
-    [IPC_CHANNELS.featuresSetup]: (_event, featureId: string) =>
-      services.dispatchFeatureSetup(featureId),
-    [IPC_CHANNELS.featuresDispatchAction]: (_event, request: FeatureActionRequest) =>
-      services.dispatchFeatureAction(request),
-    [IPC_CHANNELS.attentionGet]: () => services.getAttention(),
-    [IPC_CHANNELS.attentionAnswerPermission]: (_event, request: PermissionDecisionRequest) =>
-      services.answerPermission(request),
-    [IPC_CHANNELS.attentionAnswerQuestions]: (_event, request: AskUserAnswerRequest) =>
-      services.answerQuestions(request),
-    [IPC_CHANNELS.attentionSendHelp]: (_event, request: HelpAnswerRequest) =>
-      services.sendHelp(request),
-    [IPC_CHANNELS.attentionSaveGateDraft]: (_event, request: GateDraftRequest) =>
-      services.saveGateDraft(request),
-    [IPC_CHANNELS.attentionResolveGate]: (_event, request: GateResumeRequest) =>
-      services.resolveGate(request),
-    [IPC_CHANNELS.attentionWaiveTestingContract]: (_event, request: TestingContractWaiveRequest) =>
-      services.waiveTestingContract(request),
-    [IPC_CHANNELS.attentionGetTestingContract]: (_event, request: TestingContractRequest) =>
-      services.getTestingContract(request),
-    [IPC_CHANNELS.sessionsList]: () => services.listSessions(),
-    [IPC_CHANNELS.sessionsGet]: (_event, sessionId: string) => services.getSession(sessionId),
-    [IPC_CHANNELS.sessionsTranscript]: (_event, request: SessionTranscriptRequest) =>
-      services.getSessionTranscript(request),
-    [IPC_CHANNELS.sessionsOutputOpen]: (event, request: SessionOutputOpenRequest) => ({
-      subscriptionId: services.openSessionOutput(request, (payload) => {
-        const sender = event.sender as typeof event.sender & { isDestroyed?(): boolean };
-        if (sender.isDestroyed?.() !== true) {
-          sender.send?.(IPC_EVENTS.sessionOutput, payload);
-        }
-      }),
-    }),
-    [IPC_CHANNELS.sessionsOutputCancel]: (_event, request: { subscriptionId: string }) => ({
-      cancelled: services.cancelSessionOutput(request.subscriptionId),
-    }),
-    [IPC_CHANNELS.supervisorStateGet]: () => services.getSupervisorState(),
-    [IPC_CHANNELS.supervisorSettingsUpdate]: (_event, request: SupervisorSettingsRequest) =>
-      services.updateSupervisorSettings(request),
-    [IPC_CHANNELS.supervisorPendingChangeCancel]: (
-      _event,
-      request: SupervisorPendingChangeCancelRequest,
-    ) => services.cancelSupervisorPendingChange(request),
-    [IPC_CHANNELS.supervisorPersistFailureDismiss]: () =>
-      services.dismissSupervisorPersistFailure(),
-    [IPC_CHANNELS.supervisorTranscriptGet]: (_event, request: SupervisorTranscriptRequest) =>
-      services.getSupervisorTranscript(request),
-    [IPC_CHANNELS.supervisorMessageSend]: (_event, request: SupervisorMessageRequest) =>
-      services.sendSupervisorMessage(request),
-    [IPC_CHANNELS.supervisorInterrupt]: () => services.interruptSupervisor(),
-    [IPC_CHANNELS.supervisorEnd]: () => services.endSupervisor(),
-    [IPC_CHANNELS.supervisorReset]: () => services.resetSupervisor(),
-    [IPC_CHANNELS.creationDefaults]: () => services.getCreationDefaults(),
-    [IPC_CHANNELS.creationSources]: (_event, request: RepositorySourcesRequest) =>
-      services.inspectRepositorySources(request),
-    [IPC_CHANNELS.creationOriginStatus]: (_event, request: RepositoryOriginStatusRequest) =>
-      services.checkRepositoryOriginStatus(request),
-    [IPC_CHANNELS.creationUpdateSource]: (_event, request: RepositoryUpdateSourceRequest) =>
-      services.updateRepositorySource(request),
-    [IPC_CHANNELS.creationReconcileSourceUpdate]: (
-      _event,
-      request: RepositorySourceReconcileRequest,
-    ) => services.reconcileSourceUpdate(request),
-    [IPC_CHANNELS.creationPickFiles]: (_event, kind: CreationFileKind) =>
-      services.pickCreationFiles(kind),
-    [IPC_CHANNELS.creationUploadFiles]: (
-      _event,
-      kind: CreationFileKind,
-      paths: readonly string[],
-    ) => services.uploadCreationFiles(kind, paths),
-    [IPC_CHANNELS.clipboardReadImage]: () => services.readClipboardImage(),
-    [IPC_CHANNELS.creationSearchFiles]: (_event, request: CreationFileSearchRequest) =>
-      services.searchCreationFiles(request),
-    [IPC_CHANNELS.creationCancelFileSearch]: (_event, requestId: string) =>
-      Promise.resolve(services.cancelCreationFileSearch(requestId)).then((cancelled) => ({
-        cancelled,
-      })),
-    [IPC_CHANNELS.reviewDraftsLoad]: (_event, request: LocalReviewDraftLookupRequest) =>
-      services.loadLocalReviewDraft(request),
-    [IPC_CHANNELS.reviewDraftsSave]: (_event, request: LocalReviewDraftSaveRequest) =>
-      services.saveLocalReviewDraft(request),
-    [IPC_CHANNELS.reviewDraftsDiscard]: (_event, request: LocalReviewDraftDiscardRequest) => ({
-      discarded: services.discardLocalReviewDraft(request),
-    }),
-    [IPC_CHANNELS.reviewsRead]: (_event, request: ReviewReadRequest) =>
-      services.readReview(request),
-    [IPC_CHANNELS.reviewsOpen]: (_event, request: ReviewReadRequest) =>
-      services.openReview(request),
-    [IPC_CHANNELS.reviewsSave]: (_event, request: ReviewSaveRequest) =>
-      services.saveReview(request),
-    [IPC_CHANNELS.reviewsValidate]: (_event, request: ReviewValidateRequest) =>
-      services.validateReview(request),
-    [IPC_CHANNELS.reviewsDecide]: (_event, request: ReviewDecisionRequest) =>
-      services.decideReview(request),
-    [IPC_CHANNELS.configFeatureGet]: (_event, featureId: string) =>
-      services.getFeatureConfig(featureId),
-    [IPC_CHANNELS.configFeatureUpdate]: (_event, request: FeatureConfigUpdateRequest) =>
-      services.updateFeatureConfig(request),
-    [IPC_CHANNELS.configDefaultsGet]: () => services.getWorkspaceDefaults(),
-    [IPC_CHANNELS.configDefaultsUpdate]: (_event, defaults: WorkspaceDefaults) =>
-      services.updateWorkspaceDefaults(defaults),
-    [IPC_CHANNELS.configModelCatalogue]: () => services.getModelCatalogue(),
-    [IPC_CHANNELS.configProviderModelsRefresh]: (_event, provider: string) =>
-      services.refreshProviderModels(provider),
-    [IPC_CHANNELS.runsList]: (_event, request: RunListRequest) => services.listRuns(request),
-    [IPC_CHANNELS.runsGet]: (_event, request: RunGetRequest) => services.getRun(request),
-    [IPC_CHANNELS.runSessionsList]: (_event, request: RunGetRequest) =>
-      services.listRunSessions(request),
-    [IPC_CHANNELS.livePreviewGet]: (_event, featureId: string) =>
-      services.getLivePreview(featureId),
-    [IPC_CHANNELS.runArtifactsList]: (_event, request: RunArtifactsListRequest) =>
-      services.listRunArtifacts(request),
-    [IPC_CHANNELS.runLogsList]: (_event, request: RunArtifactsListRequest) =>
-      services.listRunLogs(request),
-    [IPC_CHANNELS.runArtifactContent]: (_event, request: RunArtifactContentRequest) =>
-      services.getRunArtifactContent(request),
-    [IPC_CHANNELS.runLogContent]: (_event, request: RunLogContentRequest) =>
-      services.getRunLogContent(request),
-    [IPC_CHANNELS.rewindPreview]: (_event, request: RewindPreviewRequest) =>
-      services.getRewindPreview(request),
-    [IPC_CHANNELS.rewindExecute]: (_event, request: RewindExecuteRequest) =>
-      services.executeRewind(request),
-    [IPC_CHANNELS.featuresRebase]: (_event, request: LaunchRebaseChildRequest) =>
-      services.launchRebaseChild(request),
-    [IPC_CHANNELS.featuresRefactor]: (_event, request: LaunchRefactorChildRequest) =>
-      services.launchRefactorChild(request),
-    [IPC_CHANNELS.featuresRefactorDiscard]: (_event, request: DiscardRefactorChildRequest) =>
-      services.discardRefactorChild(request),
-    [IPC_CHANNELS.featuresReviewFeedbackFetch]: (_event, request: FetchReviewFeedbackRequest) =>
-      services.fetchReviewFeedback(request),
-    [IPC_CHANNELS.featuresReviewFeedbackSelection]: (
-      _event,
-      request: UpdateReviewFeedbackSelectionRequest,
-    ) => services.updateReviewFeedbackSelection(request),
-    [IPC_CHANNELS.featuresReviewFeedbackLaunch]: (
-      _event,
-      request: LaunchReviewFeedbackChildRequest,
-    ) => services.launchReviewFeedbackChild(request),
-    [IPC_CHANNELS.featuresDeleteCascade]: (_event, request: DeleteFeatureCascadeRequest) =>
-      services.deleteFeatureCascade(request),
-    [IPC_CHANNELS.recoveryScan]: () => services.scanRecovery(),
-    [IPC_CHANNELS.recoveryExecute]: (_event, request: RecoveryExecuteRequest) =>
-      services.executeRecovery(request),
-    [IPC_CHANNELS.recoveryLogRead]: (_event, request: RecoveryLogReadRequest) =>
-      services.readRecoveryLog(request),
-    [IPC_CHANNELS.bulkPreview]: () => services.bulkPreview(),
-    [IPC_CHANNELS.updatesGet]: () => services.getUpdates(),
-    [IPC_CHANNELS.updatesCheck]: () => services.checkForUpdates(),
-    [IPC_CHANNELS.updatesInstallWhenIdle]: () => services.installUpdateWhenIdle(),
-    [IPC_CHANNELS.updatesInstallNow]: (_event, request: UpdateInstallNowRequest) =>
-      services.installUpdateNow(request),
-    [IPC_CHANNELS.updatesRestart]: () => services.restartToUpdate(),
-    [IPC_CHANNELS.serverUpdatesGet]: () => services.getServerUpdate(),
-    [IPC_CHANNELS.serverUpdatesCheck]: () => services.checkServerUpdate(),
-    [IPC_CHANNELS.serverUpdatesInstall]: (_event, request: ServerUpdateInstallRequest) =>
-      services.installServerUpdate(request),
-    [IPC_CHANNELS.serverUpdatesCancel]: () => services.cancelServerUpdate(),
-    [IPC_CHANNELS.diagnosticsGet]: () => services.getDiagnostics(),
-    [IPC_CHANNELS.diagnosticsReveal]: () => services.revealDiagnostics(),
-    [IPC_CHANNELS.diagnosticsClear]: () => services.clearDiagnostics(),
-    [IPC_CHANNELS.completionPreflight]: (_event, request: CompletionPreflightRequest) =>
-      services.preflightCompletion(request),
-    [IPC_CHANNELS.repositoryDiff]: (_event, request: RepositoryDiffRequest) =>
-      services.getRepositoryDiff(request),
-    [IPC_CHANNELS.publishDescription]: (_event, request: PublishDescriptionRequest) =>
-      services.generatePublishDescription(request),
-    [IPC_CHANNELS.openExternal]: (_event, request: OpenExternalRequest) =>
-      services.openExternal(request),
-    [IPC_CHANNELS.revealPath]: (_event, request: RevealPathRequest) => services.revealPath(request),
-    [IPC_CHANNELS.clipboardWriteText]: (_event, text: string) => services.writeClipboardText(text),
-    [IPC_CHANNELS.uiStatePublish]: (_event, state: MainWindowUiState) =>
-      services.publishUiState(state),
-  };
-  for (const channel of Object.values(IPC_CHANNELS)) {
-    ipcMain.handle(channel, makeHandler(channel, trusted, bindings[channel]));
+  for (const method of Object.keys(IPC_CHANNELS) as IpcMethod[]) {
+    const invoke = (event: SenderLikeEvent, ...args: unknown[]): unknown => {
+      if (method === 'openSessionOutput') {
+        const request = args[0] as SessionOutputOpenRequest;
+        return {
+          subscriptionId: services.openSessionOutput(request, (payload) => {
+            const sender = event.sender as typeof event.sender & { isDestroyed?(): boolean };
+            if (sender.isDestroyed?.() !== true) {
+              sender.send?.(IPC_EVENTS.sessionOutput, payload);
+            }
+          }),
+        };
+      }
+      // The contract validates args before this call; the mapped type validates each service.
+      return (services[method] as (...parsedArgs: unknown[]) => unknown)(...args);
+    };
+    ipcMain.handle(IPC_CHANNELS[method], makeHandler(method, trusted, invoke));
   }
 }

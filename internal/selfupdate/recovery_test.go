@@ -44,11 +44,11 @@ func beginRecoveryTx(t *testing.T, commit bool) (*txFixture, *Transaction) {
 // phase advance: candidate bytes installed, receipt still backup-ready.
 func crashInsideCommit(t *testing.T, f *txFixture) Receipt {
 	t.Helper()
-	r, err := ReadReceipt(ReceiptPath(f.exec.Path))
+	r, err := readReceipt(ReceiptPath(f.exec.Path))
 	if err != nil {
-		t.Fatalf("ReadReceipt: %v", err)
+		t.Fatalf("readReceipt: %v", err)
 	}
-	r.Phase = PhaseBackupReady
+	r.Phase = phaseBackupReady
 	if err := WriteReceiptDurable(ReceiptPath(f.exec.Path), r); err != nil {
 		t.Fatalf("rewrite receipt: %v", err)
 	}
@@ -70,8 +70,9 @@ func requireRefusal(t *testing.T, err error) {
 	if err == nil {
 		t.Fatal("expected unsafe-record refusal, got nil error")
 	}
-	if !IsUnsafeRecovery(err) {
-		t.Fatalf("error = %v, want *UnsafeRecoveryError", err)
+	var unsafe *unsafeRecoveryError
+	if !errors.As(err, &unsafe) {
+		t.Fatalf("error = %v, want *unsafeRecoveryError", err)
 	}
 }
 
@@ -95,10 +96,10 @@ func TestInspectRecoverySettledReceiptsAreNone(t *testing.T) {
 		{"confirmed", true, func(r *Receipt) { r.Outcome = OutcomeConfirmed }},
 		{"rolled back", true, func(r *Receipt) {
 			r.Outcome = OutcomeRolledBack
-			r.Phase = PhaseRollbackAttempted
+			r.Phase = phaseRollbackAttempted
 		}},
 		{"abandoned resolution", false, func(r *Receipt) {
-			r.Resolution = ResolutionAbandonedPreReplacement
+			r.Resolution = resolutionAbandonedPreReplacement
 			r.InstallFailed = true
 		}},
 	}
@@ -106,9 +107,9 @@ func TestInspectRecoverySettledReceiptsAreNone(t *testing.T) {
 		tc := tc
 		t.Run(tc.name, func(t *testing.T) {
 			f, _ := beginRecoveryTx(t, tc.commit)
-			r, err := ReadReceipt(ReceiptPath(f.exec.Path))
+			r, err := readReceipt(ReceiptPath(f.exec.Path))
 			if err != nil {
-				t.Fatalf("ReadReceipt: %v", err)
+				t.Fatalf("readReceipt: %v", err)
 			}
 			tc.mutate(&r)
 			if err := WriteReceiptDurable(ReceiptPath(f.exec.Path), r); err != nil {
@@ -184,7 +185,7 @@ func TestInspectRecoveryRefusesUnsafeRecords(t *testing.T) {
 			TransactionID:  testTxID,
 			ExecutablePath: "/elsewhere/bin/agentico",
 			Outcome:        OutcomePending,
-			Phase:          PhaseBackupReady,
+			Phase:          phaseBackupReady,
 		}
 		if err := WriteReceiptDurable(ReceiptPath(exec.Path), foreign); err != nil {
 			t.Fatalf("write foreign receipt: %v", err)
@@ -205,9 +206,9 @@ func TestInspectRecoveryRefusesUnsafeRecords(t *testing.T) {
 	})
 	t.Run("unsupported schema version", func(t *testing.T) {
 		f, _ := beginRecoveryTx(t, false)
-		r, err := ReadReceipt(ReceiptPath(f.exec.Path))
+		r, err := readReceipt(ReceiptPath(f.exec.Path))
 		if err != nil {
-			t.Fatalf("ReadReceipt: %v", err)
+			t.Fatalf("readReceipt: %v", err)
 		}
 		r.SchemaVersion = 2
 		if err := WriteReceiptDurable(ReceiptPath(f.exec.Path), r); err != nil {
@@ -224,7 +225,7 @@ func TestInspectRecoveryRefusesUnsafeRecords(t *testing.T) {
 		}{
 			{"pending rollback-attempted", true, func(r *Receipt) {
 				r.Outcome = OutcomePending
-				r.Phase = PhaseRollbackAttempted
+				r.Phase = phaseRollbackAttempted
 			}},
 			{"confirmed backup-ready", false, func(r *Receipt) {
 				r.Outcome = OutcomeConfirmed
@@ -234,16 +235,16 @@ func TestInspectRecoveryRefusesUnsafeRecords(t *testing.T) {
 			}},
 			{"confirmed with resolution", true, func(r *Receipt) {
 				r.Outcome = OutcomeConfirmed
-				r.Resolution = ResolutionAbandonedPreReplacement
+				r.Resolution = resolutionAbandonedPreReplacement
 			}},
 		}
 		for _, tc := range tests {
 			tc := tc
 			t.Run(tc.name, func(t *testing.T) {
 				f, _ := beginRecoveryTx(t, tc.commit)
-				r, err := ReadReceipt(ReceiptPath(f.exec.Path))
+				r, err := readReceipt(ReceiptPath(f.exec.Path))
 				if err != nil {
-					t.Fatalf("ReadReceipt: %v", err)
+					t.Fatalf("readReceipt: %v", err)
 				}
 				tc.mutate(&r)
 				if err := WriteReceiptDurable(ReceiptPath(f.exec.Path), r); err != nil {
@@ -272,7 +273,7 @@ func TestInspectRecoveryRefusesUnsafeRecords(t *testing.T) {
 	})
 	t.Run("symlinked lease dir component", func(t *testing.T) {
 		f, _ := beginRecoveryTx(t, false)
-		leaseDir := LeaseDir(f.exec.Path)
+		leaseDir := leaseDir(f.exec.Path)
 		real := leaseDir + ".real"
 		if err := os.Rename(leaseDir, real); err != nil {
 			t.Fatalf("rename lease dir: %v", err)
@@ -285,9 +286,9 @@ func TestInspectRecoveryRefusesUnsafeRecords(t *testing.T) {
 	})
 	t.Run("backup path outside tx dir", func(t *testing.T) {
 		f, _ := beginRecoveryTx(t, false)
-		r, err := ReadReceipt(ReceiptPath(f.exec.Path))
+		r, err := readReceipt(ReceiptPath(f.exec.Path))
 		if err != nil {
-			t.Fatalf("ReadReceipt: %v", err)
+			t.Fatalf("readReceipt: %v", err)
 		}
 		r.BackupPath = filepath.Join(t.TempDir(), "elsewhere-backup")
 		if err := WriteReceiptDurable(ReceiptPath(f.exec.Path), r); err != nil {
@@ -384,12 +385,12 @@ func TestInspectRecoveryRestoreAttemptRecorded(t *testing.T) {
 		}
 		// The crash boundary: the attempt was durable and the rename
 		// landed, but rolled_back never persisted.
-		crashed, err := ReadReceipt(plan.ReceiptPath)
+		crashed, err := readReceipt(plan.ReceiptPath)
 		if err != nil {
-			t.Fatalf("ReadReceipt: %v", err)
+			t.Fatalf("readReceipt: %v", err)
 		}
 		crashed.Outcome = OutcomePending
-		crashed.Phase = PhaseReplacementComplete
+		crashed.Phase = phaseReplacementComplete
 		if err := WriteReceiptDurable(plan.ReceiptPath, crashed); err != nil {
 			t.Fatalf("rewrite receipt: %v", err)
 		}
@@ -403,9 +404,9 @@ func TestInspectRecoveryRestoreAttemptRecorded(t *testing.T) {
 	})
 	t.Run("candidate still installed restores", func(t *testing.T) {
 		f, _ := beginRecoveryTx(t, true)
-		r, err := ReadReceipt(ReceiptPath(f.exec.Path))
+		r, err := readReceipt(ReceiptPath(f.exec.Path))
 		if err != nil {
-			t.Fatalf("ReadReceipt: %v", err)
+			t.Fatalf("readReceipt: %v", err)
 		}
 		r.RecoveryAttemptID = "11111111111111111111111111111111"
 		r.RecoveryKind = RecoveryKindRestore
@@ -422,9 +423,9 @@ func TestInspectRecoveryRestoreAttemptRecorded(t *testing.T) {
 	})
 	t.Run("neither restore copy nor candidate matches refuses", func(t *testing.T) {
 		f, _ := beginRecoveryTx(t, true)
-		r, err := ReadReceipt(ReceiptPath(f.exec.Path))
+		r, err := readReceipt(ReceiptPath(f.exec.Path))
 		if err != nil {
-			t.Fatalf("ReadReceipt: %v", err)
+			t.Fatalf("readReceipt: %v", err)
 		}
 		r.RecoveryAttemptID = "11111111111111111111111111111111"
 		r.RecoveryKind = RecoveryKindRestore
@@ -477,7 +478,7 @@ func TestRestorePreviousFullJourney(t *testing.T) {
 	if err != nil {
 		t.Fatalf("RestorePrevious: %v", err)
 	}
-	if restored.Outcome != OutcomeRolledBack || restored.Phase != PhaseRollbackAttempted {
+	if restored.Outcome != OutcomeRolledBack || restored.Phase != phaseRollbackAttempted {
 		t.Fatalf("restored receipt = %s/%s, want rolled_back/rollback-attempted", restored.Outcome, restored.Phase)
 	}
 	if restored.RecoveryAttemptID == "" || restored.RecoveryKind != RecoveryKindRestore || restored.RecoveryAttemptBy != os.Getpid() || restored.RecoveryStartedAt.IsZero() {
@@ -490,7 +491,7 @@ func TestRestorePreviousFullJourney(t *testing.T) {
 		t.Fatalf("restore path %s is not a prepared copy in the tx dir", restored.RestorePath)
 	}
 
-	installedID, err := StatFile(f.installedPath)
+	installedID, err := statFile(f.installedPath)
 	if err != nil {
 		t.Fatalf("stat installed: %v", err)
 	}
@@ -504,11 +505,11 @@ func TestRestorePreviousFullJourney(t *testing.T) {
 		t.Fatalf("installed identity %+v is not the prepared restore copy %+v", installedID, *restored.RestoreID)
 	}
 
-	onDisk, err := ReadReceipt(plan.ReceiptPath)
+	onDisk, err := readReceipt(plan.ReceiptPath)
 	if err != nil {
-		t.Fatalf("ReadReceipt: %v", err)
+		t.Fatalf("readReceipt: %v", err)
 	}
-	if onDisk.Outcome != OutcomeRolledBack || onDisk.Phase != PhaseRollbackAttempted || onDisk.RecoveryAttemptID != restored.RecoveryAttemptID {
+	if onDisk.Outcome != OutcomeRolledBack || onDisk.Phase != phaseRollbackAttempted || onDisk.RecoveryAttemptID != restored.RecoveryAttemptID {
 		t.Fatalf("on-disk receipt = %s/%s, want rolled_back/rollback-attempted", onDisk.Outcome, onDisk.Phase)
 	}
 
@@ -538,9 +539,9 @@ func TestRestorePreviousReusesPreparedRestoreCopy(t *testing.T) {
 	if _, err := RestorePrevious(f.exec, lease, plan, "interrupted", FileOps{Rename: func(string, string) error { return boom }}); !errors.Is(err, boom) {
 		t.Fatalf("interrupted RestorePrevious error = %v, want rename boom", err)
 	}
-	interrupted, err := ReadReceipt(plan.ReceiptPath)
+	interrupted, err := readReceipt(plan.ReceiptPath)
 	if err != nil {
-		t.Fatalf("ReadReceipt: %v", err)
+		t.Fatalf("readReceipt: %v", err)
 	}
 	if interrupted.RecoveryAttemptID == "" || interrupted.RecoveryKind != RecoveryKindRestore || interrupted.RestorePath == "" || interrupted.RestoreID == nil {
 		t.Fatalf("write-ahead attempt not durable after interruption: %+v", interrupted)
@@ -548,7 +549,7 @@ func TestRestorePreviousReusesPreparedRestoreCopy(t *testing.T) {
 	if got := mustDigest(t, f.installedPath); got != f.candidateDigest {
 		t.Fatalf("installed digest = %s, want candidate still installed %s", got, f.candidateDigest)
 	}
-	preparedID, err := StatFile(interrupted.RestorePath)
+	preparedID, err := statFile(interrupted.RestorePath)
 	if err != nil {
 		t.Fatalf("stat prepared restore copy: %v", err)
 	}
@@ -570,7 +571,7 @@ func TestRestorePreviousReusesPreparedRestoreCopy(t *testing.T) {
 	if final.Outcome != OutcomeRolledBack || final.RestorePath != interrupted.RestorePath {
 		t.Fatalf("final receipt = %s with restore path %s, want rolled_back reusing %s", final.Outcome, final.RestorePath, interrupted.RestorePath)
 	}
-	installedID, err := StatFile(f.installedPath)
+	installedID, err := statFile(f.installedPath)
 	if err != nil {
 		t.Fatalf("stat installed: %v", err)
 	}
@@ -607,12 +608,12 @@ func TestRestorePreviousFinishRollbackOnlyCompletesBookkeeping(t *testing.T) {
 	if _, err := RestorePrevious(f.exec, lease, plan, "target failed", FileOps{}); err != nil {
 		t.Fatalf("RestorePrevious: %v", err)
 	}
-	crashed, err := ReadReceipt(plan.ReceiptPath)
+	crashed, err := readReceipt(plan.ReceiptPath)
 	if err != nil {
-		t.Fatalf("ReadReceipt: %v", err)
+		t.Fatalf("readReceipt: %v", err)
 	}
 	crashed.Outcome = OutcomePending
-	crashed.Phase = PhaseReplacementComplete
+	crashed.Phase = phaseReplacementComplete
 	if err := WriteReceiptDurable(plan.ReceiptPath, crashed); err != nil {
 		t.Fatalf("rewrite receipt: %v", err)
 	}
@@ -628,25 +629,25 @@ func TestRestorePreviousFinishRollbackOnlyCompletesBookkeeping(t *testing.T) {
 	if err != nil {
 		t.Fatalf("stat installed: %v", err)
 	}
-	beforeID, err := StatFile(f.installedPath)
+	beforeID, err := statFile(f.installedPath)
 	if err != nil {
-		t.Fatalf("StatFile installed: %v", err)
+		t.Fatalf("statFile installed: %v", err)
 	}
 
 	final, err := RestorePrevious(f.exec, lease, resumed, "resumed finish", FileOps{})
 	if err != nil {
 		t.Fatalf("RestorePrevious finish-rollback: %v", err)
 	}
-	if final.Outcome != OutcomeRolledBack || final.Phase != PhaseRollbackAttempted {
+	if final.Outcome != OutcomeRolledBack || final.Phase != phaseRollbackAttempted {
 		t.Fatalf("final receipt = %s/%s, want rolled_back/rollback-attempted", final.Outcome, final.Phase)
 	}
 	after, err := os.Stat(f.installedPath)
 	if err != nil {
 		t.Fatalf("stat installed: %v", err)
 	}
-	afterID, err := StatFile(f.installedPath)
+	afterID, err := statFile(f.installedPath)
 	if err != nil {
-		t.Fatalf("StatFile installed: %v", err)
+		t.Fatalf("statFile installed: %v", err)
 	}
 	if !after.ModTime().Equal(before.ModTime()) {
 		t.Fatalf("installed mtime changed on finish-rollback: %s -> %s", before.ModTime(), after.ModTime())
@@ -654,9 +655,9 @@ func TestRestorePreviousFinishRollbackOnlyCompletesBookkeeping(t *testing.T) {
 	if afterID.Dev != beforeID.Dev || afterID.Ino != beforeID.Ino || afterID.Size != beforeID.Size {
 		t.Fatalf("installed identity changed on finish-rollback: %+v -> %+v", beforeID, afterID)
 	}
-	onDisk, err := ReadReceipt(plan.ReceiptPath)
+	onDisk, err := readReceipt(plan.ReceiptPath)
 	if err != nil {
-		t.Fatalf("ReadReceipt: %v", err)
+		t.Fatalf("readReceipt: %v", err)
 	}
 	if onDisk.Outcome != OutcomeRolledBack {
 		t.Fatalf("on-disk receipt outcome = %s, want rolled_back", onDisk.Outcome)
@@ -680,13 +681,13 @@ func TestMarkRecoveryRestartJourney(t *testing.T) {
 	if marked.RecoveryAttemptID == "" || marked.RecoveryKind != RecoveryKindRestart || marked.RecoveryAttemptBy != os.Getpid() || marked.RecoveryStartedAt.IsZero() {
 		t.Fatalf("restart attempt metadata incomplete: %+v", marked)
 	}
-	if marked.Outcome != OutcomePending || marked.Phase != PhaseBackupReady {
+	if marked.Outcome != OutcomePending || marked.Phase != phaseBackupReady {
 		t.Fatalf("restart marking advanced receipt = %s/%s, want pending/backup-ready", marked.Outcome, marked.Phase)
 	}
 	assertInstalledIntact(t, f)
-	onDisk, err := ReadReceipt(plan.ReceiptPath)
+	onDisk, err := readReceipt(plan.ReceiptPath)
 	if err != nil {
-		t.Fatalf("ReadReceipt: %v", err)
+		t.Fatalf("readReceipt: %v", err)
 	}
 	if onDisk.RecoveryAttemptID != marked.RecoveryAttemptID || onDisk.RecoveryKind != RecoveryKindRestart {
 		t.Fatalf("on-disk restart attempt = %+v", onDisk)
@@ -721,7 +722,7 @@ func TestResolveAbandonedSettlesPreReplacement(t *testing.T) {
 	if settled.Outcome != OutcomePending {
 		t.Fatalf("outcome = %s, want pending: the vocabulary must not grow", settled.Outcome)
 	}
-	if settled.Resolution != ResolutionAbandonedPreReplacement || !settled.InstallFailed || settled.ResolvedAt.IsZero() {
+	if settled.Resolution != resolutionAbandonedPreReplacement || !settled.InstallFailed || settled.ResolvedAt.IsZero() {
 		t.Fatalf("settlement metadata incomplete: %+v", settled)
 	}
 	if settled.Error != "installation failed before replacement" {
@@ -731,11 +732,11 @@ func TestResolveAbandonedSettlesPreReplacement(t *testing.T) {
 	if _, err := os.Stat(settled.BackupPath); err != nil {
 		t.Fatalf("ResolveAbandoned must remove nothing: %v", err)
 	}
-	onDisk, err := ReadReceipt(plan.ReceiptPath)
+	onDisk, err := readReceipt(plan.ReceiptPath)
 	if err != nil {
-		t.Fatalf("ReadReceipt: %v", err)
+		t.Fatalf("readReceipt: %v", err)
 	}
-	if onDisk.Resolution != ResolutionAbandonedPreReplacement || !onDisk.InstallFailed {
+	if onDisk.Resolution != resolutionAbandonedPreReplacement || !onDisk.InstallFailed {
 		t.Fatalf("on-disk settlement = %+v", onDisk)
 	}
 	lookup, err := LookupSuppression(f.exec.Path, f.opts.ToVersion)
@@ -772,9 +773,9 @@ func TestRecoveryMutationsRequireHeldLease(t *testing.T) {
 		},
 	}
 	for name, call := range mutations {
-		if err := call(); !IsUnsafeRecovery(err) {
-			t.Fatalf("%s without a held lease = %v, want refusal", name, err)
-		}
+		t.Run(name, func(t *testing.T) {
+			requireRefusal(t, call())
+		})
 	}
 }
 
@@ -783,11 +784,11 @@ func twoExecsInOneDir(t *testing.T) (Executable, Executable) {
 	dir := t.TempDir()
 	a := writeExecutableFile(t, dir, "agentico-a", 0o755, []byte("copy-a-bytes"))
 	b := writeExecutableFile(t, dir, "agentico-b", 0o755, []byte("copy-b-bytes"))
-	execA, err := CaptureExecutableAt(a)
+	execA, err := captureExecutableAt(a)
 	if err != nil {
 		t.Fatalf("capture exec A: %v", err)
 	}
-	execB, err := CaptureExecutableAt(b)
+	execB, err := captureExecutableAt(b)
 	if err != nil {
 		t.Fatalf("capture exec B: %v", err)
 	}

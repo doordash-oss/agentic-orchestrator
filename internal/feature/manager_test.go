@@ -15,13 +15,14 @@
 package feature_test
 
 import (
-	"context"
 	"errors"
 	"fmt"
 	"maps"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"reflect"
+	"slices"
 	"sort"
 	"strings"
 	"testing"
@@ -47,6 +48,95 @@ func newTestManager(t *testing.T) *feature.Manager {
 	mgr := feature.NewManager(store, cfg)
 	mgr.PRs = mocks.NewMockPRCloser()
 	return mgr
+}
+
+func TestManagerStartPhasePersistsStatusAndTiming(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		phase feature.Phase
+		from  feature.Status
+		to    feature.Status
+	}{
+		{"knowledge base", feature.PhaseKnowledgeBase, feature.StatusCreated, feature.StatusBuildingKB},
+		{"inquire", feature.PhaseInquire, feature.StatusCreated, feature.StatusInquiring},
+		{"research", feature.PhaseResearch, feature.StatusCreated, feature.StatusResearching},
+		{"design", feature.PhaseDesign, feature.StatusDesignReady, feature.StatusDesigning},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			mgr := newTestManager(t)
+			f := &feature.Feature{ID: "start-phase", Name: "Start phase", Status: tc.from, SchemaVersion: feature.SchemaVersionCurrent}
+			if err := mgr.Store.Save(f); err != nil {
+				t.Fatal(err)
+			}
+			if err := mgr.StartPhase(f.ID, tc.phase); err != nil {
+				t.Fatal(err)
+			}
+			got, err := mgr.Store.Load(f.ID)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got.Status != tc.to || got.CurrentPhase != tc.phase || got.ActiveTimingKey != tc.phase.DirName() || got.ActivePhaseStart == nil || got.StartedAt == nil {
+				t.Fatalf("started feature = status:%s phase:%s key:%q active:%v first:%v", got.Status, got.CurrentPhase, got.ActiveTimingKey, got.ActivePhaseStart, got.StartedAt)
+			}
+			firstStart := *got.StartedAt
+			if err := mgr.Store.Modify(f.ID, func(next *feature.Feature) error { next.Status = tc.from; return nil }); err != nil {
+				t.Fatal(err)
+			}
+			if err := mgr.StartPhase(f.ID, tc.phase); err != nil {
+				t.Fatal(err)
+			}
+			got, err = mgr.Store.Load(f.ID)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !got.StartedAt.Equal(firstStart) {
+				t.Fatalf("first start moved: got %v, want %v", got.StartedAt, firstStart)
+			}
+		})
+	}
+}
+
+func TestManagerTransitionAliasTargets(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		from feature.Status
+		to   feature.Status
+	}{
+		{"complete knowledge base", feature.StatusBuildingKB, feature.StatusCreated},
+		{"complete inquire", feature.StatusInquiring, feature.StatusInquireReady},
+		{"complete research", feature.StatusResearching, feature.StatusDesignReady},
+		{"complete design", feature.StatusDesigning, feature.StatusPlanReady},
+		{"complete planning", feature.StatusPlanning, feature.StatusImplementReady},
+		{"complete implementation", feature.StatusImplementing, feature.StatusReviewPassed},
+		{"roadmap implementation ready", feature.StatusPlanNeedsReview, feature.StatusImplementReady},
+		{"mark done", feature.StatusPublished, feature.StatusDone},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			mgr := newTestManager(t)
+			f := &feature.Feature{ID: "transition-target", Name: "Transition", Status: tc.from, SchemaVersion: feature.SchemaVersionCurrent}
+			if err := mgr.Store.Save(f); err != nil {
+				t.Fatal(err)
+			}
+			if err := mgr.Transition(f.ID, tc.to); err != nil {
+				t.Fatal(err)
+			}
+			got, err := mgr.Store.Load(f.ID)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got.Status != tc.to {
+				t.Fatalf("status = %s, want %s", got.Status, tc.to)
+			}
+			if err := mgr.Store.Modify(f.ID, func(next *feature.Feature) error { next.Status = feature.StatusDone; return nil }); err != nil {
+				t.Fatal(err)
+			}
+			if err := mgr.Transition(f.ID, tc.to); err == nil {
+				t.Fatalf("terminal transition Done -> %s unexpectedly succeeded", tc.to)
+			} else if !strings.Contains(err.Error(), "invalid transition") {
+				t.Fatalf("terminal transition error = %q, want validation error", err)
+			}
+		})
+	}
 }
 
 func skipShortFeatureRegression(t *testing.T, reason string) {
@@ -144,10 +234,10 @@ func TestManagerLifecycleTransitions(t *testing.T) {
 	}
 
 	// Start research
-	if err := mgr.StartResearch(f.ID); err != nil {
+	if err := mgr.StartPhase(f.ID, feature.PhaseResearch); err != nil {
 		t.Fatalf("start research: %v", err)
 	}
-	f, _ = mgr.Get(f.ID)
+	f, _ = mgr.Store.Load(f.ID)
 	if f.Status != feature.StatusResearching {
 		t.Errorf("status = %v, want Researching", f.Status)
 	}
@@ -156,19 +246,19 @@ func TestManagerLifecycleTransitions(t *testing.T) {
 	}
 
 	// Complete research
-	if err := mgr.CompleteResearch(f.ID); err != nil {
+	if err := mgr.Transition(f.ID, feature.StatusDesignReady); err != nil {
 		t.Fatalf("complete research: %v", err)
 	}
-	f, _ = mgr.Get(f.ID)
+	f, _ = mgr.Store.Load(f.ID)
 	if f.Status != feature.StatusDesignReady {
 		t.Errorf("status = %v, want DesignReady", f.Status)
 	}
 
 	// Start and complete design
-	if err := mgr.StartDesign(f.ID); err != nil {
+	if err := mgr.StartPhase(f.ID, feature.PhaseDesign); err != nil {
 		t.Fatalf("start design: %v", err)
 	}
-	if err := mgr.CompleteDesign(f.ID); err != nil {
+	if err := mgr.Transition(f.ID, feature.StatusPlanReady); err != nil {
 		t.Fatalf("complete design: %v", err)
 	}
 
@@ -176,7 +266,7 @@ func TestManagerLifecycleTransitions(t *testing.T) {
 	if err := mgr.StartPlanning(f.ID); err != nil {
 		t.Fatalf("start planning: %v", err)
 	}
-	f, _ = mgr.Get(f.ID)
+	f, _ = mgr.Store.Load(f.ID)
 	if f.Status != feature.StatusPlanning {
 		t.Errorf("status = %v, want Planning", f.Status)
 	}
@@ -185,10 +275,10 @@ func TestManagerLifecycleTransitions(t *testing.T) {
 	}
 
 	// Complete planning
-	if err := mgr.CompletePlanning(f.ID); err != nil {
+	if err := mgr.Transition(f.ID, feature.StatusImplementReady); err != nil {
 		t.Fatalf("complete planning: %v", err)
 	}
-	f, _ = mgr.Get(f.ID)
+	f, _ = mgr.Store.Load(f.ID)
 	if f.Status != feature.StatusImplementReady {
 		t.Errorf("status = %v, want ImplementReady", f.Status)
 	}
@@ -197,7 +287,7 @@ func TestManagerLifecycleTransitions(t *testing.T) {
 	if err := mgr.StartImplementation(f.ID); err != nil {
 		t.Fatalf("start implementation: %v", err)
 	}
-	f, _ = mgr.Get(f.ID)
+	f, _ = mgr.Store.Load(f.ID)
 	if f.Status != feature.StatusImplementing {
 		t.Errorf("status = %v, want Implementing", f.Status)
 	}
@@ -254,7 +344,7 @@ func TestManagerCreateWithWorktree(t *testing.T) {
 	}
 }
 
-func TestManagerCreateQueuesActiveSetupWithoutWorktreeSideEffects(t *testing.T) {
+func TestManagerCreateQueuesSetupWithoutWorktreeSideEffects(t *testing.T) {
 	t.Parallel()
 	// parallel-candidate: per-test temp dirs and mocks isolate filesystem and collaborator state.
 	storeDir := t.TempDir()
@@ -297,8 +387,8 @@ func TestManagerCreateQueuesActiveSetupWithoutWorktreeSideEffects(t *testing.T) 
 	if setup == nil {
 		t.Fatal("persisted run setup state is nil")
 	}
-	if setup.Status != feature.SetupStatusRunning {
-		t.Fatalf("persisted setup status = %q, want %q", setup.Status, feature.SetupStatusRunning)
+	if setup.Status != feature.SetupStatusQueued || setup.StartedAt != nil {
+		t.Fatalf("persisted setup status/started_at = %q/%v, want %q with no start time until dispatch", setup.Status, setup.StartedAt, feature.SetupStatusQueued)
 	}
 	task, ok := setup.Tasks["worktree:test-repo"]
 	if !ok {
@@ -352,7 +442,7 @@ func TestManagerCreatePersistsAcceptedSourceAndExactSetupPin(t *testing.T) {
 	if err := mgr.RunSetup(f.ID); err != nil {
 		t.Fatalf("RunSetup() error = %v", err)
 	}
-	created, err := mgr.Get(f.ID)
+	created, err := mgr.Store.Load(f.ID)
 	if err != nil {
 		t.Fatalf("Get() error = %v", err)
 	}
@@ -454,7 +544,7 @@ func TestManagerRunSetupCompletesQueuedSetupAndCopiesAssets(t *testing.T) {
 		t.Fatalf("run setup: %v", err)
 	}
 
-	loaded, err := mgr.Get(f.ID)
+	loaded, err := mgr.Store.Load(f.ID)
 	if err != nil {
 		t.Fatalf("get: %v", err)
 	}
@@ -525,6 +615,93 @@ func TestManagerRunSetupCompletesQueuedSetupAndCopiesAssets(t *testing.T) {
 	}
 }
 
+// TestManagerRunSetupProgressReportsTaskLifecycle pins the setup lifecycle
+// a created feature walks: creation leaves setup queued with no start time,
+// dispatch records the attempt start, and each task's progress events report
+// running then done, so the last progress event before completion carries
+// the terminal status and the persisted task keeps its start time.
+func TestManagerRunSetupProgressReportsTaskLifecycle(t *testing.T) {
+	store := feature.NewStore(t.TempDir())
+	wtDir := t.TempDir()
+	cfg := config.NewDefault()
+	cfg.Repos["repo-a"] = config.RepoConfig{Path: "/repos/repo-a"}
+	mgr := feature.NewManager(store, cfg)
+	worktrees := mocks.NewMockWorktreeOps()
+	worktrees.CreateFn = func(_, featureSlug, repoName, _ string) (string, error) {
+		return filepath.Join(wtDir, featureSlug, repoName), nil
+	}
+	mgr.Worktrees = worktrees
+	mgr.PRs = mocks.NewMockPRCloser()
+
+	f, err := mgr.Create("Setup Lifecycle", "progress", []string{"repo-a"}, cfg.Defaults.Models, "", "", nil, feature.CreateOptions{QueueSetup: true})
+	if err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	queued := f.Run().Setup
+	if queued.Status != feature.SetupStatusQueued || queued.StartedAt != nil {
+		t.Fatalf("created setup status/started_at = %q/%v, want queued with no start time", queued.Status, queued.StartedAt)
+	}
+
+	var events []feature.SetupEvent
+	if err := mgr.RunSetup(f.ID, feature.SetupRunnerOptions{OnEvent: func(ev feature.SetupEvent) {
+		events = append(events, ev)
+	}}); err != nil {
+		t.Fatalf("run setup: %v", err)
+	}
+
+	var progress []feature.SetupStatus
+	for _, ev := range events {
+		if ev.TaskKey == "worktree:repo-a" {
+			progress = append(progress, ev.TaskStatus)
+		}
+	}
+	want := []feature.SetupStatus{feature.SetupStatusRunning, feature.SetupStatusDone}
+	if !slices.Equal(progress, want) {
+		t.Fatalf("worktree task progress = %v, want %v", progress, want)
+	}
+	if n := len(events); n < 2 || events[n-1].Kind != feature.SetupEventCompleted || events[n-2].TaskStatus != feature.SetupStatusDone {
+		t.Fatalf("events = %+v, want a done progress event right before completion", events)
+	}
+
+	loaded, err := store.Load(f.ID)
+	if err != nil {
+		t.Fatalf("load: %v", err)
+	}
+	setup := loaded.Run().Setup
+	if setup.Status != feature.SetupStatusDone || setup.StartedAt == nil {
+		t.Fatalf("setup status/started_at = %q/%v, want done with dispatch start time", setup.Status, setup.StartedAt)
+	}
+	task := setup.Tasks["worktree:repo-a"]
+	if task.Status != feature.SetupStatusDone || task.StartedAt == nil || task.EndedAt == nil {
+		t.Fatalf("task = %+v, want done with start and end times", task)
+	}
+}
+
+// TestManagerReconcileAbandonedSetupsLeavesQueuedSetup pins that startup
+// reconciliation fails only setups that were running: a setup that was never
+// dispatched stays queued and dispatchable.
+func TestManagerReconcileAbandonedSetupsLeavesQueuedSetup(t *testing.T) {
+	mgr := newTestManager(t)
+	f, err := mgr.Create("Setup Queued", "never dispatched", []string{"test-repo"}, mgr.Config.Defaults.Models, "", "", nil, feature.CreateOptions{QueueSetup: true})
+	if err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	reconciled, err := mgr.ReconcileAbandonedSetups()
+	if err != nil {
+		t.Fatalf("reconcile: %v", err)
+	}
+	if len(reconciled) != 0 {
+		t.Fatalf("reconciled = %v, want none", reconciled)
+	}
+	loaded, err := mgr.Store.Load(f.ID)
+	if err != nil {
+		t.Fatalf("load: %v", err)
+	}
+	if loaded.Status != feature.StatusSettingUpWorktrees || loaded.Run().Setup.Status != feature.SetupStatusQueued {
+		t.Fatalf("status/setup = %s/%s, want SettingUpWorktrees/queued", loaded.Status, loaded.Run().Setup.Status)
+	}
+}
+
 func TestManagerRunSetupFailurePersistsDiagnosticsAndLog(t *testing.T) {
 	mgr := newTestManager(t)
 	worktrees := mocks.NewMockWorktreeOps()
@@ -542,7 +719,7 @@ func TestManagerRunSetupFailurePersistsDiagnosticsAndLog(t *testing.T) {
 		t.Fatal("RunSetup succeeded, want failure")
 	}
 
-	loaded, loadErr := mgr.Get(f.ID)
+	loaded, loadErr := mgr.Store.Load(f.ID)
 	if loadErr != nil {
 		t.Fatalf("get: %v", loadErr)
 	}
@@ -600,7 +777,7 @@ func TestManagerRunSetupImageFailurePreservesCompletedWorktree(t *testing.T) {
 		t.Fatal("RunSetup succeeded, want missing image failure")
 	}
 
-	loaded, err := mgr.Get(f.ID)
+	loaded, err := mgr.Store.Load(f.ID)
 	if err != nil {
 		t.Fatalf("get: %v", err)
 	}
@@ -652,7 +829,7 @@ func TestManagerRetrySetupSkipsDoneTasksAndCompletesOriginalRun(t *testing.T) {
 	if err := mgr.RunSetup(f.ID); err == nil {
 		t.Fatal("initial RunSetup succeeded, want repo-b failure")
 	}
-	failed, err := mgr.Get(f.ID)
+	failed, err := mgr.Store.Load(f.ID)
 	if err != nil {
 		t.Fatalf("get failed: %v", err)
 	}
@@ -665,7 +842,7 @@ func TestManagerRetrySetupSkipsDoneTasksAndCompletesOriginalRun(t *testing.T) {
 	if err := mgr.RetrySetup(f.ID); err != nil {
 		t.Fatalf("retry setup: %v", err)
 	}
-	loaded, err := mgr.Get(f.ID)
+	loaded, err := mgr.Store.Load(f.ID)
 	if err != nil {
 		t.Fatalf("get: %v", err)
 	}
@@ -828,7 +1005,7 @@ func TestManagerRetrySetupReusesExpectedWorktreeWhenTaskPathWasNotPersisted(t *t
 	if err := mgr.RetrySetup(f.ID); err != nil {
 		t.Fatalf("retry setup: %v", err)
 	}
-	loaded, err := mgr.Get(f.ID)
+	loaded, err := mgr.Store.Load(f.ID)
 	if err != nil {
 		t.Fatalf("get: %v", err)
 	}
@@ -902,6 +1079,7 @@ func TestManagerReconcileAbandonedSetupsMarksFailed(t *testing.T) {
 	}
 	if err := mgr.Store.Modify(f.ID, func(ff *feature.Feature) error {
 		setup := ff.Run().Setup
+		setup.Status = feature.SetupStatusRunning
 		setup.LatestLogPath = logPath
 		task := setup.Tasks["worktree:test-repo"]
 		task.Status = feature.SetupStatusRunning
@@ -919,7 +1097,7 @@ func TestManagerReconcileAbandonedSetupsMarksFailed(t *testing.T) {
 	if len(reconciled) != 1 || reconciled[0] != f.ID {
 		t.Fatalf("reconciled = %v, want [%s]", reconciled, f.ID)
 	}
-	loaded, err := mgr.Get(f.ID)
+	loaded, err := mgr.Store.Load(f.ID)
 	if err != nil {
 		t.Fatalf("get: %v", err)
 	}
@@ -979,59 +1157,59 @@ func TestManagerPhaseProgression(t *testing.T) {
 		t.Errorf("initial phase = %v, want Knowledge Base", f.CurrentPhase)
 	}
 
-	// StartKnowledgeBase + CompleteKnowledgeBase → ready for research
-	if err := mgr.StartKnowledgeBase(f.ID); err != nil {
+	// StartPhaseKnowledgeBase + TransitionToCreated → ready for research
+	if err := mgr.StartPhase(f.ID, feature.PhaseKnowledgeBase); err != nil {
 		t.Fatalf("start KB: %v", err)
 	}
-	f, _ = mgr.Get(f.ID)
+	f, _ = mgr.Store.Load(f.ID)
 	if f.CurrentPhase != feature.PhaseKnowledgeBase {
-		t.Errorf("after StartKnowledgeBase: phase = %v, want Knowledge Base", f.CurrentPhase)
+		t.Errorf("after StartPhaseKnowledgeBase: phase = %v, want Knowledge Base", f.CurrentPhase)
 	}
-	_ = mgr.CompleteKnowledgeBase(f.ID)
+	_ = mgr.Transition(f.ID, feature.StatusCreated)
 
-	// StartResearch should set CurrentPhase to Research
-	if err := mgr.StartResearch(f.ID); err != nil {
+	// StartPhaseResearch should set CurrentPhase to Research
+	if err := mgr.StartPhase(f.ID, feature.PhaseResearch); err != nil {
 		t.Fatalf("start research: %v", err)
 	}
-	f, _ = mgr.Get(f.ID)
+	f, _ = mgr.Store.Load(f.ID)
 	if f.CurrentPhase != feature.PhaseResearch {
-		t.Errorf("after StartResearch: phase = %v, want Research", f.CurrentPhase)
+		t.Errorf("after StartPhaseResearch: phase = %v, want Research", f.CurrentPhase)
 	}
 
-	// CompleteResearch → StartDesign → CompleteDesign → StartPlanning
-	_ = mgr.CompleteResearch(f.ID)
-	if err := mgr.StartDesign(f.ID); err != nil {
+	// TransitionToDesignReady → StartPhaseDesign → TransitionToPlanReady → StartPlanning
+	_ = mgr.Transition(f.ID, feature.StatusDesignReady)
+	if err := mgr.StartPhase(f.ID, feature.PhaseDesign); err != nil {
 		t.Fatalf("start design: %v", err)
 	}
-	f, _ = mgr.Get(f.ID)
+	f, _ = mgr.Store.Load(f.ID)
 	if f.CurrentPhase != feature.PhaseDesign {
-		t.Errorf("after StartDesign: phase = %v, want Design", f.CurrentPhase)
+		t.Errorf("after StartPhaseDesign: phase = %v, want Design", f.CurrentPhase)
 	}
-	_ = mgr.CompleteDesign(f.ID)
+	_ = mgr.Transition(f.ID, feature.StatusPlanReady)
 	if err := mgr.StartPlanning(f.ID); err != nil {
 		t.Fatalf("start planning: %v", err)
 	}
-	f, _ = mgr.Get(f.ID)
+	f, _ = mgr.Store.Load(f.ID)
 	if f.CurrentPhase != feature.PhasePlan {
 		t.Errorf("after StartPlanning: phase = %v, want Plan", f.CurrentPhase)
 	}
 
-	// CompletePlanning + StartImplementation should set CurrentPhase to Implement
-	_ = mgr.CompletePlanning(f.ID)
+	// TransitionToImplementReady + StartImplementation should set CurrentPhase to Implement
+	_ = mgr.Transition(f.ID, feature.StatusImplementReady)
 	if err := mgr.StartImplementation(f.ID); err != nil {
 		t.Fatalf("start implementation: %v", err)
 	}
-	f, _ = mgr.Get(f.ID)
+	f, _ = mgr.Store.Load(f.ID)
 	if f.CurrentPhase != feature.PhaseImplement {
 		t.Errorf("after StartImplementation: phase = %v, want Implement", f.CurrentPhase)
 	}
 
-	// CompleteImplementation + MarkCodeReady should set CurrentPhase to Publish
-	_ = mgr.CompleteImplementation(f.ID)
+	// TransitionToReviewPassed + MarkCodeReady should set CurrentPhase to Publish
+	_ = mgr.Transition(f.ID, feature.StatusReviewPassed)
 	if err := mgr.MarkCodeReady(f.ID); err != nil {
 		t.Fatalf("mark pr ready: %v", err)
 	}
-	f, _ = mgr.Get(f.ID)
+	f, _ = mgr.Store.Load(f.ID)
 	if f.CurrentPhase != feature.PhasePublish {
 		t.Errorf("after MarkCodeReady: phase = %v, want Publish", f.CurrentPhase)
 	}
@@ -1040,7 +1218,7 @@ func TestManagerPhaseProgression(t *testing.T) {
 	if err := mgr.MarkPublished(f.ID, "https://github.com/test/pr/1"); err != nil {
 		t.Fatalf("mark published: %v", err)
 	}
-	f, _ = mgr.Get(f.ID)
+	f, _ = mgr.Store.Load(f.ID)
 	if f.CurrentPhase != feature.PhasePublish {
 		t.Errorf("after MarkPublished: phase = %v, want Publish", f.CurrentPhase)
 	}
@@ -1065,7 +1243,7 @@ func TestMarkFinalReviewReadyTracksReviewRuntime(t *testing.T) {
 	if err := mgr.MarkFinalReviewReady(f.ID); err != nil {
 		t.Fatalf("MarkFinalReviewReady: %v", err)
 	}
-	got, err := mgr.Get(f.ID)
+	got, err := mgr.Store.Load(f.ID)
 	if err != nil {
 		t.Fatalf("Get: %v", err)
 	}
@@ -1086,7 +1264,7 @@ func TestMarkFinalReviewReadyTracksReviewRuntime(t *testing.T) {
 	if err := mgr.Transition(f.ID, feature.StatusReviewPassed); err != nil {
 		t.Fatalf("finish final review: %v", err)
 	}
-	got, err = mgr.Get(f.ID)
+	got, err = mgr.Store.Load(f.ID)
 	if err != nil {
 		t.Fatalf("Get after finish: %v", err)
 	}
@@ -1126,7 +1304,7 @@ func TestManagerMarkPublished(t *testing.T) {
 	if err := mgr.MarkPublished(f.ID, "https://github.com/test/pr/1"); err != nil {
 		t.Fatalf("mark published: %v", err)
 	}
-	f, _ = mgr.Get(f.ID)
+	f, _ = mgr.Store.Load(f.ID)
 	if f.Status != feature.StatusPublished {
 		t.Errorf("status = %v, want Published", f.Status)
 	}
@@ -1161,7 +1339,7 @@ func TestManagerMarkFailed(t *testing.T) {
 	if err := mgr.MarkFailed(f.ID, errcat.FailureRecord{Code: errcat.SafetyRailTripped, Diagnostics: "test error"}); err != nil {
 		t.Fatalf("mark failed: %v", err)
 	}
-	f, _ = mgr.Get(f.ID)
+	f, _ = mgr.Store.Load(f.ID)
 	if f.Status != feature.StatusFailed {
 		t.Errorf("status = %v, want Failed", f.Status)
 	}
@@ -1200,7 +1378,7 @@ func TestManagerMarkCodeReadyRefusesTerminalFailure(t *testing.T) {
 	if err := mgr.MarkCodeReady(f.ID); err == nil {
 		t.Fatal("MarkCodeReady succeeded, want terminal failure guard")
 	}
-	got, err := mgr.Get(f.ID)
+	got, err := mgr.Store.Load(f.ID)
 	if err != nil {
 		t.Fatalf("get: %v", err)
 	}
@@ -1253,7 +1431,7 @@ func TestManagerCreateWithImages(t *testing.T) {
 	}
 
 	// Verify feature round-trips through YAML with images
-	loaded, err := mgr.Get(f.ID)
+	loaded, err := mgr.Store.Load(f.ID)
 	if err != nil {
 		t.Fatalf("load feature: %v", err)
 	}
@@ -1292,7 +1470,7 @@ func TestMarkPublished_NonPublishableEmptyURLAccepted(t *testing.T) {
 	if err := mgr.MarkPublished(f.ID, ""); err != nil {
 		t.Fatalf("non-publishable MarkPublished with empty URL should succeed: %v", err)
 	}
-	got, _ := mgr.Get(f.ID)
+	got, _ := mgr.Store.Load(f.ID)
 	if got.Status != feature.StatusPublished {
 		t.Errorf("status = %v, want Published", got.Status)
 	}
@@ -1316,7 +1494,7 @@ func TestManagerCreateWithAutoPublish(t *testing.T) {
 	}
 
 	// Verify it persists through YAML round-trip
-	loaded, err := mgr.Get(f.ID)
+	loaded, err := mgr.Store.Load(f.ID)
 	if err != nil {
 		t.Fatalf("load feature: %v", err)
 	}
@@ -1353,7 +1531,7 @@ func TestManagerCreateNoImages(t *testing.T) {
 	}
 
 	// Verify YAML doesn't contain images key (omitempty)
-	loaded, err := mgr.Get(f.ID)
+	loaded, err := mgr.Store.Load(f.ID)
 	if err != nil {
 		t.Fatalf("load feature: %v", err)
 	}
@@ -1400,7 +1578,7 @@ func TestManagerCreateWithAttachments(t *testing.T) {
 	}
 
 	// Verify round-trip through YAML
-	loaded, err := mgr.Get(f.ID)
+	loaded, err := mgr.Store.Load(f.ID)
 	if err != nil {
 		t.Fatalf("load feature: %v", err)
 	}
@@ -1447,167 +1625,6 @@ func TestManagerCreateNoSuffixWhenNoUpstreamConflict(t *testing.T) {
 
 	if f.Slug != "no-conflict-feature" {
 		t.Errorf("slug = %q, want %q (no suffix expected)", f.Slug, "no-conflict-feature")
-	}
-}
-
-func TestManagerCreateKeepsLocallyUniqueBranchWhenOriginProbeIsUnavailable(t *testing.T) {
-	t.Parallel()
-	// The unreachable origin must stay nonblocking in both source modes while
-	// acceptance still pins the exact local commit.
-	for _, tc := range []struct {
-		name       string
-		useCurrent bool
-		wantBranch string
-	}{
-		{name: "default mode pins the resolved default branch", useCurrent: false, wantBranch: "main"},
-		{name: "current mode pins the checked-out slash branch", useCurrent: true, wantBranch: "release/2026/q4"},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			t.Parallel()
-			repoDir := testutil.InitGitRepo(t)
-			if tc.useCurrent {
-				testutil.CreateBranch(t, repoDir, tc.wantBranch)
-				testutil.CommitFile(t, repoDir, "current.txt", "current source\n", "current source")
-			}
-			acceptedCommit := featureTestGitOutput(t, repoDir, "rev-parse", "HEAD")
-			featureTestGitOutput(t, repoDir, "remote", "add", "origin", "https://user:secret@example.test/repo.git")
-			store := feature.NewStore(t.TempDir())
-			cfg := config.NewDefault()
-			cfg.Repos["repo-a"] = config.RepoConfig{Path: repoDir}
-			mgr := feature.NewManager(store, cfg)
-			mgr.Worktrees = mocks.NewMockWorktreeOps()
-			mgr.BranchProbeOptions = git.BranchProbeOptions{Runner: git.BranchProbeRunnerFunc(func(_ context.Context, _ string, args []string, _ int) git.BranchProbeCommandResult {
-				if len(args) > 0 && args[0] == "show-ref" {
-					return git.BranchProbeCommandResult{ExitCode: 1}
-				}
-				return git.BranchProbeCommandResult{ExitCode: 128, Diagnostics: "fatal: https://user:secret@example.test/repo.git offline\x1b[31m", Err: errors.New("exit status 128")}
-			})}
-
-			f, err := mgr.Create("Offline Branch", "test", []string{"repo-a"}, cfg.Defaults.Models, "", "", nil, feature.CreateOptions{
-				QueueSetup: true, UseCurrentBranch: tc.useCurrent, PinLocalSources: true,
-			})
-			if err != nil {
-				t.Fatalf("Create() error = %v", err)
-			}
-			if len(f.CreationWarnings) != 1 {
-				t.Fatalf("creation warnings = %+v, want one", f.CreationWarnings)
-			}
-			warning := f.CreationWarnings[0]
-			if warning.Repository != "repo-a" || warning.Branch != f.Repos[0].Branch {
-				t.Fatalf("warning = %+v, want repo-a on %q", warning, f.Repos[0].Branch)
-			}
-			if strings.Contains(warning.Diagnostics, "secret") || strings.ContainsRune(warning.Diagnostics, '\x1b') || !strings.Contains(warning.Diagnostics, "[redacted]") {
-				t.Fatalf("diagnostics = %q, want bounded redaction", warning.Diagnostics)
-			}
-			source := f.Repos[0].Source
-			if source == nil || source.Branch != tc.wantBranch || source.Commit != acceptedCommit {
-				t.Fatalf("accepted source = %+v, want branch %q at %q", source, tc.wantBranch, acceptedCommit)
-			}
-		})
-	}
-}
-
-func TestManagerCreateSelectsSuffixedCandidateWhenOriginConfirmsCollision(t *testing.T) {
-	t.Parallel()
-	// Controlled Git transport: the probe runs the real git ls-remote against a
-	// bare origin; the fixture plants the first generated candidate on that
-	// origin from a separate clone so the local show-ref check stays clean and
-	// only the responding origin proves the collision.
-	localDir, bareDir := testutil.InitPublishReadyGitRepo(t)
-	fixtureDir := filepath.Join(t.TempDir(), "fixture")
-	if out, err := exec.Command("git", "clone", bareDir, fixtureDir).CombinedOutput(); err != nil {
-		t.Fatalf("clone fixture: %s: %v", strings.TrimSpace(string(out)), err)
-	}
-
-	var planted bool
-	realRunner := git.ExecBranchProbeRunner{}
-	cfg := config.NewDefault()
-	cfg.Repos["repo-a"] = config.RepoConfig{Path: localDir}
-	mgr := feature.NewManager(feature.NewStore(t.TempDir()), cfg)
-	mgr.Worktrees = mocks.NewMockWorktreeOps()
-	mgr.PRs = mocks.NewMockPRCloser()
-	mgr.BranchProbeOptions = git.BranchProbeOptions{
-		OperationTimeout: 10 * time.Second,
-		Runner: git.BranchProbeRunnerFunc(func(ctx context.Context, repoPath string, args []string, limit int) git.BranchProbeCommandResult {
-			if len(args) > 0 && args[0] == "ls-remote" && !planted {
-				planted = true
-				branch := strings.TrimPrefix(args[len(args)-1], "refs/heads/")
-				testutil.CreateBranch(t, fixtureDir, branch)
-				testutil.SimulatePush(t, fixtureDir, bareDir, branch, branch)
-			}
-			return realRunner.Run(ctx, repoPath, args, limit)
-		}),
-	}
-
-	f, err := mgr.Create("Origin Collision", "test", []string{"repo-a"}, cfg.Defaults.Models, "", "", nil, feature.CreateOptions{QueueSetup: true})
-	if err != nil {
-		t.Fatalf("Create() error = %v", err)
-	}
-	if f.Slug == "origin-collision" || !strings.HasPrefix(f.Slug, "origin-collision-") {
-		t.Fatalf("slug = %q, want a suffixed candidate after the confirmed origin collision", f.Slug)
-	}
-	if got := f.Repos[0].Branch; got != git.BranchName(feature.WorkspaceSlug(f.Slug, f.ID)) {
-		t.Fatalf("selected branch = %q, want the regenerated candidate", got)
-	}
-	if len(f.CreationWarnings) != 0 {
-		t.Fatalf("creation warnings = %+v, want none from a responding origin", f.CreationWarnings)
-	}
-	selected := exec.Command("git", "-C", localDir, "show-ref", "--verify", "--quiet", "refs/heads/"+f.Repos[0].Branch)
-	if err := selected.Run(); err == nil {
-		t.Fatalf("selected candidate %q already exists locally", f.Repos[0].Branch)
-	}
-}
-
-func TestManagerCreateBoundsBranchProbesAcrossRepositories(t *testing.T) {
-	cfg := config.NewDefault()
-	for _, name := range []string{"repo-a", "repo-b"} {
-		repoDir := testutil.InitGitRepo(t)
-		featureTestGitOutput(t, repoDir, "remote", "add", "origin", "https://example.test/"+name+".git")
-		cfg.Repos[name] = config.RepoConfig{Path: repoDir}
-	}
-	mgr := feature.NewManager(feature.NewStore(t.TempDir()), cfg)
-	mgr.Worktrees = mocks.NewMockWorktreeOps()
-	mgr.BranchProbeBudget = 40 * time.Millisecond
-	mgr.BranchProbeOptions = git.BranchProbeOptions{OperationTimeout: time.Second, Runner: git.BranchProbeRunnerFunc(func(ctx context.Context, _ string, args []string, _ int) git.BranchProbeCommandResult {
-		if len(args) > 0 && args[0] == "show-ref" {
-			return git.BranchProbeCommandResult{ExitCode: 1}
-		}
-		<-ctx.Done()
-		return git.BranchProbeCommandResult{ExitCode: -1, Diagnostics: ctx.Err().Error(), Err: ctx.Err()}
-	})}
-
-	started := time.Now()
-	f, err := mgr.Create("Bounded Offline", "test", []string{"repo-a", "repo-b"}, cfg.Defaults.Models, "", "", nil, feature.CreateOptions{QueueSetup: true})
-	if err != nil {
-		t.Fatalf("Create() error = %v", err)
-	}
-	if elapsed := time.Since(started); elapsed > time.Second {
-		t.Fatalf("Create() took %s, want bounded overall probe budget", elapsed)
-	}
-	if len(f.CreationWarnings) != 2 {
-		t.Fatalf("creation warnings = %+v, want both unavailable origins", f.CreationWarnings)
-	}
-}
-
-func TestManagerCreateFailsAfterFiniteBranchCandidateExhaustion(t *testing.T) {
-	t.Parallel()
-	repoDir := testutil.InitGitRepo(t)
-	cfg := config.NewDefault()
-	cfg.Repos["repo-a"] = config.RepoConfig{Path: repoDir}
-	mgr := feature.NewManager(feature.NewStore(t.TempDir()), cfg)
-	mgr.Worktrees = mocks.NewMockWorktreeOps()
-	var calls int
-	mgr.BranchProbeOptions = git.BranchProbeOptions{Runner: git.BranchProbeRunnerFunc(func(_ context.Context, _ string, _ []string, _ int) git.BranchProbeCommandResult {
-		calls++
-		return git.BranchProbeCommandResult{ExitCode: 0}
-	})}
-
-	_, err := mgr.Create("Exhaust Branches", "test", []string{"repo-a"}, cfg.Defaults.Models, "", "", nil, feature.CreateOptions{QueueSetup: true})
-	if err == nil || !strings.Contains(err.Error(), "after 5 attempts") {
-		t.Fatalf("Create() error = %v, want finite exhaustion", err)
-	}
-	if calls != 5 {
-		t.Fatalf("probe calls = %d, want 5 local collision attempts", calls)
 	}
 }
 
@@ -1681,7 +1698,7 @@ func TestCreateDuplicateSlug(t *testing.T) {
 	})
 }
 
-func TestRewindToPhase_StatusMapping(t *testing.T) {
+func TestRewindWithRequest_StatusMapping(t *testing.T) {
 	t.Parallel()
 	// parallel-candidate: per-test temp dirs and mocks isolate filesystem and collaborator state.
 	tests := []struct {
@@ -1713,11 +1730,11 @@ func TestRewindToPhase_StatusMapping(t *testing.T) {
 				f.CurrentPhase = feature.PhaseImplement
 				return nil
 			})
-			_, _, err = mgr.RewindToPhase(f.ID, tt.targetPhase)
+			_, _, err = mgr.RewindWithRequest(f.ID, feature.RewindRequest{TargetPhase: tt.targetPhase})
 			if err != nil {
-				t.Fatalf("RewindToPhase: %v", err)
+				t.Fatalf("RewindWithRequest: %v", err)
 			}
-			got, _ := mgr.Get(f.ID)
+			got, _ := mgr.Store.Load(f.ID)
 			if got.Status != tt.wantStatus {
 				t.Errorf("status = %v, want %v", got.Status, tt.wantStatus)
 			}
@@ -1733,12 +1750,12 @@ func TestRewindToPhase_StatusMapping(t *testing.T) {
 	}
 }
 
-// TestRewindToPhase_ArtifactsPreservedInSealedRun verifies the Phase 2
+// TestRewindWithRequest_ArtifactsPreservedInSealedRun verifies the Phase 2
 // seal+fork semantics: rewind DOES NOT destroy artifacts. All phase dirs
 // from the active run live on under `runs/run-001/`, and `runs/run-002/`
 // receives a deep copy of each phase dir that `carryForwardDirs` lists for
 // the target. Rewinding to PhaseResearch carries only `inquire/` forward.
-func TestRewindToPhase_ArtifactsPreservedInSealedRun(t *testing.T) {
+func TestRewindWithRequest_ArtifactsPreservedInSealedRun(t *testing.T) {
 	t.Parallel()
 	// parallel-candidate: per-test temp dirs and mocks isolate filesystem and collaborator state.
 	skipShortFeatureRegression(t, "extended rewind artifact-preservation variant; canonical carry-forward remains in short mode")
@@ -1764,8 +1781,8 @@ func TestRewindToPhase_ArtifactsPreservedInSealedRun(t *testing.T) {
 		os.WriteFile(filepath.Join(dir, "marker.txt"), []byte("test"), 0o644)
 	}
 
-	if _, _, err := mgr.RewindToPhase(f.ID, feature.PhaseResearch); err != nil {
-		t.Fatalf("RewindToPhase: %v", err)
+	if _, _, err := mgr.RewindWithRequest(f.ID, feature.RewindRequest{TargetPhase: feature.PhaseResearch}); err != nil {
+		t.Fatalf("RewindWithRequest: %v", err)
 	}
 
 	// Post-rewind: the sealed run-001 keeps ALL its phase dirs intact.
@@ -1789,17 +1806,17 @@ func TestRewindToPhase_ArtifactsPreservedInSealedRun(t *testing.T) {
 		}
 	}
 	// Feature metadata reflects the new active run.
-	got, _ := mgr.Get(f.ID)
+	got, _ := mgr.Store.Load(f.ID)
 	if got.ActiveRun != 2 || got.RunCount != 2 {
 		t.Errorf("ActiveRun/RunCount = %d/%d, want 2/2", got.ActiveRun, got.RunCount)
 	}
 }
 
-// TestRewindToPhase_ArtifactMap_ForwardCarriesCorrectSubset_SealedPreserved
+// TestRewindWithRequest_ArtifactMap_ForwardCarriesCorrectSubset_SealedPreserved
 // verifies that after seal+fork, the new run's Artifacts map carries
 // exactly the key subset that the target permits (per the carry-forward
 // matrix), while the sealed run retains its full map on disk.
-func TestRewindToPhase_ArtifactMap_ForwardCarriesCorrectSubset_SealedPreserved(t *testing.T) {
+func TestRewindWithRequest_ArtifactMap_ForwardCarriesCorrectSubset_SealedPreserved(t *testing.T) {
 	t.Parallel()
 	// parallel-candidate: per-test temp dirs and mocks isolate filesystem and collaborator state.
 	skipShortFeatureRegression(t, "extended rewind artifact-map subset variant; canonical carry-forward remains in short mode")
@@ -1821,10 +1838,10 @@ func TestRewindToPhase_ArtifactMap_ForwardCarriesCorrectSubset_SealedPreserved(t
 		return nil
 	})
 
-	if _, _, err := mgr.RewindToPhase(f.ID, feature.PhaseDesign); err != nil {
-		t.Fatalf("RewindToPhase: %v", err)
+	if _, _, err := mgr.RewindWithRequest(f.ID, feature.RewindRequest{TargetPhase: feature.PhaseDesign}); err != nil {
+		t.Fatalf("RewindWithRequest: %v", err)
 	}
-	got, _ := mgr.Get(f.ID)
+	got, _ := mgr.Store.Load(f.ID)
 	// New active run (run-002) carries exactly {inquire, research} per the matrix.
 	wantKeys := map[string]bool{"inquire": true, "research": true}
 	if len(got.Artifacts) != len(wantKeys) {
@@ -1855,11 +1872,11 @@ func TestRewindToPhase_ArtifactMap_ForwardCarriesCorrectSubset_SealedPreserved(t
 	}
 }
 
-// TestRewindToPhase_TimingsCostsCarriedForKeptPhases_Run001Preserved verifies
+// TestRewindWithRequest_TimingsCostsCarriedForKeptPhases_Run001Preserved verifies
 // that seal+fork carries timings/costs of the phases whose outputs survive the
 // rewind, drops the ledger entries for redone phases, and keeps the sealed
 // run's full history intact for provenance.
-func TestRewindToPhase_TimingsCostsCarriedForKeptPhases_Run001Preserved(t *testing.T) {
+func TestRewindWithRequest_TimingsCostsCarriedForKeptPhases_Run001Preserved(t *testing.T) {
 	t.Parallel()
 	// parallel-candidate: per-test temp dirs and mocks isolate filesystem and collaborator state.
 	skipShortFeatureRegression(t, "extended rewind timing/cost provenance variant")
@@ -1887,10 +1904,10 @@ func TestRewindToPhase_TimingsCostsCarriedForKeptPhases_Run001Preserved(t *testi
 		return nil
 	})
 
-	if _, _, err := mgr.RewindToPhase(f.ID, feature.PhasePlan); err != nil {
-		t.Fatalf("RewindToPhase: %v", err)
+	if _, _, err := mgr.RewindWithRequest(f.ID, feature.RewindRequest{TargetPhase: feature.PhasePlan}); err != nil {
+		t.Fatalf("RewindWithRequest: %v", err)
 	}
-	got, _ := mgr.Get(f.ID)
+	got, _ := mgr.Store.Load(f.ID)
 	// Rewind to PhasePlan keeps inquire/research outputs, so their ledger
 	// entries carry; plan/implement/rebase-1 are redone and start at zero.
 	wantTimings := map[string]time.Duration{"inquire": 1 * time.Minute, "research": 2 * time.Minute}
@@ -1918,7 +1935,7 @@ func TestRewindToPhase_TimingsCostsCarriedForKeptPhases_Run001Preserved(t *testi
 	}
 }
 
-func TestRewindToPhase_PRURLCleared(t *testing.T) {
+func TestRewindWithRequest_PRURLCleared(t *testing.T) {
 	t.Parallel()
 	// parallel-candidate: per-test temp dirs and mocks isolate filesystem and collaborator state.
 	skipShortFeatureRegression(t, "extended rewind PR-close regression; lower-level PR URL clearing remains covered elsewhere")
@@ -1949,9 +1966,9 @@ func TestRewindToPhase_PRURLCleared(t *testing.T) {
 		return nil
 	})
 
-	warns, _, err := mgr.RewindToPhase(f.ID, feature.PhaseResearch)
+	warns, _, err := mgr.RewindWithRequest(f.ID, feature.RewindRequest{TargetPhase: feature.PhaseResearch})
 	if err != nil {
-		t.Fatalf("RewindToPhase: %v", err)
+		t.Fatalf("RewindWithRequest: %v", err)
 	}
 	// Should have a warning about PR close failure
 	foundPRWarn := false
@@ -1964,13 +1981,13 @@ func TestRewindToPhase_PRURLCleared(t *testing.T) {
 	if !foundPRWarn {
 		t.Errorf("expected warning about PR close failure, got warnings: %v", warns)
 	}
-	got, _ := mgr.Get(f.ID)
+	got, _ := mgr.Store.Load(f.ID)
 	if got.PRURL() != "" {
 		t.Errorf("PRURL should be cleared, got %q", got.PRURL())
 	}
 }
 
-func TestRewindToPhase_BackupBranchWarning(t *testing.T) {
+func TestRewindWithRequest_BackupBranchWarning(t *testing.T) {
 	t.Parallel()
 	// parallel-candidate: per-test temp dirs and mocks isolate filesystem and collaborator state.
 	skipShortFeatureRegression(t, "extended rewind backup-branch warning regression")
@@ -1990,9 +2007,9 @@ func TestRewindToPhase_BackupBranchWarning(t *testing.T) {
 		return nil
 	})
 
-	warns, _, err := mgr.RewindToPhase(f.ID, feature.PhaseResearch)
+	warns, _, err := mgr.RewindWithRequest(f.ID, feature.RewindRequest{TargetPhase: feature.PhaseResearch})
 	if err != nil {
-		t.Fatalf("RewindToPhase: %v", err)
+		t.Fatalf("RewindWithRequest: %v", err)
 	}
 	// Should have a warning about backup branch failure
 	foundBackupWarn := false
@@ -2016,79 +2033,7 @@ func TestRewindToPhase_BackupBranchWarning(t *testing.T) {
 	}
 }
 
-func TestRewindablePhases(t *testing.T) {
-	t.Parallel()
-	// parallel-candidate: per-test temp dirs and mocks isolate filesystem and collaborator state.
-	tests := []struct {
-		name       string
-		status     feature.Status
-		phase      feature.Phase
-		wantPhases []feature.Phase
-	}{
-		{
-			name:       "created has no rewind targets",
-			status:     feature.StatusCreated,
-			phase:      feature.PhaseKnowledgeBase,
-			wantPhases: nil,
-		},
-		{
-			name:       "inquiring allows rewind to inquire",
-			status:     feature.StatusInquiring,
-			phase:      feature.PhaseInquire,
-			wantPhases: []feature.Phase{feature.PhaseInquire},
-		},
-		{
-			name:       "researching allows inquire and research",
-			status:     feature.StatusResearching,
-			phase:      feature.PhaseResearch,
-			wantPhases: []feature.Phase{feature.PhaseInquire, feature.PhaseResearch},
-		},
-		{
-			name:       "design review allows through design",
-			status:     feature.StatusDesignNeedsReview,
-			phase:      feature.PhaseDesign,
-			wantPhases: []feature.Phase{feature.PhaseInquire, feature.PhaseResearch, feature.PhaseDesign},
-		},
-		{
-			name:       "implementing allows all phases",
-			status:     feature.StatusImplementing,
-			phase:      feature.PhaseImplement,
-			wantPhases: []feature.Phase{feature.PhaseInquire, feature.PhaseResearch, feature.PhaseDesign, feature.PhasePlan, feature.PhaseImplement},
-		},
-		{
-			name:       "done allows all phases",
-			status:     feature.StatusDone,
-			phase:      feature.PhasePublish,
-			wantPhases: []feature.Phase{feature.PhaseInquire, feature.PhaseResearch, feature.PhaseDesign, feature.PhasePlan, feature.PhaseImplement},
-		},
-		{
-			name:       "published allows all phases",
-			status:     feature.StatusPublished,
-			phase:      feature.PhasePublish,
-			wantPhases: []feature.Phase{feature.PhaseInquire, feature.PhaseResearch, feature.PhaseDesign, feature.PhasePlan, feature.PhaseImplement},
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			f := &feature.Feature{
-				Status:       tt.status,
-				CurrentPhase: tt.phase,
-			}
-			got := feature.RewindablePhases(f)
-			if len(got) != len(tt.wantPhases) {
-				t.Fatalf("RewindablePhases returned %d phases, want %d: %v", len(got), len(tt.wantPhases), got)
-			}
-			for i, p := range got {
-				if p != tt.wantPhases[i] {
-					t.Errorf("phase[%d] = %v, want %v", i, p, tt.wantPhases[i])
-				}
-			}
-		})
-	}
-}
-
-func TestRewindToPhase_FieldsZeroed(t *testing.T) {
+func TestRewindWithRequest_FieldsZeroed(t *testing.T) {
 	t.Parallel()
 	// parallel-candidate: per-test temp dirs and mocks isolate filesystem and collaborator state.
 	skipShortFeatureRegression(t, "extended rewind field-reset matrix")
@@ -2112,10 +2057,10 @@ func TestRewindToPhase_FieldsZeroed(t *testing.T) {
 		return nil
 	})
 
-	if _, _, err := mgr.RewindToPhase(f.ID, feature.PhasePlan); err != nil {
-		t.Fatalf("RewindToPhase: %v", err)
+	if _, _, err := mgr.RewindWithRequest(f.ID, feature.RewindRequest{TargetPhase: feature.PhasePlan}); err != nil {
+		t.Fatalf("RewindWithRequest: %v", err)
 	}
-	got, _ := mgr.Get(f.ID)
+	got, _ := mgr.Store.Load(f.ID)
 	if got.CurrentIteration != 0 {
 		t.Errorf("CurrentIteration = %d, want 0", got.CurrentIteration)
 	}
@@ -2139,7 +2084,7 @@ func TestRewindToPhase_FieldsZeroed(t *testing.T) {
 	}
 }
 
-func TestRewindToPhase_InvalidTargetFromCurrentState(t *testing.T) {
+func TestRewindWithRequest_InvalidTargetFromCurrentState(t *testing.T) {
 	t.Parallel()
 	// parallel-candidate: per-test temp dirs and mocks isolate filesystem and collaborator state.
 	tests := []struct {
@@ -2192,7 +2137,7 @@ func TestRewindToPhase_InvalidTargetFromCurrentState(t *testing.T) {
 				return nil
 			})
 
-			_, _, err = mgr.RewindToPhase(f.ID, tc.target)
+			_, _, err = mgr.RewindWithRequest(f.ID, feature.RewindRequest{TargetPhase: tc.target})
 			if tc.wantErrSub != "" {
 				if err == nil {
 					t.Fatalf("expected error containing %q, got nil", tc.wantErrSub)
@@ -2239,7 +2184,7 @@ func TestAdvanceRoadmapPhase(t *testing.T) {
 	if err := mgr.AdvanceRoadmapPhase(f.ID); err != nil {
 		t.Fatalf("AdvanceRoadmapPhase: %v", err)
 	}
-	f, _ = mgr.Get(f.ID)
+	f, _ = mgr.Store.Load(f.ID)
 	if f.Status != feature.StatusPlanning {
 		t.Errorf("status = %v, want Planning", f.Status)
 	}
@@ -2295,7 +2240,7 @@ func TestAdvanceRoadmapPhaseTDDFillIn(t *testing.T) {
 	if err := mgr.AdvanceRoadmapPhase(f.ID); err != nil {
 		t.Fatalf("AdvanceRoadmapPhase: %v", err)
 	}
-	f, _ = mgr.Get(f.ID)
+	f, _ = mgr.Store.Load(f.ID)
 	if f.CurrentRoadmapPhase != 2 {
 		t.Errorf("CurrentRoadmapPhase = %d, want 2", f.CurrentRoadmapPhase)
 	}
@@ -2328,13 +2273,13 @@ func TestAdvanceRoadmapPhaseCollapsed(t *testing.T) {
 	if err := mgr.AdvanceRoadmapPhase(f.ID); err != nil {
 		t.Fatalf("AdvanceRoadmapPhase: %v", err)
 	}
-	f, _ = mgr.Get(f.ID)
+	f, _ = mgr.Store.Load(f.ID)
 	if f.RoadmapPhaseType != "collapsed" {
 		t.Errorf("RoadmapPhaseType = %q, want %q", f.RoadmapPhaseType, "collapsed")
 	}
 }
 
-func TestStartRoadmapPhaseImplementation(t *testing.T) {
+func TestTransitionToImplementReady(t *testing.T) {
 	t.Parallel()
 	// parallel-candidate: per-test temp dirs and mocks isolate filesystem and collaborator state.
 	mgr := newTestManager(t)
@@ -2347,17 +2292,17 @@ func TestStartRoadmapPhaseImplementation(t *testing.T) {
 	_ = mgr.Transition(f.ID, feature.StatusPlanReady)
 	_ = mgr.Transition(f.ID, feature.StatusPlanning)
 
-	if err := mgr.StartRoadmapPhaseImplementation(f.ID); err != nil {
-		t.Fatalf("StartRoadmapPhaseImplementation: %v", err)
+	if err := mgr.Transition(f.ID, feature.StatusImplementReady); err != nil {
+		t.Fatalf("TransitionToImplementReady: %v", err)
 	}
-	f, _ = mgr.Get(f.ID)
+	f, _ = mgr.Store.Load(f.ID)
 	if f.Status != feature.StatusImplementReady {
 		t.Errorf("status = %v, want ImplementReady", f.Status)
 	}
 }
 
 // TestRoadmapPhaseTimingKeyTransitions verifies that timing keys transition correctly
-// through AdvanceRoadmapPhase → StartRoadmapPhaseImplementation → StartImplementation.
+// through AdvanceRoadmapPhase → TransitionToImplementReady → StartImplementation.
 func TestRoadmapPhaseTimingKeyTransitions(t *testing.T) {
 	t.Parallel()
 	// parallel-candidate: per-test temp dirs and mocks isolate filesystem and collaborator state.
@@ -2385,7 +2330,7 @@ func TestRoadmapPhaseTimingKeyTransitions(t *testing.T) {
 	if err := mgr.AdvanceRoadmapPhase(f.ID); err != nil {
 		t.Fatalf("AdvanceRoadmapPhase: %v", err)
 	}
-	f, _ = mgr.Get(f.ID)
+	f, _ = mgr.Store.Load(f.ID)
 	if f.ActiveTimingKey != "phase-1-plan" {
 		t.Errorf("after AdvanceRoadmapPhase: ActiveTimingKey = %q, want %q", f.ActiveTimingKey, "phase-1-plan")
 	}
@@ -2393,21 +2338,21 @@ func TestRoadmapPhaseTimingKeyTransitions(t *testing.T) {
 		t.Error("after AdvanceRoadmapPhase: ActivePhaseStart should be non-nil")
 	}
 
-	// Step 2: StartRoadmapPhaseImplementation → transitions to ImplementReady,
+	// Step 2: TransitionToImplementReady → transitions to ImplementReady,
 	// which accumulates plan timing via the Transition path.
-	if err := mgr.StartRoadmapPhaseImplementation(f.ID); err != nil {
-		t.Fatalf("StartRoadmapPhaseImplementation: %v", err)
+	if err := mgr.Transition(f.ID, feature.StatusImplementReady); err != nil {
+		t.Fatalf("TransitionToImplementReady: %v", err)
 	}
-	f, _ = mgr.Get(f.ID)
+	f, _ = mgr.Store.Load(f.ID)
 	if f.Status != feature.StatusImplementReady {
-		t.Errorf("after StartRoadmapPhaseImplementation: status = %v, want ImplementReady", f.Status)
+		t.Errorf("after TransitionToImplementReady: status = %v, want ImplementReady", f.Status)
 	}
 
 	// Step 3: StartImplementation → sets ActiveTimingKey = "phase-1-impl" (NOT "phase-1-plan")
 	if err := mgr.StartImplementation(f.ID); err != nil {
 		t.Fatalf("StartImplementation: %v", err)
 	}
-	f, _ = mgr.Get(f.ID)
+	f, _ = mgr.Store.Load(f.ID)
 
 	// Verify the plan timing was accumulated
 	planDuration := f.PhaseTimings["phase-1-plan"]
@@ -2459,7 +2404,7 @@ func TestRoadmapPhasePlanTimingSurvivesInterruptRestart(t *testing.T) {
 		t.Fatalf("AdvanceRoadmapPhase(2): %v", err)
 	}
 
-	f, _ = mgr.Get(f.ID)
+	f, _ = mgr.Store.Load(f.ID)
 	if f.ActiveTimingKey != "phase-2-plan" {
 		t.Fatalf("after AdvanceRoadmapPhase(2): ActiveTimingKey = %q, want %q", f.ActiveTimingKey, "phase-2-plan")
 	}
@@ -2476,7 +2421,7 @@ func TestRoadmapPhasePlanTimingSurvivesInterruptRestart(t *testing.T) {
 	if err := mgr.Transition(f.ID, feature.StatusInterrupted); err != nil {
 		t.Fatalf("Transition(Interrupted): %v", err)
 	}
-	f, _ = mgr.Get(f.ID)
+	f, _ = mgr.Store.Load(f.ID)
 	firstAttempt := f.PhaseTimings["phase-2-plan"]
 	if firstAttempt < time.Minute {
 		t.Fatalf("phase-2-plan after first interrupt = %v, want >= 1m", firstAttempt)
@@ -2491,7 +2436,7 @@ func TestRoadmapPhasePlanTimingSurvivesInterruptRestart(t *testing.T) {
 	if err := mgr.StartPlanning(f.ID); err != nil {
 		t.Fatalf("StartPlanning after interrupt: %v", err)
 	}
-	f, _ = mgr.Get(f.ID)
+	f, _ = mgr.Store.Load(f.ID)
 	if f.ActiveTimingKey != "phase-2-plan" {
 		t.Fatalf("after StartPlanning restart: ActiveTimingKey = %q, want %q (regression: bucket collapsed into strategic plan)", f.ActiveTimingKey, "phase-2-plan")
 	}
@@ -2506,7 +2451,7 @@ func TestRoadmapPhasePlanTimingSurvivesInterruptRestart(t *testing.T) {
 	if err := mgr.Transition(f.ID, feature.StatusInterrupted); err != nil {
 		t.Fatalf("Transition(Interrupted) #2: %v", err)
 	}
-	f, _ = mgr.Get(f.ID)
+	f, _ = mgr.Store.Load(f.ID)
 	if got := f.PhaseTimings["plan"]; got != 0 {
 		t.Errorf("plan bucket should remain empty after restart accumulation, got %v", got)
 	}
@@ -3134,7 +3079,7 @@ func TestTryCompletePublish_WrongStatus(t *testing.T) {
 	}
 }
 
-func TestRewindToPhase_ClearsRepoImpl(t *testing.T) {
+func TestRewindWithRequest_ClearsRepoImpl(t *testing.T) {
 	t.Parallel()
 	// parallel-candidate: per-test temp dirs and mocks isolate filesystem and collaborator state.
 	skipShortFeatureRegression(t, "extended rewind repo-state clearing regression")
@@ -3158,17 +3103,17 @@ func TestRewindToPhase_ClearsRepoImpl(t *testing.T) {
 	})
 
 	// Rewind to Plan — past implement — should clear RepoImpl.
-	_, _, err := mgr.RewindToPhase(f.ID, feature.PhasePlan)
+	_, _, err := mgr.RewindWithRequest(f.ID, feature.RewindRequest{TargetPhase: feature.PhasePlan})
 	if err != nil {
-		t.Fatalf("RewindToPhase: %v", err)
+		t.Fatalf("RewindWithRequest: %v", err)
 	}
-	got, _ := mgr.Get(f.ID)
+	got, _ := mgr.Store.Load(f.ID)
 	if got.RepoStates != nil {
 		t.Errorf("RepoImpl should be nil after rewind past implement, got %v", got.RepoStates)
 	}
 }
 
-// TestRewindToPhase_MediumPlanWritesDescriptionReview regression-guards
+// TestRewindWithRequest_MediumPlanWritesDescriptionReview regression-guards
 // the Medium-rewind-to-Plan fix. Medium pipelines have no inquire /
 // research / design phases, so rewinding to Plan (the first phase of
 // the Medium pipeline) previously left the feature with no artifact the
@@ -3176,11 +3121,11 @@ func TestRewindToPhase_ClearsRepoImpl(t *testing.T) {
 // found for the previous phase" and the user could not attach to review.
 //
 // Treating PhasePlan as "first phase of the pipeline" for Medium mirrors
-// the PhaseInquire case for Large/Moonshot: RewindToPhase writes
+// the PhaseInquire case for Large/Moonshot: RewindWithRequest writes
 // description-review.md so startRewindReviewSessionCmd has something to
 // show, and the orchestrator reads it back on proceed to overwrite
 // f.Description (symmetric with rewind-to-inquire).
-func TestRewindToPhase_MediumPlanWritesDescriptionReview(t *testing.T) {
+func TestRewindWithRequest_MediumPlanWritesDescriptionReview(t *testing.T) {
 	t.Parallel()
 	// parallel-candidate: per-test temp dirs and mocks isolate filesystem and collaborator state.
 	skipShortFeatureRegression(t, "extended rewind description-review file regression")
@@ -3196,8 +3141,8 @@ func TestRewindToPhase_MediumPlanWritesDescriptionReview(t *testing.T) {
 		return nil
 	})
 
-	if _, _, err := mgr.RewindToPhase(f.ID, feature.PhasePlan); err != nil {
-		t.Fatalf("RewindToPhase: %v", err)
+	if _, _, err := mgr.RewindWithRequest(f.ID, feature.RewindRequest{TargetPhase: feature.PhasePlan}); err != nil {
+		t.Fatalf("RewindWithRequest: %v", err)
 	}
 
 	descPath := filepath.Join(mgr.Store.BaseDir, f.ID, "description-review.md")
@@ -3210,13 +3155,13 @@ func TestRewindToPhase_MediumPlanWritesDescriptionReview(t *testing.T) {
 	}
 }
 
-// TestRewindToPhase_StandardPlanDoesNotWriteDescriptionReview ensures the
+// TestRewindWithRequest_StandardPlanDoesNotWriteDescriptionReview ensures the
 // Medium-only carve-out does not leak into Large/Moonshot pipelines,
 // which still have a real design/research artifact for PhasePlan rewind
 // to display. Writing description-review.md here would be harmless but
 // semantically misleading — it signals "Plan's input is the description"
 // which is only true for Medium.
-func TestRewindToPhase_LargePlanDoesNotWriteDescriptionReview(t *testing.T) {
+func TestRewindWithRequest_LargePlanDoesNotWriteDescriptionReview(t *testing.T) {
 	t.Parallel()
 	// parallel-candidate: per-test temp dirs and mocks isolate filesystem and collaborator state.
 	skipShortFeatureRegression(t, "extended rewind description-review file regression")
@@ -3232,8 +3177,8 @@ func TestRewindToPhase_LargePlanDoesNotWriteDescriptionReview(t *testing.T) {
 		return nil
 	})
 
-	if _, _, err := mgr.RewindToPhase(f.ID, feature.PhasePlan); err != nil {
-		t.Fatalf("RewindToPhase: %v", err)
+	if _, _, err := mgr.RewindWithRequest(f.ID, feature.RewindRequest{TargetPhase: feature.PhasePlan}); err != nil {
+		t.Fatalf("RewindWithRequest: %v", err)
 	}
 
 	descPath := filepath.Join(mgr.Store.BaseDir, f.ID, "description-review.md")
@@ -3242,12 +3187,12 @@ func TestRewindToPhase_LargePlanDoesNotWriteDescriptionReview(t *testing.T) {
 	}
 }
 
-// (TestRewindToPhase_ClearsExecutionPlan removed in SchemaVersionCurrent = 3
+// (TestRewindWithRequest_ClearsExecutionPlan removed in SchemaVersionCurrent = 3
 // — the ExecutionPlan field has been removed; the per-phase plan is now read
 // fresh from disk per orchestrator cycle and there is nothing on the feature
 // to clear on rewind.)
 
-func TestRewindToPhase_ClosesPerRepoPRs(t *testing.T) {
+func TestRewindWithRequest_ClosesPerRepoPRs(t *testing.T) {
 	t.Parallel()
 	// parallel-candidate: per-test temp dirs and mocks isolate filesystem and collaborator state.
 	skipShortFeatureRegression(t, "extended rewind per-repo PR close warning regression")
@@ -3278,9 +3223,9 @@ func TestRewindToPhase_ClosesPerRepoPRs(t *testing.T) {
 		return nil
 	})
 
-	warns, _, err := mgr.RewindToPhase(f.ID, feature.PhasePlan)
+	warns, _, err := mgr.RewindWithRequest(f.ID, feature.RewindRequest{TargetPhase: feature.PhasePlan})
 	if err != nil {
-		t.Fatalf("RewindToPhase: %v", err)
+		t.Fatalf("RewindWithRequest: %v", err)
 	}
 
 	repoAWarn := false
@@ -3301,7 +3246,7 @@ func TestRewindToPhase_ClosesPerRepoPRs(t *testing.T) {
 	}
 }
 
-func TestRewindToPhase_ImplementResetsMultiRepoState(t *testing.T) {
+func TestRewindWithRequest_ImplementResetsMultiRepoState(t *testing.T) {
 	t.Parallel()
 	// parallel-candidate: per-test temp dirs and mocks isolate filesystem and collaborator state.
 	skipShortFeatureRegression(t, "extended rewind multi-repo reset regression")
@@ -3326,11 +3271,11 @@ func TestRewindToPhase_ImplementResetsMultiRepoState(t *testing.T) {
 		return nil
 	})
 
-	_, _, err := mgr.RewindToPhase(f.ID, feature.PhaseImplement)
+	_, _, err := mgr.RewindWithRequest(f.ID, feature.RewindRequest{TargetPhase: feature.PhaseImplement})
 	if err != nil {
-		t.Fatalf("RewindToPhase: %v", err)
+		t.Fatalf("RewindWithRequest: %v", err)
 	}
-	got, _ := mgr.Get(f.ID)
+	got, _ := mgr.Store.Load(f.ID)
 
 	// Multi-repo RepoImpl must be cleared for a full restart.
 	if got.RepoStates != nil {
@@ -3638,7 +3583,7 @@ func TestRewindChoicesForFeature_MediumPlanNeedsReviewIncludesPlan(t *testing.T)
 	}
 }
 
-func TestRewindToPhase_MediumRejectsNonMediumPhase(t *testing.T) {
+func TestRewindWithRequest_MediumRejectsNonMediumPhase(t *testing.T) {
 	t.Parallel()
 	// parallel-candidate: per-test temp dirs and mocks isolate filesystem and collaborator state.
 	mgr := newTestManager(t)
@@ -3654,7 +3599,7 @@ func TestRewindToPhase_MediumRejectsNonMediumPhase(t *testing.T) {
 	})
 
 	// Rewinding to Research on medium should fail — not a valid phase
-	_, _, err = mgr.RewindToPhase(f.ID, feature.PhaseResearch)
+	_, _, err = mgr.RewindWithRequest(f.ID, feature.RewindRequest{TargetPhase: feature.PhaseResearch})
 	if err == nil {
 		t.Fatal("expected error rewinding medium to non-medium phase, got nil")
 	}
@@ -3682,15 +3627,15 @@ func TestUpgradeThenRewind_MediumToStandard(t *testing.T) {
 	}
 
 	// Step 2: Rewind to Inquire — should redirect to KB Build
-	_, effective, err := mgr.RewindToPhase(f.ID, feature.PhaseInquire)
+	_, effective, err := mgr.RewindWithRequest(f.ID, feature.RewindRequest{TargetPhase: feature.PhaseInquire})
 	if err != nil {
-		t.Fatalf("RewindToPhase: %v", err)
+		t.Fatalf("RewindWithRequest: %v", err)
 	}
 	if effective != feature.PhaseKnowledgeBase {
 		t.Errorf("effectiveTarget = %v, want PhaseKnowledgeBase", effective)
 	}
 
-	got, _ := mgr.Get(f.ID)
+	got, _ := mgr.Store.Load(f.ID)
 	if got.Pipeline != feature.PipelineLarge {
 		t.Errorf("Pipeline = %q, want %q", got.Pipeline, feature.PipelineLarge)
 	}
@@ -3709,7 +3654,7 @@ func TestUpgradeThenRewind_MediumToStandard(t *testing.T) {
 	}
 }
 
-func TestRewindToPhase_NoEscalationWithinProfile(t *testing.T) {
+func TestRewindWithRequest_NoEscalationWithinProfile(t *testing.T) {
 	t.Parallel()
 	// parallel-candidate: per-test temp dirs and mocks isolate filesystem and collaborator state.
 	skipShortFeatureRegression(t, "extended pipeline rewind escalation regression")
@@ -3725,14 +3670,14 @@ func TestRewindToPhase_NoEscalationWithinProfile(t *testing.T) {
 		return nil
 	})
 
-	_, effective, err := mgr.RewindToPhase(f.ID, feature.PhasePlan)
+	_, effective, err := mgr.RewindWithRequest(f.ID, feature.RewindRequest{TargetPhase: feature.PhasePlan})
 	if err != nil {
-		t.Fatalf("RewindToPhase: %v", err)
+		t.Fatalf("RewindWithRequest: %v", err)
 	}
 	if effective != feature.PhasePlan {
 		t.Errorf("effectiveTarget = %v, want PhasePlan", effective)
 	}
-	got, _ := mgr.Get(f.ID)
+	got, _ := mgr.Store.Load(f.ID)
 	if got.Pipeline != feature.PipelineMedium {
 		t.Errorf("Pipeline = %q, want %q (should not change)", got.Pipeline, feature.PipelineMedium)
 	}
@@ -3744,7 +3689,7 @@ func TestRewindToPhase_NoEscalationWithinProfile(t *testing.T) {
 	}
 }
 
-func TestRewindToPhase_StandardToMoonshotNotNeeded(t *testing.T) {
+func TestRewindWithRequest_StandardToMoonshotNotNeeded(t *testing.T) {
 	t.Parallel()
 	// parallel-candidate: per-test temp dirs and mocks isolate filesystem and collaborator state.
 	skipShortFeatureRegression(t, "extended pipeline rewind escalation regression")
@@ -3760,14 +3705,14 @@ func TestRewindToPhase_StandardToMoonshotNotNeeded(t *testing.T) {
 		return nil
 	})
 
-	_, effective, err := mgr.RewindToPhase(f.ID, feature.PhaseResearch)
+	_, effective, err := mgr.RewindWithRequest(f.ID, feature.RewindRequest{TargetPhase: feature.PhaseResearch})
 	if err != nil {
-		t.Fatalf("RewindToPhase: %v", err)
+		t.Fatalf("RewindWithRequest: %v", err)
 	}
 	if effective != feature.PhaseResearch {
 		t.Errorf("effectiveTarget = %v, want PhaseResearch", effective)
 	}
-	got, _ := mgr.Get(f.ID)
+	got, _ := mgr.Store.Load(f.ID)
 	if got.Pipeline != feature.PipelineLarge {
 		t.Errorf("Pipeline = %q, want %q (should not change)", got.Pipeline, feature.PipelineLarge)
 	}
@@ -3791,7 +3736,7 @@ func TestUpgradePipeline_MediumToStandard(t *testing.T) {
 	if err := mgr.UpgradePipeline(f.ID, feature.PipelineLarge); err != nil {
 		t.Fatalf("UpgradePipeline: %v", err)
 	}
-	got, _ := mgr.Get(f.ID)
+	got, _ := mgr.Store.Load(f.ID)
 	if got.Pipeline != feature.PipelineLarge {
 		t.Errorf("Pipeline = %q, want %q", got.Pipeline, feature.PipelineLarge)
 	}
@@ -3822,7 +3767,7 @@ func TestUpgradePipeline_StandardToMoonshot(t *testing.T) {
 	if err := mgr.UpgradePipeline(f.ID, feature.PipelineMoonshot); err != nil {
 		t.Fatalf("UpgradePipeline: %v", err)
 	}
-	got, _ := mgr.Get(f.ID)
+	got, _ := mgr.Store.Load(f.ID)
 	if got.Pipeline != feature.PipelineMoonshot {
 		t.Errorf("Pipeline = %q, want %q", got.Pipeline, feature.PipelineMoonshot)
 	}
@@ -3891,7 +3836,7 @@ func TestUpgradeThenRewind_MediumToStandard_ResearchGoesToKB(t *testing.T) {
 	}
 
 	// Step 2: Verify upgrade recorded the origin
-	got, _ := mgr.Get(f.ID)
+	got, _ := mgr.Store.Load(f.ID)
 	if got.Pipeline != feature.PipelineLarge {
 		t.Errorf("Pipeline = %q, want %q", got.Pipeline, feature.PipelineLarge)
 	}
@@ -3900,16 +3845,16 @@ func TestUpgradeThenRewind_MediumToStandard_ResearchGoesToKB(t *testing.T) {
 	}
 
 	// Step 3: Rewind to Research — should escalate to KB
-	_, effective, err := mgr.RewindToPhase(f.ID, feature.PhaseResearch)
+	_, effective, err := mgr.RewindWithRequest(f.ID, feature.RewindRequest{TargetPhase: feature.PhaseResearch})
 	if err != nil {
-		t.Fatalf("RewindToPhase: %v", err)
+		t.Fatalf("RewindWithRequest: %v", err)
 	}
 	if effective != feature.PhaseKnowledgeBase {
 		t.Errorf("effectiveTarget = %v, want PhaseKnowledgeBase", effective)
 	}
 
 	// Step 4: Verify final state
-	got, _ = mgr.Get(f.ID)
+	got, _ = mgr.Store.Load(f.ID)
 	if got.Pipeline != feature.PipelineLarge {
 		t.Errorf("Pipeline = %q, want %q (unchanged)", got.Pipeline, feature.PipelineLarge)
 	}
@@ -3954,7 +3899,7 @@ func TestUpgradeThenRewind_MediumToMoonshot_DesignGoesToKB(t *testing.T) {
 	}
 
 	// Step 2: Verify upgrade recorded the origin
-	got, _ := mgr.Get(f.ID)
+	got, _ := mgr.Store.Load(f.ID)
 	if got.Pipeline != feature.PipelineMoonshot {
 		t.Errorf("Pipeline = %q, want %q", got.Pipeline, feature.PipelineMoonshot)
 	}
@@ -3963,16 +3908,16 @@ func TestUpgradeThenRewind_MediumToMoonshot_DesignGoesToKB(t *testing.T) {
 	}
 
 	// Step 3: Rewind to Design — should escalate to KB
-	_, effective, err := mgr.RewindToPhase(f.ID, feature.PhaseDesign)
+	_, effective, err := mgr.RewindWithRequest(f.ID, feature.RewindRequest{TargetPhase: feature.PhaseDesign})
 	if err != nil {
-		t.Fatalf("RewindToPhase: %v", err)
+		t.Fatalf("RewindWithRequest: %v", err)
 	}
 	if effective != feature.PhaseKnowledgeBase {
 		t.Errorf("effectiveTarget = %v, want PhaseKnowledgeBase", effective)
 	}
 
 	// Step 4: Verify final state
-	got, _ = mgr.Get(f.ID)
+	got, _ = mgr.Store.Load(f.ID)
 	if got.Pipeline != feature.PipelineMoonshot {
 		t.Errorf("Pipeline = %q, want %q (unchanged)", got.Pipeline, feature.PipelineMoonshot)
 	}
@@ -4017,7 +3962,7 @@ func TestUpgradeThenRewind_StandardToMoonshot_NoKBEscalation(t *testing.T) {
 	}
 
 	// Step 2: Verify upgrade recorded the origin as large (not medium)
-	got, _ := mgr.Get(f.ID)
+	got, _ := mgr.Store.Load(f.ID)
 	if got.Pipeline != feature.PipelineMoonshot {
 		t.Errorf("Pipeline = %q, want %q", got.Pipeline, feature.PipelineMoonshot)
 	}
@@ -4026,22 +3971,22 @@ func TestUpgradeThenRewind_StandardToMoonshot_NoKBEscalation(t *testing.T) {
 	}
 
 	// Step 3: Rewind to Research — should NOT escalate to KB (origin was large, not medium)
-	_, effective, err := mgr.RewindToPhase(f.ID, feature.PhaseResearch)
+	_, effective, err := mgr.RewindWithRequest(f.ID, feature.RewindRequest{TargetPhase: feature.PhaseResearch})
 	if err != nil {
-		t.Fatalf("RewindToPhase: %v", err)
+		t.Fatalf("RewindWithRequest: %v", err)
 	}
 	if effective != feature.PhaseResearch {
 		t.Errorf("effectiveTarget = %v, want PhaseResearch (no KB escalation)", effective)
 	}
 
 	// Step 4: Verify final state — no KB escalation path
-	got, _ = mgr.Get(f.ID)
+	got, _ = mgr.Store.Load(f.ID)
 	if got.Pipeline != feature.PipelineMoonshot {
 		t.Errorf("Pipeline = %q, want %q (unchanged)", got.Pipeline, feature.PipelineMoonshot)
 	}
 }
 
-func TestManagerMarkDone(t *testing.T) {
+func TestManagerTransitionToDone(t *testing.T) {
 	t.Parallel()
 	// parallel-candidate: per-test temp dirs and mocks isolate filesystem and collaborator state.
 	mgr := newTestManager(t)
@@ -4055,10 +4000,10 @@ func TestManagerMarkDone(t *testing.T) {
 	_ = mgr.Transition(f.ID, feature.StatusImplementing)
 	_ = mgr.Transition(f.ID, feature.StatusReviewPassed)
 
-	if err := mgr.MarkDone(f.ID); err != nil {
+	if err := mgr.Transition(f.ID, feature.StatusDone); err != nil {
 		t.Fatalf("mark done: %v", err)
 	}
-	f, _ = mgr.Get(f.ID)
+	f, _ = mgr.Store.Load(f.ID)
 	if f.Status != feature.StatusDone {
 		t.Errorf("status = %v, want Done", f.Status)
 	}
@@ -4137,7 +4082,7 @@ func TestManagerCreateSetsPublishable(t *testing.T) {
 	})
 }
 
-func TestRewindToPhase_SkipsClosePRForUnpublished(t *testing.T) {
+func TestRewindWithRequest_SkipsClosePRForUnpublished(t *testing.T) {
 	t.Parallel()
 	// parallel-candidate: per-test temp dirs and mocks isolate filesystem and collaborator state.
 	skipShortFeatureRegression(t, "extended rewind PR-close skip regression")
@@ -4160,9 +4105,9 @@ func TestRewindToPhase_SkipsClosePRForUnpublished(t *testing.T) {
 		return nil
 	})
 
-	warns, _, err := mgr.RewindToPhase(f.ID, feature.PhaseResearch)
+	warns, _, err := mgr.RewindWithRequest(f.ID, feature.RewindRequest{TargetPhase: feature.PhaseResearch})
 	if err != nil {
-		t.Fatalf("RewindToPhase: %v", err)
+		t.Fatalf("RewindWithRequest: %v", err)
 	}
 	for _, w := range warns {
 		if w.Kind == feature.RewindWarningPullRequestClose {
@@ -4171,7 +4116,7 @@ func TestRewindToPhase_SkipsClosePRForUnpublished(t *testing.T) {
 	}
 }
 
-func TestRewindToPhase_ClosePRStillCalledForPublished(t *testing.T) {
+func TestRewindWithRequest_ClosePRStillCalledForPublished(t *testing.T) {
 	t.Parallel()
 	// parallel-candidate: per-test temp dirs and mocks isolate filesystem and collaborator state.
 	skipShortFeatureRegression(t, "extended rewind PR-close warning regression")
@@ -4205,9 +4150,9 @@ func TestRewindToPhase_ClosePRStillCalledForPublished(t *testing.T) {
 		return nil
 	})
 
-	warns, _, err := mgr.RewindToPhase(f.ID, feature.PhaseResearch)
+	warns, _, err := mgr.RewindWithRequest(f.ID, feature.RewindRequest{TargetPhase: feature.PhaseResearch})
 	if err != nil {
-		t.Fatalf("RewindToPhase: %v", err)
+		t.Fatalf("RewindWithRequest: %v", err)
 	}
 	foundPRWarn := false
 	for _, w := range warns {
@@ -4221,7 +4166,7 @@ func TestRewindToPhase_ClosePRStillCalledForPublished(t *testing.T) {
 	}
 }
 
-func TestRewindToPhase_UnpublishedUsesLocalReset(t *testing.T) {
+func TestRewindWithRequest_UnpublishedUsesLocalReset(t *testing.T) {
 	t.Parallel()
 	// parallel-candidate: per-test temp dirs and mocks isolate filesystem and collaborator state.
 	if testing.Short() {
@@ -4259,9 +4204,9 @@ func TestRewindToPhase_UnpublishedUsesLocalReset(t *testing.T) {
 		t.Fatalf("commit in worktree: %s: %v", out, err)
 	}
 
-	warns, _, err := mgr.RewindToPhase(f.ID, feature.PhaseResearch)
+	warns, _, err := mgr.RewindWithRequest(f.ID, feature.RewindRequest{TargetPhase: feature.PhaseResearch})
 	if err != nil {
-		t.Fatalf("RewindToPhase: %v", err)
+		t.Fatalf("RewindWithRequest: %v", err)
 	}
 	for _, w := range warns {
 		if w.Kind == feature.RewindWarningWorktreeReset {
@@ -4306,7 +4251,7 @@ func TestManagerCreateSkipsBranchCheckForUnpublishedRepos(t *testing.T) {
 	}
 }
 
-func TestRewindToPhase_FromReviewing_StatusMapping(t *testing.T) {
+func TestRewindWithRequest_FromReviewing_StatusMapping(t *testing.T) {
 	t.Parallel()
 	// parallel-candidate: per-test temp dirs and mocks isolate filesystem and collaborator state.
 	skipShortFeatureRegression(t, "extended reviewing rewind status matrix")
@@ -4333,11 +4278,11 @@ func TestRewindToPhase_FromReviewing_StatusMapping(t *testing.T) {
 				f.ReviewIteration = 3
 				return nil
 			})
-			_, _, err = mgr.RewindToPhase(f.ID, tt.targetPhase)
+			_, _, err = mgr.RewindWithRequest(f.ID, feature.RewindRequest{TargetPhase: tt.targetPhase})
 			if err != nil {
-				t.Fatalf("RewindToPhase: %v", err)
+				t.Fatalf("RewindWithRequest: %v", err)
 			}
-			got, _ := mgr.Get(f.ID)
+			got, _ := mgr.Store.Load(f.ID)
 			if got.Status != tt.wantStatus {
 				t.Errorf("Status = %v, want %v", got.Status, tt.wantStatus)
 			}
@@ -4353,10 +4298,10 @@ func TestRewindToPhase_FromReviewing_StatusMapping(t *testing.T) {
 	}
 }
 
-// TestRewindToPhase_FromReviewing_ReviewArtifactsPreservedInSealedRun verifies
+// TestRewindWithRequest_FromReviewing_ReviewArtifactsPreservedInSealedRun verifies
 // review artifacts from the sealed run stay on disk under `runs/run-001/`.
 // The fresh run starts with no review dir.
-func TestRewindToPhase_FromReviewing_ReviewArtifactsPreservedInSealedRun(t *testing.T) {
+func TestRewindWithRequest_FromReviewing_ReviewArtifactsPreservedInSealedRun(t *testing.T) {
 	t.Parallel()
 	// parallel-candidate: per-test temp dirs and mocks isolate filesystem and collaborator state.
 	skipShortFeatureRegression(t, "extended reviewing rewind artifact-preservation regression")
@@ -4376,9 +4321,9 @@ func TestRewindToPhase_FromReviewing_ReviewArtifactsPreservedInSealedRun(t *test
 	os.MkdirAll(filepath.Join(reviewDir, "iteration-01"), 0o755)
 	os.WriteFile(filepath.Join(reviewDir, "iteration-01", "meta.yaml"), []byte("status: approved"), 0o644)
 
-	_, _, err = mgr.RewindToPhase(f.ID, feature.PhaseImplement)
+	_, _, err = mgr.RewindWithRequest(f.ID, feature.RewindRequest{TargetPhase: feature.PhaseImplement})
 	if err != nil {
-		t.Fatalf("RewindToPhase: %v", err)
+		t.Fatalf("RewindWithRequest: %v", err)
 	}
 	// Sealed run-001 still has its review/ tree.
 	if _, err := os.Stat(filepath.Join(reviewDir, "iteration-01", "meta.yaml")); err != nil {
@@ -4390,7 +4335,7 @@ func TestRewindToPhase_FromReviewing_ReviewArtifactsPreservedInSealedRun(t *test
 	}
 }
 
-func TestRewindToPhase_FromReviewing_ClearsReviewIteration(t *testing.T) {
+func TestRewindWithRequest_FromReviewing_ClearsReviewIteration(t *testing.T) {
 	t.Parallel()
 	// parallel-candidate: per-test temp dirs and mocks isolate filesystem and collaborator state.
 	skipShortFeatureRegression(t, "extended reviewing rewind field-reset regression")
@@ -4405,20 +4350,20 @@ func TestRewindToPhase_FromReviewing_ClearsReviewIteration(t *testing.T) {
 		f.ReviewIteration = 5
 		return nil
 	})
-	_, _, err = mgr.RewindToPhase(f.ID, feature.PhaseImplement)
+	_, _, err = mgr.RewindWithRequest(f.ID, feature.RewindRequest{TargetPhase: feature.PhaseImplement})
 	if err != nil {
-		t.Fatalf("RewindToPhase: %v", err)
+		t.Fatalf("RewindWithRequest: %v", err)
 	}
-	got, _ := mgr.Get(f.ID)
+	got, _ := mgr.Store.Load(f.ID)
 	if got.ReviewIteration != 0 {
 		t.Errorf("ReviewIteration = %d, want 0 after rewind", got.ReviewIteration)
 	}
 }
 
-// TestRewindToPhase_NotFromReviewing_ReviewDirPreservedInSealedRun — under
+// TestRewindWithRequest_NotFromReviewing_ReviewDirPreservedInSealedRun — under
 // seal+fork the prior review/ tree is left intact on the sealed run; the
 // fresh run has no review/ dir at all.
-func TestRewindToPhase_NotFromReviewing_ReviewDirPreservedInSealedRun(t *testing.T) {
+func TestRewindWithRequest_NotFromReviewing_ReviewDirPreservedInSealedRun(t *testing.T) {
 	t.Parallel()
 	// parallel-candidate: per-test temp dirs and mocks isolate filesystem and collaborator state.
 	skipShortFeatureRegression(t, "extended rewind review-dir preservation regression")
@@ -4437,19 +4382,19 @@ func TestRewindToPhase_NotFromReviewing_ReviewDirPreservedInSealedRun(t *testing
 	os.MkdirAll(reviewDir, 0o755)
 	os.WriteFile(filepath.Join(reviewDir, "stale.txt"), []byte("stale"), 0o644)
 
-	_, _, err = mgr.RewindToPhase(f.ID, feature.PhasePlan)
+	_, _, err = mgr.RewindWithRequest(f.ID, feature.RewindRequest{TargetPhase: feature.PhasePlan})
 	if err != nil {
-		t.Fatalf("RewindToPhase: %v", err)
+		t.Fatalf("RewindWithRequest: %v", err)
 	}
 	if _, err := os.Stat(filepath.Join(reviewDir, "stale.txt")); err != nil {
 		t.Errorf("sealed run-001/review/stale.txt missing: %v", err)
 	}
 }
 
-// TestRewindToPhase_FromReviewing_CarriesKeptPhaseTimings — seal+fork carries
+// TestRewindWithRequest_FromReviewing_CarriesKeptPhaseTimings — seal+fork carries
 // the planning ledger (its outputs survive a rewind to implement) and drops
 // the review spend; the sealed run-001 retains its full timing/cost history.
-func TestRewindToPhase_FromReviewing_CarriesKeptPhaseTimings(t *testing.T) {
+func TestRewindWithRequest_FromReviewing_CarriesKeptPhaseTimings(t *testing.T) {
 	t.Parallel()
 	// parallel-candidate: per-test temp dirs and mocks isolate filesystem and collaborator state.
 	skipShortFeatureRegression(t, "extended reviewing rewind timing reset regression")
@@ -4471,11 +4416,11 @@ func TestRewindToPhase_FromReviewing_CarriesKeptPhaseTimings(t *testing.T) {
 		}
 		return nil
 	})
-	_, _, err = mgr.RewindToPhase(f.ID, feature.PhaseImplement)
+	_, _, err = mgr.RewindWithRequest(f.ID, feature.RewindRequest{TargetPhase: feature.PhaseImplement})
 	if err != nil {
-		t.Fatalf("RewindToPhase: %v", err)
+		t.Fatalf("RewindWithRequest: %v", err)
 	}
-	got, _ := mgr.Get(f.ID)
+	got, _ := mgr.Store.Load(f.ID)
 	// New active run (run-002) carries the plan ledger; review is redone.
 	wantTimings := map[string]time.Duration{"plan": 2 * time.Minute}
 	if !maps.Equal(got.PhaseTimings, wantTimings) {
@@ -4498,7 +4443,7 @@ func TestRewindToPhase_FromReviewing_CarriesKeptPhaseTimings(t *testing.T) {
 	}
 }
 
-func TestRewindToPhase_FromReviewing_InvalidTarget(t *testing.T) {
+func TestRewindWithRequest_FromReviewing_InvalidTarget(t *testing.T) {
 	t.Parallel()
 	// parallel-candidate: per-test temp dirs and mocks isolate filesystem and collaborator state.
 	mgr := newTestManager(t)
@@ -4513,7 +4458,7 @@ func TestRewindToPhase_FromReviewing_InvalidTarget(t *testing.T) {
 		return nil
 	})
 	// PhaseResearch is not in Medium pipeline, so should be rejected
-	_, _, err = mgr.RewindToPhase(f.ID, feature.PhaseResearch)
+	_, _, err = mgr.RewindWithRequest(f.ID, feature.RewindRequest{TargetPhase: feature.PhaseResearch})
 	if err == nil {
 		t.Fatal("expected error for invalid rewind target, got nil")
 	}
@@ -4670,8 +4615,8 @@ func seedRewindableFeature(t *testing.T, mgr *feature.Manager) (*feature.Feature
 }
 
 // seedCarryForwardFixtures writes marker files into a full set of phase
-// directories under run-001 so TestRewindToPhase_CarriesForwardCorrectPhases
-// and TestRewindToPhase_ToPhaseImplement_CarriesPlanDirs can assert carry
+// directories under run-001 so TestRewindWithRequest_CarriesForwardCorrectPhases
+// and TestRewindWithRequest_ToPhaseImplement_CarriesPlanDirs can assert carry
 // semantics against real on-disk content.
 func seedCarryForwardFixtures(t *testing.T, run1Dir string) {
 	t.Helper()
@@ -4698,10 +4643,10 @@ func seedCarryForwardFixtures(t *testing.T, run1Dir string) {
 	}
 }
 
-// TestRewindToPhase_CarriesForwardCorrectPhases verifies the static matrix:
+// TestRewindWithRequest_CarriesForwardCorrectPhases verifies the static matrix:
 // rewind to each rewindable target carries exactly the set of phase
 // directories that carryForwardDirs declares, no more and no less.
-func TestRewindToPhase_CarriesForwardCorrectPhases(t *testing.T) {
+func TestRewindWithRequest_CarriesForwardCorrectPhases(t *testing.T) {
 	t.Parallel()
 	// parallel-candidate: per-test temp dirs and mocks isolate filesystem and collaborator state.
 	tests := []struct {
@@ -4750,8 +4695,8 @@ func TestRewindToPhase_CarriesForwardCorrectPhases(t *testing.T) {
 			f, run1Dir := seedRewindableFeature(t, mgr)
 			seedCarryForwardFixtures(t, run1Dir)
 
-			if _, _, err := mgr.RewindToPhase(f.ID, tc.target); err != nil {
-				t.Fatalf("RewindToPhase(%v): %v", tc.target, err)
+			if _, _, err := mgr.RewindWithRequest(f.ID, feature.RewindRequest{TargetPhase: tc.target}); err != nil {
+				t.Fatalf("RewindWithRequest(%v): %v", tc.target, err)
 			}
 
 			run2Dir := filepath.Join(mgr.Store.BaseDir, f.ID, "runs", "run-002")
@@ -4805,11 +4750,11 @@ func TestRewindToPhase_CarriesForwardCorrectPhases(t *testing.T) {
 	}
 }
 
-// TestRewindToPhase_ToPhaseImplement_CarriesPlanDirs specializes the
+// TestRewindWithRequest_ToPhaseImplement_CarriesPlanDirs specializes the
 // carry-forward suite on the Implement target's dynamic phase-NN/plan
 // discovery: many phase-NN directories carry, phase-NN without a plan/
 // subdir does not.
-func TestRewindToPhase_ToPhaseImplement_CarriesPlanDirs(t *testing.T) {
+func TestRewindWithRequest_ToPhaseImplement_CarriesPlanDirs(t *testing.T) {
 	t.Parallel()
 	// parallel-candidate: per-test temp dirs and mocks isolate filesystem and collaborator state.
 	skipShortFeatureRegression(t, "extended dynamic phase-plan carry-forward regression")
@@ -4842,8 +4787,8 @@ func TestRewindToPhase_ToPhaseImplement_CarriesPlanDirs(t *testing.T) {
 		t.Fatalf("write phase-99: %v", err)
 	}
 
-	if _, _, err := mgr.RewindToPhase(f.ID, feature.PhaseImplement); err != nil {
-		t.Fatalf("RewindToPhase: %v", err)
+	if _, _, err := mgr.RewindWithRequest(f.ID, feature.RewindRequest{TargetPhase: feature.PhaseImplement}); err != nil {
+		t.Fatalf("RewindWithRequest: %v", err)
 	}
 
 	run2Dir := filepath.Join(mgr.Store.BaseDir, f.ID, "runs", "run-002")
@@ -4936,7 +4881,7 @@ func TestRewindWithRequest_RejectsInvalidPartialBeforeSideEffects(t *testing.T) 
 			if !strings.Contains(err.Error(), tc.wantErr) {
 				t.Fatalf("error = %q, want contains %q", err, tc.wantErr)
 			}
-			got, getErr := mgr.Get(f.ID)
+			got, getErr := mgr.Store.Load(f.ID)
 			if getErr != nil {
 				t.Fatalf("Get: %v", getErr)
 			}
@@ -5009,7 +4954,7 @@ func TestRewindWithRequest_PartialPersistsPendingReviewRoadmapPhase(t *testing.T
 		t.Fatalf("RewindWithRequest: %v", err)
 	}
 
-	got, err := mgr.Get(f.ID)
+	got, err := mgr.Store.Load(f.ID)
 	if err != nil {
 		t.Fatalf("Get: %v", err)
 	}
@@ -5281,7 +5226,7 @@ func TestRewindWithRequest_PartialRetainsTargetPhaseFrontend(t *testing.T) {
 		t.Fatalf("RewindWithRequest: %v", err)
 	}
 
-	got, err := mgr.Get(f.ID)
+	got, err := mgr.Store.Load(f.ID)
 	if err != nil {
 		t.Fatalf("Get: %v", err)
 	}
@@ -5340,7 +5285,7 @@ func TestRewindWithRequest_PartialRestoresMissingTargetPhaseFrontendFromPlan(t *
 		t.Fatalf("RewindWithRequest: %v", err)
 	}
 
-	got, err := mgr.Get(f.ID)
+	got, err := mgr.Store.Load(f.ID)
 	if err != nil {
 		t.Fatalf("Get: %v", err)
 	}
@@ -5349,7 +5294,7 @@ func TestRewindWithRequest_PartialRestoresMissingTargetPhaseFrontendFromPlan(t *
 	}
 }
 
-func TestRewindToPhase_FullImplementOmitsSealedRoadmapPhase(t *testing.T) {
+func TestRewindWithRequest_FullImplementOmitsSealedRoadmapPhase(t *testing.T) {
 	mgr := newTestManager(t)
 	f := newMultiRepoFeature(t, mgr, []feature.FeatureRepo{
 		{Name: "repo-a", Path: "/tmp/repo-a", WorktreePath: "/tmp/wt-a", BaseBranch: "main"},
@@ -5366,8 +5311,8 @@ func TestRewindToPhase_FullImplementOmitsSealedRoadmapPhase(t *testing.T) {
 	mgr.Worktrees = mocks.NewMockWorktreeOps()
 	mgr.PRs = nil
 
-	if _, _, err := mgr.RewindToPhase(f.ID, feature.PhaseImplement); err != nil {
-		t.Fatalf("RewindToPhase: %v", err)
+	if _, _, err := mgr.RewindWithRequest(f.ID, feature.RewindRequest{TargetPhase: feature.PhaseImplement}); err != nil {
+		t.Fatalf("RewindWithRequest: %v", err)
 	}
 	sealedRun, err := mgr.Store.LoadRun(f.ID, 1)
 	if err != nil {
@@ -5483,7 +5428,103 @@ func TestRewindWithRequest_PartialPublishableClosesPRs(t *testing.T) {
 	}
 }
 
-func TestRewindWithRequest_PartialBranchFailureStillSeals(t *testing.T) {
+func TestRewindPreviewMatchesPartialExecutionAcrossRepos(t *testing.T) {
+	mgr := newTestManager(t)
+	repoB := testutil.InitGitRepo(t)
+	repoA := testutil.InitGitRepo(t)
+	// Reverse feature order so the PR close order is independently checked.
+	f := newMultiRepoFeature(t, mgr, []feature.FeatureRepo{
+		{Name: "repo-b", Path: repoB, WorktreePath: repoB, BaseBranch: "main"},
+		{Name: "repo-a", Path: repoA, WorktreePath: repoA, BaseBranch: "main"},
+	})
+	if err := mgr.Store.Modify(f.ID, func(ff *feature.Feature) error {
+		ff.Status = feature.StatusPublished
+		ff.CurrentPhase = feature.PhasePublish
+		ff.CurrentRoadmapPhase = 3
+		ff.TotalRoadmapPhases = 3
+		ff.RepoStates = map[string]*feature.RepoState{
+			"repo-b": {PRURL: "https://example.invalid/repo-b/pull/2"},
+			"repo-a": {PRURL: "https://example.invalid/repo-a/pull/1"},
+		}
+		ff.Run().RoadmapPhaseCommitAnchors = map[int]map[string]string{
+			1: {"repo-b": strings.Repeat("b", 40), "repo-a": strings.Repeat("a", 40)},
+		}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	var err error
+	f, err = mgr.Store.Load(f.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sealedRunDir := mgr.Store.RunDir(f.ID, f.ActiveRun)
+	planPath := filepath.Join(sealedRunDir, "phase-01", "plan", "plan.md")
+	if err := os.MkdirAll(filepath.Dir(planPath), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(planPath, []byte("prior plan"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	request := feature.RewindRequest{TargetPhase: feature.PhaseImplement, RoadmapPhase: 2}
+	preview := feature.RewindPreviewForFeature(f, sealedRunDir, request, "")
+	if !preview.Eligible {
+		t.Fatalf("preview findings = %v", preview.ValidationFindings)
+	}
+	if len(preview.PRConsequences) != 2 || preview.PRConsequences[0].Repo != "repo-a" || preview.PRConsequences[1].Repo != "repo-b" {
+		t.Fatalf("preview PR order = %+v", preview.PRConsequences)
+	}
+	worktrees := mocks.NewMockWorktreeOps()
+	prs := mocks.NewMockPRCloser()
+	mgr.Worktrees = worktrees
+	mgr.PRs = prs
+	if _, _, err := mgr.RewindWithRequest(f.ID, request); err != nil {
+		t.Fatal(err)
+	}
+	if len(prs.Calls) != len(preview.PRConsequences) {
+		t.Fatalf("closed PRs = %+v, preview = %+v", prs.Calls, preview.PRConsequences)
+	}
+	for i, consequence := range preview.PRConsequences {
+		if got := prs.Calls[i].Args[0]; got != consequence.PRURL {
+			t.Fatalf("PR close %d = %v, want %s", i, got, consequence.PRURL)
+		}
+	}
+	sealed, err := mgr.Store.LoadRun(f.ID, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(sealed.BackupBranches) != len(preview.BackupBranchRepos) {
+		t.Fatalf("backups = %v, preview = %v", sealed.BackupBranches, preview.BackupBranchRepos)
+	}
+	for _, repo := range preview.BackupBranchRepos {
+		if sealed.BackupBranches[repo] == "" {
+			t.Fatalf("missing backup for %s", repo)
+		}
+	}
+	newRun, err := mgr.Store.LoadRun(f.ID, 2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(newRun.CarriedPhases, preview.CarriedPhases) {
+		t.Fatalf("carried = %v, preview = %v", newRun.CarriedPhases, preview.CarriedPhases)
+	}
+	var resets []string
+	for _, call := range worktrees.Calls {
+		if call.Method == "ResetToCommit" {
+			resets = append(resets, call.Args[0].(string))
+		}
+	}
+	if len(resets) != len(preview.WorktreeConsequences) {
+		t.Fatalf("reset paths = %v, preview = %v", resets, preview.WorktreeConsequences)
+	}
+	for i, consequence := range preview.WorktreeConsequences {
+		if consequence.ResetKind != feature.ResetKindAnchor || resets[i] != f.Repos[i].WorktreePath || consequence.Repo != f.Repos[i].Name {
+			t.Fatalf("reset %d = %s/%s, preview = %+v", i, f.Repos[i].Name, resets[i], consequence)
+		}
+	}
+}
+
+func TestRewindWithRequest_PartialBranchFailureStillSeals_MultiRepo(t *testing.T) {
 	mgr := newTestManager(t)
 	repoB := testutil.InitGitRepo(t)
 	f := newMultiRepoFeature(t, mgr, []feature.FeatureRepo{
@@ -5543,10 +5584,10 @@ func TestRewindWithRequest_PartialBranchFailureStillSeals(t *testing.T) {
 	}
 }
 
-// TestRewindToPhase_RecordsBackupBranches verifies each successful
+// TestRewindWithRequest_RecordsBackupBranches verifies each successful
 // CreateBackupBranch call is recorded in the sealed run's BackupBranches
 // map keyed by repo name.
-func TestRewindToPhase_RecordsBackupBranches(t *testing.T) {
+func TestRewindWithRequest_RecordsBackupBranches(t *testing.T) {
 	t.Parallel()
 	// parallel-candidate: per-test temp dirs and mocks isolate filesystem and collaborator state.
 	skipShortFeatureRegression(t, "extended rewind backup-branch recording regression")
@@ -5566,8 +5607,8 @@ func TestRewindToPhase_RecordsBackupBranches(t *testing.T) {
 		t.Fatalf("modify: %v", err)
 	}
 
-	if _, _, err := mgr.RewindToPhase(f.ID, feature.PhasePlan); err != nil {
-		t.Fatalf("RewindToPhase: %v", err)
+	if _, _, err := mgr.RewindWithRequest(f.ID, feature.RewindRequest{TargetPhase: feature.PhasePlan}); err != nil {
+		t.Fatalf("RewindWithRequest: %v", err)
 	}
 
 	sealedRun, err := mgr.Store.LoadRun(f.ID, 1)
@@ -5589,11 +5630,11 @@ func TestRewindToPhase_RecordsBackupBranches(t *testing.T) {
 	}
 }
 
-// TestRewindToPhase_PartialBranchFailureStillSeals verifies that one repo
+// TestRewindWithRequest_PartialBranchFailureStillSeals verifies that one repo
 // failing CreateBackupBranch does not abort the rewind: the surviving repo
 // is recorded, the failing repo produces a per-repo warning, and the fresh
 // run-002 is created.
-func TestRewindToPhase_PartialBranchFailureStillSeals(t *testing.T) {
+func TestRewindWithRequest_PartialBranchFailureStillSeals(t *testing.T) {
 	t.Parallel()
 	// parallel-candidate: per-test temp dirs and mocks isolate filesystem and collaborator state.
 	skipShortFeatureRegression(t, "extended rewind partial backup failure regression")
@@ -5612,9 +5653,9 @@ func TestRewindToPhase_PartialBranchFailureStillSeals(t *testing.T) {
 		t.Fatalf("modify: %v", err)
 	}
 
-	warns, _, err := mgr.RewindToPhase(f.ID, feature.PhasePlan)
+	warns, _, err := mgr.RewindWithRequest(f.ID, feature.RewindRequest{TargetPhase: feature.PhasePlan})
 	if err != nil {
-		t.Fatalf("RewindToPhase: %v", err)
+		t.Fatalf("RewindWithRequest: %v", err)
 	}
 
 	// One warning, per-repo attribution for repo-a, nothing about repo-b.
@@ -5655,10 +5696,10 @@ func TestRewindToPhase_PartialBranchFailureStillSeals(t *testing.T) {
 	}
 }
 
-// TestRewindToPhase_ArtifactMapCarriedForward verifies the Artifacts map is
+// TestRewindWithRequest_ArtifactMapCarriedForward verifies the Artifacts map is
 // both key-filtered and value-normalized (to run-relative) on the new run,
 // while the sealed run retains its original absolute values.
-func TestRewindToPhase_ArtifactMapCarriedForward(t *testing.T) {
+func TestRewindWithRequest_ArtifactMapCarriedForward(t *testing.T) {
 	t.Parallel()
 	// parallel-candidate: per-test temp dirs and mocks isolate filesystem and collaborator state.
 	skipShortFeatureRegression(t, "extended rewind artifact-map normalization regression")
@@ -5694,11 +5735,11 @@ func TestRewindToPhase_ArtifactMapCarriedForward(t *testing.T) {
 			t.Fatalf("modify: %v", err)
 		}
 
-		if _, _, err := mgr.RewindToPhase(f.ID, feature.PhasePlan); err != nil {
-			t.Fatalf("RewindToPhase: %v", err)
+		if _, _, err := mgr.RewindWithRequest(f.ID, feature.RewindRequest{TargetPhase: feature.PhasePlan}); err != nil {
+			t.Fatalf("RewindWithRequest: %v", err)
 		}
 
-		got, err := mgr.Get(f.ID)
+		got, err := mgr.Store.Load(f.ID)
 		if err != nil {
 			t.Fatalf("Get: %v", err)
 		}
@@ -5780,11 +5821,11 @@ func TestRewindToPhase_ArtifactMapCarriedForward(t *testing.T) {
 			t.Fatalf("modify: %v", err)
 		}
 
-		if _, _, err := mgr.RewindToPhase(f.ID, feature.PhaseImplement); err != nil {
-			t.Fatalf("RewindToPhase: %v", err)
+		if _, _, err := mgr.RewindWithRequest(f.ID, feature.RewindRequest{TargetPhase: feature.PhaseImplement}); err != nil {
+			t.Fatalf("RewindWithRequest: %v", err)
 		}
 
-		got, err := mgr.Get(f.ID)
+		got, err := mgr.Store.Load(f.ID)
 		if err != nil {
 			t.Fatalf("Get: %v", err)
 		}
@@ -5848,17 +5889,17 @@ func stringSlicesEqual(a, b []string) bool {
 }
 
 // ---------------------------------------------------------------------------
-// Crash-recovery tests for RewindToPhase
+// Crash-recovery tests for RewindWithRequest
 // ---------------------------------------------------------------------------
 
-// TestRewindToPhase_CrashBeforeCommitFlagCleared_CleanedUpOnStartup
+// TestRewindWithRequest_CrashBeforeCommitFlagCleared_CleanedUpOnStartup
 // simulates a crashed rewind by hand-fabricating the on-disk state this path
 // contracts against: run-001 sealed, run-002 skeleton with Committing:true,
 // feature.yaml still at ActiveRun:1. Then: cleanup -> retry rewind -> assert
 // the feature ends in a healthy post-rewind state. This is the end-to-end
 // retry scenario from the roadmap's "re-triggering rewind from the UI
 // succeeds" guarantee, exercised at the manager boundary.
-func TestRewindToPhase_CrashBeforeCommitFlagCleared_CleanedUpOnStartup(t *testing.T) {
+func TestRewindWithRequest_CrashBeforeCommitFlagCleared_CleanedUpOnStartup(t *testing.T) {
 	t.Parallel()
 	// parallel-candidate: per-test temp dirs and mocks isolate filesystem and collaborator state.
 	skipShortFeatureRegression(t, "extended rewind crash-recovery regression")
@@ -5869,17 +5910,17 @@ func TestRewindToPhase_CrashBeforeCommitFlagCleared_CleanedUpOnStartup(t *testin
 	}
 
 	// Drive into a rewindable state.
-	if err := mgr.StartInquire(f.ID); err != nil {
-		t.Fatalf("StartInquire: %v", err)
+	if err := mgr.StartPhase(f.ID, feature.PhaseInquire); err != nil {
+		t.Fatalf("StartPhaseInquire: %v", err)
 	}
-	if err := mgr.CompleteInquire(f.ID); err != nil {
-		t.Fatalf("CompleteInquire: %v", err)
+	if err := mgr.Transition(f.ID, feature.StatusInquireReady); err != nil {
+		t.Fatalf("TransitionToResearchReady: %v", err)
 	}
-	if err := mgr.StartResearch(f.ID); err != nil {
-		t.Fatalf("StartResearch: %v", err)
+	if err := mgr.StartPhase(f.ID, feature.PhaseResearch); err != nil {
+		t.Fatalf("StartPhaseResearch: %v", err)
 	}
-	if err := mgr.CompleteResearch(f.ID); err != nil {
-		t.Fatalf("CompleteResearch: %v", err)
+	if err := mgr.Transition(f.ID, feature.StatusDesignReady); err != nil {
+		t.Fatalf("TransitionToDesignReady: %v", err)
 	}
 	// Seed inquire/ dir on run-001 so the carry-forward copy has something
 	// to carry.
@@ -5944,10 +5985,10 @@ func TestRewindToPhase_CrashBeforeCommitFlagCleared_CleanedUpOnStartup(t *testin
 	}
 
 	// Re-trigger the rewind. Idempotent re-seal kicks in on run-001.
-	if _, _, err := mgr.RewindToPhase(f.ID, feature.PhaseResearch); err != nil {
-		t.Fatalf("RewindToPhase after cleanup: %v", err)
+	if _, _, err := mgr.RewindWithRequest(f.ID, feature.RewindRequest{TargetPhase: feature.PhaseResearch}); err != nil {
+		t.Fatalf("RewindWithRequest after cleanup: %v", err)
 	}
-	got, err := mgr.Get(f.ID)
+	got, err := mgr.Store.Load(f.ID)
 	if err != nil {
 		t.Fatalf("Get after rewind: %v", err)
 	}
@@ -6048,7 +6089,7 @@ func TestRewindWithRequest_PartialCrashCleanupAllowsRetry(t *testing.T) {
 		t.Fatalf("retry RewindWithRequest: %v", err)
 	}
 
-	got, err := mgr.Get(f.ID)
+	got, err := mgr.Store.Load(f.ID)
 	if err != nil {
 		t.Fatalf("Get: %v", err)
 	}
@@ -6074,12 +6115,12 @@ func TestRewindWithRequest_PartialCrashCleanupAllowsRetry(t *testing.T) {
 	}
 }
 
-// TestRewindToPhase_ReSealAfterCleanup_IdempotentSealFields asserts that the
-// manager's RewindToPhase can re-seal an already-sealed active run when
+// TestRewindWithRequest_ReSealAfterCleanup_IdempotentSealFields asserts that the
+// manager's RewindWithRequest can re-seal an already-sealed active run when
 // cleanup has removed the orphan forward run. The re-seal must overwrite the
 // old run's seal fields (RewindTarget in particular) with values from the
 // second rewind.
-func TestRewindToPhase_ReSealAfterCleanup_IdempotentSealFields(t *testing.T) {
+func TestRewindWithRequest_ReSealAfterCleanup_IdempotentSealFields(t *testing.T) {
 	t.Parallel()
 	// parallel-candidate: per-test temp dirs and mocks isolate filesystem and collaborator state.
 	skipShortFeatureRegression(t, "extended rewind idempotent reseal regression")
@@ -6097,10 +6138,10 @@ func TestRewindToPhase_ReSealAfterCleanup_IdempotentSealFields(t *testing.T) {
 	})
 
 	// First rewind: target = Inquire. After this, feature.yaml is at ActiveRun:2.
-	if _, _, err := mgr.RewindToPhase(f.ID, feature.PhaseInquire); err != nil {
+	if _, _, err := mgr.RewindWithRequest(f.ID, feature.RewindRequest{TargetPhase: feature.PhaseInquire}); err != nil {
 		t.Fatalf("first rewind: %v", err)
 	}
-	mid, err := mgr.Get(f.ID)
+	mid, err := mgr.Store.Load(f.ID)
 	if err != nil {
 		t.Fatalf("Get mid: %v", err)
 	}
@@ -6122,7 +6163,7 @@ func TestRewindToPhase_ReSealAfterCleanup_IdempotentSealFields(t *testing.T) {
 		t.Errorf("deleted = %v, want [2]", deleted)
 	}
 	// Reload to verify reconciliation landed in feature.yaml.
-	postClean, err := mgr.Get(f.ID)
+	postClean, err := mgr.Store.Load(f.ID)
 	if err != nil {
 		t.Fatalf("Get post-clean: %v", err)
 	}
@@ -6146,7 +6187,7 @@ func TestRewindToPhase_ReSealAfterCleanup_IdempotentSealFields(t *testing.T) {
 	})
 
 	// Second rewind: target = Research (different from first).
-	if _, _, err := mgr.RewindToPhase(f.ID, feature.PhaseResearch); err != nil {
+	if _, _, err := mgr.RewindWithRequest(f.ID, feature.RewindRequest{TargetPhase: feature.PhaseResearch}); err != nil {
 		t.Fatalf("second rewind: %v", err)
 	}
 
@@ -6160,7 +6201,7 @@ func TestRewindToPhase_ReSealAfterCleanup_IdempotentSealFields(t *testing.T) {
 	}
 
 	// feature.yaml bumped to ActiveRun:2.
-	post, err := mgr.Get(f.ID)
+	post, err := mgr.Store.Load(f.ID)
 	if err != nil {
 		t.Fatalf("Get post-reseal: %v", err)
 	}
@@ -6195,7 +6236,7 @@ func containsPhase(sl []string, want string) bool {
 
 // marshalRun marshals a *feature.Run to YAML bytes. Used by crash-recovery
 // tests that write run.yaml files directly to disk (bypassing
-// Store.SaveRun's sealed-run panic).
+// sealed-run immutability).
 func marshalRun(r *feature.Run) ([]byte, error) {
 	return yaml.Marshal(r)
 }

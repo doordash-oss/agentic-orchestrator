@@ -25,6 +25,6 @@ const (
 	RepoFreshnessUnknown      RepoFreshness = "unknown"
 )
 
-type RepoFreshnessProvider interface {
+type repoFreshnessProvider interface {
 	Freshness(f *feature.Feature, repo feature.FeatureRepo) RepoFreshness
 }

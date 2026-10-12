@@ -34,7 +34,7 @@ func TestBuildWorkspace_GrantsOnlyActiveRunState(t *testing.T) {
 		}
 	}
 
-	ws, err := BuildWorkspace(&feature.Feature{ActiveRun: 5}, featureStateDir)
+	ws, err := buildWorkspace(&feature.Feature{ActiveRun: 5}, featureStateDir)
 	if err != nil {
 		t.Fatalf("BuildWorkspace() error = %v", err)
 	}
@@ -57,7 +57,7 @@ func TestBuildWorkspace_SingleRepoWorktree(t *testing.T) {
 	feat := &feature.Feature{
 		Repos: []feature.FeatureRepo{{Name: "solo", Path: "/repos/solo", WorktreePath: wt}},
 	}
-	ws, err := BuildWorkspace(feat, stateDir)
+	ws, err := buildWorkspace(feat, stateDir)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -83,7 +83,7 @@ func TestBuildWorkspace_MultiRepoSorted(t *testing.T) {
 			{Name: "mid", Path: "/repos/mid"},
 		},
 	}
-	ws, err := BuildWorkspace(feat, stateDir)
+	ws, err := buildWorkspace(feat, stateDir)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -97,7 +97,7 @@ func TestBuildWorkspace_MultiRepoSorted(t *testing.T) {
 func TestBuildWorkspace_NoRepos(t *testing.T) {
 	stateDir := t.TempDir()
 	feat := &feature.Feature{}
-	ws, err := BuildWorkspace(feat, stateDir)
+	ws, err := buildWorkspace(feat, stateDir)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -108,13 +108,13 @@ func TestBuildWorkspace_NoRepos(t *testing.T) {
 }
 
 func TestBuildWorkspace_NilFeature(t *testing.T) {
-	if _, err := BuildWorkspace(nil, "/tmp"); err == nil {
+	if _, err := buildWorkspace(nil, "/tmp"); err == nil {
 		t.Fatal("expected error for nil feature")
 	}
 }
 
 func TestBuildWorkspace_EmptyStateDir(t *testing.T) {
-	if _, err := BuildWorkspace(&feature.Feature{}, ""); err == nil {
+	if _, err := buildWorkspace(&feature.Feature{}, ""); err == nil {
 		t.Fatal("expected error for empty state dir")
 	}
 }
@@ -127,7 +127,7 @@ func TestBuildWorkspace_RepoMissingBothPathFields(t *testing.T) {
 			{Name: "real", Path: "/r/real"},
 		},
 	}
-	ws, err := BuildWorkspace(feat, stateDir)
+	ws, err := buildWorkspace(feat, stateDir)
 	if err != nil {
 		t.Fatal(err)
 	}

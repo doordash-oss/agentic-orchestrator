@@ -29,7 +29,7 @@ limitations under the License.
  */
 import type { AppRouteEvent, SettingsSection, WindowPurpose } from '../shared/ipc';
 
-export interface WindowRegistryDeps<W> {
+interface WindowRegistryDeps<W> {
   /** Builds a brand-new window for a purpose. Called only when none is open. */
   create(purpose: WindowPurpose): W;
   /** Raises an already-open window (restore + show + focus). */
@@ -144,7 +144,7 @@ export class WindowRegistry<W> {
 
 // --- Renderer crash recovery --------------------------------------------------
 
-export interface CrashRecoveryDeps {
+interface CrashRecoveryDeps {
   /** Reloads the window's renderer in place. */
   reload(): void;
   /** Destroys the window so eviction runs and the next open rebuilds fresh. */

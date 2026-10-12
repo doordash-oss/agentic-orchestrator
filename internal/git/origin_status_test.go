@@ -91,7 +91,7 @@ func TestPlanOriginCheckLocalOnlyOutcomes(t *testing.T) {
 		t.Parallel()
 		repo := testutil.InitGitRepo(t)
 		plan := PlanOriginCheck(context.Background(), repo, LocalSourceModeDefault, OriginCheckOptions{})
-		if plan.Status != OriginCheckNoOrigin || plan.Mapping != nil {
+		if plan.Status != originCheckNoOrigin || plan.Mapping != nil {
 			t.Fatalf("plan = status %q mapping %+v; want no_origin without mapping", plan.Status, plan.Mapping)
 		}
 	})
@@ -105,7 +105,7 @@ func TestPlanOriginCheckLocalOnlyOutcomes(t *testing.T) {
 		runGit(t, repo, "config", "branch.main.remote", "upstream")
 		runGit(t, repo, "config", "branch.main.merge", "refs/heads/main")
 		plan := PlanOriginCheck(context.Background(), repo, LocalSourceModeDefault, OriginCheckOptions{})
-		if plan.Status != OriginCheckOtherUpstream || plan.Mapping != nil {
+		if plan.Status != originCheckOtherUpstream || plan.Mapping != nil {
 			t.Fatalf("plan = status %q mapping %+v; want other_upstream without substituting origin", plan.Status, plan.Mapping)
 		}
 	})
@@ -117,7 +117,7 @@ func TestPlanOriginCheckLocalOnlyOutcomes(t *testing.T) {
 		runGit(t, repo, "config", "branch.main.remote", ".")
 		runGit(t, repo, "config", "branch.main.merge", "refs/heads/trunk")
 		plan := PlanOriginCheck(context.Background(), repo, LocalSourceModeDefault, OriginCheckOptions{})
-		if plan.Status != OriginCheckOtherUpstream || plan.Mapping != nil {
+		if plan.Status != originCheckOtherUpstream || plan.Mapping != nil {
 			t.Fatalf("plan = status %q mapping %+v; want other_upstream for local tracking", plan.Status, plan.Mapping)
 		}
 	})
@@ -139,7 +139,7 @@ func TestPlanOriginCheckLocalOnlyOutcomes(t *testing.T) {
 		testutil.PairWithBareRemote(t, repo, "main", "main")
 		runGit(t, repo, "checkout", "--detach", "HEAD")
 		plan := PlanOriginCheck(context.Background(), repo, LocalSourceModeCurrent, OriginCheckOptions{})
-		if plan.Status != OriginCheckDetached || plan.Mapping != nil {
+		if plan.Status != originCheckDetached || plan.Mapping != nil {
 			t.Fatalf("plan = status %q mapping %+v; want detached without mapping", plan.Status, plan.Mapping)
 		}
 	})
@@ -177,10 +177,10 @@ func TestFetchOriginBranchFetchedAndFresh(t *testing.T) {
 	t.Parallel()
 
 	repo, bare := originFixture(t)
-	mapping := OriginMapping{Branch: "main"}
+	mapping := originMapping{Branch: "main"}
 
 	result := FetchOriginBranch(context.Background(), repo, mapping, OriginCheckOptions{})
-	if result.State != FetchOriginFetched {
+	if result.State != fetchOriginFetched {
 		t.Fatalf("state = %q diagnostics %q; want fetched", result.State, result.Diagnostics)
 	}
 	if want := gitOutput(t, bare, "rev-parse", "refs/heads/main"); result.SHA != want {
@@ -193,7 +193,7 @@ func TestFetchOriginBranchFetchedAndFresh(t *testing.T) {
 	runGit(t, bare, "fetch", repo, "main:refs/heads/main")
 
 	retry := FetchOriginBranch(context.Background(), repo, mapping, OriginCheckOptions{})
-	if retry.State != FetchOriginFetched {
+	if retry.State != fetchOriginFetched {
 		t.Fatalf("retry state = %q diagnostics %q; want fetched", retry.State, retry.Diagnostics)
 	}
 	if want := gitOutput(t, bare, "rev-parse", "refs/heads/main"); retry.SHA != want {
@@ -210,7 +210,7 @@ func TestFetchOriginBranchProvesRemoteDeletionDespiteCachedRef(t *testing.T) {
 	if !refExists(t, repo, "refs/remotes/origin/main") {
 		t.Fatal("fixture must retain the cached tracking ref before the check")
 	}
-	if result := FetchOriginBranch(context.Background(), repo, OriginMapping{Branch: "main"}, OriginCheckOptions{}); result.State != FetchOriginAbsent {
+	if result := FetchOriginBranch(context.Background(), repo, originMapping{Branch: "main"}, OriginCheckOptions{}); result.State != FetchOriginAbsent {
 		t.Fatalf("state = %q diagnostics %q; want absent proved by current attempt", result.State, result.Diagnostics)
 	}
 }
@@ -221,17 +221,17 @@ func TestFetchOriginBranchUnavailableFailures(t *testing.T) {
 	t.Run("ls-remote failure is unavailable with sanitized diagnostics", func(t *testing.T) {
 		t.Parallel()
 		repo := testutil.InitGitRepo(t)
-		runner := BranchProbeRunnerFunc(func(ctx context.Context, repoPath string, args []string, limit int) BranchProbeCommandResult {
+		runner := branchProbeRunnerFunc(func(ctx context.Context, repoPath string, args []string, limit int) branchProbeCommandResult {
 			if len(args) > 0 && args[0] == "ls-remote" {
-				return BranchProbeCommandResult{
+				return branchProbeCommandResult{
 					ExitCode:    128,
 					Err:         errors.New("exit status 128"),
 					Diagnostics: "\x1b[31mfatal: 'https://user:secret@example.com/repo' not found\x1b[0m",
 				}
 			}
-			return ExecBranchProbeRunner{}.Run(ctx, repoPath, args, limit)
+			return execBranchProbeRunner{}.Run(ctx, repoPath, args, limit)
 		})
-		result := FetchOriginBranch(context.Background(), repo, OriginMapping{Branch: "main"}, OriginCheckOptions{Runner: runner})
+		result := FetchOriginBranch(context.Background(), repo, originMapping{Branch: "main"}, OriginCheckOptions{Runner: runner})
 		if result.State != FetchOriginUnavailable {
 			t.Fatalf("state = %q; want unavailable", result.State)
 		}
@@ -246,13 +246,13 @@ func TestFetchOriginBranchUnavailableFailures(t *testing.T) {
 	t.Run("fetch failure after proved existence is unavailable", func(t *testing.T) {
 		t.Parallel()
 		repo, _ := originFixture(t)
-		runner := BranchProbeRunnerFunc(func(ctx context.Context, repoPath string, args []string, limit int) BranchProbeCommandResult {
+		runner := branchProbeRunnerFunc(func(ctx context.Context, repoPath string, args []string, limit int) branchProbeCommandResult {
 			if len(args) > 0 && args[0] == "fetch" {
-				return BranchProbeCommandResult{ExitCode: 128, Err: errors.New("exit status 128"), Diagnostics: "fatal: the remote end hung up unexpectedly"}
+				return branchProbeCommandResult{ExitCode: 128, Err: errors.New("exit status 128"), Diagnostics: "fatal: the remote end hung up unexpectedly"}
 			}
-			return ExecBranchProbeRunner{}.Run(ctx, repoPath, args, limit)
+			return execBranchProbeRunner{}.Run(ctx, repoPath, args, limit)
 		})
-		result := FetchOriginBranch(context.Background(), repo, OriginMapping{Branch: "main"}, OriginCheckOptions{Runner: runner})
+		result := FetchOriginBranch(context.Background(), repo, originMapping{Branch: "main"}, OriginCheckOptions{Runner: runner})
 		if result.State != FetchOriginUnavailable {
 			t.Fatalf("state = %q; want unavailable, not absence", result.State)
 		}
@@ -275,8 +275,8 @@ func TestFetchOriginBranchCannotBeBroadenedByConfiguredRefspecs(t *testing.T) {
 
 	localRefsBefore := gitOutput(t, repo, "for-each-ref", "refs/heads", "--format=%(refname)")
 
-	result := FetchOriginBranch(context.Background(), repo, OriginMapping{Branch: "main"}, OriginCheckOptions{})
-	if result.State != FetchOriginFetched {
+	result := FetchOriginBranch(context.Background(), repo, originMapping{Branch: "main"}, OriginCheckOptions{})
+	if result.State != fetchOriginFetched {
 		t.Fatalf("state = %q diagnostics %q; want fetched", result.State, result.Diagnostics)
 	}
 
@@ -297,7 +297,7 @@ func TestCompareOriginSourceStates(t *testing.T) {
 
 	checkedAt := time.Date(2026, 9, 9, 12, 0, 0, 0, time.UTC)
 	options := OriginCheckOptions{Now: func() time.Time { return checkedAt }}
-	mapping := OriginMapping{Branch: "main"}
+	mapping := originMapping{Branch: "main"}
 
 	t.Run("equal shas are up to date", func(t *testing.T) {
 		t.Parallel()
@@ -307,7 +307,7 @@ func TestCompareOriginSourceStates(t *testing.T) {
 		if err != nil {
 			t.Fatalf("CompareOriginSource: %v", err)
 		}
-		if comparison.Status != OriginCheckUpToDate || comparison.AheadCount != 0 || comparison.BehindCount != 0 {
+		if comparison.Status != originCheckUpToDate || comparison.AheadCount != 0 || comparison.BehindCount != 0 {
 			t.Fatalf("comparison = %#v; want up_to_date 0/0", comparison)
 		}
 		if !comparison.CheckedAt.Equal(checkedAt) {
@@ -325,7 +325,7 @@ func TestCompareOriginSourceStates(t *testing.T) {
 		if err != nil {
 			t.Fatalf("CompareOriginSource: %v", err)
 		}
-		if comparison.Status != OriginCheckAhead || comparison.AheadCount != 1 || comparison.BehindCount != 0 {
+		if comparison.Status != originCheckAhead || comparison.AheadCount != 1 || comparison.BehindCount != 0 {
 			t.Fatalf("comparison = %#v; want ahead 1/0", comparison)
 		}
 	})
@@ -363,11 +363,11 @@ func TestCompareOriginSourceStates(t *testing.T) {
 		remote := gitOutput(t, repo, "rev-parse", "HEAD")
 		runGit(t, bare, "fetch", repo, "main:refs/heads/main")
 
-		comparison, err := CompareOriginSource(context.Background(), repo, local, remote, OriginMapping{Branch: "topic"}, options)
+		comparison, err := CompareOriginSource(context.Background(), repo, local, remote, originMapping{Branch: "topic"}, options)
 		if err != nil {
 			t.Fatalf("CompareOriginSource: %v", err)
 		}
-		if comparison.Status != OriginCheckDiverged || comparison.AheadCount != 1 || comparison.BehindCount != 1 {
+		if comparison.Status != originCheckDiverged || comparison.AheadCount != 1 || comparison.BehindCount != 1 {
 			t.Fatalf("comparison = %#v; want diverged 1/1", comparison)
 		}
 	})
@@ -396,7 +396,7 @@ func TestProbeUpdateEligibility(t *testing.T) {
 			t.Fatal(err)
 		}
 		eligible, blockers := ProbeUpdateEligibility(context.Background(), repo, "main", nil, OriginCheckOptions{})
-		if eligible || !containsBlocker(blockers, UpdateBlockerDirtyTargetCheckout) {
+		if eligible || !containsBlocker(blockers, updateBlockerDirtyTargetCheckout) {
 			t.Fatalf("eligible = %v blockers = %v; want dirty_target_checkout", eligible, blockers)
 		}
 	})
@@ -409,7 +409,7 @@ func TestProbeUpdateEligibility(t *testing.T) {
 		runGit(t, repo, "worktree", "add", linked, "topic")
 		t.Cleanup(func() { runGit(t, repo, "worktree", "remove", "--force", linked) })
 		eligible, blockers := ProbeUpdateEligibility(context.Background(), repo, "topic", nil, OriginCheckOptions{})
-		if eligible || !containsBlocker(blockers, UpdateBlockerBranchCheckedOutInWorktree) {
+		if eligible || !containsBlocker(blockers, updateBlockerBranchCheckedOutInWorktree) {
 			t.Fatalf("eligible = %v blockers = %v; want branch_checked_out_in_worktree", eligible, blockers)
 		}
 	})
@@ -445,7 +445,7 @@ func TestProbeUpdateEligibility(t *testing.T) {
 		}
 		comparison := &OriginComparison{Status: OriginCheckBehind, LocalSHA: gitUpdateSHA(t, repo, "HEAD"), FetchedSHA: target}
 		eligible, blockers := ProbeUpdateEligibility(context.Background(), repo, "main", comparison, OriginCheckOptions{})
-		if eligible || !containsBlocker(blockers, UpdateBlockerIgnoredPathCollision) {
+		if eligible || !containsBlocker(blockers, updateBlockerIgnoredPathCollision) {
 			t.Fatalf("eligible = %v blockers = %v; want ignored_path_collision", eligible, blockers)
 		}
 	})
@@ -460,21 +460,21 @@ func TestProbeUpdateEligibility(t *testing.T) {
 			t.Fatal(err)
 		}
 		eligible, blockers := ProbeUpdateEligibility(context.Background(), repo, "main", nil, OriginCheckOptions{})
-		if eligible || !containsBlocker(blockers, UpdateBlockerCheckoutOperationInProgress) {
+		if eligible || !containsBlocker(blockers, updateBlockerCheckoutOperationInProgress) {
 			t.Fatalf("eligible = %v blockers = %v; want checkout_operation_in_progress", eligible, blockers)
 		}
 	})
 
 	t.Run("uninspectable checkout is blocked, never assumed safe", func(t *testing.T) {
 		repo := testutil.InitGitRepo(t)
-		options := OriginCheckOptions{Runner: BranchProbeRunnerFunc(func(ctx context.Context, repoPath string, args []string, diagnosticLimit int) BranchProbeCommandResult {
+		options := OriginCheckOptions{Runner: branchProbeRunnerFunc(func(ctx context.Context, repoPath string, args []string, diagnosticLimit int) branchProbeCommandResult {
 			if len(args) > 0 && args[0] == "status" {
-				return BranchProbeCommandResult{ExitCode: 128, Diagnostics: "status failed"}
+				return branchProbeCommandResult{ExitCode: 128, Diagnostics: "status failed"}
 			}
-			return ExecBranchProbeRunner{}.Run(ctx, repoPath, args, diagnosticLimit)
+			return execBranchProbeRunner{}.Run(ctx, repoPath, args, diagnosticLimit)
 		})}
 		eligible, blockers := ProbeUpdateEligibility(context.Background(), repo, "main", nil, options)
-		if eligible || !containsBlocker(blockers, UpdateBlockerCheckoutUninspectable) {
+		if eligible || !containsBlocker(blockers, updateBlockerCheckoutUninspectable) {
 			t.Fatalf("eligible = %v blockers = %v; want checkout_uninspectable", eligible, blockers)
 		}
 	})
@@ -487,7 +487,7 @@ func TestProbeUpdateEligibility(t *testing.T) {
 		mu.Lock()
 		defer mu.Unlock()
 		eligible, blockers := ProbeUpdateEligibility(context.Background(), repo, "topic", nil, OriginCheckOptions{})
-		if eligible || !containsBlocker(blockers, UpdateBlockerGitOperationInProgress) {
+		if eligible || !containsBlocker(blockers, updateBlockerGitOperationInProgress) {
 			t.Fatalf("eligible = %v blockers = %v; want git_operation_in_progress", eligible, blockers)
 		}
 	})
@@ -554,10 +554,10 @@ func TestOriginCheckPreservesRepositoryState(t *testing.T) {
 	}
 
 	before := snapshot()
-	if result := FetchOriginBranch(context.Background(), repo, OriginMapping{Branch: "main"}, OriginCheckOptions{}); result.State != FetchOriginFetched {
+	if result := FetchOriginBranch(context.Background(), repo, originMapping{Branch: "main"}, OriginCheckOptions{}); result.State != fetchOriginFetched {
 		t.Fatalf("successful check state = %q diagnostics %q", result.State, result.Diagnostics)
 	}
-	if _, err := CompareOriginSource(context.Background(), repo, gitOutput(t, repo, "rev-parse", "refs/heads/main"), gitOutput(t, repo, "rev-parse", "refs/remotes/origin/main"), OriginMapping{Branch: "main"}, OriginCheckOptions{}); err != nil {
+	if _, err := CompareOriginSource(context.Background(), repo, gitOutput(t, repo, "rev-parse", "refs/heads/main"), gitOutput(t, repo, "rev-parse", "refs/remotes/origin/main"), originMapping{Branch: "main"}, OriginCheckOptions{}); err != nil {
 		t.Fatalf("compare: %v", err)
 	}
 	if after := snapshot(); after != before {
@@ -567,7 +567,7 @@ func TestOriginCheckPreservesRepositoryState(t *testing.T) {
 	// A failed check (unreachable remote) must not change local state either.
 	runGit(t, repo, "remote", "set-url", "origin", filepath.Join(t.TempDir(), "missing-remote"))
 	beforeFailed := snapshot()
-	if result := FetchOriginBranch(context.Background(), repo, OriginMapping{Branch: "main"}, OriginCheckOptions{}); result.State != FetchOriginUnavailable {
+	if result := FetchOriginBranch(context.Background(), repo, originMapping{Branch: "main"}, OriginCheckOptions{}); result.State != FetchOriginUnavailable {
 		t.Fatalf("failed check state = %q diagnostics %q; want unavailable", result.State, result.Diagnostics)
 	}
 	if after := snapshot(); after != beforeFailed {

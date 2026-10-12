@@ -76,13 +76,13 @@ export const SUPERVISOR_COPY = {
 } as const;
 
 /** "Rebuilding history for <Harness>…" while a launch rebuilds the native session. */
-export function rebuildingStatus(harness: string): string {
+function rebuildingStatus(harness: string): string {
   const label = harnessLabel(harness);
   return label === '' ? 'Rebuilding history…' : `Rebuilding history for ${label}…`;
 }
 
 /** The catalogue role whose eligible models a conversation may run on. */
-export const SUPERVISOR_CATALOGUE_ROLE = 'chat';
+const SUPERVISOR_CATALOGUE_ROLE = 'chat';
 
 const HARNESS_LABELS: Readonly<Record<string, string>> = {
   claude: 'Claude',
@@ -97,7 +97,7 @@ export function harnessLabel(harness: string): string {
   return harness === '' ? harness : `${harness.charAt(0).toLocaleUpperCase()}${harness.slice(1)}`;
 }
 
-export interface SupervisorHarnessGroup {
+interface SupervisorHarnessGroup {
   harness: string;
   label: string;
   /** Chat-eligible models in the server's order; empty means none are usable. */
@@ -234,7 +234,7 @@ export interface ProvisionalReply {
   chunks: ReadonlyMap<number, string>;
 }
 
-export function provisionalText(reply: ProvisionalReply): string {
+function provisionalText(reply: ProvisionalReply): string {
   return [...reply.chunks.entries()]
     .sort(([left], [right]) => left - right)
     .map(([, text]) => text)
@@ -367,14 +367,14 @@ export function markerNoticeText(marker: SupervisorMarker): string {
 }
 
 /** A record's attachments as transcript chips (display name and kind only). */
-export function recordAttachmentChips(record: SupervisorRecord): ConversationAttachment[] {
+function recordAttachmentChips(record: SupervisorRecord): ConversationAttachment[] {
   return (record.attachments ?? []).map((attachment) => ({
     kind: attachment.kind,
     name: attachment.name,
   }));
 }
 
-export interface SupervisorConversationOptions {
+interface SupervisorConversationOptions {
   backgroundTasks?: readonly SupervisorBackgroundTask[];
   /** The just-sent text, shown until its committed record arrives. */
   optimistic?: string | null;
@@ -385,7 +385,7 @@ export interface SupervisorConversationOptions {
 }
 
 /** The folded committed history plus the stream ids it already holds. */
-export interface CommittedConversation {
+interface CommittedConversation {
   items: readonly ConversationItem[];
   itemTurns?: readonly string[];
   itemGenerations?: readonly number[];
@@ -620,15 +620,4 @@ export function supervisorConversationTail(
     });
   }
   return items;
-}
-
-/**
- * The full conversation: the committed history followed by its live tail
- * (provisional replies and the optimistic user row).
- */
-export function buildSupervisorConversation(
-  records: readonly SupervisorRecord[],
-  options: SupervisorConversationOptions = {},
-): ConversationItem[] {
-  return supervisorConversationTail(supervisorConversationBuilder.committed(records), options);
 }

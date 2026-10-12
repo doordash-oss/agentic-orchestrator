@@ -169,7 +169,7 @@ export function crossCheckServerBinary(identity, probe) {
 }
 
 /** Map a package identity to the single GOARCH its bundled server must carry. */
-export function expectedGoarchForIdentity(identity) {
+function expectedGoarchForIdentity(identity) {
   if (identity.os === 'linux') return identity.arch === 'x64' ? 'amd64' : 'arm64';
   // Each slice of the macOS universal binary is independently inspected below.
   return null;

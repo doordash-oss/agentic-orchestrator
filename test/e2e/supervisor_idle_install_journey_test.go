@@ -41,7 +41,7 @@ func (idleInstallStager) StageCandidate(_ context.Context, _ string, progress fu
 	for _, stage := range []string{"resolve", "download", "verify", "probe", "admit"} {
 		progress(stage)
 	}
-	return selfupdate.VerifiedCandidate{}, &selfupdate.ServerContract{APIVersion: 2, SchemaVersion: 4, MinClientSchema: 1}, func() error { return nil }, nil
+	return selfupdate.VerifiedCandidate{}, &selfupdate.ServerContract{APIVersion: 2, SchemaVersion: server.CompatibilitySchemaVersion, MinClientSchema: 1}, func() error { return nil }, nil
 }
 
 type idleInstallTx struct{}
@@ -96,7 +96,7 @@ func TestSupervisorIdleInstallProceedsWhileWaitingOnPermission(t *testing.T) {
 		Policy:         selfupdate.PolicyNotify,
 		Settings:       selfupdate.StartupSettings{Policy: selfupdate.PolicyNotify, Channel: "stable", CheckInterval: 6 * time.Hour, Strategy: "idle"},
 		CurrentVersion: "1.0.0",
-		Eligibility:    selfupdate.Eligibility{Supported: true, Install: selfupdate.InstallTarball},
+		Eligibility:    selfupdate.Eligibility{Supported: true, Install: "tarball"},
 		Feed:           idleInstallFeed{},
 		Stager:         idleInstallStager{},
 		Install:        lifecycle,

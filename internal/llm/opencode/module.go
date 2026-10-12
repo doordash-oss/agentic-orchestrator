@@ -28,7 +28,7 @@ import (
 // other providers.
 var Module = fx.Module("llm-opencode",
 	fx.Provide(func(cfg *config.Config) *Provider {
-		return NewWithBinary(cfg.ProviderCLI(providerName, defaultBinary))
+		return New(cfg.ProviderCLI(providerName, defaultBinary), nil)
 	}),
 	fx.Invoke(func(r *llm.Registry, p *Provider) {
 		r.Register(p)

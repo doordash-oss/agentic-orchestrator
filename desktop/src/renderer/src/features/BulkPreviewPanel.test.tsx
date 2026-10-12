@@ -181,8 +181,7 @@ describe('BulkPreviewPanel', () => {
     mock.api.dispatchFeatureAction.mockImplementation(
       ({ featureId, action }: { featureId: string; action: string }) =>
         new Promise((resolve) => {
-          releaseFirstDispatch = () =>
-            resolve({ featureId, action, result: 'started', sessionIds: [] });
+          releaseFirstDispatch = () => resolve({ featureId, action, result: 'started' });
         }),
     );
 

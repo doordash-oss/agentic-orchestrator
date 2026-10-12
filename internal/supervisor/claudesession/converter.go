@@ -38,7 +38,6 @@ import (
 	_ "image/gif"  // register decoder for image validation
 	_ "image/jpeg" // register decoder for image validation
 	_ "image/png"  // register decoder for image validation
-	"os"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -86,9 +85,9 @@ func New(opts Options) *Converter {
 // Harness reports "claude".
 func (c *Converter) Harness() string { return Harness }
 
-// SessionPath is the session file the CLI resumes for sessionID in workDir:
+// sessionPath is the session file the CLI resumes for sessionID in workDir:
 // <configDir>/projects/<encoded workDir>/<sessionID>.jsonl.
-func SessionPath(configDir, workDir, sessionID string) string {
+func sessionPath(configDir, workDir, sessionID string) string {
 	return filepath.Join(claudeconfig.ProjectsDir(configDir, workDir), sessionID+".jsonl")
 }
 
@@ -122,11 +121,11 @@ func (c *Converter) Rebuild(ctx context.Context, in supervisor.RebuildInput) (su
 	if configDir == "" {
 		return supervisor.RebuildResult{}, errors.New("resolve claude config dir: empty path")
 	}
-	path := SessionPath(configDir, in.WorkDir, in.NativeSessionID)
+	path := sessionPath(configDir, in.WorkDir, in.NativeSessionID)
 	if err := ctx.Err(); err != nil {
 		return supervisor.RebuildResult{}, err
 	}
-	if err := writeFileAtomic(path, data); err != nil {
+	if err := supervisor.WriteFileAtomic(path, data, 0o700, 0o600); err != nil {
 		return supervisor.RebuildResult{}, fmt.Errorf("write claude session file %s: %w", path, err)
 	}
 	return supervisor.RebuildResult{Resume: true, SessionID: in.NativeSessionID, Path: path}, nil
@@ -137,7 +136,7 @@ func (c *Converter) Rebuild(ctx context.Context, in supervisor.RebuildInput) (su
 // empty. Argument errors are plain errors; unrepresentable records are
 // *supervisor.ConversionError.
 func Render(in supervisor.RebuildInput) ([]byte, error) {
-	if err := validateInput(in); err != nil {
+	if err := supervisor.ValidateNativeRebuildInput(in, "claude session rebuild"); err != nil {
 		return nil, err
 	}
 	selection, err := supervisor.SelectCheckpoint(in.Records, Harness)
@@ -145,24 +144,11 @@ func Render(in supervisor.RebuildInput) ([]byte, error) {
 		return nil, err
 	}
 	in.Records = selection.Records
-	entries, err := selectEntries(in.Records)
+	entries, err := supervisor.SelectEntries(in.Records, selectionRules())
 	if err != nil {
 		return nil, err
 	}
 	return encodeLines(in, entries, selection)
-}
-
-func validateInput(in supervisor.RebuildInput) error {
-	if in.NativeSessionID == "" {
-		return errors.New("claude session rebuild: empty native session id")
-	}
-	if strings.ContainsAny(in.NativeSessionID, `/\`) || in.NativeSessionID == "." || in.NativeSessionID == ".." {
-		return fmt.Errorf("claude session rebuild: unsafe native session id %q", in.NativeSessionID)
-	}
-	if in.WorkDir == "" {
-		return errors.New("claude session rebuild: empty working directory")
-	}
-	return nil
 }
 
 const (
@@ -194,79 +180,27 @@ func conversionError(rec *supervisor.Record, format string, args ...any) error {
 	return &supervisor.ConversionError{Seq: rec.Seq, Reason: fmt.Sprintf(format, args...)}
 }
 
-// selectEntries applies selection and every exclusion: interrupted turns'
-// tool records, unpaired tool blocks and adjacent duplicates.
-func selectEntries(records []supervisor.Record) ([]entry, error) {
-	interrupted, err := interruptedTurns(records)
-	if err != nil {
-		return nil, err
+// selectionRules wires the Claude entry and block types into the shared
+// selection algorithm. The duplicate key covers role, prompt and raw blocks,
+// and a prompt-only entry is non-empty: a lone user prompt is still history.
+func selectionRules() supervisor.SelectionRules[entry, block] {
+	return supervisor.SelectionRules[entry, block]{
+		Decode:         decodeEntry,
+		Parts:          func(e *entry) []block { return e.blocks },
+		SetParts:       func(e *entry, parts []block) { e.blocks = parts },
+		PartKind:       func(b block) string { return b.kind },
+		PartID:         func(b block) string { return b.id },
+		ToolUseKind:    blockToolUse,
+		ToolResultKind: blockToolResult,
+		EntryKey:       envelopeKey,
+		NonEmpty:       func(e entry) bool { return e.prompt != nil || len(e.blocks) > 0 },
 	}
-	var entries []entry
-	for i := range records {
-		rec := &records[i]
-		if !selected(rec) {
-			continue
-		}
-		e, err := decodeEntry(rec)
-		if err != nil {
-			return nil, err
-		}
-		if rec.TurnID != "" && interrupted[rec.TurnID] {
-			e.blocks = dropKinds(e.blocks, blockToolUse, blockToolResult)
-		}
-		entries = append(entries, e)
-	}
-	entries = pairTools(entries)
-	return collapseDuplicates(entries), nil
-}
-
-func selected(rec *supervisor.Record) bool {
-	switch rec.Visibility {
-	case supervisor.VisibilityContent, supervisor.VisibilityModelOnly:
-	default:
-		return false
-	}
-	switch rec.Kind {
-	case supervisor.KindUser, supervisor.KindAssistant, supervisor.KindToolUse, supervisor.KindToolResult, supervisor.KindNote:
-		return true
-	}
-	return false
-}
-
-// interruptedTurns collects the turns named by interrupted markers.
-func interruptedTurns(records []supervisor.Record) (map[string]bool, error) {
-	turns := map[string]bool{}
-	for i := range records {
-		rec := &records[i]
-		if rec.Kind != supervisor.KindMarker {
-			continue
-		}
-		var m supervisor.MarkerData
-		if err := decodePayload(rec, &m); err != nil {
-			return nil, err
-		}
-		if m.Marker == supervisor.MarkerInterrupted && rec.TurnID != "" {
-			turns[rec.TurnID] = true
-		}
-	}
-	return turns, nil
-}
-
-func decodePayload(rec *supervisor.Record, v any) error {
-	data := bytes.TrimSpace(rec.Data)
-	if len(data) == 0 || bytes.Equal(data, []byte("null")) {
-		return conversionError(rec, "%s record has no payload", rec.Kind)
-	}
-	if err := json.Unmarshal(data, v); err != nil {
-		return conversionError(rec, "decode %s payload: %v", rec.Kind, err)
-	}
-	return nil
 }
 
 func decodeEntry(rec *supervisor.Record) (entry, error) {
 	if rec.Kind == supervisor.KindUser || rec.Kind == supervisor.KindNote {
 		var u supervisor.UserData
-		if err := decodePayload(rec, &u); err != nil {
+		if err := supervisor.DecodeRecordPayload(rec, &u); err != nil {
 			return entry{}, err
 		}
 		e := entry{rec: rec, role: roleUser}
@@ -277,7 +211,7 @@ func decodeEntry(rec *supervisor.Record) (entry, error) {
 	}
 
 	var cd supervisor.ContentData
-	if err := decodePayload(rec, &cd); err != nil {
+	if err := supervisor.DecodeRecordPayload(rec, &cd); err != nil {
 		return entry{}, err
 	}
 	role := roleAssistant
@@ -431,7 +365,7 @@ func imagePlaceholder(item json.RawMessage) (string, bool) {
 		} `json:"source"`
 	}
 	if err := json.Unmarshal(item, &img); err != nil || img.Source == nil {
-		return omittedImage(""), true
+		return supervisor.OmittedImagePlaceholder(""), true
 	}
 	src := img.Source
 	switch {
@@ -440,7 +374,7 @@ func imagePlaceholder(item json.RawMessage) (string, bool) {
 	case src.Type == "base64" && restorableBase64(src.MediaType, src.Data):
 		return "", false
 	}
-	return omittedImage(src.MediaType), true
+	return supervisor.OmittedImagePlaceholder(src.MediaType), true
 }
 
 func restorableBase64(mediaType, data string) bool {
@@ -457,90 +391,6 @@ func restorableBase64(mediaType, data string) bool {
 		return err == nil
 	}
 	return true
-}
-
-func omittedImage(mediaType string) string {
-	if mediaType == "" {
-		mediaType = "image"
-	}
-	return "[image omitted: " + mediaType + " could not be restored]"
-}
-
-func dropKinds(blocks []block, kinds ...string) []block {
-	out := blocks[:0:0]
-	for _, b := range blocks {
-		drop := false
-		for _, k := range kinds {
-			if b.kind == k {
-				drop = true
-			}
-		}
-		if !drop {
-			out = append(out, b)
-		}
-	}
-	return out
-}
-
-// pairTools keeps a tool_use only when a later tool_result answers it and a
-// tool_result only when an earlier tool_use asked for it; the first of each
-// per id wins so a resumed request never repeats a tool id.
-func pairTools(entries []entry) []entry {
-	usesSeen := map[string]bool{}
-	answered := map[string]bool{}
-	for _, e := range entries {
-		for _, b := range e.blocks {
-			switch b.kind {
-			case blockToolUse:
-				usesSeen[b.id] = true
-			case blockToolResult:
-				if usesSeen[b.id] {
-					answered[b.id] = true
-				}
-			}
-		}
-	}
-	keptUse := map[string]bool{}
-	keptResult := map[string]bool{}
-	for i := range entries {
-		var kept []block
-		for _, b := range entries[i].blocks {
-			switch b.kind {
-			case blockToolUse:
-				if !answered[b.id] || keptUse[b.id] {
-					continue
-				}
-				keptUse[b.id] = true
-			case blockToolResult:
-				if !answered[b.id] || !keptUse[b.id] || keptResult[b.id] {
-					continue
-				}
-				keptResult[b.id] = true
-			}
-			kept = append(kept, b)
-		}
-		entries[i].blocks = kept
-	}
-	return entries
-}
-
-// collapseDuplicates drops entries that yield nothing and any entry whose
-// role and content equal the previous kept entry's.
-func collapseDuplicates(entries []entry) []entry {
-	var out []entry
-	prev := ""
-	for _, e := range entries {
-		if e.prompt == nil && len(e.blocks) == 0 {
-			continue
-		}
-		key := envelopeKey(e)
-		if key == prev {
-			continue
-		}
-		prev = key
-		out = append(out, e)
-	}
-	return out
 }
 
 func envelopeKey(e entry) string {
@@ -690,48 +540,4 @@ func marshal(v any) (json.RawMessage, error) {
 		return nil, err
 	}
 	return bytes.TrimRight(buf.Bytes(), "\n"), nil
-}
-
-// writeFileAtomic replaces path through a same-directory temp file that is
-// fsynced before the rename; the directory is fsynced after so the rename
-// survives a crash. Readers never observe a partial file.
-func writeFileAtomic(path string, data []byte) error {
-	dir := filepath.Dir(path)
-	if err := os.MkdirAll(dir, 0o700); err != nil {
-		return err
-	}
-	tmp, err := os.CreateTemp(dir, "."+filepath.Base(path)+".tmp-*")
-	if err != nil {
-		return err
-	}
-	tmpName := tmp.Name()
-	fail := func(err error) error {
-		_ = tmp.Close()
-		_ = os.Remove(tmpName)
-		return err
-	}
-	if err := tmp.Chmod(0o600); err != nil {
-		return fail(err)
-	}
-	if _, err := tmp.Write(data); err != nil {
-		return fail(err)
-	}
-	if err := tmp.Sync(); err != nil {
-		return fail(err)
-	}
-	if err := tmp.Close(); err != nil {
-		_ = os.Remove(tmpName)
-		return err
-	}
-	if err := os.Rename(tmpName, path); err != nil {
-		_ = os.Remove(tmpName)
-		return err
-	}
-	// Directory fsync is best effort: some platforms reject it on a
-	// directory handle, and the rename has already replaced the file.
-	if d, err := os.Open(dir); err == nil {
-		_ = d.Sync()
-		_ = d.Close()
-	}
-	return nil
 }

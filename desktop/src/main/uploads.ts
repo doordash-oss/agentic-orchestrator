@@ -20,15 +20,11 @@ limitations under the License.
  * gateway transport, one request per file. The renderer asks for a batch and
  * receives a per-file result (never a wholesale failure) so its composer
  * chips can stage/fail/retry individually.
- *
- * Server-shape note: `StageUploadResponse` is validated with a locally
- * declared schema until `npm run generate:api` regenerates schema.gen.ts
- * from the updated openapi.yaml.
+
  */
 import path from 'node:path';
-import { z } from 'zod';
 import { buildCanonicalError, CanonicalErrorException, toCanonicalError } from '../shared/errors';
-import { validateWithSchema } from '../shared/api/parse';
+import { StageUploadResponseSchema, validateWithSchema } from '../shared/api/parse';
 import {
   AbsolutePathSchema,
   CREATION_IMAGE_FORMATS,
@@ -41,8 +37,8 @@ import type { HttpResult } from './gateway/runtimeGateway';
 import { mapServerError } from './serverClient';
 
 /** The authenticated binary-post surface the gateway provides. */
-export interface UploadTransport {
-  apiUpload?(path: string, body: Uint8Array): Promise<HttpResult>;
+interface UploadTransport {
+  apiUpload(path: string, body: Uint8Array): Promise<HttpResult>;
 }
 
 export interface UploadServiceDeps {
@@ -62,15 +58,6 @@ export const UPLOAD_BYTE_LIMITS: Record<CreationFileKind, number> = {
   image: 10 * 1024 * 1024,
   attachment: 25 * 1024 * 1024,
 };
-
-/** Locally declared until the StageUploadResponse model is regenerated. */
-const StageUploadResponseSchema = z.object({
-  api_version: z.string().optional(),
-  reference: z.string().min(1).max(128),
-  kind: z.enum(['image', 'attachment']),
-  name: z.string().min(1).max(255),
-  size: z.number().int().nonnegative(),
-});
 
 const IMAGE_EXTENSIONS: ReadonlySet<string> = new Set(
   CREATION_IMAGE_FORMATS.map((format) => format.extension),
@@ -123,17 +110,9 @@ export class UploadService {
         }),
       );
     }
-    const upload = this.deps.transport.apiUpload;
-    if (upload === undefined) {
-      throw new CanonicalErrorException(buildCanonicalError('E_UPLOAD_UNAVAILABLE'));
-    }
     const body = await this.deps.readFile(validated);
     const query = new URLSearchParams({ kind, name });
-    const result = await upload.call(
-      this.deps.transport,
-      `/api/v1/uploads?${query.toString()}`,
-      body,
-    );
+    const result = await this.deps.transport.apiUpload(`/api/v1/uploads?${query.toString()}`, body);
     if (result.status < 200 || result.status >= 300) {
       throw mapServerError(result);
     }

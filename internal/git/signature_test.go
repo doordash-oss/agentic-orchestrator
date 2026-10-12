@@ -37,15 +37,15 @@ func TestInjectPRSignature(t *testing.T) {
 			wantSig: true,
 		},
 		{
-			name:    "body mentioning AgenticURL but without signature still gets signed",
+			name:    "body mentioning agenticURL but without signature still gets signed",
 			body:    "Already has https://github.com/doordash-oss/agentic-orchestrator in it",
 			wantSig: true,
 		},
 		{
 			name:     "body already containing full signature is unchanged",
-			body:     "Some PR body" + PRSignature,
+			body:     "Some PR body" + pRSignature,
 			wantSig:  false,
-			wantBody: "Some PR body" + PRSignature,
+			wantBody: "Some PR body" + pRSignature,
 		},
 		{
 			name:    "body with multiple sections gets signature appended",
@@ -56,14 +56,14 @@ func TestInjectPRSignature(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got := InjectPRSignature(tt.body)
+			got := injectPRSignature(tt.body)
 
 			if tt.wantSig {
-				if !strings.Contains(got, AgenticURL) {
-					t.Errorf("expected body to contain AgenticURL, got: %q", got)
+				if !strings.Contains(got, agenticURL) {
+					t.Errorf("expected body to contain agenticURL, got: %q", got)
 				}
-				if !strings.HasSuffix(got, PRSignature) {
-					t.Errorf("expected body to end with PRSignature, got: %q", got)
+				if !strings.HasSuffix(got, pRSignature) {
+					t.Errorf("expected body to end with pRSignature, got: %q", got)
 				}
 				// Verify it starts with the original body
 				if !strings.HasPrefix(got, tt.body) {
@@ -80,26 +80,26 @@ func TestInjectPRSignature(t *testing.T) {
 
 func TestInjectPRSignature_Idempotent(t *testing.T) {
 	body := "## Summary\n\nSome changes."
-	first := InjectPRSignature(body)
-	second := InjectPRSignature(first)
+	first := injectPRSignature(body)
+	second := injectPRSignature(first)
 
 	if first != second {
-		t.Errorf("InjectPRSignature is not idempotent:\nfirst:  %q\nsecond: %q", first, second)
+		t.Errorf("injectPRSignature is not idempotent:\nfirst:  %q\nsecond: %q", first, second)
 	}
 }
 
 func TestConstants(t *testing.T) {
 	wantTrailer := "Co-authored-by: Agentico <noreply@doordash-oss.github.com>"
-	if CommitSignatureTrailer != wantTrailer {
-		t.Errorf("CommitSignatureTrailer = %q, want %q (Co-authored-by convention so GitHub renders Agentico as a co-author)", CommitSignatureTrailer, wantTrailer)
+	if commitSignatureTrailer != wantTrailer {
+		t.Errorf("commitSignatureTrailer = %q, want %q (Co-authored-by convention so GitHub renders Agentico as a co-author)", commitSignatureTrailer, wantTrailer)
 	}
-	if !strings.Contains(PRSignature, AgenticURL) {
-		t.Errorf("PRSignature should contain AgenticURL")
+	if !strings.Contains(pRSignature, agenticURL) {
+		t.Errorf("pRSignature should contain agenticURL")
 	}
-	if !strings.Contains(PRSignature, "Generated with [agentic orchestrator]") {
-		t.Errorf("PRSignature should contain 'Generated with [agentic orchestrator]'")
+	if !strings.Contains(pRSignature, "Generated with [agentic orchestrator]") {
+		t.Errorf("pRSignature should contain 'Generated with [agentic orchestrator]'")
 	}
-	if strings.Contains(PRSignature, "Generated with [Agentic]") {
-		t.Errorf("PRSignature should not contain legacy 'Generated with [Agentic]' label")
+	if strings.Contains(pRSignature, "Generated with [Agentic]") {
+		t.Errorf("pRSignature should not contain legacy 'Generated with [Agentic]' label")
 	}
 }

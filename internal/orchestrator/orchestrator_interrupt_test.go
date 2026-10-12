@@ -26,15 +26,6 @@ import (
 // kbStatusBuilding is the fixture KBStatus value shared by this file's tests.
 const kbStatusBuilding = "building"
 
-func findInterruptLifecycleCall(lc *mocks.MockFeatureLifecycle, method string) *mocks.MockCall {
-	for i := range lc.Calls {
-		if lc.Calls[i].Method == method {
-			return &lc.Calls[i]
-		}
-	}
-	return nil
-}
-
 // ---------------------------------------------------------------------------
 // TestOrchestrator_InterruptFeature
 // ---------------------------------------------------------------------------
@@ -55,8 +46,7 @@ func TestOrchestrator_InterruptFeature(t *testing.T) {
 		},
 		KBStatus: kbStatus,
 	}
-	lc := lifecycleForFeature(f)
-	fs := newFeatureStore(f)
+	fs, lc := newStoredFeatureFixture(t, f)
 
 	sm := mocks.NewMockSessionManager()
 	sessions := []ports.SessionView{
@@ -67,9 +57,9 @@ func TestOrchestrator_InterruptFeature(t *testing.T) {
 
 	var hookFeatureID string
 	o := orchestrator.New(orchestrator.Deps{
-		Lifecycle: lc,
-		Store:     fs,
-		Sessions:  sm,
+		Manager:  lc,
+		Store:    fs,
+		Sessions: sm,
 	}, orchestrator.Hooks{
 		OnFeatureInterrupted: func(id string) { hookFeatureID = id },
 	})
@@ -83,7 +73,8 @@ func TestOrchestrator_InterruptFeature(t *testing.T) {
 		t.Errorf("StopSession calls = %d, want 2", len(sm.StopCalls))
 	}
 
-	// Pending flags cleared on feature via Modify.
+	// Pending flags cleared in the stored feature.
+	f = loadStoredFeature(t, fs, f.ID)
 	for _, h := range f.HelpQueue {
 		if h.Pending {
 			t.Errorf("HelpQueue entry still pending: %+v", h)
@@ -106,14 +97,8 @@ func TestOrchestrator_InterruptFeature(t *testing.T) {
 		t.Errorf("KBStatus[repo-a] = %q, want building", f.KBStatus[repoName])
 	}
 
-	// Transition called with StatusInterrupted.
-	call := assertLifecycleCall(t, lc, "Transition")
-	if call != nil && len(call.Args) >= 2 {
-		if status, ok := call.Args[1].(feature.Status); ok {
-			if status != feature.StatusInterrupted {
-				t.Errorf("Transition status = %v, want StatusInterrupted", status)
-			}
-		}
+	if f.Status != feature.StatusInterrupted {
+		t.Errorf("stored status = %s, want Interrupted", f.Status)
 	}
 
 	if hookFeatureID != "feat-int" {
@@ -132,16 +117,15 @@ func TestOrchestrator_InterruptFeature(t *testing.T) {
 
 func TestOrchestrator_InterruptFeature_NoSessions(t *testing.T) {
 	f := &feature.Feature{ID: "feat-ns", Status: feature.StatusImplementing}
-	lc := lifecycleForFeature(f)
-	fs := newFeatureStore(f)
+	fs, lc := newStoredFeatureFixture(t, f)
 
 	sm := mocks.NewMockSessionManager()
 	// FeatureSessionsFn default returns nil.
 
 	o := orchestrator.New(orchestrator.Deps{
-		Lifecycle: lc,
-		Store:     fs,
-		Sessions:  sm,
+		Manager:  lc,
+		Store:    fs,
+		Sessions: sm,
 	}, orchestrator.Hooks{})
 
 	if err := o.InterruptFeature("feat-ns"); err != nil {
@@ -150,7 +134,9 @@ func TestOrchestrator_InterruptFeature_NoSessions(t *testing.T) {
 	if len(sm.StopCalls) != 0 {
 		t.Errorf("StopSession should not be called with no sessions; got %d", len(sm.StopCalls))
 	}
-	assertLifecycleCall(t, lc, "Transition")
+	if stored := loadStoredFeature(t, fs, f.ID); stored.Status != feature.StatusInterrupted {
+		t.Errorf("stored status = %s, want Interrupted", stored.Status)
+	}
 }
 
 func TestOrchestrator_InterruptFeature_SettledFeatureIsIdempotent(t *testing.T) {
@@ -166,22 +152,18 @@ func TestOrchestrator_InterruptFeature_SettledFeatureIsIdempotent(t *testing.T) 
 				ID:     "feat-settled",
 				Status: status,
 			}
-			lc := lifecycleForFeature(f)
-			fs := newFeatureStore(f)
+			fs, lc := newStoredFeatureFixture(t, f)
 			o := orchestrator.New(orchestrator.Deps{
-				Lifecycle: lc,
-				Store:     fs,
-				Sessions:  mocks.NewMockSessionManager(),
+				Manager:  lc,
+				Store:    fs,
+				Sessions: mocks.NewMockSessionManager(),
 			}, orchestrator.Hooks{})
 
 			if err := o.InterruptFeature(f.ID); err != nil {
 				t.Fatalf("InterruptFeature: %v", err)
 			}
-			if f.Status != status {
-				t.Fatalf("status = %s, want unchanged %s", f.Status, status)
-			}
-			if call := findInterruptLifecycleCall(lc, "Transition"); call != nil {
-				t.Fatalf("Transition called for settled feature: %+v", call)
+			if stored := loadStoredFeature(t, fs, f.ID); stored.Status != status {
+				t.Fatalf("stored status = %s, want unchanged %s", stored.Status, status)
 			}
 		})
 	}
@@ -210,41 +192,16 @@ func TestOrchestrator_InterruptAllRunning(t *testing.T) {
 	done := &feature.Feature{ID: "done-1", Status: feature.StatusDone}
 	setup := &feature.Feature{ID: "setup-1", Status: feature.StatusSettingUpWorktrees}
 
-	fs := newFeatureStore(running1, running2, published, done, setup)
-	lc := mocks.NewMockFeatureLifecycle()
-	lc.GetFn = func(id string) (*feature.Feature, error) {
-		switch id {
-		case "running-1":
-			return running1, nil
-		case "running-2":
-			return running2, nil
-		case "pub-1":
-			return published, nil
-		case "done-1":
-			return done, nil
-		case "setup-1":
-			return setup, nil
-		}
-		return nil, nil
-	}
-	lc.TransitionFn = func(id string, to feature.Status) error {
-		switch id {
-		case "running-1":
-			running1.Status = to
-		case "running-2":
-			running2.Status = to
-		}
-		return nil
-	}
+	fs, lc := newStoredFeatureFixture(t, running1, running2, published, done, setup)
 
 	sm := mocks.NewMockSessionManager()
 	sm.FeatureSessionsFn = func(id string) []ports.SessionView { return nil }
 
 	interrupts := 0
 	o := orchestrator.New(orchestrator.Deps{
-		Lifecycle: lc,
-		Store:     fs,
-		Sessions:  sm,
+		Manager:  lc,
+		Store:    fs,
+		Sessions: sm,
 	}, orchestrator.Hooks{
 		OnFeatureInterrupted: func(id string) { interrupts++ },
 	})
@@ -258,6 +215,11 @@ func TestOrchestrator_InterruptAllRunning(t *testing.T) {
 	}
 
 	// Running features KBStatus cleared (startup-sweep parity).
+	running1 = loadStoredFeature(t, fs, running1.ID)
+	running2 = loadStoredFeature(t, fs, running2.ID)
+	published = loadStoredFeature(t, fs, published.ID)
+	done = loadStoredFeature(t, fs, done.ID)
+	setup = loadStoredFeature(t, fs, setup.ID)
 	if running1.KBStatus != nil {
 		t.Errorf("running1.KBStatus should be nil after InterruptAllRunning, got %v", running1.KBStatus)
 	}

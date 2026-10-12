@@ -23,6 +23,7 @@ import (
 	"time"
 
 	"github.com/doordash-oss/agentic-orchestrator/internal/agent"
+	"github.com/doordash-oss/agentic-orchestrator/internal/config"
 	"github.com/doordash-oss/agentic-orchestrator/internal/errcat"
 	"github.com/doordash-oss/agentic-orchestrator/internal/feature"
 	"github.com/doordash-oss/agentic-orchestrator/internal/ports"
@@ -44,6 +45,16 @@ const fanoutQAFile = `# User Q&A — Phase Clarifications
 **A:** Recommended option B
 _(auto-picked, confidence: 0.85)_
 `
+
+func newFanoutStoreManager(t *testing.T, f *feature.Feature) (*feature.Store, *feature.Manager) {
+	t.Helper()
+	store := feature.NewStore(filepath.Join(t.TempDir(), "features"))
+	f.SchemaVersion = feature.SchemaVersionCurrent
+	if err := store.Save(f); err != nil {
+		t.Fatalf("save feature %s: %v", f.ID, err)
+	}
+	return store, feature.NewManager(store, config.NewDefault())
+}
 
 // TestRunPhasePlanning_HighInquireness_GrillMePromptInvariant drives
 // startRoadmapPhasePlan with a high-inquireness feature and captures the
@@ -108,8 +119,7 @@ func TestRunPhasePlanning_HighInquireness_GrillMePromptInvariant(t *testing.T) {
 		return nil, session.ErrShuttingDown
 	}
 
-	lc := newGateLifecycle(f)
-	fs := newGateFeatureStore(f)
+	fs, mgr := newFanoutStoreManager(t, f)
 
 	pr := &agent.PhaseRunner{
 		SessionManager: sm,
@@ -131,7 +141,7 @@ func TestRunPhasePlanning_HighInquireness_GrillMePromptInvariant(t *testing.T) {
 	}
 
 	o := New(Deps{
-		Lifecycle:   lc,
+		Manager:     mgr,
 		Store:       fs,
 		Sessions:    sm,
 		PhaseRunner: pr,
@@ -153,6 +163,10 @@ func TestRunPhasePlanning_HighInquireness_GrillMePromptInvariant(t *testing.T) {
 	mu.Unlock()
 	if !gotCaptured {
 		t.Fatalf("BuildSession was never called within timeout")
+	}
+	stored, err := fs.Load(featureID)
+	if err != nil || stored.Inquireness != feature.InquirenessHigh {
+		t.Fatalf("persisted feature = %+v (err %v), want high inquireness", stored, err)
 	}
 
 	if !strings.Contains(prompt, "## Ambiguity Resolution [grill-me]") {
@@ -331,14 +345,20 @@ func TestGrillMeFanout_PrimaryBuilders_EndToEnd(t *testing.T) {
 				t.Fatalf("pre-write qa-answers.md: %v", err)
 			}
 
-			lc := newGateLifecycle(f)
-			fs := newGateFeatureStore(f)
+			fs, mgr := newFanoutStoreManager(t, f)
 			sm := sessionManagerWithQALog("sess-1")
 			pr := &agent.PhaseRunner{StateDir: tmpStateDir}
 
-			o := New(Deps{Lifecycle: lc, Store: fs, Sessions: sm, PhaseRunner: pr}, Hooks{})
+			o := New(Deps{Manager: mgr, Store: fs, Sessions: sm, PhaseRunner: pr}, Hooks{})
 
 			tc.invoke(t, o, f.ID)
+			stored, err := fs.Load(f.ID)
+			if err != nil {
+				t.Fatalf("load feature after phase completion: %v", err)
+			}
+			if stored.SchemaVersion != feature.SchemaVersionCurrent {
+				t.Fatalf("persisted schema version = %d", stored.SchemaVersion)
+			}
 
 			got, err := os.ReadFile(qaPath)
 			if err != nil {
@@ -595,17 +615,7 @@ func TestGrillMeFanout_StartPaths_DriveEntryPath(t *testing.T) {
 				return nil, session.ErrShuttingDown
 			}
 
-			lc := newGateLifecycle(f)
-			// Plan / phase-plan dispatch a "failed" PlanLoopResult once
-			// BuildSession returns ErrShuttingDown; the orchestrator routes
-			// that through markFailedWithEvent. Provide MarkFailed so the
-			// dispatch goroutine completes cleanly.
-			lc.MarkFailedFn = func(id string, failure errcat.FailureRecord) error {
-				f.Status = feature.StatusFailed
-				return nil
-			}
-
-			fs := newGateFeatureStore(f)
+			fs, mgr := newFanoutStoreManager(t, f)
 
 			pr := &agent.PhaseRunner{
 				SessionManager: sm,
@@ -633,7 +643,7 @@ func TestGrillMeFanout_StartPaths_DriveEntryPath(t *testing.T) {
 			}
 
 			o := New(Deps{
-				Lifecycle:   lc,
+				Manager:     mgr,
 				Store:       fs,
 				Sessions:    sm,
 				PhaseRunner: pr,

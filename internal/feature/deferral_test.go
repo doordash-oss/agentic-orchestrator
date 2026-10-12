@@ -138,7 +138,7 @@ func TestMergeDeferrals(t *testing.T) {
 			},
 			assert: func(t *testing.T, got []Deferral) {
 				requireDeferralCount(t, got, 1)
-				if got[0].Status != DeferralClosed {
+				if got[0].Status != deferralClosed {
 					t.Errorf("closed entry status = %q, want closed", got[0].Status)
 				}
 			},
@@ -321,7 +321,7 @@ func requireDeferralCount(t *testing.T, got []Deferral, want int) {
 	}
 }
 
-func countDeferralEvents(d Deferral, kind DeferralEventKind) int {
+func countDeferralEvents(d Deferral, kind deferralEventKind) int {
 	n := 0
 	for _, e := range d.History {
 		if e.Kind == kind {
@@ -336,17 +336,17 @@ func TestDueForPhase_FiltersCorrectly(t *testing.T) {
 	// parallel-candidate: pure value, table-driven, or per-test temp-dir assertions with no shared state.
 	ledger := []Deferral{
 		{ID: "D-1", DueByPhase: 3, Status: DeferralOpen},
-		{ID: "D-2", DueByPhase: 3, Status: DeferralClosed},
+		{ID: "D-2", DueByPhase: 3, Status: deferralClosed},
 		{ID: "D-3", DueByPhase: 5, Status: DeferralOpen},
 		{ID: "D-4", DueByPhase: 3, Status: DeferralRedeferred},
 	}
-	got := DueForPhase(ledger, 3)
+	got := dueForPhase(ledger, 3)
 	if len(got) != 2 {
 		t.Fatalf("expected 2 due entries (D-1, D-4), got %d: %+v", len(got), got)
 	}
 	// Sorted by ID.
 	if got[0].ID != "D-1" || got[1].ID != "D-4" {
-		t.Errorf("DueForPhase not sorted by ID: %+v", got)
+		t.Errorf("dueForPhase not sorted by ID: %+v", got)
 	}
 }
 
@@ -357,13 +357,13 @@ func TestCloseDeferrals_TransitionsMatchingIDs(t *testing.T) {
 	ledger := []Deferral{
 		{ID: "D-1", Status: DeferralOpen},
 		{ID: "D-2", Status: DeferralOpen},
-		{ID: "D-3", Status: DeferralClosed},
+		{ID: "D-3", Status: deferralClosed},
 	}
 	n := CloseDeferrals(ledger, []string{"D-1", "D-3", "D-nope"}, 3, "implement", now)
 	if n != 1 {
 		t.Errorf("transitioned %d entries, want 1 (D-1 only; D-3 already closed, D-nope nonexistent)", n)
 	}
-	if ledger[0].Status != DeferralClosed {
+	if ledger[0].Status != deferralClosed {
 		t.Errorf("D-1 not transitioned")
 	}
 	if ledger[0].ClosedInPhase != 3 {
@@ -547,7 +547,7 @@ func TestDueForPhaseScopedTo(t *testing.T) {
 		{
 			name: "scope filter respects due-phase status filters",
 			ledger: []Deferral{
-				{ID: "D-closed", Description: "X", DueByPhase: 3, Status: DeferralClosed, RepoScope: []string{"repo-a"}},
+				{ID: "D-closed", Description: "X", DueByPhase: 3, Status: deferralClosed, RepoScope: []string{"repo-a"}},
 				{ID: "D-wrong-phase", Description: "Y", DueByPhase: 4, Status: DeferralOpen, RepoScope: []string{"repo-a"}},
 				{ID: "D-open", Description: "Z", DueByPhase: 3, Status: DeferralOpen, RepoScope: []string{"repo-a"}},
 			},

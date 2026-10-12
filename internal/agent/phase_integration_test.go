@@ -31,6 +31,7 @@ import (
 	"github.com/doordash-oss/agentic-orchestrator/internal/session"
 	"github.com/doordash-oss/agentic-orchestrator/test/testutil"
 	"github.com/doordash-oss/agentic-orchestrator/test/testutil/mocks"
+	"go.uber.org/fx"
 )
 
 // Claude-backed sessions may outlive the mock CLI itself while the session
@@ -205,6 +206,7 @@ func TestPhaseRunnerResearchSuccess(t *testing.T) {
 				InitialPrompt: opts.Prompt,
 				RepoName:      opts.RepoName,
 				LogPath:       opts.LogPath,
+				Protocol:      testSessionProtocol(opts.Prompt),
 			}
 			return []string{"bash", researchScript}, nil, sessOpts, nil
 		},
@@ -398,6 +400,7 @@ exit 1
 				InitialPrompt: opts.Prompt,
 				RepoName:      opts.RepoName,
 				LogPath:       opts.LogPath,
+				Protocol:      testSessionProtocol(opts.Prompt),
 			}
 			return []string{"bash", failScript}, nil, sessOpts, nil
 		},
@@ -461,6 +464,7 @@ sleep 0.2
 				InitialPrompt: opts.Prompt,
 				RepoName:      opts.RepoName,
 				LogPath:       opts.LogPath,
+				Protocol:      testSessionProtocol(opts.Prompt),
 			}
 			return []string{"bash", script}, nil, sessOpts, nil
 		},
@@ -514,79 +518,6 @@ doneCheck:
 	_ = gotNeedInput
 }
 
-func TestPhaseRunnerImplementationForwardsBuilders(t *testing.T) {
-	if testing.Short() {
-		t.Skip("skipping integration test in short mode")
-	}
-
-	tmpDir := t.TempDir()
-	workDir := filepath.Join(tmpDir, "work")
-	stateDir := filepath.Join(tmpDir, "state")
-	scriptsDir := filepath.Join(tmpDir, "scripts")
-	for _, d := range []string{workDir, stateDir, scriptsDir} {
-		os.MkdirAll(d, 0o755)
-	}
-
-	// ArtifactDir for implementation is stateDir/featureID/runs/run-001/implement
-	implArtifactDir := filepath.Join(stateDir, "test-feat-001", "runs", "run-001", "implement")
-	agentScript := testutil.WriteScript(t, scriptsDir, "agent.sh",
-		testutil.JSONLInit+"\n"+testutil.WriteImplementSuccessArtifacts(implArtifactDir)+"\n"+testutil.JSONLSuccess+"\n")
-	reviewScript := testutil.WriteScript(t, scriptsDir, "review.sh",
-		testutil.JSONLInit+"\n"+testutil.WriteReviewApproved(implArtifactDir)+"\n"+testutil.JSONLSuccess+"\n")
-
-	eventCh := make(chan interface{}, 100)
-	sm := session.NewManager(eventCh)
-	defer sm.Shutdown()
-
-	pr := &PhaseRunner{
-		SessionManager: sm,
-		StateDir:       stateDir,
-		BuildSessionFn: mockBuildSession(agentScript, reviewScript),
-	}
-
-	f := newTestFeature(t, workDir)
-	implementDir := filepath.Join(stateDir, f.ID, "runs", "run-001", "implement")
-	os.MkdirAll(implementDir, 0o755)
-	planPath := writePlanFile(t, implementDir, "Test plan")
-
-	resultCh, err := pr.RunImplementation(f, planPath)
-	if err != nil {
-		t.Fatalf("RunImplementation error: %v", err)
-	}
-
-	select {
-	case result := <-resultCh:
-		if result.FinalStatus != finalStatusReviewPassed {
-			t.Errorf("expected review_passed, got %s (error: %s)", result.FinalStatus, result.LastError)
-		}
-	case <-time.After(15 * time.Second):
-		t.Fatal("implementation loop did not complete within timeout")
-	}
-}
-
-func TestPhaseRunnerGetPhaseOutputPreservesContent(t *testing.T) {
-	tmpDir := t.TempDir()
-	stateDir := tmpDir
-
-	f := &feature.Feature{ID: "feat-001", ActiveRun: 1, RunCount: 1}
-
-	// Create a fake output file — run-aware path.
-	outputDir := filepath.Join(ActiveRunDir(stateDir, f), "research")
-	os.MkdirAll(outputDir, 0o755)
-	os.WriteFile(filepath.Join(outputDir, "output.txt"),
-		[]byte("Research results\nMore text\n"), 0o644)
-
-	pr := &PhaseRunner{StateDir: stateDir}
-	output := pr.GetPhaseOutput(f, "research")
-
-	if !strings.Contains(output, "Research results") {
-		t.Error("expected output to contain research results")
-	}
-	if !strings.Contains(output, "More text") {
-		t.Error("expected all text to be preserved")
-	}
-}
-
 func TestRunResearch_ViaRegistry_Claude(t *testing.T) {
 	if testing.Short() {
 		t.Skip("skipping integration test in short mode")
@@ -622,8 +553,8 @@ echo "# Research Output" > "%s/research.md"
 	t.Setenv("PATH", mockBinDir+":"+os.Getenv("PATH"))
 
 	reg := llm.NewRegistry()
-	reg.Register(&claude.Provider{})
-	reg.Register(&codex.Provider{})
+	reg.Register(claude.NewProvider(""))
+	reg.Register(codex.NewProvider(""))
 
 	eventCh := make(chan interface{}, 100)
 	sm := session.NewManager(eventCh)
@@ -734,14 +665,20 @@ func TestRunResearch_GlobalBashRulesAutoApproveAcrossProviders(t *testing.T) {
 			tt.writeMockCLI(t, mockBinDir, artifactDir)
 			t.Setenv("PATH", mockBinDir+":"+os.Getenv("PATH"))
 
-			store := permission.NewStore(permDir)
-			if err := store.EnsureGlobalDefaults(); err != nil {
-				t.Fatalf("EnsureGlobalDefaults: %v", err)
+			var permCache *permission.Cache
+			permApp := fx.New(
+				fx.Supply(fx.Annotate(stateDir, fx.ResultTags(`name:"stateDir"`))),
+				permission.Module,
+				fx.Populate(&permCache),
+				fx.NopLogger,
+			)
+			if err := permApp.Err(); err != nil {
+				t.Fatalf("build permission cache: %v", err)
 			}
 
 			reg := llm.NewRegistry()
-			reg.Register(&claude.Provider{})
-			reg.Register(&codex.Provider{})
+			reg.Register(claude.NewProvider(""))
+			reg.Register(codex.NewProvider(""))
 
 			eventCh := make(chan interface{}, 100)
 			sm := session.NewManager(eventCh)
@@ -751,7 +688,7 @@ func TestRunResearch_GlobalBashRulesAutoApproveAcrossProviders(t *testing.T) {
 				SessionManager:  sm,
 				StateDir:        stateDir,
 				Registry:        reg,
-				PermissionCache: permission.NewCache(store),
+				PermissionCache: permCache,
 			}
 
 			f := newResearchFeature(t, workDir)
@@ -865,8 +802,8 @@ echo '{"method":"turn/completed","params":{"threadId":"test-thread-1","turn":{"i
 	t.Setenv("PATH", mockBinDir+":"+os.Getenv("PATH"))
 
 	reg := llm.NewRegistry()
-	reg.Register(&claude.Provider{})
-	reg.Register(&codex.Provider{})
+	reg.Register(claude.NewProvider(""))
+	reg.Register(codex.NewProvider(""))
 
 	eventCh := make(chan interface{}, 100)
 	sm := session.NewManager(eventCh)

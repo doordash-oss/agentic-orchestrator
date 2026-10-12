@@ -19,7 +19,6 @@ import userEvent from '@testing-library/user-event';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type {
   CloneOperation,
-  ClonePublication,
   ReadinessSnapshot,
   RepositoryIdentity,
   RepositoryState,
@@ -32,6 +31,8 @@ import {
   readySnapshot,
 } from '../test/agenticoMock';
 import { CreateFeatureForm } from './CreateFeatureForm';
+
+type ClonePublication = NonNullable<CloneOperation['published']>;
 
 afterEach(cleanup);
 

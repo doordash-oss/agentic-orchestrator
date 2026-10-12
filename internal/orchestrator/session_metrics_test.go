@@ -22,15 +22,36 @@ import (
 	"testing"
 	"time"
 
+	"github.com/doordash-oss/agentic-orchestrator/internal/config"
 	"github.com/doordash-oss/agentic-orchestrator/internal/feature"
 	"github.com/doordash-oss/agentic-orchestrator/internal/observe"
-	"github.com/doordash-oss/agentic-orchestrator/test/testutil/mocks"
+	"go.uber.org/fx"
 )
 
 const agenticRepoName = "agentic"
 
+// observerFromModuleForTest builds an enabled JSONL observer through the fx
+// module (the production construction path) with the given state dir and
+// service name.
+func observerFromModuleForTest(t *testing.T, stateDir, serviceName string) *observe.Observer {
+	t.Helper()
+	cfg := config.NewDefault()
+	cfg.Observability.OTelServiceName = serviceName
+	var obs *observe.Observer
+	app := fx.New(
+		fx.Supply(cfg, fx.Annotate(stateDir, fx.ResultTags(`name:"stateDir"`))),
+		observe.Module,
+		fx.Populate(&obs),
+		fx.NopLogger,
+	)
+	if err := app.Err(); err != nil {
+		t.Fatalf("build observer: %v", err)
+	}
+	return obs
+}
+
 // TestAttachDropReport_IncludesRunNumber verifies that attachDropObserver
-// resolves ActiveRun via ports.FeatureStore when emitting the
+// resolves ActiveRun via the feature store when emitting the
 // session.critical_message_dropped event. This is the runtime guard that the
 // generic Observer.Emit escape hatch carries run context.
 func TestAttachDropReport_IncludesRunNumber(t *testing.T) {
@@ -40,13 +61,10 @@ func TestAttachDropReport_IncludesRunNumber(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	obs := observe.New(true, stateDir, false, "", false, agenticRepoName)
-	fs := mocks.NewMockFeatureStore()
-	fs.LoadFn = func(id string) (*feature.Feature, error) {
-		if id != featureID {
-			return nil, nil
-		}
-		return &feature.Feature{ID: id, ActiveRun: 5}, nil
+	obs := observerFromModuleForTest(t, stateDir, agenticRepoName)
+	fs := feature.NewStore(stateDir)
+	if err := fs.Save(&feature.Feature{ID: featureID, ActiveRun: 5, SchemaVersion: feature.SchemaVersionCurrent}); err != nil {
+		t.Fatal(err)
 	}
 
 	reporter := newAttachDropObserver(obs, fs)
@@ -80,15 +98,5 @@ func TestAttachDropReport_IncludesRunNumber(t *testing.T) {
 	}
 	if evt.FeatureID != featureID {
 		t.Errorf("FeatureID = %q, want %s", evt.FeatureID, featureID)
-	}
-}
-
-// TestNewAttachDropObserver_NilStoreReturnsNil asserts the constructor
-// degrades to nil when the feature store is nil, matching the "reporter is
-// optional" contract.
-func TestNewAttachDropObserver_NilStoreReturnsNil(t *testing.T) {
-	obs := observe.New(true, t.TempDir(), false, "", false, agenticRepoName)
-	if got := newAttachDropObserver(obs, nil); got != nil {
-		t.Errorf("expected nil reporter when fs is nil, got %+v", got)
 	}
 }

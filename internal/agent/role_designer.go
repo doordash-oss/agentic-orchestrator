@@ -29,7 +29,7 @@ var designerRoleSpec = roleSpec{
 	Role:      RoleDesigner,
 	SkillName: "design",
 	OutputRoots: []outputRootSpec{
-		singleShotPhaseDirOutputRoot("Design phase artifact directory."),
+		iterationOutputRoot("phase_dir", "Design phase artifact directory."),
 	},
 	Artifacts: []roleArtifactSpec{
 		phaseMarkdownRoleArtifact("design markdown artifact", validateDesignDocumentArtifact),

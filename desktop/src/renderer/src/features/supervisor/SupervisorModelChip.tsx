@@ -43,7 +43,7 @@ import {
   supervisorHarnessGroups,
 } from './supervisorModel';
 
-export interface SupervisorModelChipProps {
+interface SupervisorModelChipProps {
   settings: SupervisorSettings;
   catalogue: ModelCatalogue | null;
   onCommit(request: SupervisorSettings): Promise<void>;

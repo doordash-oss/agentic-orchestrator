@@ -104,6 +104,38 @@ describe('SetupWizard provider step', () => {
     expect(screen.getByRole('button', { name: /check again/i })).toBeEnabled();
   });
 
+  it('shows endpoint reachability and its advisory warning on the provider row', () => {
+    installAgenticoMock();
+    const snapshot = unreadySnapshot();
+    const claude = snapshot.providers[0]!;
+    render(
+      <Harness
+        initial={{
+          ...snapshot,
+          providers: [
+            {
+              ...claude,
+              endpointReachable: false,
+              warning: {
+                code: 'provider_endpoint_unreachable',
+                class: 'warning',
+                title: 'Provider endpoint unreachable',
+                summary:
+                  'Provider endpoint gw.example.team (claude) is unreachable; claude sessions will fail until it can be reached.',
+              },
+            },
+          ],
+        }}
+      />,
+    );
+
+    const row = screen.getByText('claude').closest('li')!;
+    expect(within(row).getByText('unreachable')).toBeInTheDocument();
+    expect(within(row).getByText('provider_endpoint_unreachable')).toHaveClass(
+      'error-surface__code',
+    );
+  });
+
   it('renders each provider issue through a compact ErrorSurface with the code tag', () => {
     installAgenticoMock();
     render(<Harness initial={unreadySnapshot()} />);

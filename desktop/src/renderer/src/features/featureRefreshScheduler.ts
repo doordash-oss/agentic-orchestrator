@@ -16,7 +16,7 @@ limitations under the License.
 
 export const BACKGROUND_REFRESH_DELAY_MS = 5_000;
 
-export interface FeatureRefreshOptions {
+interface FeatureRefreshOptions {
   silent?: boolean;
 }
 

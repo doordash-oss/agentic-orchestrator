@@ -35,7 +35,7 @@ import { KeyedDraftStore } from './keyedDraftStore';
 
 const FILE_NAME = 'review-local-drafts.json';
 
-export interface LocalDraftStoreOptions {
+interface LocalDraftStoreOptions {
   warn?: (message: string) => void;
   now?: () => Date;
 }

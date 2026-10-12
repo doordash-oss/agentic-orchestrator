@@ -34,7 +34,7 @@ func retrySessionID(base string, sessionAttempt int) string {
 	return fmt.Sprintf("%s-retry-%02d", base, sessionAttempt)
 }
 
-func shouldRetryPlanInfrastructureSession(agentStatus string, sess ports.SessionView, cost SessionCost, duration time.Duration, sessionAttempt int) bool {
+func shouldRetryPlanInfrastructureSession(agentStatus string, sess ports.SessionView, cost sessionCost, duration time.Duration, sessionAttempt int) bool {
 	if sessionAttempt >= retryableInfrastructureSessionMaxAttempts {
 		return false
 	}
@@ -44,7 +44,7 @@ func shouldRetryPlanInfrastructureSession(agentStatus string, sess ports.Session
 	return isRetryableInfrastructureSessionFailure(sess, cost, duration)
 }
 
-func isRetryableInfrastructureSessionFailure(sess ports.SessionView, cost SessionCost, duration time.Duration) bool {
+func isRetryableInfrastructureSessionFailure(sess ports.SessionView, cost sessionCost, duration time.Duration) bool {
 	if sess == nil {
 		return false
 	}

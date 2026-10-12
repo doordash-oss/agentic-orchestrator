@@ -15,7 +15,6 @@
 package opencode
 
 import (
-	"encoding/json"
 	"reflect"
 	"sort"
 
@@ -78,20 +77,6 @@ func discoverEffortVariants(variants map[string]map[string]any) (map[llm.EffortL
 		}
 	}
 	return result, levels
-}
-
-func cloneCatalog(models []llm.ModelInfo) []llm.ModelInfo {
-	// Catalog metadata is JSON-shaped. Deep copies keep nested variant options
-	// isolated across refreshes, callers and concurrently built sessions.
-	data, err := json.Marshal(models)
-	if err != nil {
-		return nil
-	}
-	var result []llm.ModelInfo
-	if json.Unmarshal(data, &result) != nil {
-		return nil
-	}
-	return result
 }
 
 func (p *Provider) effortOptions(model string, level llm.EffortLevel) map[string]any {

@@ -16,13 +16,7 @@ limitations under the License.
 
 import { describe, expect, it } from 'vitest';
 
-import {
-  cleanShutdownFailure,
-  reapTrackedProcesses,
-  terminateElectronApp,
-  trackProcess,
-  untrackProcess,
-} from './appTermination.mjs';
+import { reapTrackedProcesses, trackProcess, untrackProcess } from './appTermination.mjs';
 
 /**
  * Minimal stand-in for a Playwright ElectronApplication process handle
@@ -54,60 +48,6 @@ function fakeHandle({ dieOn = ['SIGTERM', 'SIGKILL'] } = {}) {
   };
 }
 
-const fastTimeouts = { closeTimeoutMs: 20, sigtermTimeoutMs: 20, sigkillTimeoutMs: 20 };
-
-describe('terminateElectronApp', () => {
-  it('reports a graceful shutdown when close() exits the process without signals', async () => {
-    const handle = fakeHandle();
-    const app = {
-      close: async () => {
-        handle.exitCleanly();
-      },
-    };
-
-    const result = await terminateElectronApp(app, handle, fastTimeouts);
-
-    expect(result.method).toBe('graceful');
-    expect(handle.killed).toEqual([]);
-  });
-
-  it('escalates to SIGTERM when close() hangs (quit guard blocking)', async () => {
-    const handle = fakeHandle();
-    const app = { close: () => new Promise(() => {}) };
-
-    const result = await terminateElectronApp(app, handle, fastTimeouts);
-
-    expect(result.method).toBe('sigterm');
-    expect(handle.killed).toEqual(['SIGTERM']);
-    expect(handle.signalCode).toBe('SIGTERM');
-  });
-
-  it('escalates to SIGKILL when SIGTERM is also ignored', async () => {
-    const handle = fakeHandle({ dieOn: ['SIGKILL'] });
-    const app = { close: () => new Promise(() => {}) };
-
-    const result = await terminateElectronApp(app, handle, fastTimeouts);
-
-    expect(result.method).toBe('sigkill');
-    expect(handle.killed).toEqual(['SIGTERM', 'SIGKILL']);
-    expect(handle.signalCode).toBe('SIGKILL');
-  });
-
-  it('treats a close() rejection like a hang and still kills the process', async () => {
-    const handle = fakeHandle();
-    const app = {
-      close: async () => {
-        throw new Error('target closed');
-      },
-    };
-
-    const result = await terminateElectronApp(app, handle, fastTimeouts);
-
-    expect(result.method).toBe('sigterm');
-    expect(handle.signalCode).toBe('SIGTERM');
-  });
-});
-
 describe('process reaper', () => {
   it('SIGKILLs every still-live tracked process and clears the registry', () => {
     const live = fakeHandle({ dieOn: ['SIGKILL'] });
@@ -127,17 +67,5 @@ describe('process reaper', () => {
 
     reapTrackedProcesses();
     expect(live.killed).toEqual(['SIGKILL']);
-  });
-});
-
-describe('cleanShutdownFailure', () => {
-  it('is null for a graceful shutdown', () => {
-    expect(cleanShutdownFailure('graceful')).toBeNull();
-  });
-
-  it('explains the quit-guard leak for forced shutdowns', () => {
-    const message = cleanShutdownFailure('sigkill');
-    expect(message).toContain('did not quit cleanly');
-    expect(message).toContain('sigkill');
   });
 });

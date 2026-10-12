@@ -21,18 +21,18 @@ import (
 	"github.com/doordash-oss/agentic-orchestrator/internal/feature"
 )
 
-// RoundCommitKind classifies a completed loop round for commit messaging.
-type RoundCommitKind string
+// roundCommitKind classifies a completed loop round for commit messaging.
+type roundCommitKind string
 
 const (
 	// RoundCommitImplement is a round that started without pending reviewer
 	// feedback (initial implementation work or a fresh continuation).
-	RoundCommitImplement RoundCommitKind = "implement"
+	RoundCommitImplement roundCommitKind = "implement"
 	// RoundCommitFix is a phase-implement round that started with pending
 	// reviewer feedback from a CHANGES_REQUESTED review cycle.
-	RoundCommitFix RoundCommitKind = "fix"
+	RoundCommitFix roundCommitKind = "fix"
 	// RoundCommitFinalReviewFix is a feature-level Final Review fix round.
-	RoundCommitFinalReviewFix RoundCommitKind = "final_review_fix"
+	RoundCommitFinalReviewFix roundCommitKind = "final_review_fix"
 )
 
 // RoundCommitInput is the per-round completion event the phase-implement and
@@ -54,7 +54,7 @@ type RoundCommitInput struct {
 	Iteration int
 
 	// Kind classifies the round (implement / fix / final-review fix).
-	Kind RoundCommitKind
+	Kind roundCommitKind
 
 	// FixNumber is the per-phase (or feature-level for Final Review) fix
 	// counter when Kind is a fix kind; 0 otherwise.
@@ -92,9 +92,9 @@ var FinalReviewRootOrchestrationArtifacts = []string{
 // order, skipping missing or unreadable entries. Both round-commit trackers
 // rebuild their accounting through it so a crash-resumed loop labels rounds
 // identically to the interrupted run.
-func scanIterationMetas(am *ArtifactManager, artifactDir string, startIter int, visit func(IterationMeta)) {
+func scanIterationMetas(am *artifactManager, artifactDir string, startIter int, visit func(iterationMeta)) {
 	for j := 1; j <= startIter; j++ {
-		meta, err := am.ReadMeta(filepath.Join(artifactDir, fmt.Sprintf("iteration-%02d", j)))
+		meta, err := am.readMeta(filepath.Join(artifactDir, fmt.Sprintf("iteration-%02d", j)))
 		if err != nil {
 			continue
 		}
@@ -119,9 +119,9 @@ type implementRoundCommitTracker struct {
 
 // newImplementRoundCommitTracker scans the phase's persisted iteration metas
 // (1..startIter) to rebuild the round-commit accounting after a restart.
-func newImplementRoundCommitTracker(am *ArtifactManager, artifactDir string, startIter int) *implementRoundCommitTracker {
+func newImplementRoundCommitTracker(am *artifactManager, artifactDir string, startIter int) *implementRoundCommitTracker {
 	t := &implementRoundCommitTracker{}
-	scanIterationMetas(am, artifactDir, startIter, func(meta IterationMeta) {
+	scanIterationMetas(am, artifactDir, startIter, func(meta iterationMeta) {
 		if meta.ReviewStatus == agentStatusChangesRequested {
 			t.changesRequested++
 		}
@@ -178,9 +178,9 @@ type frRoundCommitTracker struct {
 	changesRequested int
 }
 
-func newFRRoundCommitTracker(am *ArtifactManager, artifactDir string, startIter int) *frRoundCommitTracker {
+func newFRRoundCommitTracker(am *artifactManager, artifactDir string, startIter int) *frRoundCommitTracker {
 	t := &frRoundCommitTracker{}
-	scanIterationMetas(am, artifactDir, startIter, func(meta IterationMeta) {
+	scanIterationMetas(am, artifactDir, startIter, func(meta iterationMeta) {
 		if meta.ReviewStatus == frMetaChangesRequested {
 			t.changesRequested++
 		}

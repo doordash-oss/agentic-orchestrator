@@ -46,8 +46,8 @@ func (sc SpanContext) WithRun(n int) SpanContext {
 	return sc
 }
 
-// NewSpanID generates a random 16-char hex span ID.
-func NewSpanID() string {
+// newSpanID generates a random 16-char hex span ID.
+func newSpanID() string {
 	b := make([]byte, 8)
 	_, _ = rand.Read(b)
 	return hex.EncodeToString(b)
@@ -67,7 +67,7 @@ func SpanContextForFeature(featureID, traceID, featureName, featureSpanID string
 	}
 	spanID := featureSpanID
 	if spanID == "" {
-		spanID = NewSpanID()
+		spanID = newSpanID()
 	}
 	return SpanContext{
 		TraceID:     traceID,
@@ -81,7 +81,7 @@ func SpanContextForFeature(featureID, traceID, featureName, featureSpanID string
 func (sc SpanContext) Child() SpanContext {
 	return SpanContext{
 		TraceID:      sc.TraceID,
-		SpanID:       NewSpanID(),
+		SpanID:       newSpanID(),
 		ParentSpanID: sc.SpanID,
 		FeatureID:    sc.FeatureID,
 		FeatureName:  sc.FeatureName,

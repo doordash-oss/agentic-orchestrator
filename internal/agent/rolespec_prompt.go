@@ -87,7 +87,7 @@ func buildImplementSystemPrompt(in implementSystemPromptInput) string {
 func buildRoleSystemPrompt(in roleSystemPromptInput) string {
 	spec := in.Spec
 	rt := roleRuntime{IterationDir: in.IterationDir}
-	roots := spec.OutputRootPaths(rt)
+	roots := spec.outputRootPaths(rt)
 	rootViews := make([]prompts.OutputRootView, 0, len(spec.OutputRoots))
 	for _, root := range spec.OutputRoots {
 		rootViews = append(rootViews, prompts.OutputRootView{
@@ -106,7 +106,7 @@ func buildRoleSystemPrompt(in roleSystemPromptInput) string {
 	for i := range requiredSkills {
 		requiredSkills[i].Condition = in.RequiredSkillConditions[requiredSkills[i].Name]
 	}
-	return prompts.RoleSystemPrompt(prompts.RoleSystemInput{
+	return prompts.MustRender(prompts.TemplateSystem, prompts.RoleSystemInput{
 		OutputRoots:          rootViews,
 		SkillPath:            skillPath,
 		RequiredSkills:       requiredSkills,

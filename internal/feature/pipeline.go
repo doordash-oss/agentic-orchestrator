@@ -36,25 +36,6 @@ func (p PipelineProfile) String() string {
 	return string(p)
 }
 
-// ConfigKey returns the user-facing/profile-config key.
-func (p PipelineProfile) ConfigKey() string {
-	return string(p)
-}
-
-// DisplayName returns the user-facing name for a pipeline profile.
-func (p PipelineProfile) DisplayName() string {
-	switch p {
-	case PipelineMedium:
-		return "Medium"
-	case PipelineLarge:
-		return "Large"
-	case PipelineMoonshot:
-		return "Moonshot"
-	default:
-		return string(p)
-	}
-}
-
 // IsValid returns true for known profiles.
 func (p PipelineProfile) IsValid() bool {
 	switch p {
@@ -64,10 +45,10 @@ func (p PipelineProfile) IsValid() bool {
 	return false
 }
 
-// PhasesForProfile returns the ordered phases for this profile.
+// phasesForProfile returns the ordered phases for this profile.
 // Medium: Plan, Implement, Review, Publish
 // Large/Moonshot: KnowledgeBase, Inquire, Research, Design, Plan, Implement, Review, Publish
-func PhasesForProfile(profile PipelineProfile) []Phase {
+func phasesForProfile(profile PipelineProfile) []Phase {
 	switch profile {
 	case PipelineMedium:
 		return []Phase{PhasePlan, PhaseImplement, PhaseReview, PhasePublish}
@@ -78,21 +59,9 @@ func PhasesForProfile(profile PipelineProfile) []Phase {
 	}
 }
 
-// MinimumProfileForPhase returns the least permissive profile that includes the given phase.
-// Medium includes: Plan, Implement, Review, Publish
-// Large/Moonshot include all 7 phases (same phase set, different validation behavior)
-func MinimumProfileForPhase(phase Phase) PipelineProfile {
-	switch phase {
-	case PhaseKnowledgeBase, PhaseInquire, PhaseResearch, PhaseDesign:
-		return PipelineLarge
-	default: // PhasePlan, PhaseImplement, PhaseReview, PhasePublish
-		return PipelineMedium
-	}
-}
-
 // HasPhase returns true if the given phase is part of this profile's pipeline.
 func (p PipelineProfile) HasPhase(phase Phase) bool {
-	return slices.Contains(PhasesForProfile(p), phase)
+	return slices.Contains(phasesForProfile(p), phase)
 }
 
 // UpgradeOptions returns the pipeline profiles this profile may upgrade into
@@ -113,14 +82,14 @@ func (p PipelineProfile) UpgradeOptions() []PipelineProfile {
 // FirstPhase returns the first phase to execute for this profile.
 // Medium: PhasePlan, Large/Moonshot: PhaseKnowledgeBase
 func (p PipelineProfile) FirstPhase() Phase {
-	phases := PhasesForProfile(p)
+	phases := phasesForProfile(p)
 	return phases[0]
 }
 
 // NextPhase returns the phase that follows `current` in this profile's pipeline.
 // Returns ("", false) if current is the last phase.
 func (p PipelineProfile) NextPhase(current Phase) (Phase, bool) {
-	phases := PhasesForProfile(p)
+	phases := phasesForProfile(p)
 	for i, ph := range phases {
 		if ph == current && i+1 < len(phases) {
 			return phases[i+1], true
@@ -179,23 +148,6 @@ func (p PipelineProfile) ShouldContractAgentEvidence() bool {
 	return p == PipelineMoonshot
 }
 
-// AllProfiles returns all profiles in cycle order: moonshot -> medium -> large.
-func AllProfiles() []PipelineProfile {
-	return []PipelineProfile{PipelineMoonshot, PipelineMedium, PipelineLarge}
-}
-
-// NextProfile returns the next profile in cycle order.
-// moonshot -> medium -> large -> moonshot
-func (p PipelineProfile) NextProfile() PipelineProfile {
-	profiles := AllProfiles()
-	for i, prof := range profiles {
-		if prof == p {
-			return profiles[(i+1)%len(profiles)]
-		}
-	}
-	return PipelineMoonshot
-}
-
 // DefaultCheckpointsForProfile returns the default checkpoints for a profile.
 func DefaultCheckpointsForProfile(profile PipelineProfile) Checkpoints {
 	switch profile {
@@ -212,55 +164,54 @@ func DefaultCheckpointsForProfile(profile PipelineProfile) Checkpoints {
 type GateIndex int
 
 const (
-	GateInquiryReview GateIndex = iota
-	GateResearchReview
-	GateDesignReview
-	GateRoadmapReview
-	GatePhasePlanReview
-	GateManualPublish
+	gateInquiryReview GateIndex = iota
+	gateResearchReview
+	gateDesignReview
+	gateRoadmapReview
+	gatePhasePlanReview
+	gateManualPublish
 )
 
 // GateProjection is the shared gate contract for a pipeline profile.
 type GateProjection struct {
 	Visible     []GateIndex
 	Checkpoints Checkpoints
-	FromConfig  bool
 }
 
 // ApplicableGates returns which gate indices are relevant for this profile.
-func (p PipelineProfile) ApplicableGates() []GateIndex {
+func (p PipelineProfile) applicableGates() []GateIndex {
 	switch p {
 	case PipelineMedium:
-		return []GateIndex{GateRoadmapReview, GatePhasePlanReview, GateManualPublish}
+		return []GateIndex{gateRoadmapReview, gatePhasePlanReview, gateManualPublish}
 	case PipelineLarge, PipelineMoonshot:
-		return []GateIndex{GateInquiryReview, GateResearchReview, GateDesignReview, GateRoadmapReview, GatePhasePlanReview, GateManualPublish}
+		return []GateIndex{gateInquiryReview, gateResearchReview, gateDesignReview, gateRoadmapReview, gatePhasePlanReview, gateManualPublish}
 	default:
-		return []GateIndex{GateInquiryReview, GateResearchReview, GateDesignReview, GateRoadmapReview, GatePhasePlanReview, GateManualPublish}
+		return []GateIndex{gateInquiryReview, gateResearchReview, gateDesignReview, gateRoadmapReview, gatePhasePlanReview, gateManualPublish}
 	}
 }
 
 // FilterCheckpoints zeroes out any gates not in this profile's applicable set.
-func (p PipelineProfile) FilterCheckpoints(cp Checkpoints) Checkpoints {
+func (p PipelineProfile) filterCheckpoints(cp Checkpoints) Checkpoints {
 	applicable := make(map[GateIndex]bool)
-	for _, g := range p.ApplicableGates() {
+	for _, g := range p.applicableGates() {
 		applicable[g] = true
 	}
-	if !applicable[GateInquiryReview] {
+	if !applicable[gateInquiryReview] {
 		cp.InquiryReview = false
 	}
-	if !applicable[GateResearchReview] {
+	if !applicable[gateResearchReview] {
 		cp.ResearchReview = false
 	}
-	if !applicable[GateDesignReview] {
+	if !applicable[gateDesignReview] {
 		cp.DesignReview = false
 	}
-	if !applicable[GateRoadmapReview] {
+	if !applicable[gateRoadmapReview] {
 		cp.RoadmapReview = false
 	}
-	if !applicable[GatePhasePlanReview] {
+	if !applicable[gatePhasePlanReview] {
 		cp.PhasePlanReview = false
 	}
-	if !applicable[GateManualPublish] {
+	if !applicable[gateManualPublish] {
 		cp.ManualPublish = false
 	}
 	return cp
@@ -269,7 +220,7 @@ func (p PipelineProfile) FilterCheckpoints(cp Checkpoints) Checkpoints {
 // NormalizeCheckpoints filters unsupported gates and enforces unpublished-save
 // invariants shared by editor snapshots and persisted feature config.
 func (p PipelineProfile) NormalizeCheckpoints(cp Checkpoints, publishable bool) Checkpoints {
-	cp = p.FilterCheckpoints(cp)
+	cp = p.filterCheckpoints(cp)
 	if !publishable {
 		cp.ManualPublish = true
 	}
@@ -279,10 +230,10 @@ func (p PipelineProfile) NormalizeCheckpoints(cp Checkpoints, publishable bool) 
 // ProjectGates returns the visible gates plus normalized checkpoint state for a profile.
 func (p PipelineProfile) ProjectGates(cp Checkpoints, publishable bool) GateProjection {
 	normalized := p.NormalizeCheckpoints(cp, publishable)
-	visible := append([]GateIndex(nil), p.ApplicableGates()...)
+	visible := append([]GateIndex(nil), p.applicableGates()...)
 	if !publishable {
 		visible = slices.DeleteFunc(visible, func(g GateIndex) bool {
-			return g == GateManualPublish
+			return g == gateManualPublish
 		})
 	}
 
@@ -290,38 +241,6 @@ func (p PipelineProfile) ProjectGates(cp Checkpoints, publishable bool) GateProj
 		Visible:     visible,
 		Checkpoints: normalized,
 	}
-}
-
-func mergeCheckpoints(checkpoints ...Checkpoints) Checkpoints {
-	merged := Checkpoints{}
-	for _, cp := range checkpoints {
-		merged.InquiryReview = merged.InquiryReview || cp.InquiryReview
-		merged.ResearchReview = merged.ResearchReview || cp.ResearchReview
-		merged.DesignReview = merged.DesignReview || cp.DesignReview
-		merged.RoadmapReview = merged.RoadmapReview || cp.RoadmapReview
-		merged.PhasePlanReview = merged.PhasePlanReview || cp.PhasePlanReview
-		merged.ManualPublish = merged.ManualPublish || cp.ManualPublish
-		merged.DraftPublish = merged.DraftPublish || cp.DraftPublish
-	}
-	return merged
-}
-
-// ProjectMergedGates merges checkpoint inputs, normalizes them for the profile,
-// and returns the visible gate contract for the current pipeline selection.
-func (p PipelineProfile) ProjectMergedGates(base Checkpoints, overrides []Checkpoints, publishable bool) GateProjection {
-	effective := p.FilterCheckpoints(base)
-	fromConfig := len(overrides) > 0
-	if fromConfig {
-		filtered := make([]Checkpoints, 0, len(overrides))
-		for _, override := range overrides {
-			filtered = append(filtered, p.FilterCheckpoints(override))
-		}
-		effective = mergeCheckpoints(filtered...)
-	}
-
-	projection := p.ProjectGates(effective, publishable)
-	projection.FromConfig = fromConfig
-	return projection
 }
 
 // ParsePipelineProfile converts a string to PipelineProfile, returning an error for invalid values.
@@ -335,19 +254,6 @@ func ParsePipelineProfile(s string) (PipelineProfile, error) {
 		return PipelineMoonshot, nil
 	default:
 		return "", fmt.Errorf("invalid pipeline profile %q: must be medium, large, or moonshot", s)
-	}
-}
-
-// ConfigCheckpointsToFeature converts config.Checkpoints to feature.Checkpoints.
-func ConfigCheckpointsToFeature(cc config.Checkpoints) Checkpoints {
-	return Checkpoints{
-		InquiryReview:   cc.InquiryReview,
-		ResearchReview:  cc.ResearchReview,
-		DesignReview:    cc.DesignReview,
-		RoadmapReview:   cc.RoadmapReview,
-		PhasePlanReview: cc.PhasePlanReview,
-		ManualPublish:   cc.ManualPublish,
-		DraftPublish:    cc.DraftPublish,
 	}
 }
 

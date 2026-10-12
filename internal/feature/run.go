@@ -40,19 +40,19 @@ type RewindRequest struct {
 	RoadmapPhase int
 }
 
-// RewindWarningKind identifies the non-fatal rewind failure family.
-type RewindWarningKind string
+// rewindWarningKind identifies the non-fatal rewind failure family.
+type rewindWarningKind string
 
 const (
 	// RewindWarningPullRequestClose marks a pull request that could not be
 	// closed during the rewind.
-	RewindWarningPullRequestClose RewindWarningKind = "pull_request_close"
+	RewindWarningPullRequestClose rewindWarningKind = "pull_request_close"
 	// RewindWarningBackupBranch marks a backup branch that could not be
 	// created during the rewind.
-	RewindWarningBackupBranch RewindWarningKind = "backup_branch"
+	RewindWarningBackupBranch rewindWarningKind = "backup_branch"
 	// RewindWarningWorktreeReset marks a worktree that could not be reset
 	// during the rewind.
-	RewindWarningWorktreeReset RewindWarningKind = "worktree_reset"
+	RewindWarningWorktreeReset rewindWarningKind = "worktree_reset"
 )
 
 // RewindWarning is one typed non-fatal rewind failure: the cause family, the
@@ -60,7 +60,7 @@ const (
 // mutation-target boundary classifies it into a canonical rewind warning
 // code with the repositories block; no layer renders it as text first.
 type RewindWarning struct {
-	Kind   RewindWarningKind
+	Kind   rewindWarningKind
 	Repo   string
 	Branch string
 	Err    error
@@ -89,7 +89,7 @@ type Run struct {
 
 	// FeatureSeq is the PersistSeq of the feature save that last wrote this
 	// file through saveUnlocked. Run-only writes (seal, fork skeletons,
-	// SaveRun paths) leave it at its last stamped value or zero, so a value
+	// standalone run writes) leave it at its last stamped value or zero, so a value
 	// strictly newer than the feature record's PersistSeq can only mean a
 	// reader interleaved a joint save between its feature and run reads.
 	FeatureSeq int64 `yaml:"feature_seq,omitempty"`
@@ -166,6 +166,7 @@ type Run struct {
 	// Plan validation + gate state (moved from Feature).
 	ValidatingPlan    bool              `yaml:"validating_plan,omitempty"`
 	ValidatorStatuses map[string]string `yaml:"validator_statuses,omitempty"`
+	ValidatorErrors   map[string]string `yaml:"validator_errors,omitempty"`
 	// VerificationItems is the ordered live progress of harness-executed
 	// testing-contract commands while CurrentPhaseStatus is "verifying".
 	VerificationItems  []VerificationItemStatus `yaml:"verification_items,omitempty"`
@@ -211,6 +212,19 @@ type Run struct {
 	// single-repo NEED_USER_INPUT gate. Empty when no gate is open. Multi-repo
 	// runs persist the per-repo gate path on RepoImplState instead.
 	PendingNeedUserInputPath string `yaml:"pending_need_user_input_path,omitempty"`
+
+	// Sandbox is set once, the first time this run executes harness
+	// verification or launches a sandboxed review validator while the OS
+	// sandbox is unavailable (e.g. nested macOS sandbox-exec), so the run
+	// record shows those commands ran unconfined. Absent otherwise.
+	Sandbox *SandboxRecord `yaml:"sandbox,omitempty"`
+}
+
+// SandboxRecord notes that the verification sandbox was unavailable for a
+// run and why.
+type SandboxRecord struct {
+	Available bool   `yaml:"available"`
+	Reason    string `yaml:"reason,omitempty"`
 }
 
 // SessionCostRecord is one accounted LLM session within a run. PhaseCosts is
@@ -224,28 +238,24 @@ type SessionCostRecord struct {
 	CostUSD           float64 `yaml:"cost_usd"`
 	CostSource        string  `yaml:"cost_source,omitempty"`
 	CostCreditsMicros *int64  `yaml:"cost_credits_micros,omitempty"`
+	// Token counts are recorded so sessions whose provider reported no price
+	// (CostSource "unavailable") still leave an auditable usage row.
+	InputTokens              int `yaml:"input_tokens,omitempty"`
+	OutputTokens             int `yaml:"output_tokens,omitempty"`
+	CacheReadInputTokens     int `yaml:"cache_read_input_tokens,omitempty"`
+	CacheCreationInputTokens int `yaml:"cache_creation_input_tokens,omitempty"`
+}
+
+// HasUsage reports whether the record carries any cost, credit, or token
+// signal worth persisting.
+func (r SessionCostRecord) HasUsage() bool {
+	return r.CostUSD > 0 || r.CostCreditsMicros != nil ||
+		r.InputTokens+r.OutputTokens+r.CacheReadInputTokens+r.CacheCreationInputTokens > 0
 }
 
 // IsSealed reports whether this run has been sealed (rewound past).
-// A sealed run is immutable: SaveRun panics if called on one.
+// A sealed run is immutable after seal-and-fork commits it.
 func (r *Run) IsSealed() bool { return r != nil && r.SealedAt != nil }
-
-// AccumulateActiveTime moves elapsed time from ActivePhaseStart into
-// PhaseTimings under the ActiveTimingKey, then clears ActivePhaseStart.
-// ActiveTimingKey is intentionally preserved so rebase cycle keys survive
-// interrupt/fail transitions and are available when
-// the phase is resumed.
-func (r *Run) AccumulateActiveTime() {
-	if r == nil || r.ActivePhaseStart == nil || r.ActiveTimingKey == "" {
-		return
-	}
-	elapsed := time.Since(*r.ActivePhaseStart)
-	if r.PhaseTimings == nil {
-		r.PhaseTimings = make(map[string]time.Duration)
-	}
-	r.PhaseTimings[r.ActiveTimingKey] += elapsed
-	r.ActivePhaseStart = nil
-}
 
 // SetRoadmapPhaseFrontend records whether a roadmap phase contains frontend
 // work. Non-positive phases are ignored because roadmap phases are 1-indexed.
@@ -327,14 +337,6 @@ func (r *Run) TotalCost() float64 {
 		total += c
 	}
 	return total
-}
-
-// PhaseCost returns the accumulated cost for a specific phase/cycle key.
-func (r *Run) PhaseCost(key string) float64 {
-	if r == nil {
-		return 0
-	}
-	return r.PhaseCosts[key]
 }
 
 // AddPhaseCost adds a cost amount to the given phase/cycle key.

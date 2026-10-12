@@ -183,17 +183,13 @@ func (h *supervisorHarness) start(mutate ...func(*supervisor.Options)) {
 	runtime := server.RuntimeIdentity{RuntimeDir: h.runtimeDir, StateDir: h.stateDir, Config: filepath.Join(h.runtimeDir, "config.yaml")}
 	if h.updates != nil {
 		rs, err := server.Start(context.Background(), server.Options{
-			AuthToken:    supervisorTestToken,
-			ListenAddr:   fmt.Sprintf("127.0.0.1:%d", selfupdateFreePort(h.t, "127.0.0.1")),
-			Registry:     h.registry,
-			FeatureStore: h.store,
-			Features:     h.store,
-			Sessions:     h.sessions,
-			Mutations:    mutations.New(mutations.Deps{Sessions: h.sessions}),
-			Supervisor:   coord,
-			Admission:    h.admission,
-			Updates:      *h.updates,
-			Runtime:      runtime,
+			ListenAddr: fmt.Sprintf("127.0.0.1:%d", selfupdateFreePort(h.t, "127.0.0.1")),
+			HandlerOptions: server.HandlerOptions{
+				AuthToken: supervisorTestToken, Registry: h.registry, FeatureStore: h.store,
+				Features: h.store, Sessions: h.sessions,
+				Mutations:  mutations.New(mutations.Deps{Sessions: h.sessions}),
+				Supervisor: coord, Admission: h.admission, Updates: *h.updates, Runtime: runtime,
+			},
 		})
 		if err != nil {
 			h.t.Fatalf("server.Start: %v", err)

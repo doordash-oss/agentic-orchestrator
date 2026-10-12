@@ -37,8 +37,8 @@ const (
 	PolicyAuto Policy = "auto"
 )
 
-// PolicyDefault is the policy used when no source expresses a preference.
-const PolicyDefault = PolicyNotify
+// policyDefault is the policy used when no source expresses a preference.
+const policyDefault = PolicyNotify
 
 // ParsePolicyValue parses one raw policy value (flag, env, or config) after
 // trimming. ok is false for any value that is not exactly off, notify, or
@@ -63,8 +63,8 @@ const (
 	DefaultChannel = "stable"
 	// DefaultStrategy is the default (reserved) update strategy.
 	DefaultStrategy = "quiesce"
-	// MaxCheckJitter bounds periodic schedule jitter: twenty minutes.
-	MaxCheckJitter = 20 * time.Minute
+	// maxCheckJitter bounds periodic schedule jitter: twenty minutes.
+	maxCheckJitter = 20 * time.Minute
 )
 
 // StartupSettings is the resolved, validated update configuration a server
@@ -97,24 +97,24 @@ type SettingsSources struct {
 	ConfigWindow        string
 }
 
-// SettingsError describes one invalid update setting. Field names the setting
+// settingsError describes one invalid update setting. Field names the setting
 // (flag, env, or a config key), Value is the offending raw value, and Reason
 // explains the expected form.
-type SettingsError struct {
+type settingsError struct {
 	Field  string
 	Value  string
 	Reason string
 }
 
-func (e *SettingsError) Error() string {
+func (e *settingsError) Error() string {
 	return fmt.Sprintf("invalid update setting %s=%q: %s", e.Field, e.Value, e.Reason)
 }
 
 // ResolveStartupSettings resolves and validates the effective update startup
-// settings from the precedence chain. Malformed values return *SettingsError.
+// settings from the precedence chain. Malformed values return *settingsError.
 func ResolveStartupSettings(src SettingsSources) (StartupSettings, error) {
 	settings := StartupSettings{
-		Policy:        PolicyDefault,
+		Policy:        policyDefault,
 		Channel:       DefaultChannel,
 		CheckInterval: DefaultCheckInterval,
 		Strategy:      DefaultStrategy,
@@ -132,7 +132,7 @@ func ResolveStartupSettings(src SettingsSources) (StartupSettings, error) {
 	if rawPolicy != "" {
 		policy, ok := ParsePolicyValue(rawPolicy)
 		if !ok {
-			return settings, &SettingsError{
+			return settings, &settingsError{
 				Field:  source,
 				Value:  rawPolicy,
 				Reason: "expected off, notify, or auto",
@@ -143,7 +143,7 @@ func ResolveStartupSettings(src SettingsSources) (StartupSettings, error) {
 
 	if v := strings.TrimSpace(src.ConfigChannel); v != "" {
 		if v != DefaultChannel {
-			return settings, &SettingsError{
+			return settings, &settingsError{
 				Field:  "server.updates.channel",
 				Value:  src.ConfigChannel,
 				Reason: fmt.Sprintf("expected %q; only the stable channel is supported", DefaultChannel),
@@ -155,7 +155,7 @@ func ResolveStartupSettings(src SettingsSources) (StartupSettings, error) {
 	if v := strings.TrimSpace(src.ConfigCheckInterval); v != "" {
 		d, err := time.ParseDuration(v)
 		if err != nil || d <= 0 {
-			return settings, &SettingsError{
+			return settings, &settingsError{
 				Field:  "server.updates.check_interval",
 				Value:  src.ConfigCheckInterval,
 				Reason: "expected a positive Go duration like 6h or 30m",
@@ -166,7 +166,7 @@ func ResolveStartupSettings(src SettingsSources) (StartupSettings, error) {
 
 	if v := strings.TrimSpace(src.ConfigStrategy); v != "" {
 		if v != "idle" && v != "quiesce" {
-			return settings, &SettingsError{
+			return settings, &settingsError{
 				Field:  "server.updates.strategy",
 				Value:  src.ConfigStrategy,
 				Reason: "expected idle or quiesce",
@@ -176,8 +176,8 @@ func ResolveStartupSettings(src SettingsSources) (StartupSettings, error) {
 	}
 
 	if v := strings.TrimSpace(src.ConfigWindow); v != "" {
-		if err := ValidateWindow(v); err != nil {
-			return settings, &SettingsError{
+		if err := validateWindow(v); err != nil {
+			return settings, &settingsError{
 				Field:  "server.updates.window",
 				Value:  src.ConfigWindow,
 				Reason: err.Error(),
@@ -226,8 +226,8 @@ func ParseWindow(v string) (Window, error) {
 	return Window{Start: minutes[0], End: minutes[1]}, nil
 }
 
-// ValidateWindow checks the local-time maintenance-window syntax.
-func ValidateWindow(v string) error {
+// validateWindow checks the local-time maintenance-window syntax.
+func validateWindow(v string) error {
 	_, err := ParseWindow(v)
 	return err
 }
@@ -256,12 +256,12 @@ func (w Window) NextOpen(t time.Time) time.Time {
 }
 
 // JitterDelay returns the periodic scheduling jitter for the configured
-// interval: at most MaxCheckJitter, clamped to a quarter of the interval so
+// interval: at most maxCheckJitter, clamped to a quarter of the interval so
 // even very short test intervals keep every realized delay positive. The
 // returned magnitude is the half-width of the jitter band; the caller draws
 // an offset in [-magnitude, +magnitude).
 func JitterDelay(interval time.Duration) time.Duration {
-	magnitude := MaxCheckJitter
+	magnitude := maxCheckJitter
 	if interval > 0 && interval/4 < magnitude {
 		magnitude = interval / 4
 	}

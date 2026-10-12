@@ -16,7 +16,7 @@ Every operation the supervisor uses, grouped by job. Each entry gives the method
 
 - `GET /api/v1/features` — list top-level feature summaries (`id`, `name`, `status`, `current_phase`, `active_run`, `errors`, `active_child`). Child features appear under their parent's `active_child` and `child_history`.
   Example: `"$AGENTICO_BIN" api GET /api/v1/features`
-- `POST /api/v1/features` — create a feature. Required: `name`. Common optional fields: `description` (the brief, up to 10000 characters), `repos` (repository names from `workspace.repositories[].name` in `GET /api/v1/readiness`), `pipeline` (`medium`, `large`, `moonshot`), `inquireness` (`none`, `medium`, `high`), `risk_level` (`low`, `medium`, `high`), `exit_criteria`, `models`, `checkpoints`, `use_current_branch`, `idempotency_key`. Returns 201 with the new feature's ID; creation only queues worktree setup, so follow it with the `setup` action.
+- `POST /api/v1/features` — create a feature. Required: `name`. Common optional fields: `description` (the brief, up to 10000 characters), `repos` (repository names from `workspace.repositories[].name` in `GET /api/v1/readiness`), `pipeline` (`medium`, `large`, `moonshot`), `inquireness` (`none`, `medium`, `high`), `risk_level` (`low`, `medium`, `high`), `exit_criteria`, `models`, `checkpoints`, `use_current_branch`, `idempotency_key`. Returns 201 with the new feature's ID. Creation only queues worktree setup and never runs it: the feature reads `SettingUpWorktrees` with `active_run_detail.setup.status` `queued` (no `started_at`) and an enabled `setup` action until you dispatch it, so follow creation with the `setup` action.
   Example: `"$AGENTICO_BIN" api POST /api/v1/features '{"name":"Add CSV export","description":"Add a CSV export button to the reports page.","repos":["web-app"],"pipeline":"medium"}'`
 - `GET /api/v1/features/{feature_id}` — read one feature's detail: status, phase, runs, repositories, gates (`review_gate`, `need_user_input`), `failure`, `errors`, and the `actions` catalog saying which actions are enabled and why others are disabled.
   Example: `"$AGENTICO_BIN" api GET /api/v1/features/{feature_id}`
@@ -51,7 +51,7 @@ All actions use `POST /api/v1/features/{feature_id}/actions/{action}`. Check the
   Example: `"$AGENTICO_BIN" api POST /api/v1/features/{feature_id}/actions/retry '{}'`
 - `POST /api/v1/features/{feature_id}/actions/restart` — restart a feature that stopped at its iteration limit. Optional: `max_iterations_delta`, `max_plan_iterations_delta` raise those limits.
   Example: `"$AGENTICO_BIN" api POST /api/v1/features/{feature_id}/actions/restart '{"max_iterations_delta":2}'`
-- `POST /api/v1/features/{feature_id}/actions/setup` — dispatch worktree setup for a newly created feature, or retry it after it failed. Body `{}`.
+- `POST /api/v1/features/{feature_id}/actions/setup` — dispatch the queued worktree setup of a newly created feature, or rerun the unfinished tasks after setup failed. Returns immediately; setup runs in the background (`setup.status` `running`, each task `queued` → `running` → `done` or `failed`) and the feature becomes `Created` when it finishes, usually within seconds. It never starts the pipeline; use `start` for that. Body `{}`.
   Example: `"$AGENTICO_BIN" api POST /api/v1/features/{feature_id}/actions/setup '{}'`
 - `POST /api/v1/features/{feature_id}/actions/rewind` — rewind to an earlier phase. Required: `target_phase`. Optional: `roadmap_phase`, `upgrade_pipeline`, and `source_run_number` plus `source_revision` from the rewind preview (send them so a stale preview is refused).
   Example: `"$AGENTICO_BIN" api POST /api/v1/features/{feature_id}/actions/rewind '{"target_phase":"plan","source_run_number":1,"source_revision":"{source_revision}"}'`
@@ -63,7 +63,7 @@ All actions use `POST /api/v1/features/{feature_id}/actions/{action}`. Check the
   Example: `"$AGENTICO_BIN" api POST /api/v1/features/{feature_id}/actions/testing-contract-waive '{"item_ids":["{item_id}"],"reason":"User waived: no display on this machine."}'`
 - `POST /api/v1/features/{feature_id}/actions/publish` — publish (open or update pull requests). Optional: `repos`, `title`, `body`, `source_revision` from the completion preflight.
   Example: `"$AGENTICO_BIN" api POST /api/v1/features/{feature_id}/actions/publish '{"source_revision":"{source_revision}"}'`
-- `POST /api/v1/features/{feature_id}/actions/{action}/{subaction}` — run a named sub-action; `{subaction}` is `description` or `fetch`. The publish description sub-action generates a PR title and body. Optional: `repos`.
+- `POST /api/v1/features/{feature_id}/actions/{action}/{subaction}` — run a named sub-action; `{subaction}` is `description`, `fetch`, or `selection`. The publish description sub-action generates a PR title and body. Optional: `repos`.
   Example: `"$AGENTICO_BIN" api POST /api/v1/features/{feature_id}/actions/publish/description '{}'`
 - `POST /api/v1/features/{feature_id}/actions/merge` — merge the published pull requests. Optional: `source_revision`.
   Example: `"$AGENTICO_BIN" api POST /api/v1/features/{feature_id}/actions/merge '{"source_revision":"{source_revision}"}'`
@@ -128,7 +128,7 @@ Feature sessions ask questions (ask-user) and request help; both wait in the pen
 
 ## Transcripts and output streams
 
-- `GET /api/v1/sessions/{session_id}/transcript` — read a bounded page of the session's structured transcript. Optional query: `offset`, `limit`.
+- `GET /api/v1/sessions/{session_id}/transcript` — read a bounded page of the session's structured transcript (`tool_use` and `tool_progress` rows carry a one-line `tool_call.summary` naming the path, pattern, or command when known). Optional query: `offset`, `limit`.
   Example: `"$AGENTICO_BIN" api GET '/api/v1/sessions/{session_id}/transcript?limit=50'`
 - `GET /api/v1/sessions/{session_id}/output/stream` — tail the session's transcript records as they are written. Requires `--timeout`. Optional query: `from` (the transcript row index to start at).
   Example: `"$AGENTICO_BIN" api --timeout 30s GET '/api/v1/sessions/{session_id}/output/stream?from=120'`
@@ -137,7 +137,7 @@ Feature sessions ask questions (ask-user) and request help; both wait in the pen
 
 - `GET /api/v1/features/{feature_id}/runs` — list the feature's runs, newest first. Optional query: `page`, `page_size`.
   Example: `"$AGENTICO_BIN" api GET /api/v1/features/{feature_id}/runs`
-- `GET /api/v1/features/{feature_id}/runs/{run_number}` — one run's detail: seal, provenance, timing, cost.
+- `GET /api/v1/features/{feature_id}/runs/{run_number}` — one run's detail: seal, provenance, timing, cost, and `sandbox` (`{available:false, reason}`, present only when the run's verification commands or review validators ran without the OS sandbox).
   Example: `"$AGENTICO_BIN" api GET /api/v1/features/{feature_id}/runs/{run_number}`
 - `GET /api/v1/features/{feature_id}/runs/{run_number}/sessions` — the sessions that belong to one run.
   Example: `"$AGENTICO_BIN" api GET /api/v1/features/{feature_id}/runs/{run_number}/sessions`
@@ -183,6 +183,10 @@ Recovery lists sessions orphaned by a previous server process.
   Example: `"$AGENTICO_BIN" api GET /api/v1/readiness/runtime`
 - `POST /api/v1/readiness/runtime/refresh` — refresh runtime readiness without repository inspection. Body `{}`.
   Example: `"$AGENTICO_BIN" api POST /api/v1/readiness/runtime/refresh '{}'`
+
+Each `providers[]` entry may carry `endpoint_reachable` (result of a short, unauthenticated probe of the provider's custom API endpoint, such as an OpenCode `baseURL`, `ANTHROPIC_BASE_URL`, or a Codex `model_provider` `base_url`; absent when none is configured or the background check is still running) and `warning`. A `provider_endpoint_unreachable` warning also appears in `issues` and does not set `ready:false`, but sessions on that provider will fail to connect. Tell the user to check their VPN or network, then refresh readiness. A refresh waits up to 3 seconds for the check; plain reads use the cached result and recheck in the background.
+
+On macOS, Agentico runs testing-contract commands and Final Review validators under `sandbox-exec`. It checks once per server process that `sandbox-exec` can apply a profile. macOS does not allow nested sandboxes, so when Agentico itself runs inside one (hardened CI, an agent sandbox, or Agentico validating itself), that check fails and `issues` carries one `verification_sandbox_unavailable` warning. The probe's reason is in `diagnostics`, and `ready` stays unchanged. In that state, each contract command runs once, unsandboxed: there is no sandboxed attempt and no confirmation rerun, and the result notes `verification sandbox unavailable (<reason>)`. Validators launch without the sandbox wrapper. The affected run records `sandbox` in its run detail. To restore write confinement, run Agentico outside the outer sandbox and restart the server.
 
 ## Runtime config
 

@@ -53,8 +53,8 @@ func TestRefactorPassForkPoint_NamesForkPointPerRepo(t *testing.T) {
 // resolve relative language into absolute end-state statements.
 func TestSpecPhasePromptsCarryRefactorPassContext(t *testing.T) {
 	child := refactorChildFixture()
-	roadmap := BuildRoadmapPrompt(child, "", "", "/path/to/design.md", nil)
-	design := BuildDesignPrompt(child, "", "", "/path/to/research.md", nil)
+	roadmap := buildRoadmapPromptWithResearch(child, "/path/to/design.md", "", nil)
+	design := buildDesignPrompt(child, "/path/to/research.md", nil)
 
 	for name, prompt := range map[string]string{"roadmap": roadmap, "design": design} {
 		if !strings.Contains(prompt, "## Refactor Pass Context") {
@@ -83,10 +83,10 @@ func TestSpecPhasePromptsCarryRefactorPassContext(t *testing.T) {
 		Inquireness: feature.InquirenessMedium,
 		Repos:       []feature.FeatureRepo{{Name: "repo-a", BaseBranch: "main"}},
 	}
-	if strings.Contains(BuildRoadmapPrompt(top, "", "", "", nil), "Refactor Pass Context") {
+	if strings.Contains(buildRoadmapPromptWithResearch(top, "", "", nil), "Refactor Pass Context") {
 		t.Fatal("top-level roadmap prompt unexpectedly carries the refactor pass context")
 	}
-	if strings.Contains(BuildDesignPrompt(top, "", "", "", nil), "Refactor Pass Context") {
+	if strings.Contains(buildDesignPrompt(top, "", nil), "Refactor Pass Context") {
 		t.Fatal("top-level design prompt unexpectedly carries the refactor pass context")
 	}
 }
@@ -99,14 +99,14 @@ func TestSpecPhasePromptsCarryRefactorPassContext(t *testing.T) {
 func TestSpecConsumerPromptsResolveTheForkPoint(t *testing.T) {
 	forkPoint := "repo-a @ abc123def456"
 
-	review := BuildImplementationReviewAxisPromptWithOpts(ImplementationReviewAxisPromptOpts{
+	review := buildImplementationReviewAxisPromptWithOpts(implementationReviewAxisPromptOpts{
 		Gate:                  implementationReviewGateFinal,
 		AxisLabel:             "QA",
 		DiffBase:              "main",
 		RefactorPassForkPoint: forkPoint,
 		FeedbackPath:          "/state/review-feedback.md",
 	})
-	fix := BuildFinalFixPrompt(FinalFixPromptOpts{
+	fix := buildFinalFixPrompt(finalFixPromptOpts{
 		Feedback:              "revert the body",
 		FeedbackPath:          "/state/review-feedback.md",
 		Iteration:             2,
@@ -136,7 +136,7 @@ func TestSpecConsumerPromptsResolveTheForkPoint(t *testing.T) {
 		t.Fatalf("fix prompt missing the misattribution escape hatch:\n%s", fix)
 	}
 
-	plain := BuildImplementationReviewAxisPromptWithOpts(ImplementationReviewAxisPromptOpts{
+	plain := buildImplementationReviewAxisPromptWithOpts(implementationReviewAxisPromptOpts{
 		Gate:         implementationReviewGateFinal,
 		AxisLabel:    "QA",
 		FeedbackPath: "/state/review-feedback.md",

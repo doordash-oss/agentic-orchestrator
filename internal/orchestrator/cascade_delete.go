@@ -27,18 +27,8 @@ import (
 	"github.com/doordash-oss/agentic-orchestrator/internal/ports"
 )
 
-type cascadeDeleteStore interface {
-	BeginCascadeDelete(parentID string, now time.Time) (*feature.CascadeDeleteIntent, error)
-	LoadCascadeDelete(parentID string) (*feature.CascadeDeleteIntent, error)
-	SaveCascadeDelete(parentID string, intent *feature.CascadeDeleteIntent) error
-}
-
 func (o *Orchestrator) cascadeOwnsRelationship(parentID string) (bool, error) {
-	journals, ok := o.deps.Store.(cascadeDeleteStore)
-	if !ok {
-		return false, nil
-	}
-	_, err := journals.LoadCascadeDelete(parentID)
+	_, err := o.deps.Store.LoadCascadeDelete(parentID)
 	if err == nil {
 		return true, nil
 	}
@@ -52,13 +42,7 @@ func (o *Orchestrator) cascadeOwnsRelationship(parentID string) (bool, error) {
 // Attention is a convergent outcome, not a startup failure; material journal
 // read/write failures fail recovery closed.
 func (o *Orchestrator) reconcileCascadeDeletes() error {
-	if o.deps.Store == nil {
-		return nil
-	}
-	journals, ok := o.deps.Store.(cascadeDeleteStore)
-	if !ok {
-		return nil
-	}
+	journals := o.deps.Store
 	features, err := o.deps.Store.List()
 	if err != nil {
 		return fmt.Errorf("listing cascade delete intents: %w", err)
@@ -89,21 +73,11 @@ func (o *Orchestrator) deleteCascade(featureID string) (feature.CascadeDeleteRes
 
 	// Release any KB locks the feature still owns before its durable record
 	// disappears, so queued KB waiters are woken rather than orphaned.
-	if o.deps.Lifecycle != nil {
-		if f, err := o.deps.Lifecycle.Get(featureID); err == nil {
-			o.releaseKBLocksForFeature(f)
-		}
+	if f, err := o.deps.Store.Load(featureID); err == nil {
+		o.releaseKBLocksForFeature(f)
 	}
 
-	journals, ok := o.deps.Store.(cascadeDeleteStore)
-	if !ok {
-		// Keep small unit-test and embedding implementations source-compatible.
-		// Production wiring always supplies *feature.Store.
-		if err := o.deleteWithoutCascade(featureID); err != nil {
-			return feature.CascadeDeleteResult{}, err
-		}
-		return completedCascadeResult(featureID), nil
-	}
+	journals := o.deps.Store
 
 	var before *feature.CascadeDeleteIntent
 	if existing, loadErr := journals.LoadCascadeDelete(featureID); loadErr == nil {
@@ -200,7 +174,7 @@ func (o *Orchestrator) deleteCascade(featureID string) (feature.CascadeDeleteRes
 }
 
 func (o *Orchestrator) emitCascadeProgressIfChanged(
-	journals cascadeDeleteStore,
+	journals *feature.Store,
 	before, attempted *feature.CascadeDeleteIntent,
 ) {
 	current, err := journals.LoadCascadeDelete(attempted.ParentID)
@@ -219,20 +193,6 @@ func (o *Orchestrator) emitCascadeProgressIfChanged(
 			Message:   "relationship cascade " + string(current.Status),
 		})
 	}
-}
-
-func (o *Orchestrator) deleteWithoutCascade(featureID string) error {
-	o.stopFeatureSessions(featureID)
-	if o.deps.Lifecycle != nil {
-		if err := o.deps.Lifecycle.Delete(featureID); err != nil {
-			return fmt.Errorf("deleting feature: %w", err)
-		}
-		return nil
-	}
-	if o.deps.Store == nil {
-		return errors.New("feature store is not configured")
-	}
-	return o.deps.Store.Delete(featureID)
 }
 
 func (o *Orchestrator) quiesceCascadeSessions(intent *feature.CascadeDeleteIntent) error {
@@ -284,7 +244,7 @@ func (o *Orchestrator) settleCascadeAttention(intent *feature.CascadeDeleteInten
 }
 
 func (o *Orchestrator) classifyCascadeRefs(
-	journals cascadeDeleteStore,
+	journals *feature.Store,
 	intent *feature.CascadeDeleteIntent,
 ) (bool, error) {
 	intent.Diagnostics = nil
@@ -456,7 +416,7 @@ func (o *Orchestrator) addCascadeRefDiagnostics(
 }
 
 func (o *Orchestrator) cleanupCascadeResources(
-	journals cascadeDeleteStore,
+	journals *feature.Store,
 	intent *feature.CascadeDeleteIntent,
 ) error {
 	intent.Diagnostics = nil
@@ -528,7 +488,7 @@ func (o *Orchestrator) cleanupCascadeResources(
 }
 
 func (o *Orchestrator) parkCascadeCleanup(
-	journals cascadeDeleteStore,
+	journals *feature.Store,
 	intent *feature.CascadeDeleteIntent,
 	code string,
 	cause error,

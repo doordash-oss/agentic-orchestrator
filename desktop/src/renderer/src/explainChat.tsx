@@ -28,7 +28,7 @@ import { createContext, useContext, type ReactNode } from 'react';
 import type { AppRouteEvent } from '../../shared/ipc';
 
 /** Issues a route request exactly as App's root route requester does. */
-export type ExplainChatRequester = (event: AppRouteEvent) => void;
+type ExplainChatRequester = (event: AppRouteEvent) => void;
 
 const ExplainChatContext = createContext<ExplainChatRequester | null>(null);
 

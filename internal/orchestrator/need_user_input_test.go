@@ -20,6 +20,7 @@ import (
 	"testing"
 
 	"github.com/doordash-oss/agentic-orchestrator/internal/agent"
+	"github.com/doordash-oss/agentic-orchestrator/internal/config"
 	"github.com/doordash-oss/agentic-orchestrator/internal/feature"
 	"github.com/doordash-oss/agentic-orchestrator/internal/orchestrator"
 	"github.com/doordash-oss/agentic-orchestrator/internal/ports"
@@ -92,10 +93,9 @@ func TestOrchestrator_HandlePhaseCompletion_NeedUserInput_PausesFeature(t *testi
 		Pipeline:     feature.PipelineMoonshot,
 		Repos:        []feature.FeatureRepo{{Name: repoName, Path: repoAPath}},
 	}
-	lc := lifecycleForFeature(f)
-	fs := newFeatureStore(f)
+	fs, lc := newStoredFeatureFixture(t, f)
 
-	o := orchestrator.New(orchestrator.Deps{Lifecycle: lc, Store: fs}, orchestrator.Hooks{})
+	o := orchestrator.New(orchestrator.Deps{Manager: lc, Store: fs}, orchestrator.Hooks{})
 
 	if err := o.HandlePhaseCompletion("feat-nui", orchestrator.PhaseCompletionInput{
 		Phase: feature.PhaseImplement,
@@ -109,6 +109,7 @@ func TestOrchestrator_HandlePhaseCompletion_NeedUserInput_PausesFeature(t *testi
 		t.Fatalf("HandlePhaseCompletion: %v", err)
 	}
 
+	f = loadStoredFeature(t, fs, f.ID)
 	if f.Status != feature.StatusNeedUserInput {
 		t.Errorf("Status = %v, want StatusNeedUserInput", f.Status)
 	}
@@ -142,9 +143,8 @@ func TestResumeNeedUserInput_StaleRepoNameRoutesToFeatureScope(t *testing.T) {
 		Repos:      []feature.FeatureRepo{{Name: repoName}},
 		RepoStates: map[string]*feature.RepoState{},
 	}
-	lc := lifecycleForFeature(f)
-	fs := newFeatureStore(f)
-	o := orchestrator.New(orchestrator.Deps{Lifecycle: lc, Store: fs}, orchestrator.Hooks{})
+	fs, lc := newStoredFeatureFixture(t, f)
+	o := orchestrator.New(orchestrator.Deps{Manager: lc, Store: fs}, orchestrator.Hooks{})
 
 	err := o.ResumeNeedUserInput("feat-mr-nui-no-repo", orchestrator.NeedUserInputResume{})
 	if err == nil {
@@ -177,8 +177,8 @@ func TestResumeNeedUserInput_GenericGateResumesWithoutVerificationDecision(t *te
 	if err := store.Save(f); err != nil {
 		t.Fatal(err)
 	}
-	lc := lifecycleForFeature(f)
-	o := orchestrator.New(orchestrator.Deps{Lifecycle: lc, Store: store}, orchestrator.Hooks{})
+	lc := feature.NewManager(store, config.NewDefault())
+	o := orchestrator.New(orchestrator.Deps{Manager: lc, Store: store}, orchestrator.Hooks{})
 
 	err := o.ResumeNeedUserInput(f.ID, orchestrator.NeedUserInputResume{})
 	if err == nil || !strings.Contains(err.Error(), "plan phase did not produce an artifact") {
@@ -214,8 +214,8 @@ func TestResumeNeedUserInputAppliesHarnessWaiverBeforeResume(t *testing.T) {
 	if err := store.Save(f); err != nil {
 		t.Fatal(err)
 	}
-	lc := lifecycleForFeature(f)
-	o := orchestrator.New(orchestrator.Deps{Lifecycle: lc, Store: store}, orchestrator.Hooks{})
+	lc := feature.NewManager(store, config.NewDefault())
+	o := orchestrator.New(orchestrator.Deps{Manager: lc, Store: store}, orchestrator.Hooks{})
 
 	if err := o.ResumeNeedUserInput(f.ID, orchestrator.NeedUserInputResume{}); err == nil || !strings.Contains(err.Error(), "plan phase did not produce an artifact") {
 		t.Fatalf("ResumeNeedUserInput() error = %v, want expected post-resume dispatch failure", err)
@@ -247,7 +247,8 @@ func TestResumeNeedUserInputRejectsVerificationGateOutsideFeatureScope(t *testin
 	}
 	f := &feature.Feature{
 		ID: featureID, Name: "Gate scope", Slug: "gate-scope", Status: feature.StatusNeedUserInput,
-		CurrentPhase: feature.PhaseImplement, PendingNeedUserInputPath: gatePath,
+		SchemaVersion: feature.SchemaVersionCurrent,
+		CurrentPhase:  feature.PhaseImplement, PendingNeedUserInputPath: gatePath,
 		Repos: []feature.FeatureRepo{{Name: repoName, Path: repoAPath}},
 	}
 	store := feature.NewStore(stateRoot)
@@ -255,7 +256,7 @@ func TestResumeNeedUserInputRejectsVerificationGateOutsideFeatureScope(t *testin
 		t.Fatal(err)
 	}
 	o := orchestrator.New(
-		orchestrator.Deps{Lifecycle: lifecycleForFeature(f), Store: store},
+		orchestrator.Deps{Manager: feature.NewManager(store, config.NewDefault()), Store: store},
 		orchestrator.Hooks{},
 	)
 

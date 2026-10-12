@@ -25,8 +25,8 @@ import (
 	"time"
 )
 
-// IdentityProbeTimeout bounds ResolveRepoIdentity invocations.
-var IdentityProbeTimeout = 5 * time.Second
+// identityProbeTimeout bounds ResolveRepoIdentity invocations.
+var identityProbeTimeout = 5 * time.Second
 
 // RepoIdentity is the server-resolved identity of a repository checkout.
 // Path is the canonical checkout path and CommonDir the resolved Git common
@@ -57,7 +57,7 @@ func (a RepoIdentity) Equal(b RepoIdentity) bool {
 // bare repository, a broken .git pointer, or a missing git executable); the
 // caller decides how to surface that to the user.
 func ResolveRepoIdentity(dir string) (RepoIdentity, bool) {
-	ctx, cancel := context.WithTimeout(context.Background(), IdentityProbeTimeout)
+	ctx, cancel := context.WithTimeout(context.Background(), identityProbeTimeout)
 	defer cancel()
 	cmd := exec.CommandContext(ctx, "git", "-C", dir, "rev-parse", "--show-toplevel", "--git-common-dir")
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}

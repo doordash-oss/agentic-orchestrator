@@ -19,16 +19,16 @@ import (
 	"github.com/doordash-oss/agentic-orchestrator/internal/feature"
 )
 
-// RoleFinalReviewFixer is the fix session that runs after Final Review
+// roleFinalReviewFixer is the fix session that runs after Final Review
 // requests changes.
-const RoleFinalReviewFixer Role = "final_review_fixer"
+const roleFinalReviewFixer Role = "final_review_fixer"
 
 var finalReviewFixerRoleSpec = roleSpec{
 	Phase:     feature.PhaseReview,
-	Role:      RoleFinalReviewFixer,
+	Role:      roleFinalReviewFixer,
 	SkillName: "final-fix",
 	OutputRoots: []outputRootSpec{
-		iterationDirOutputRoot("Final-review fix iteration artifact directory."),
+		iterationOutputRoot("iteration_dir", "Final-review fix iteration artifact directory."),
 	},
 	// No required artifacts: no testing contract executes at Final Review;
 	// the next review iteration's live-run axes re-exercise the product.

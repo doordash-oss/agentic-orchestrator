@@ -47,8 +47,8 @@ const (
 // DesignArtifactKey is the artifact-map key for the Design phase output.
 const DesignArtifactKey = "design"
 
-// ResearchArtifactKey is the artifact-map key for the Research phase output.
-const ResearchArtifactKey = "research"
+// researchArtifactKey is the artifact-map key for the Research phase output.
+const researchArtifactKey = "research"
 
 // DesignArtifactPath returns the recorded path of the Design artifact for a feature.
 func (f *Feature) DesignArtifactPath() string {
@@ -63,13 +63,13 @@ func (f *Feature) ResearchArtifactPath() string {
 	if f == nil || f.Artifacts == nil {
 		return ""
 	}
-	return f.Artifacts[ResearchArtifactKey]
+	return f.Artifacts[researchArtifactKey]
 }
 
 // LogicalOrder returns the execution/display sequence order for the phase.
 // This avoids breaking existing serialized Phase values (iota-based) while
 // providing the correct ordering for progress bar display and done checks.
-func (p Phase) LogicalOrder() int {
+func (p Phase) logicalOrder() int {
 	switch p {
 	case PhaseKnowledgeBase:
 		return 0
@@ -245,7 +245,7 @@ const (
 	StatusInquiryNeedsReview
 	StatusResearchNeedsReview
 	StatusDesignNeedsReview
-	StatusReviewing
+	statusReviewing
 	// StatusNeedUserInput marks a feature paused on a phase-implement
 	// need-user-input gate. The unified flow tracks NEED_USER_INPUT at the
 	// feature level via Feature.PendingNeedUserInputPath; per-repo pauses
@@ -307,7 +307,7 @@ func (s Status) String() string {
 		return "ResearchNeedsReview"
 	case StatusDesignNeedsReview:
 		return "DesignNeedsReview"
-	case StatusReviewing:
+	case statusReviewing:
 		return "Reviewing"
 	case StatusNeedUserInput:
 		return "NeedUserInput"
@@ -382,7 +382,7 @@ func (s *Status) UnmarshalYAML(unmarshal func(interface{}) error) error {
 		"InquiryNeedsReview":  StatusInquiryNeedsReview,
 		"ResearchNeedsReview": StatusResearchNeedsReview,
 		"DesignNeedsReview":   StatusDesignNeedsReview,
-		"Reviewing":           StatusReviewing,
+		"Reviewing":           statusReviewing,
 		"NeedUserInput":       StatusNeedUserInput,
 		"FinalReviewing":      StatusFinalReviewing,
 		"SettingUpWorktrees":  StatusSettingUpWorktrees,
@@ -445,7 +445,7 @@ type ConfigSnapshot struct {
 type InputNotificationsMode string
 
 const (
-	InputNotificationsDefault InputNotificationsMode = "default"
+	inputNotificationsDefault InputNotificationsMode = "default"
 	InputNotificationsEnabled InputNotificationsMode = "enabled"
 	InputNotificationsMuted   InputNotificationsMode = "muted"
 )
@@ -455,13 +455,13 @@ func NormalizeInputNotificationsMode(mode InputNotificationsMode) InputNotificat
 	case InputNotificationsEnabled, InputNotificationsMuted:
 		return mode
 	default:
-		return InputNotificationsDefault
+		return inputNotificationsDefault
 	}
 }
 
 func PersistInputNotificationsMode(mode InputNotificationsMode) InputNotificationsMode {
 	normalized := NormalizeInputNotificationsMode(mode)
-	if normalized == InputNotificationsDefault {
+	if normalized == inputNotificationsDefault {
 		return ""
 	}
 	return normalized
@@ -486,8 +486,8 @@ const (
 type AutomaticReviewSource string
 
 const (
-	AutomaticReviewSourceGlobal  AutomaticReviewSource = "global"
-	AutomaticReviewSourceFeature AutomaticReviewSource = "feature"
+	automaticReviewSourceGlobal  AutomaticReviewSource = "global"
+	automaticReviewSourceFeature AutomaticReviewSource = "feature"
 )
 
 func NormalizeAutomaticReviewMode(mode AutomaticReviewMode) AutomaticReviewMode {
@@ -523,11 +523,11 @@ func PersistAutomaticReviewMode(mode AutomaticReviewMode) AutomaticReviewMode {
 func ResolveAutomaticReview(mode AutomaticReviewMode, globalEnabled bool) (bool, AutomaticReviewSource) {
 	switch NormalizeAutomaticReviewMode(mode) {
 	case AutomaticReviewEnabled:
-		return true, AutomaticReviewSourceFeature
+		return true, automaticReviewSourceFeature
 	case AutomaticReviewDisabled, AutomaticReviewSkipPermissions:
-		return false, AutomaticReviewSourceFeature
+		return false, automaticReviewSourceFeature
 	default:
-		return globalEnabled, AutomaticReviewSourceGlobal
+		return globalEnabled, automaticReviewSourceGlobal
 	}
 }
 
@@ -552,13 +552,13 @@ type FeatureRepo struct {
 	Branch       string              `yaml:"branch"`
 	BaseBranch   string              `yaml:"base_branch,omitempty"`
 	Publishable  *bool               `yaml:"publishable,omitempty"` // nil = publishable (backward compat); *false = no origin remote
-	Source       *AcceptedRepoSource `yaml:"source,omitempty"`
+	Source       *acceptedRepoSource `yaml:"source,omitempty"`
 }
 
-// AcceptedRepoSource is the immutable local source accepted for an ordinary
+// acceptedRepoSource is the immutable local source accepted for an ordinary
 // feature. It is intentionally distinct from BaseBranch, which remains the
 // publication and merge target.
-type AcceptedRepoSource struct {
+type acceptedRepoSource struct {
 	Mode      string `yaml:"mode"`
 	Kind      string `yaml:"kind"`
 	Branch    string `yaml:"branch,omitempty"`
@@ -683,6 +683,9 @@ type Feature struct {
 	ReviewFixing      bool              `yaml:"-"`
 	ValidatingPlan    bool              `yaml:"-"`
 	ValidatorStatuses map[string]string `yaml:"-"`
+	// ValidatorErrors holds the last error of a failed or retrying validator,
+	// keyed like ValidatorStatuses.
+	ValidatorErrors map[string]string `yaml:"-"`
 	// VerificationItems is the ordered live progress of harness-executed
 	// testing-contract commands while CurrentPhaseStatus is "verifying".
 	VerificationItems []VerificationItemStatus `yaml:"-"`
@@ -790,6 +793,7 @@ func (f *Feature) syncShadowsToRun() {
 	r.ReviewFixing = f.ReviewFixing
 	r.ValidatingPlan = f.ValidatingPlan
 	r.ValidatorStatuses = f.ValidatorStatuses
+	r.ValidatorErrors = f.ValidatorErrors
 	r.VerificationItems = f.VerificationItems
 	r.PlanIteration = f.PlanIteration
 	r.ReviewIteration = f.ReviewIteration
@@ -832,6 +836,7 @@ func (f *Feature) syncRunToShadows() {
 	f.ReviewFixing = r.ReviewFixing
 	f.ValidatingPlan = r.ValidatingPlan
 	f.ValidatorStatuses = r.ValidatorStatuses
+	f.ValidatorErrors = r.ValidatorErrors
 	f.VerificationItems = r.VerificationItems
 	f.PlanIteration = r.PlanIteration
 	f.ReviewIteration = r.ReviewIteration
@@ -940,9 +945,9 @@ var validTransitions = map[Status][]Status{
 	StatusImplementReady:      {StatusImplementing, StatusFailed},
 	StatusImplementing:        {StatusReviewPassed, StatusImplementReady, StatusNeedUserInput, StatusFailed, StatusInterrupted},
 	StatusNeedUserInput:       {StatusImplementing, StatusFailed, StatusInterrupted},
-	StatusReviewPassed:        {StatusCodeReady, StatusDone, StatusImplementing, StatusImplementReady, StatusFailed, StatusPlanning, StatusReviewing, StatusFinalReviewing},
+	StatusReviewPassed:        {StatusCodeReady, StatusDone, StatusImplementing, StatusImplementReady, StatusFailed, StatusPlanning, statusReviewing, StatusFinalReviewing},
 	StatusFinalReviewing:      {StatusCodeReady, StatusReviewPassed, StatusFailed, StatusInterrupted},
-	StatusReviewing:           {StatusCodeReady, StatusFailed, StatusInterrupted},
+	statusReviewing:           {StatusCodeReady, StatusFailed, StatusInterrupted},
 	StatusCodeReady:           {StatusPublished, StatusDone, StatusFailed, StatusImplementReady, StatusInquiring},
 	StatusPublished:           {StatusDone, StatusFailed, StatusImplementReady, StatusInquiring, StatusPlanReady, StatusCodeReady},
 	StatusDone:                {},
@@ -1050,22 +1055,6 @@ func (f *Feature) IsPublishable() bool {
 	return true
 }
 
-// EffectivePhases returns the pipeline phases for this feature, excluding
-// PhasePublish when the feature is not publishable.
-func (f *Feature) EffectivePhases() []Phase {
-	phases := PhasesForProfile(f.EffectivePipeline())
-	if !f.IsPublishable() {
-		filtered := make([]Phase, 0, len(phases)-1)
-		for _, p := range phases {
-			if p != PhasePublish {
-				filtered = append(filtered, p)
-			}
-		}
-		return filtered
-	}
-	return phases
-}
-
 // isImplementTimingKey returns true if the key belongs to the implement phase
 // (initial implementation or any cycle variant).
 func isImplementTimingKey(key string) bool {
@@ -1114,11 +1103,6 @@ func (f *Feature) TotalCost() float64 {
 	return total
 }
 
-// PhaseCost returns the accumulated cost for a specific phase/cycle key.
-func (f *Feature) PhaseCost(key string) float64 {
-	return f.PhaseCosts[key]
-}
-
 // AddPhaseCost adds a cost amount to the given phase/cycle key.
 func (f *Feature) AddPhaseCost(key string, cost float64) {
 	if cost <= 0 {
@@ -1131,15 +1115,24 @@ func (f *Feature) AddPhaseCost(key string, cost float64) {
 }
 
 // RecordSessionCost appends one session-level ledger row and updates the
-// phase-level aggregate used by existing dashboard and summary readers.
+// phase-level aggregate used by existing dashboard and summary readers. A
+// session that consumed tokens but has no known price still records its row
+// and materializes its phase key, so the phase is visible in cost.by_phase
+// rather than silently missing.
 func (f *Feature) RecordSessionCost(record SessionCostRecord) {
 	record.PhaseKey = strings.TrimSpace(record.PhaseKey)
-	if (record.CostUSD <= 0 && record.CostCreditsMicros == nil) || record.PhaseKey == "" {
+	if !record.HasUsage() || record.PhaseKey == "" {
 		return
 	}
 	record.SessionID = strings.TrimSpace(record.SessionID)
 	record.ObserverPhase = strings.TrimSpace(record.ObserverPhase)
 	record.RepoName = strings.TrimSpace(record.RepoName)
+	if f.PhaseCosts == nil {
+		f.PhaseCosts = make(map[string]float64)
+	}
+	if _, ok := f.PhaseCosts[record.PhaseKey]; !ok {
+		f.PhaseCosts[record.PhaseKey] = 0
+	}
 	f.AddPhaseCost(record.PhaseKey, record.CostUSD)
 	f.SessionCosts = append(f.SessionCosts, record)
 }
@@ -1167,7 +1160,7 @@ func (f *Feature) Transition(to Status) error {
 // or has a non-empty PR URL recorded. Returns false when f or f.Repos is
 // empty so callers cannot mistake an unconfigured feature for a published
 // one.
-func (f *Feature) AllReposPublished() bool {
+func (f *Feature) allReposPublished() bool {
 	if f == nil || len(f.Repos) == 0 {
 		return false
 	}

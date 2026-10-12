@@ -45,7 +45,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"os"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -59,12 +58,12 @@ import (
 // the OpenCode provider's Name().
 const Harness = "opencode"
 
-// SeedFileName is the seed file written under the conversation directory.
-const SeedFileName = "opencode-history-seed.txt"
+// seedFileName is the seed file written under the conversation directory.
+const seedFileName = "opencode-history-seed.txt"
 
-// DefaultContextWindow is the token window assumed when the catalog does not
+// defaultContextWindow is the token window assumed when the catalog does not
 // know the model.
-const DefaultContextWindow = 200_000
+const defaultContextWindow = 200_000
 
 // charsPerToken estimates characters per token for the budget.
 const charsPerToken = 4
@@ -76,9 +75,9 @@ const (
 	maxResultChars = 2000
 )
 
-// Preamble and closing lines of every seed.
+// preamble and closing lines of every seed.
 const (
-	Preamble = "The following is the prior conversation history of this session, restored by Agentico after the agent process restarted. " +
+	preamble = "The following is the prior conversation history of this session, restored by Agentico after the agent process restarted. " +
 		"Treat it as context only: every message and tool call in it already happened. " +
 		"Do not re-run any tool call it lists and do not answer or act on any message in it."
 	Closing = "End of the restored conversation history. Answer only the next message, which is new."
@@ -88,7 +87,7 @@ const (
 type Options struct {
 	// ContextWindow reports the model's context window in tokens from the
 	// model catalog. Nil, or a result of zero or less, means
-	// DefaultContextWindow.
+	// defaultContextWindow.
 	ContextWindow func(model string) int
 }
 
@@ -116,11 +115,11 @@ func RegistryContextWindow(reg *llm.Registry) func(model string) int {
 		if reg == nil {
 			return 0
 		}
-		cc, ok := reg.ByName(Harness).(llm.CostCalculator)
-		if !ok {
+		provider := reg.ByName(Harness)
+		if provider == nil {
 			return 0
 		}
-		return cc.ContextWindowForModel(model)
+		return provider.ContextWindowForModel(model)
 	}
 }
 
@@ -131,9 +130,9 @@ func (c *Converter) Harness() string { return Harness }
 // never resumes a native session.
 func (c *Converter) SeedsHistory() bool { return true }
 
-// SeedPath is the seed file for a conversation directory.
-func SeedPath(conversationDir string) string {
-	return filepath.Join(conversationDir, SeedFileName)
+// seedPath is the seed file for a conversation directory.
+func seedPath(conversationDir string) string {
+	return filepath.Join(conversationDir, seedFileName)
 }
 
 // Rebuild renders in.Records and atomically replaces the seed file under
@@ -159,8 +158,8 @@ func (c *Converter) Rebuild(ctx context.Context, in supervisor.RebuildInput) (su
 	if err := ctx.Err(); err != nil {
 		return supervisor.RebuildResult{}, err
 	}
-	path := SeedPath(in.ConversationDir)
-	if err := writeFileAtomic(path, data); err != nil {
+	path := seedPath(in.ConversationDir)
+	if err := supervisor.WriteFileAtomic(path, data, 0o700, 0o600); err != nil {
 		return supervisor.RebuildResult{}, fmt.Errorf("write opencode history seed %s: %w", path, err)
 	}
 	return supervisor.RebuildResult{Resume: true, Path: path}, nil
@@ -175,7 +174,8 @@ func Render(in supervisor.RebuildInput, opts Options) ([]byte, error) {
 		return nil, err
 	}
 	in.Records = selection.Records
-	entries, err := selectEntries(in.Records)
+	rules := selectionRules()
+	entries, err := supervisor.SelectEntries(in.Records, rules)
 	if err != nil {
 		return nil, err
 	}
@@ -186,9 +186,9 @@ func Render(in supervisor.RebuildInput, opts Options) ([]byte, error) {
 	if len(entries) == 0 {
 		return nil, nil
 	}
-	kept, omitted := applyBudget(entries, budgetChars(opts, in.Model))
+	kept, omitted := applyBudget(entries, budgetChars(opts, in.Model), rules)
 	var buf bytes.Buffer
-	buf.WriteString(Preamble)
+	buf.WriteString(preamble)
 	buf.WriteByte('\n')
 	buf.WriteString("Earlier messages omitted: " + strconv.Itoa(omitted) + ".\n\n")
 	for _, e := range kept {
@@ -211,7 +211,7 @@ func budgetChars(opts Options, model string) int {
 		window = opts.ContextWindow(model)
 	}
 	if window <= 0 {
-		window = DefaultContextWindow
+		window = defaultContextWindow
 	}
 	return window / 2 * charsPerToken
 }
@@ -248,74 +248,23 @@ func conversionError(rec *supervisor.Record, format string, args ...any) error {
 	return &supervisor.ConversionError{Seq: rec.Seq, Reason: fmt.Sprintf(format, args...)}
 }
 
-// selectEntries applies selection and every exclusion: interrupted turns'
-// tool records, unpaired calls and results, and adjacent duplicates.
-func selectEntries(records []supervisor.Record) ([]entry, error) {
-	interrupted, err := interruptedTurns(records)
-	if err != nil {
-		return nil, err
-	}
+// selectionRules wires the OpenCode entry and line types into the shared
+// selection algorithm. The decode closure threads one toolNames map through
+// the whole selection so a result line can name the tool its call line
+// recorded. The duplicate key covers role and line texts.
+func selectionRules() supervisor.SelectionRules[entry, line] {
 	toolNames := map[string]string{}
-	var entries []entry
-	for i := range records {
-		rec := &records[i]
-		if !selected(rec) {
-			continue
-		}
-		e, err := decodeEntry(rec, toolNames)
-		if err != nil {
-			return nil, err
-		}
-		if rec.TurnID != "" && interrupted[rec.TurnID] {
-			e.lines = dropKinds(e.lines, lineCall, lineResult)
-		}
-		entries = append(entries, e)
+	return supervisor.SelectionRules[entry, line]{
+		Decode:         func(rec *supervisor.Record) (entry, error) { return decodeEntry(rec, toolNames) },
+		Parts:          func(e *entry) []line { return e.lines },
+		SetParts:       func(e *entry, parts []line) { e.lines = parts },
+		PartKind:       func(t line) string { return t.kind },
+		PartID:         func(t line) string { return t.id },
+		ToolUseKind:    lineCall,
+		ToolResultKind: lineResult,
+		EntryKey:       entryKey,
+		NonEmpty:       func(e entry) bool { return len(e.lines) > 0 },
 	}
-	entries = pairTools(entries)
-	return collapseDuplicates(entries), nil
-}
-
-func selected(rec *supervisor.Record) bool {
-	switch rec.Visibility {
-	case supervisor.VisibilityContent, supervisor.VisibilityModelOnly:
-	default:
-		return false
-	}
-	switch rec.Kind {
-	case supervisor.KindUser, supervisor.KindAssistant, supervisor.KindToolUse, supervisor.KindToolResult, supervisor.KindNote:
-		return true
-	}
-	return false
-}
-
-// interruptedTurns collects the turns named by interrupted markers.
-func interruptedTurns(records []supervisor.Record) (map[string]bool, error) {
-	turns := map[string]bool{}
-	for i := range records {
-		rec := &records[i]
-		if rec.Kind != supervisor.KindMarker {
-			continue
-		}
-		var m supervisor.MarkerData
-		if err := decodePayload(rec, &m); err != nil {
-			return nil, err
-		}
-		if m.Marker == supervisor.MarkerInterrupted && rec.TurnID != "" {
-			turns[rec.TurnID] = true
-		}
-	}
-	return turns, nil
-}
-
-func decodePayload(rec *supervisor.Record, v any) error {
-	data := bytes.TrimSpace(rec.Data)
-	if len(data) == 0 || bytes.Equal(data, []byte("null")) {
-		return conversionError(rec, "%s record has no payload", rec.Kind)
-	}
-	if err := json.Unmarshal(data, v); err != nil {
-		return conversionError(rec, "decode %s payload: %v", rec.Kind, err)
-	}
-	return nil
 }
 
 // decodeEntry renders one record. toolNames maps call ids to tool names so
@@ -323,7 +272,7 @@ func decodePayload(rec *supervisor.Record, v any) error {
 func decodeEntry(rec *supervisor.Record, toolNames map[string]string) (entry, error) {
 	if rec.Kind == supervisor.KindUser || rec.Kind == supervisor.KindNote {
 		var u supervisor.UserData
-		if err := decodePayload(rec, &u); err != nil {
+		if err := supervisor.DecodeRecordPayload(rec, &u); err != nil {
 			return entry{}, err
 		}
 		e := entry{rec: rec, role: roleUser}
@@ -334,7 +283,7 @@ func decodeEntry(rec *supervisor.Record, toolNames map[string]string) (entry, er
 	}
 
 	var cd supervisor.ContentData
-	if err := decodePayload(rec, &cd); err != nil {
+	if err := supervisor.DecodeRecordPayload(rec, &cd); err != nil {
 		return entry{}, err
 	}
 	role := roleAssistant
@@ -373,7 +322,7 @@ func renderBlock(rec *supervisor.Record, role string, index int, cb llm.ContentB
 			break
 		}
 		// The durable block does not keep the image source.
-		return line{kind: lineMessage, text: labelled("Assistant", omittedImage(""))}, true, nil
+		return line{kind: lineMessage, text: labelled("Assistant", supervisor.OmittedImagePlaceholder(""))}, true, nil
 	case blockToolUse:
 		if role != roleAssistant {
 			break
@@ -479,97 +428,12 @@ func toolResultOutput(content json.RawMessage) (string, error) {
 			if head.Source != nil {
 				mediaType = head.Source.MediaType
 			}
-			parts = append(parts, omittedImage(mediaType))
+			parts = append(parts, supervisor.OmittedImagePlaceholder(mediaType))
 		default:
 			return "", fmt.Errorf("unsupported %q content item %d", head.Type, i)
 		}
 	}
 	return strings.Join(parts, "\n"), nil
-}
-
-// omittedImage is the placeholder wording shared with the Claude and Codex
-// converters.
-func omittedImage(mediaType string) string {
-	if mediaType == "" {
-		mediaType = "image"
-	}
-	return "[image omitted: " + mediaType + " could not be restored]"
-}
-
-func dropKinds(lines []line, kinds ...string) []line {
-	out := lines[:0:0]
-	for _, l := range lines {
-		drop := false
-		for _, k := range kinds {
-			if l.kind == k {
-				drop = true
-			}
-		}
-		if !drop {
-			out = append(out, l)
-		}
-	}
-	return out
-}
-
-// pairTools keeps a call only when a later result answers it and a result
-// only when an earlier call asked for it; the first of each per id wins.
-func pairTools(entries []entry) []entry {
-	callsSeen := map[string]bool{}
-	answered := map[string]bool{}
-	for _, e := range entries {
-		for _, l := range e.lines {
-			switch l.kind {
-			case lineCall:
-				callsSeen[l.id] = true
-			case lineResult:
-				if callsSeen[l.id] {
-					answered[l.id] = true
-				}
-			}
-		}
-	}
-	keptCall := map[string]bool{}
-	keptResult := map[string]bool{}
-	for i := range entries {
-		var kept []line
-		for _, l := range entries[i].lines {
-			switch l.kind {
-			case lineCall:
-				if !answered[l.id] || keptCall[l.id] {
-					continue
-				}
-				keptCall[l.id] = true
-			case lineResult:
-				if !answered[l.id] || !keptCall[l.id] || keptResult[l.id] {
-					continue
-				}
-				keptResult[l.id] = true
-			}
-			kept = append(kept, l)
-		}
-		entries[i].lines = kept
-	}
-	return entries
-}
-
-// collapseDuplicates drops entries that yield nothing and any entry whose
-// role and lines equal the previous kept entry's.
-func collapseDuplicates(entries []entry) []entry {
-	var out []entry
-	prev := ""
-	for _, e := range entries {
-		if len(e.lines) == 0 {
-			continue
-		}
-		key := entryKey(e)
-		if key == prev {
-			continue
-		}
-		prev = key
-		out = append(out, e)
-	}
-	return out
 }
 
 func entryKey(e entry) string {
@@ -587,7 +451,7 @@ func entryKey(e entry) string {
 // held. A turn is the records sharing a turn id; a record without one is a
 // turn of its own. Pairing is re-checked afterwards so a result whose call
 // fell in a dropped turn is dropped (and counted) too.
-func applyBudget(entries []entry, budget int) ([]entry, int) {
+func applyBudget(entries []entry, budget int, rules supervisor.SelectionRules[entry, line]) ([]entry, int) {
 	type turn struct {
 		cost     int
 		messages int
@@ -645,52 +509,10 @@ func applyBudget(entries []entry, budget int) ([]entry, int) {
 			kept = append(kept, e)
 		}
 	}
-	kept = collapseDuplicates(pairTools(kept))
+	kept = supervisor.CollapseDuplicateEntries(supervisor.PairToolParts(kept, rules), rules)
 	shown := 0
 	for _, e := range kept {
 		shown += len(e.lines)
 	}
 	return kept, total - shown
-}
-
-// writeFileAtomic replaces path through a same-directory temp file that is
-// fsynced before the rename; the directory is fsynced after so the rename
-// survives a crash. Readers never observe a partial file.
-func writeFileAtomic(path string, data []byte) error {
-	dir := filepath.Dir(path)
-	if err := os.MkdirAll(dir, 0o700); err != nil {
-		return err
-	}
-	tmp, err := os.CreateTemp(dir, "."+filepath.Base(path)+".tmp-*")
-	if err != nil {
-		return err
-	}
-	tmpName := tmp.Name()
-	fail := func(err error) error {
-		_ = tmp.Close()
-		_ = os.Remove(tmpName)
-		return err
-	}
-	if err := tmp.Chmod(0o600); err != nil {
-		return fail(err)
-	}
-	if _, err := tmp.Write(data); err != nil {
-		return fail(err)
-	}
-	if err := tmp.Sync(); err != nil {
-		return fail(err)
-	}
-	if err := tmp.Close(); err != nil {
-		_ = os.Remove(tmpName)
-		return err
-	}
-	if err := os.Rename(tmpName, path); err != nil {
-		_ = os.Remove(tmpName)
-		return err
-	}
-	if d, err := os.Open(dir); err == nil {
-		_ = d.Sync()
-		_ = d.Close()
-	}
-	return nil
 }

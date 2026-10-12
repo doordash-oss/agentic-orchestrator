@@ -58,8 +58,9 @@ import {
 } from './NeedUserInputVerificationDecision';
 import { formatWaitingDuration } from './phaseRail';
 import { useAttentionDraftSaves } from './useAttentionDraftSaves';
+import { defined } from '../../../shared/defined';
 
-export interface QuestionAnswerDraft {
+interface QuestionAnswerDraft {
   selected: number[];
   freeText: string;
 }
@@ -94,7 +95,7 @@ export function emptyAttentionDrafts(): AttentionDrafts {
   return { questions: {}, help: {}, gates: {} };
 }
 
-export interface AttentionInboxProps {
+interface AttentionInboxProps {
   items: AttentionItem[];
   refresh(): Promise<AttentionItem[]>;
   featureLabel(featureId: string | undefined): string;
@@ -466,7 +467,7 @@ function AutoModeSplitButton({
       () =>
         window.agentico.answerPermission({
           requestId: item.id,
-          ...(item.sessionId === undefined ? {} : { sessionId: item.sessionId }),
+          ...defined('sessionId', item.sessionId),
           decision: 'allow_once',
           autoApproveScope: scope,
         }),
@@ -585,7 +586,7 @@ export function AttentionDetail({
               submit(() =>
                 window.agentico.answerPermission({
                   requestId: item.id,
-                  ...(item.sessionId === undefined ? {} : { sessionId: item.sessionId }),
+                  ...defined('sessionId', item.sessionId),
                   decision: 'allow_once',
                 }),
               )
@@ -600,7 +601,7 @@ export function AttentionDetail({
               submit(() =>
                 window.agentico.answerPermission({
                   requestId: item.id,
-                  ...(item.sessionId === undefined ? {} : { sessionId: item.sessionId }),
+                  ...defined('sessionId', item.sessionId),
                   decision: 'deny',
                 }),
               )
@@ -617,7 +618,7 @@ export function AttentionDetail({
                   () =>
                     window.agentico.answerPermission({
                       requestId: item.id,
-                      ...(item.sessionId === undefined ? {} : { sessionId: item.sessionId }),
+                      ...defined('sessionId', item.sessionId),
                       decision: 'retry_auto_review',
                     }),
                   {
@@ -641,7 +642,7 @@ export function AttentionDetail({
                 submit(() =>
                   window.agentico.answerPermission({
                     requestId: item.id,
-                    ...(item.sessionId === undefined ? {} : { sessionId: item.sessionId }),
+                    ...defined('sessionId', item.sessionId),
                     decision: 'allow_remember',
                     rememberPattern: item.remember!.pattern,
                     rememberScope: item.remember!.scope,
@@ -665,7 +666,7 @@ export function AttentionDetail({
       submit(() =>
         window.agentico.answerQuestions({
           requestId: item.id,
-          ...(item.sessionId === undefined ? {} : { sessionId: item.sessionId }),
+          ...defined('sessionId', item.sessionId),
           answers: Object.fromEntries(
             item.questions.map((question) => [
               String(question.index),
@@ -862,8 +863,8 @@ export function AttentionDetail({
             onClick={() =>
               submit(() =>
                 window.agentico.sendHelp({
-                  ...(item.featureId === undefined ? {} : { featureId: item.featureId }),
-                  ...(item.sessionId === undefined ? {} : { sessionId: item.sessionId }),
+                  ...defined('featureId', item.featureId),
+                  ...defined('sessionId', item.sessionId),
                   message: helpText,
                 }),
               )
@@ -970,7 +971,7 @@ export function AttentionDetail({
                 }
                 return window.agentico.resolveGate({
                   featureId: item.featureId,
-                  ...(item.repoName === undefined ? {} : { repoName: item.repoName }),
+                  ...defined('repoName', item.repoName),
                 });
               })
             }
@@ -1247,7 +1248,7 @@ function saveGateDraftForItem(
 ): Promise<AttentionActionResult> {
   return window.agentico.saveGateDraft({
     featureId: item.featureId,
-    ...(item.repoName === undefined ? {} : { repoName: item.repoName }),
+    ...defined('repoName', item.repoName),
     answers: gateAnswersForSubmit(item, draft),
   });
 }

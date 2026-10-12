@@ -30,7 +30,7 @@ export const SUPERVISOR_TURN_SETTLE_MS = 10_000;
 const PREVIEW_LINE_MAX = 180;
 const GENERIC_BODY = 'Supervisor finished a turn.';
 
-export interface SupervisorNotificationCoordinatorDeps {
+interface SupervisorNotificationCoordinatorDeps {
   /** The attention coordinator's sink. */
   sink: NotificationSink;
   /** The attention coordinator's focus gate; re-read when the settle fires. */

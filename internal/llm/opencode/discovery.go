@@ -50,6 +50,10 @@ type openCodeVerboseModel struct {
 type openCodeModelCost struct {
 	Input  *float64 `json:"input"`
 	Output *float64 `json:"output"`
+	Cache  *struct {
+		Read  *float64 `json:"read"`
+		Write *float64 `json:"write"`
+	} `json:"cache"`
 }
 
 type openCodeModelLimit struct {
@@ -76,8 +80,7 @@ func (p *Provider) DiscoverModelCatalog(ctx context.Context) ([]llm.ModelInfo, e
 }
 
 // DiscoverModelCatalogWithProgress refreshes OpenCode's model catalog and, on
-// success, reports each parsed model in catalog order before returning. Pricing
-// parsed alongside the catalog is stored on the provider for ComputeCost. The
+// success, reports each parsed model in catalog order before returning. The
 // returned error is sanitized so a failed discovery cannot leak credential-like
 // or terminal-control content into a startup warning, log, or cache diagnostic.
 func (p *Provider) DiscoverModelCatalogWithProgress(ctx context.Context, report llm.ModelDiscoveryReporter) ([]llm.ModelInfo, error) {
@@ -101,12 +104,11 @@ func (p *Provider) DiscoverModelCatalogWithProgress(ctx context.Context, report 
 			)
 			continue
 		}
-		models, rates, perr := parseOpenCodeModels(out)
+		models, perr := parseOpenCodeModels(out)
 		if perr != nil {
 			lastErr = perr
 			continue
 		}
-		p.setRates(rates)
 		if report != nil {
 			for _, m := range models {
 				report(m)
@@ -137,18 +139,16 @@ func discoveryAttemptContext(ctx context.Context, remainingAttempts int) (contex
 }
 
 // parseOpenCodeModels parses `opencode models` output (verbose or line-only) into
-// normalized catalog entries plus a pricing table keyed by lowercased model id
-// (under both the suffixed and unsuffixed forms). It is tolerant of mixed and
+// normalized catalog entries. It is tolerant of mixed and
 // malformed output: blank lines are skipped, a header line with no following
 // JSON object becomes a metadata-less entry, hidden/unavailable and duplicate
 // entries are dropped, and ids that are not well-formed slash-form backend
 // identifiers — bare tokens, flag-shaped lines, ids carrying unsafe characters,
 // and credential-shaped strings — are rejected. It returns an error only when no
 // usable model survives, so wholly malformed output fails over to the fallback.
-func parseOpenCodeModels(out []byte) ([]llm.ModelInfo, map[string]modelRate, error) {
+func parseOpenCodeModels(out []byte) ([]llm.ModelInfo, error) {
 	lines := strings.Split(string(out), "\n")
 	var models []llm.ModelInfo
-	rates := make(map[string]modelRate)
 	seen := make(map[string]bool)
 
 	addEntry := func(backendID string, meta *openCodeVerboseModel) {
@@ -199,9 +199,14 @@ func parseOpenCodeModels(out []byte) ([]llm.ModelInfo, map[string]modelRate, err
 
 		if meta != nil && meta.Cost != nil && meta.Cost.Input != nil && meta.Cost.Output != nil && validPrice(*meta.Cost.Input) && validPrice(*meta.Cost.Output) {
 			info.Cost = &llm.ModelCost{Input: *meta.Cost.Input, Output: *meta.Cost.Output}
-			rate := modelRate{inputPerMToken: *meta.Cost.Input, outputPerMToken: *meta.Cost.Output}
-			rates[strings.ToLower(info.ID)] = rate
-			rates[strings.ToLower(id)] = rate
+			if cache := meta.Cost.Cache; cache != nil {
+				if cache.Read != nil && validPrice(*cache.Read) {
+					info.Cost.CacheRead = cache.Read
+				}
+				if cache.Write != nil && validPrice(*cache.Write) {
+					info.Cost.CacheWrite = cache.Write
+				}
+			}
 		}
 
 		models = append(models, info)
@@ -256,9 +261,9 @@ func parseOpenCodeModels(out []byte) ([]llm.ModelInfo, map[string]modelRate, err
 	}
 
 	if len(models) == 0 {
-		return nil, nil, fmt.Errorf("opencode models output contained no usable models")
+		return nil, fmt.Errorf("opencode models output contained no usable models")
 	}
-	return models, rates, nil
+	return models, nil
 }
 
 // collectJSONObject joins lines starting at start until the JSON object opened on

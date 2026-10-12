@@ -36,7 +36,7 @@ func TestRealRunnerClonesRealGitRepository(t *testing.T) {
 	src := makeGitRepo(t)
 	staging := filepath.Join(t.TempDir(), "staging")
 	stages := make(chan string, 8)
-	handle, err := NewRealRunner("").Start(RunSpec{
+	handle, err := newRealRunner("").Start(runSpec{
 		Remote:   "file://" + src,
 		Staging:  staging,
 		Deadline: 30 * time.Second,
@@ -97,7 +97,7 @@ while true; do sleep 1; done
 		t.Fatal(err)
 	}
 	childPIDFile := filepath.Join(dir, "child.pid")
-	handle, err := NewRealRunner(gitShim).Start(RunSpec{
+	handle, err := newRealRunner(gitShim).Start(runSpec{
 		Remote:  "https://example.com/acme/widget.git",
 		Staging: filepath.Join(dir, "staging"),
 		// The shim only forks the pipe-holding descendant when it is told
@@ -133,7 +133,7 @@ while true; do sleep 1; done
 		t.Fatal("the git shim never recorded its descendant's pid; the process-tree guarantee is unverified")
 	}
 
-	done := make(chan RunResult, 1)
+	done := make(chan runResult, 1)
 	go func() { done <- handle.Wait() }()
 	handle.Terminate()
 	select {
@@ -191,7 +191,7 @@ func TestRealRunnerDeadlineKillsTree(t *testing.T) {
 	if err := os.WriteFile(gitShim, []byte("#!/bin/sh\nwhile true; do sleep 1; done\n"), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	handle, err := NewRealRunner(gitShim).Start(RunSpec{
+	handle, err := newRealRunner(gitShim).Start(runSpec{
 		Remote:   "https://example.com/acme/widget.git",
 		Staging:  filepath.Join(dir, "staging"),
 		Deadline: 150 * time.Millisecond,
@@ -239,7 +239,7 @@ func TestOutputFloodCannotExhaustMemory(t *testing.T) {
 		tailBytes += len(line)
 	}
 	h.tailMu.Unlock()
-	if tailBytes > 8*(MaxDiagnosticsLength+8) {
+	if tailBytes > 8*(maxDiagnosticsLength+8) {
 		t.Errorf("tail grew to %d bytes beyond its bound", tailBytes)
 	}
 }
@@ -254,7 +254,7 @@ func TestRealRunnerDrainsVerboseCloneAndRetainsFinalDiagnostic(t *testing.T) {
 	if err := os.WriteFile(gitShim, []byte(script), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	handle, err := NewRealRunner(gitShim).Start(RunSpec{
+	handle, err := newRealRunner(gitShim).Start(runSpec{
 		Remote: "https://example.com/acme/widget.git", Staging: filepath.Join(dir, "staging"),
 		Deadline: 30 * time.Second,
 	})
@@ -265,7 +265,7 @@ func TestRealRunnerDrainsVerboseCloneAndRetainsFinalDiagnostic(t *testing.T) {
 	if result.TimedOut || result.ExitCode != 1 || result.Err != nil {
 		t.Fatalf("finite stderr producer did not complete: %+v", result)
 	}
-	if got := ClassifyFailure(result); got != FailureAuthentication {
+	if got := classifyFailure(result); got != failureAuthentication {
 		t.Fatalf("failure = %s, want authentication failure from final diagnostic: %+v", got, result)
 	}
 }
@@ -286,7 +286,7 @@ func TestCloneOutputFramesProgressAfterOverlongRecord(t *testing.T) {
 	if len(progress) != 2 || progress[0] != "Receiving objects: 10%" || progress[1] != "Receiving objects: 100%" {
 		t.Fatalf("progress after overlong record = %q", progress)
 	}
-	if tail := h.tailText(); !strings.Contains(tail, "final diagnostic") || len(tail) > MaxDiagnosticsLength {
+	if tail := h.tailText(); !strings.Contains(tail, "final diagnostic") || len(tail) > maxDiagnosticsLength {
 		t.Fatalf("final diagnostic missing or output exceeded bound: %q", tail)
 	}
 }

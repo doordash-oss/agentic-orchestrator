@@ -20,56 +20,56 @@ import (
 	"github.com/doordash-oss/agentic-orchestrator/internal/errcat"
 )
 
-// TransactionPhase is the aggregate phase of the multi-repository
+// transactionPhase is the aggregate phase of the multi-repository
 // transaction journal. It records the durable lifecycle from candidate
 // preparation through application, rollback, and settlement.
-type TransactionPhase string
+type transactionPhase string
 
 const (
 	// TransactionPhasePreparing: candidates are being staged (merge commits
 	// created without advancing parent refs). No candidate is durable yet.
-	TransactionPhasePreparing TransactionPhase = "preparing"
+	TransactionPhasePreparing transactionPhase = "preparing"
 	// TransactionPhasePrepared: every repository has a durable candidate
 	// commit; the candidate vector is complete and ready for application.
-	TransactionPhasePrepared TransactionPhase = "prepared"
+	TransactionPhasePrepared transactionPhase = "prepared"
 	// TransactionPhaseApplying: candidates are being applied via
 	// compare-and-swap ref updates; some refs may already be at their
 	// candidate commits.
-	TransactionPhaseApplying TransactionPhase = "applying"
+	TransactionPhaseApplying transactionPhase = "applying"
 	// TransactionPhaseApplied: every repository's parent ref is confirmed
 	// at its candidate commit; closure may proceed.
-	TransactionPhaseApplied TransactionPhase = "applied"
+	TransactionPhaseApplied transactionPhase = "applied"
 	// TransactionPhaseRollingBack: a later apply failure triggered
 	// conditional rollback of earlier applied refs.
-	TransactionPhaseRollingBack TransactionPhase = "rolling_back"
+	TransactionPhaseRollingBack transactionPhase = "rolling_back"
 	// TransactionPhaseRolledBack: rollback completed; all provable
 	// earlier applied refs were restored to their old SHAs.
-	TransactionPhaseRolledBack TransactionPhase = "rolled_back"
+	TransactionPhaseRolledBack transactionPhase = "rolled_back"
 	// TransactionPhaseAttention: a retryable failure (dirty parent, conflict,
 	// external race, or unclassifiable state) parked the transaction. The
 	// child stays active and restartable.
-	TransactionPhaseAttention TransactionPhase = "attention"
+	TransactionPhaseAttention transactionPhase = "attention"
 	// TransactionPhaseMerged: the transaction is fully applied and the child
 	// relationship is durably closed (Completed outcome recorded).
-	TransactionPhaseMerged TransactionPhase = "merged"
+	TransactionPhaseMerged transactionPhase = "merged"
 )
 
-// RepoPrepState records the per-repository preparation outcome.
-type RepoPrepState string
+// repoPrepState records the per-repository preparation outcome.
+type repoPrepState string
 
 const (
-	RepoPrepPending  RepoPrepState = "pending"
-	RepoPrepPrepared RepoPrepState = "prepared"
-	RepoPrepFailed   RepoPrepState = "failed"
+	RepoPrepPending  repoPrepState = "pending"
+	RepoPrepPrepared repoPrepState = "prepared"
+	RepoPrepFailed   repoPrepState = "failed"
 )
 
-// RepoApplyState records the per-repository apply or rollback outcome.
-type RepoApplyState string
+// repoApplyState records the per-repository apply or rollback outcome.
+type repoApplyState string
 
 const (
-	RepoApplyApplied    RepoApplyState = "applied"
-	RepoApplyRolledBack RepoApplyState = "rolled_back"
-	RepoApplyAttention  RepoApplyState = "attention"
+	RepoApplyApplied    repoApplyState = "applied"
+	RepoApplyRolledBack repoApplyState = "rolled_back"
+	RepoApplyAttention  repoApplyState = "attention"
 )
 
 // RepoTransactionEntry is the per-repository journal entry in a transaction.
@@ -102,9 +102,9 @@ type RepoTransactionEntry struct {
 	// a successful apply, this equals CandidateSHA.
 	MergeHEAD string `yaml:"merge_head,omitempty"`
 	// PrepState records whether the candidate is pending, prepared, or failed.
-	PrepState RepoPrepState `yaml:"prep_state,omitempty"`
+	PrepState repoPrepState `yaml:"prep_state,omitempty"`
 	// ApplyState records the per-repo apply or rollback outcome.
-	ApplyState RepoApplyState `yaml:"apply_state,omitempty"`
+	ApplyState repoApplyState `yaml:"apply_state,omitempty"`
 	// ObservedSHA is the actual ref SHA observed at apply or rollback time;
 	// used to diagnose external races.
 	ObservedSHA string `yaml:"observed_sha,omitempty"`
@@ -132,7 +132,7 @@ type RepoTransactionEntry struct {
 // when integration parks — the single canonical attention record.
 type TransactionJournal struct {
 	// Phase is the aggregate transaction phase.
-	Phase TransactionPhase `yaml:"phase"`
+	Phase transactionPhase `yaml:"phase"`
 	// Entries is the ordered per-repository journal, preserving the
 	// inherited parent repository order.
 	Entries []RepoTransactionEntry `yaml:"entries"`
@@ -158,7 +158,7 @@ type TransactionJournal struct {
 // needs a guard.
 func (t *TransactionJournal) UnmarshalYAML(value *yaml.Node) error {
 	var raw struct {
-		Phase       TransactionPhase       `yaml:"phase"`
+		Phase       transactionPhase       `yaml:"phase"`
 		Entries     []RepoTransactionEntry `yaml:"entries"`
 		Attention   yaml.Node              `yaml:"attention"`
 		TailSettled bool                   `yaml:"tail_settled"`
@@ -201,11 +201,11 @@ func (t *TransactionJournal) AttentionCode() errcat.Code {
 // attention: the phase is attention, the journal carries an attention record
 // (including a closure-time sync failure on an applied journal), or any
 // entry carries apply attention.
-func (t *TransactionJournal) HasAttention() bool {
+func (t *TransactionJournal) hasAttention() bool {
 	if t == nil {
 		return false
 	}
-	return t.Phase == TransactionPhaseAttention || t.Attention != nil || t.AnyApplyAttention()
+	return t.Phase == TransactionPhaseAttention || t.Attention != nil || t.anyApplyAttention()
 }
 
 // IntegrationAttentionRecord returns the child's stored integration
@@ -223,7 +223,7 @@ func (f *Feature) HasIntegrationAttention() bool {
 	if f == nil || f.Parent == nil {
 		return false
 	}
-	return f.Parent.Transaction.HasAttention()
+	return f.Parent.Transaction.hasAttention()
 }
 
 // AllCandidatesPrepared reports whether every per-repo entry has a durable
@@ -270,7 +270,7 @@ func (t *TransactionJournal) AnyApplied() bool {
 // AnyApplyAttention reports whether at least one per-repo entry has
 // ApplyState == attention, indicating an external race or unclassifiable
 // state that must persist as durable integration attention.
-func (t *TransactionJournal) AnyApplyAttention() bool {
+func (t *TransactionJournal) anyApplyAttention() bool {
 	if t == nil {
 		return false
 	}

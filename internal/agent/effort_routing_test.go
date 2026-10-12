@@ -15,6 +15,7 @@
 package agent
 
 import (
+	"context"
 	"testing"
 
 	"github.com/doordash-oss/agentic-orchestrator/internal/config"
@@ -32,7 +33,7 @@ func TestEffortCapabilitiesForProviderQualifiedModel(t *testing.T) {
 		}},
 	})
 
-	got := (&PhaseRunner{Registry: reg}).EffortCapabilitiesForModel("mock:sonnet")
+	got := (&PhaseRunner{Registry: reg}).effortCapabilitiesForModel("mock:sonnet")
 	if len(got) != 3 || got[0] != llm.EffortLow || got[1] != llm.EffortMedium || got[2] != llm.EffortHigh {
 		t.Fatalf("capabilities = %v, want [low medium high]", got)
 	}
@@ -55,6 +56,22 @@ func (p *effortCatalogProvider) VersionInfo() (string, error)                   
 func (p *effortCatalogProvider) MinVersion() [3]int                             { return [3]int{} }
 func (p *effortCatalogProvider) EnvVarsToExclude() []string                     { return nil }
 func (p *effortCatalogProvider) ModelCatalog() []llm.ModelInfo                  { return p.models }
+func (p *effortCatalogProvider) SetModelCatalog(models []llm.ModelInfo)         { p.models = models }
+func (p *effortCatalogProvider) DiscoverModelCatalog(context.Context) ([]llm.ModelInfo, error) {
+	return nil, nil
+}
+func (p *effortCatalogProvider) DiscoverModelCatalogWithProgress(context.Context, llm.ModelDiscoveryReporter) ([]llm.ModelInfo, error) {
+	return nil, nil
+}
+func (p *effortCatalogProvider) ContextWindowForModel(string) int { return 0 }
+func (p *effortCatalogProvider) AskingQuestionsClause() string    { return "" }
+func (p *effortCatalogProvider) SupportsNativeToollessReview() bool {
+	return false
+}
+func (p *effortCatalogProvider) CheckReadiness(context.Context) llm.ProviderReadiness {
+	return llm.ProviderReadiness{Ready: true}
+}
+func (p *effortCatalogProvider) ReviewPreferenceBand(llm.ModelInfo) (int, bool) { return 0, false }
 
 func TestResolveEffortForRole(t *testing.T) {
 	// When the PhaseRunner has no Registry (as in this unit test),
@@ -191,12 +208,12 @@ func TestResolveEffortForRole(t *testing.T) {
 func TestValidatorEffortLevel(t *testing.T) {
 	cases := []struct {
 		name       string
-		cfg        PlanLoopConfig
+		cfg        planLoopConfig
 		wantEffort llm.EffortLevel
 	}{
 		{
 			name: "uses validator effort when set",
-			cfg: PlanLoopConfig{
+			cfg: planLoopConfig{
 				EffortLevel:              llm.EffortHigh,
 				EffectiveEffort:          llm.EffortHigh,
 				ValidatorEffectiveEffort: llm.EffortMedium,
@@ -205,7 +222,7 @@ func TestValidatorEffortLevel(t *testing.T) {
 		},
 		{
 			name: "falls back to planner effort when validator not set",
-			cfg: PlanLoopConfig{
+			cfg: planLoopConfig{
 				EffortLevel:     llm.EffortHigh,
 				EffectiveEffort: llm.EffortMedium,
 			},
@@ -213,7 +230,7 @@ func TestValidatorEffortLevel(t *testing.T) {
 		},
 		{
 			name: "falls back to pipeline effort when neither set",
-			cfg: PlanLoopConfig{
+			cfg: planLoopConfig{
 				EffortLevel: llm.EffortHigh,
 			},
 			wantEffort: llm.EffortHigh,
@@ -270,70 +287,45 @@ func TestReviewHelperEffortFromImpl(t *testing.T) {
 	}
 }
 
-func TestFinalReviewEffortRouting(t *testing.T) {
+func TestMultiRepoOrchestratorConfigEffortRouting(t *testing.T) {
+	reg := llm.NewRegistry()
+	reg.Register(&effortCatalogProvider{
+		models: []llm.ModelInfo{{
+			ID:                 "sonnet",
+			EffortCapabilities: []llm.EffortLevel{llm.EffortLow, llm.EffortMedium, llm.EffortHigh},
+		}},
+	})
+	pr := &PhaseRunner{Registry: reg}
+	f := &feature.Feature{
+		ID:       "test-feature",
+		Pipeline: feature.PipelineMedium,
+		Models:   config.ModelConfig{Implementation: "mock:sonnet", Review: "mock:sonnet"},
+		Effort:   config.EffortConfig{Implementation: "high"},
+	}
+
 	cases := []struct {
-		name           string
-		cfg            OrchestratorConfig
-		wantAxisEffort llm.EffortLevel
-		wantAxisSource llm.EffortSource
-		wantFixEffort  llm.EffortLevel
-		wantFixSource  llm.EffortSource
+		name       string
+		passRole   llm.PhaseRole
+		wantEffort llm.EffortLevel
+		wantSource llm.EffortSource
 	}{
-		{
-			name: "review axes use review effort, fix uses impl effort",
-			cfg: OrchestratorConfig{
-				EffortLevel:           llm.EffortHigh,
-				EffectiveEffort:       llm.EffortHigh,
-				ImplEffectiveEffort:   llm.EffortMedium,
-				ImplEffortSource:      llm.EffortSourceExplicit,
-				ReviewEffectiveEffort: llm.EffortMax,
-				ReviewEffortSource:    llm.EffortSourceExplicit,
-			},
-			wantAxisEffort: llm.EffortMax,
-			wantAxisSource: llm.EffortSourceExplicit,
-			wantFixEffort:  llm.EffortMedium,
-			wantFixSource:  llm.EffortSourceExplicit,
-		},
-		{
-			name: "falls back to effective effort when role-specific not set",
-			cfg: OrchestratorConfig{
-				EffortLevel:     llm.EffortHigh,
-				EffectiveEffort: llm.EffortMedium,
-				EffortSource:    llm.EffortSourceAuto,
-			},
-			wantAxisEffort: llm.EffortMedium,
-			wantAxisSource: llm.EffortSourceAuto,
-			wantFixEffort:  llm.EffortMedium,
-			wantFixSource:  llm.EffortSourceAuto,
-		},
-		{
-			name: "falls back to pipeline when no effort resolved",
-			cfg: OrchestratorConfig{
-				EffortLevel: llm.EffortHigh,
-			},
-			wantAxisEffort: llm.EffortHigh,
-			wantAxisSource: "",
-			wantFixEffort:  llm.EffortHigh,
-			wantFixSource:  "",
-		},
+		{name: "implementation pass uses implementation effort", passRole: llm.PhaseImplementation, wantEffort: llm.EffortHigh, wantSource: llm.EffortSourceExplicit},
+		{name: "final review pass uses review effort", passRole: llm.PhaseReview, wantEffort: llm.EffortMedium, wantSource: llm.EffortSourceAuto},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			gotAxisEffort := finalReviewAxisEffortLevel(tc.cfg)
-			if gotAxisEffort != tc.wantAxisEffort {
-				t.Errorf("axis effort = %q, want %q", gotAxisEffort, tc.wantAxisEffort)
+			cfg := pr.multiRepoOrchestratorConfig(f, tc.passRole, nil)
+			if cfg.EffectiveEffort != tc.wantEffort || cfg.EffortSource != tc.wantSource {
+				t.Errorf("effective effort = %q/%q, want %q/%q", cfg.EffectiveEffort, cfg.EffortSource, tc.wantEffort, tc.wantSource)
 			}
-			gotAxisSource := finalReviewAxisEffortSource(tc.cfg)
-			if gotAxisSource != tc.wantAxisSource {
-				t.Errorf("axis source = %q, want %q", gotAxisSource, tc.wantAxisSource)
+			if cfg.ImplEffectiveEffort != llm.EffortHigh || cfg.ImplEffortSource != llm.EffortSourceExplicit {
+				t.Errorf("impl effort = %q/%q, want high/explicit", cfg.ImplEffectiveEffort, cfg.ImplEffortSource)
 			}
-			gotFixEffort := finalReviewFixEffortLevel(tc.cfg)
-			if gotFixEffort != tc.wantFixEffort {
-				t.Errorf("fix effort = %q, want %q", gotFixEffort, tc.wantFixEffort)
+			if cfg.ReviewEffectiveEffort != llm.EffortMedium || cfg.ReviewEffortSource != llm.EffortSourceAuto {
+				t.Errorf("review effort = %q/%q, want medium/auto", cfg.ReviewEffectiveEffort, cfg.ReviewEffortSource)
 			}
-			gotFixSource := finalReviewFixEffortSource(tc.cfg)
-			if gotFixSource != tc.wantFixSource {
-				t.Errorf("fix source = %q, want %q", gotFixSource, tc.wantFixSource)
+			if cfg.EffortLevel != llm.EffortMedium {
+				t.Errorf("pipeline effort = %q, want medium", cfg.EffortLevel)
 			}
 		})
 	}

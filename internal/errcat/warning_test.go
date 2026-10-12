@@ -52,7 +52,7 @@ func TestWarningCodesAreWarningClassWithoutActions(t *testing.T) {
 		if !ok {
 			t.Fatalf("%s: missing from catalog", code)
 		}
-		if entry.Class != ClassWarning {
+		if entry.Class != classWarning {
 			t.Errorf("%s: class = %q; want warning", code, entry.Class)
 		}
 		if len(entry.Actions) != 0 {
@@ -82,11 +82,11 @@ func TestOrphanSessionCodesAreNeedsActionResume(t *testing.T) {
 		if len(entry.Actions) != 1 || entry.Actions[0] != "resume" {
 			t.Errorf("%s: actions = %#v; want [resume]", code, entry.Actions)
 		}
-		blocks := map[Block]bool{}
+		blocks := map[block]bool{}
 		for _, block := range entry.Blocks {
 			blocks[block] = true
 		}
-		if len(blocks) != 2 || !blocks[BlockPhase] || !blocks[BlockRepositories] {
+		if len(blocks) != 2 || !blocks[blockPhase] || !blocks[blockRepositories] {
 			t.Errorf("%s: blocks = %#v; want exactly phase and repositories", code, entry.Blocks)
 		}
 		if entry.Remediation == "" {
@@ -125,7 +125,7 @@ func TestWarningSummaryTemplates(t *testing.T) {
 	if !strings.Contains(rendered.Summary, `"web"`) || !strings.Contains(rendered.Summary, "agentico/pass-3") {
 		t.Fatalf("child_cleanup_incomplete stored-record summary does not name repository and branch: %q", rendered.Summary)
 	}
-	if rendered.Class != ClassWarning {
+	if rendered.Class != classWarning {
 		t.Fatalf("child_cleanup_incomplete renders as %q; want warning", rendered.Class)
 	}
 

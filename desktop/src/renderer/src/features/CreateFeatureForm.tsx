@@ -113,6 +113,7 @@ import {
   type CheckpointState,
   type Pipeline,
 } from './runContract';
+import { defined } from '../../../shared/defined';
 
 type DefaultsState = LoadState<{ phase: 'loaded'; defaults: CreationDefaults }>;
 type SourceState =
@@ -302,7 +303,7 @@ function plural(count: number, one: string, many: string): string {
   return `${count} ${count === 1 ? one : many}`;
 }
 
-export interface CreateFeatureFormProps {
+interface CreateFeatureFormProps {
   onCreated(created: {
     featureId: string;
     name: string;
@@ -1869,7 +1870,7 @@ export function CreateFeatureForm({
         handleCreated({
           featureId: created.featureId,
           name: name.trim(),
-          ...(created.warnings === undefined ? {} : { warnings: created.warnings }),
+          ...defined('warnings', created.warnings),
         });
       } catch (err) {
         const parsed = parseIpcError(err);

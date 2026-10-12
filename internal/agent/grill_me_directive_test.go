@@ -35,7 +35,7 @@ func TestGrillMeInquirenessPartial_AllLevels(t *testing.T) {
 	var first string
 	for _, level := range levels {
 		t.Run(string(level), func(t *testing.T) {
-			got := prompts.GrillMeInquireness(string(level))
+			got := prompts.MustRender(prompts.TemplateGrillMeInquireness, prompts.GrillMeInquirenessInput{Level: string(level)})
 			if first == "" {
 				first = got
 			} else if got != first {
@@ -51,7 +51,7 @@ func TestGrillMeInquirenessPartial_AllLevels(t *testing.T) {
 // Phase-Plan-revision builders). Header is the bracketed-tag form (no stray
 // colon); body resolves all ambiguity autonomously without grilling the user.
 func TestAutonomousInquirenessPartial(t *testing.T) {
-	got := prompts.AutonomousInquireness()
+	got := prompts.MustRender(prompts.TemplateAutonomousInquireness, prompts.AutonomousInquirenessInput{})
 
 	wantSnippets := []string{
 		"## Ambiguity Resolution [none]",
@@ -70,9 +70,9 @@ func TestAutonomousInquirenessPartial(t *testing.T) {
 }
 
 func TestGrillMeInquirenessPartial_InvariantAndPolicyFree(t *testing.T) {
-	none := prompts.GrillMeInquireness(string(feature.InquirenessNone))
-	medium := prompts.GrillMeInquireness(string(feature.InquirenessMedium))
-	high := prompts.GrillMeInquireness(string(feature.InquirenessHigh))
+	none := prompts.MustRender(prompts.TemplateGrillMeInquireness, prompts.GrillMeInquirenessInput{Level: string(feature.InquirenessNone)})
+	medium := prompts.MustRender(prompts.TemplateGrillMeInquireness, prompts.GrillMeInquirenessInput{Level: string(feature.InquirenessMedium)})
+	high := prompts.MustRender(prompts.TemplateGrillMeInquireness, prompts.GrillMeInquirenessInput{Level: string(feature.InquirenessHigh)})
 
 	if none != medium || medium != high {
 		t.Fatalf("grill-me directive differs by inquireness level:\n--- none ---\n%s\n--- medium ---\n%s\n--- high ---\n%s", none, medium, high)
@@ -112,7 +112,7 @@ func TestBuildInquirePrompt_UsesGrillMeDirective(t *testing.T) {
 				},
 				Inquireness: level,
 			}
-			prompt := BuildInquirePrompt(f, "")
+			prompt := buildInquirePrompt(f)
 
 			if first == "" {
 				first = prompt
@@ -160,12 +160,7 @@ func assertPolicyFreeGrillMePrompt(t *testing.T, prompt string) {
 // revision builder flip: revision prompts emit the renamed autonomous block,
 // not the legacy three-branch directive.
 func TestBuildRoadmapRevisionPrompt_UsesAutonomousDirective(t *testing.T) {
-	f := &feature.Feature{
-		Name:        "Roadmap Revision",
-		Description: "exercise revision directive",
-		Inquireness: feature.InquirenessHigh,
-	}
-	prompt := BuildRoadmapRevisionPrompt(f, "", "/tmp/roadmap.md", "/tmp/prev.md", "feedback", "", 1, nil)
+	prompt := buildRoadmapRevisionPrompt("", "/tmp/prev.md", "feedback", 1, nil)
 
 	wantSnippets := []string{
 		"## Ambiguity Resolution [none]",
@@ -191,7 +186,7 @@ func TestBuildPhasePlanRevisionPrompt_UsesAutonomousDirective(t *testing.T) {
 		Inquireness: feature.InquirenessHigh,
 	}
 	phase := RoadmapPhase{Number: 1, Name: "Bootstrap", Type: "Tracer"}
-	prompt := BuildPhasePlanRevisionPrompt(f, "", "/tmp/plan.md", "feedback", "", phase, 1, nil)
+	prompt := buildPhasePlanRevisionPrompt(f, "", "/tmp/plan.md", "feedback", phase, 1, nil)
 
 	wantSnippets := []string{
 		"## Ambiguity Resolution [none]",

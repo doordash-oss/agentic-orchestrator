@@ -48,14 +48,10 @@ const maxReadinessTextLen = 240
 func (h *apiHandler) handleReadiness(w http.ResponseWriter, r *http.Request) {
 	snapshot, err := h.readinessSnapshot(r.Context(), false)
 	if err != nil {
-		if !h.writeAdmissionRefusal(w, err) {
-			writeAPIError(w, http.StatusInternalServerError, errcat.InternalError)
-		}
+		h.writeAdmissionOrInternal(w, err)
 		return
 	}
-	revision := revisionForAny(snapshot)
-	snapshot.Meta = h.responseMeta(revision)
-	h.writeRevisionedJSON(w, r, revision, snapshot)
+	h.writeRevisionedResponse(w, r, snapshot, func(meta ResponseMeta) any { snapshot.Meta = meta; return snapshot })
 }
 
 // handleRuntimeReadiness is the dashboard/attach gate. Its wire shape omits
@@ -78,9 +74,7 @@ func (h *apiHandler) handleRuntimeReadinessRefresh(w http.ResponseWriter, r *htt
 func (h *apiHandler) writeRuntimeReadiness(w http.ResponseWriter, r *http.Request, refresh bool) {
 	ready, err := h.runtimeReadinessSnapshot(r.Context(), refresh)
 	if err != nil {
-		if !h.writeAdmissionRefusal(w, err) {
-			writeAPIError(w, http.StatusInternalServerError, errcat.InternalError)
-		}
+		h.writeAdmissionOrInternal(w, err)
 		return
 	}
 	snapshot := RuntimeReadinessResponse{
@@ -113,9 +107,7 @@ func (h *apiHandler) handleReadinessRefreshRoute(w http.ResponseWriter, r *http.
 	}
 	snapshot, err := h.readinessSnapshot(r.Context(), true)
 	if err != nil {
-		if !h.writeAdmissionRefusal(w, err) {
-			writeAPIError(w, http.StatusInternalServerError, errcat.InternalError)
-		}
+		h.writeAdmissionOrInternal(w, err)
 		return
 	}
 	revision := revisionForAny(snapshot)
@@ -138,9 +130,7 @@ func (h *apiHandler) rejectNotReadyForCreation(w http.ResponseWriter, r *http.Re
 		// The creation guard's lazy provider probe was refused by a closed
 		// admission boundary: creation is a work-start request, so the
 		// canonical refusal applies.
-		if !h.writeAdmissionRefusal(w, err) {
-			writeAPIError(w, http.StatusInternalServerError, errcat.InternalError)
-		}
+		h.writeAdmissionOrInternal(w, err)
 		return true
 	}
 	if snapshot.Ready {
@@ -191,6 +181,10 @@ func (h *apiHandler) runtimeReadinessSnapshot(ctx context.Context, forceProbe bo
 	if err != nil {
 		return ReadinessResponse{}, err
 	}
+	// Endpoint reachability is advisory: plain reads use the cached result
+	// and refresh it in the background; only forced refreshes wait (bounded).
+	h.checkProviderEndpoints(ctx, forceProbe)
+	providers = h.applyEndpointResults(providers)
 	cfg := h.configOrDefault()
 	resp := ReadinessResponse{
 		APIVersion:    APIVersion,
@@ -339,14 +333,9 @@ func probeProviderReadiness(ctx context.Context, p llm.LLMProvider) ProviderRead
 			return out
 		}
 	}
-	checker, ok := p.(llm.ReadinessChecker)
-	if !ok {
-		out.Ready = true
-		return out
-	}
 	probeCtx, cancel := context.WithTimeout(ctx, providerReadinessProbeTimeout)
 	defer cancel()
-	status := checker.CheckReadiness(probeCtx)
+	status := p.CheckReadiness(probeCtx)
 	if status.Ready {
 		out.Ready = true
 		return out
@@ -540,6 +529,9 @@ func flattenReadinessIssues(resp ReadinessResponse) []Error {
 		if p.Issue != nil {
 			issues = append(issues, *p.Issue)
 		}
+		if p.Warning != nil {
+			issues = append(issues, *p.Warning)
+		}
 	}
 	if resp.Models.Issue != nil {
 		issues = append(issues, *resp.Models.Issue)
@@ -557,5 +549,24 @@ func flattenReadinessIssues(resp ReadinessResponse) []Error {
 			issues = append(issues, *repo.Issue)
 		}
 	}
+	if issue := sandboxReadinessIssue(); issue != nil {
+		issues = append(issues, *issue)
+	}
 	return issues
+}
+
+// verificationSandboxStatus is the cached once-per-process sandbox probe;
+// tests replace it.
+var verificationSandboxStatus = agent.SandboxAvailability
+
+// sandboxReadinessIssue is the single machine-level warning that the
+// verification sandbox cannot be applied (only macOS reports this, e.g.
+// nested sandbox-exec). It never changes ready.
+func sandboxReadinessIssue() *Error {
+	status := verificationSandboxStatus()
+	if !status.Unavailable {
+		return nil
+	}
+	return readinessIssue(errcat.VerificationSandboxUnavailable,
+		errcat.WithDiagnostics(SafeDisplayText(status.Reason, maxReadinessTextLen)))
 }

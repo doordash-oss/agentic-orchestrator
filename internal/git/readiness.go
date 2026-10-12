@@ -26,18 +26,18 @@ import (
 	"time"
 )
 
-// ReadinessProber resolves and checks Git once per catalog scan. It is safe
+// readinessProber resolves and checks Git once per catalog scan. It is safe
 // for concurrent repository inspections and never changes process PATH.
-type ReadinessProber struct{ executable string }
+type readinessProber struct{ executable string }
 
 // NewReadinessProber detects shared installation failures before every repo
 // pays for the same failing command (for example an unaccepted Xcode license).
-func NewReadinessProber(ctx context.Context) (*ReadinessProber, error) {
+func NewReadinessProber(ctx context.Context) (*readinessProber, error) {
 	executable, err := exec.LookPath("git")
 	if err != nil {
 		return nil, fmt.Errorf("locate git: %w", err)
 	}
-	prober := &ReadinessProber{executable: executable}
+	prober := &readinessProber{executable: executable}
 	if _, err := prober.run(ctx, "--version"); err != nil {
 		return nil, err
 	}
@@ -46,7 +46,7 @@ func NewReadinessProber(ctx context.Context) (*ReadinessProber, error) {
 
 // Inspect distinguishes a usable unborn checkout from a failed Git command.
 // No result is cached: a replaced checkout must acquire a new identity.
-func (p *ReadinessProber) Inspect(ctx context.Context, dir string) (RepoIdentity, bool, error) {
+func (p *readinessProber) Inspect(ctx context.Context, dir string) (RepoIdentity, bool, error) {
 	out, err := p.run(ctx, "-C", dir, "rev-parse", "--show-toplevel", "--git-common-dir")
 	if err != nil {
 		return RepoIdentity{}, false, err
@@ -68,7 +68,7 @@ func (p *ReadinessProber) Inspect(ctx context.Context, dir string) (RepoIdentity
 	return RepoIdentity{}, false, err
 }
 
-func (p *ReadinessProber) run(parent context.Context, args ...string) ([]byte, error) {
+func (p *readinessProber) run(parent context.Context, args ...string) ([]byte, error) {
 	ctx, cancel := context.WithTimeout(parent, 5*time.Second)
 	defer cancel()
 	cmd := exec.CommandContext(ctx, p.executable, args...)

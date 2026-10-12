@@ -25,7 +25,7 @@ import (
 // override is read from config (providers.codex.cli).
 var Module = fx.Module("llm-codex",
 	fx.Provide(func(cfg *config.Config) *Provider {
-		return &Provider{binary: cfg.ProviderCLI("codex", defaultBinary)}
+		return NewProvider(cfg.ProviderCLI("codex", defaultBinary))
 	}),
 	fx.Invoke(func(r *llm.Registry, p *Provider) {
 		r.Register(p)

@@ -47,20 +47,20 @@ func newCrashFixture(t *testing.T) *crashFixture {
 // craftRecord writes a record (and its staging with a valid ownership
 // marker) directly into the store directory, as a crash would have left
 // it, and returns it.
-func (fx *crashFixture) craftRecord(t *testing.T, id, key, dest string, state State, process *ProcessInfo, cancelRequested bool) Record {
+func (fx *crashFixture) craftRecord(t *testing.T, id, key, dest string, state state, process *processInfo, cancelRequested bool) Record {
 	t.Helper()
-	stagingRel := stagingName(id)
+	stagingRel := stagingNameFor(kindClone, id)
 	stagingPath := filepath.Join(fx.root, stagingRel)
 	if err := os.MkdirAll(stagingPath, 0o700); err != nil {
 		t.Fatal(err)
 	}
-	handle, _, err := OpenRootDir(fx.root)
+	handle, _, err := openRootDir(fx.root)
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer handle.Close()
 	nonce := newNonce()
-	_, idty, err := OpenRootDir(fx.root)
+	_, idty, err := openRootDir(fx.root)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -80,7 +80,7 @@ func (fx *crashFixture) craftRecord(t *testing.T, id, key, dest string, state St
 		RootDevice: idty.Device, RootInode: idty.Inode,
 		Destination: dest, DestinationPath: filepath.Join(fx.root, dest),
 		StagingPath: stagingPath, OwnershipNonce: nonce,
-		State: state, Stage: StageTransferring,
+		State: state, Stage: stageTransferring,
 		CancelRequested: cancelRequested,
 		Process:         process,
 		CreatedAt:       now, UpdatedAt: now,
@@ -95,7 +95,7 @@ func (fx *crashFixture) craftRecord(t *testing.T, id, key, dest string, state St
 // group and returns its recorded process info. The child is reaped
 // asynchronously so a terminated survivor disappears instead of turning
 // into a zombie that still answers kill(pid, 0).
-func spawnSurvivor(t *testing.T) *ProcessInfo {
+func spawnSurvivor(t *testing.T) *processInfo {
 	t.Helper()
 	cmd := exec.Command("sleep", "30")
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
@@ -106,7 +106,7 @@ func spawnSurvivor(t *testing.T) *ProcessInfo {
 	t.Cleanup(func() {
 		_ = syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)
 	})
-	return &ProcessInfo{
+	return &processInfo{
 		Pid:           cmd.Process.Pid,
 		Pgid:          cmd.Process.Pid,
 		StartIdentity: processStartIdentity(cmd.Process.Pid),
@@ -117,13 +117,13 @@ func spawnSurvivor(t *testing.T) *ProcessInfo {
 func TestRecoverInterruptsUnfinishedWorkWithoutRespawning(t *testing.T) {
 	t.Parallel()
 	fx := newCrashFixture(t)
-	rec := fx.craftRecord(t, "clone-running", "k-run", "widget", StateRunning, nil, false)
+	rec := fx.craftRecord(t, "clone-running", "k-run", "widget", stateRunning, nil, false)
 
 	if err := fx.svc.Recover(); err != nil {
 		t.Fatalf("Recover: %v", err)
 	}
 	final, _ := fx.svc.Snapshot(rec.ID)
-	if final.State != StateInterrupted {
+	if final.State != stateInterrupted {
 		t.Fatalf("state = %s, want interrupted", final.State)
 	}
 	if _, err := os.Lstat(final.StagingPath); !errors.Is(err, os.ErrNotExist) {
@@ -141,7 +141,7 @@ func TestRecoverInterruptsUnfinishedWorkWithoutRespawning(t *testing.T) {
 		t.Fatalf("second Recover: %v", err)
 	}
 	again, _ := fx.svc.Snapshot(rec.ID)
-	if again.State != StateInterrupted || !again.ResolvedAt.Equal(final.ResolvedAt) {
+	if again.State != stateInterrupted || !again.ResolvedAt.Equal(final.ResolvedAt) {
 		t.Errorf("second reconciliation changed the record: %+v", again)
 	}
 }
@@ -149,13 +149,13 @@ func TestRecoverInterruptsUnfinishedWorkWithoutRespawning(t *testing.T) {
 func TestRecoverKeepsExplicitCancellationDistinguishable(t *testing.T) {
 	t.Parallel()
 	fx := newCrashFixture(t)
-	rec := fx.craftRecord(t, "clone-cancelling", "k-cancel", "widget", StateCancelling, nil, true)
+	rec := fx.craftRecord(t, "clone-cancelling", "k-cancel", "widget", stateCancelling, nil, true)
 
 	if err := fx.svc.Recover(); err != nil {
 		t.Fatal(err)
 	}
 	final, _ := fx.svc.Snapshot(rec.ID)
-	if final.State != StateCancelled {
+	if final.State != stateCancelled {
 		t.Fatalf("state = %s, want cancelled (not interrupted)", final.State)
 	}
 }
@@ -163,12 +163,12 @@ func TestRecoverKeepsExplicitCancellationDistinguishable(t *testing.T) {
 func TestRecoverAcceptedBeforeSpawn(t *testing.T) {
 	t.Parallel()
 	fx := newCrashFixture(t)
-	rec := fx.craftRecord(t, "clone-accepted", "k-accepted", "widget", StateAccepted, nil, false)
+	rec := fx.craftRecord(t, "clone-accepted", "k-accepted", "widget", stateAccepted, nil, false)
 	if err := fx.svc.Recover(); err != nil {
 		t.Fatal(err)
 	}
 	final, _ := fx.svc.Snapshot(rec.ID)
-	if final.State != StateInterrupted {
+	if final.State != stateInterrupted {
 		t.Fatalf("state = %s, want interrupted", final.State)
 	}
 }
@@ -182,7 +182,7 @@ func TestRecoverRecognizesPublicationAfterCrash(t *testing.T) {
 	if err := os.MkdirAll(filepath.Join(dest, ".git"), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	rec := fx.craftRecord(t, "clone-finalizing", "k-fin", "widget", StateFinalizing, nil, false)
+	rec := fx.craftRecord(t, "clone-finalizing", "k-fin", "widget", stateFinalizing, nil, false)
 	pubMarker, _ := json.Marshal(publicationMarker{OperationID: rec.ID, Nonce: rec.OwnershipNonce, PublishedAt: time.Now().UTC()})
 	if err := os.WriteFile(filepath.Join(dest, ".git", publicationMarkerName), pubMarker, 0o600); err != nil {
 		t.Fatal(err)
@@ -214,7 +214,7 @@ func TestRecoverDoesNotClaimUnrelatedDestinationAsSuccess(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(dest, ".git", "HEAD"), []byte("ref: refs/heads/main\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	rec := fx.craftRecord(t, "clone-finalizing-foreign", "k-foreign", "widget", StateFinalizing, nil, false)
+	rec := fx.craftRecord(t, "clone-finalizing-foreign", "k-foreign", "widget", stateFinalizing, nil, false)
 	_ = os.RemoveAll(rec.StagingPath)
 
 	if err := fx.svc.Recover(); err != nil {
@@ -224,7 +224,7 @@ func TestRecoverDoesNotClaimUnrelatedDestinationAsSuccess(t *testing.T) {
 	if final.State == StateSucceeded {
 		t.Fatal("unrelated destination repository reported as this attempt's success")
 	}
-	if final.State != StateInterrupted && final.State != StateCleanupPending {
+	if final.State != stateInterrupted && final.State != StateCleanupPending {
 		t.Fatalf("state = %s, want interrupted or cleanup-pending", final.State)
 	}
 	// The unrelated repository was never a cleanup target.
@@ -237,16 +237,16 @@ func TestRecoverTerminatesVerifiedSurvivingProcess(t *testing.T) {
 	t.Parallel()
 	fx := newCrashFixture(t)
 	survivor := spawnSurvivor(t)
-	rec := fx.craftRecord(t, "clone-survivor", "k-survivor", "widget", StateRunning, survivor, false)
+	rec := fx.craftRecord(t, "clone-survivor", "k-survivor", "widget", stateRunning, survivor, false)
 
 	if err := fx.svc.Recover(); err != nil {
 		t.Fatal(err)
 	}
-	if IsProcessAlive(survivor.Pid) {
+	if isProcessAlive(survivor.Pid) {
 		t.Error("verified surviving process was not terminated")
 	}
 	final, _ := fx.svc.Snapshot(rec.ID)
-	if final.State != StateInterrupted {
+	if final.State != stateInterrupted {
 		t.Fatalf("state = %s, want interrupted", final.State)
 	}
 }
@@ -257,13 +257,13 @@ func TestRecoverRefusesToSignalOnPIDReuse(t *testing.T) {
 	survivor := spawnSurvivor(t)
 	// A record whose recorded start identity does not match the live
 	// process: PID reuse. Nothing may be signaled or deleted.
-	stale := &ProcessInfo{Pid: survivor.Pid, Pgid: survivor.Pgid, StartIdentity: "reused-identity", StartedAt: time.Now().UTC()}
-	rec := fx.craftRecord(t, "clone-reused", "k-reused", "widget", StateRunning, stale, false)
+	stale := &processInfo{Pid: survivor.Pid, Pgid: survivor.Pgid, StartIdentity: "reused-identity", StartedAt: time.Now().UTC()}
+	rec := fx.craftRecord(t, "clone-reused", "k-reused", "widget", stateRunning, stale, false)
 
 	if err := fx.svc.Recover(); err != nil {
 		t.Fatal(err)
 	}
-	if !IsProcessAlive(survivor.Pid) {
+	if !isProcessAlive(survivor.Pid) {
 		t.Error("unverifiable process was signaled despite PID-reuse uncertainty")
 	}
 	final, _ := fx.svc.Snapshot(rec.ID)
@@ -282,7 +282,7 @@ func TestRecoverRefusesToSignalOnPIDReuse(t *testing.T) {
 func TestRecoverRootSwapKeepsChangedOwnershipUntouched(t *testing.T) {
 	t.Parallel()
 	fx := newCrashFixture(t)
-	rec := fx.craftRecord(t, "clone-swap", "k-swap", "widget", StateRunning, nil, false)
+	rec := fx.craftRecord(t, "clone-swap", "k-swap", "widget", stateRunning, nil, false)
 	// Replace the configured root path with a symlink to a different tree
 	// after the record was created: identity no longer matches.
 	other := t.TempDir()
@@ -304,7 +304,7 @@ func TestRecoverRootSwapKeepsChangedOwnershipUntouched(t *testing.T) {
 		t.Fatalf("state = %s, want cleanup-pending after root identity change", final.State)
 	}
 	// The moved real root (with our staging inside) was never touched.
-	if _, err := os.Lstat(filepath.Join(moved, stagingName(rec.ID))); err != nil {
+	if _, err := os.Lstat(filepath.Join(moved, stagingNameFor(kindClone, rec.ID))); err != nil {
 		t.Errorf("changed-ownership staging deleted: %v", err)
 	}
 }
@@ -314,7 +314,7 @@ func TestRecoverCleanupPendingResolvesThroughSameBoundary(t *testing.T) {
 	fx := newCrashFixture(t)
 	rec := fx.craftRecord(t, "clone-pending", "k-pending", "widget", StateCleanupPending, nil, false)
 	pending := rec
-	pending.PendingOutcome = StateFailed
+	pending.PendingOutcome = stateFailed
 	if err := fx.svc.save(&pending); err != nil {
 		t.Fatal(err)
 	}
@@ -323,7 +323,7 @@ func TestRecoverCleanupPendingResolvesThroughSameBoundary(t *testing.T) {
 		t.Fatal(err)
 	}
 	final, _ := fx.svc.Snapshot(rec.ID)
-	if final.State != StateFailed {
+	if final.State != stateFailed {
 		t.Fatalf("state = %s, want failed after startup cleanup reconciliation", final.State)
 	}
 	if _, err := os.Lstat(final.StagingPath); !errors.Is(err, os.ErrNotExist) {
@@ -336,7 +336,7 @@ func TestRecoverLateSuccessThroughCleanupEndpoint(t *testing.T) {
 	fx := newCrashFixture(t)
 	rec := fx.craftRecord(t, "clone-late", "k-late", "widget", StateCleanupPending, nil, false)
 	pending := rec
-	pending.PendingOutcome = StateFailed
+	pending.PendingOutcome = stateFailed
 	if err := fx.svc.save(&pending); err != nil {
 		t.Fatal(err)
 	}
@@ -364,8 +364,8 @@ func TestRecoverLateSuccessThroughCleanupEndpoint(t *testing.T) {
 func TestRecoverPersistenceFailureLeavesTruthfulUnresolvedRecord(t *testing.T) {
 	t.Parallel()
 	fx := newCrashFixture(t)
-	rec := fx.craftRecord(t, "clone-persist", "k-persist", "widget", StateRunning, nil, false)
-	storeDir := filepath.Join(fx.stateDir, StoreDirName)
+	rec := fx.craftRecord(t, "clone-persist", "k-persist", "widget", stateRunning, nil, false)
+	storeDir := filepath.Join(fx.stateDir, storeDirName)
 	if err := os.Chmod(storeDir, 0o500); err != nil {
 		t.Fatal(err)
 	}
@@ -375,7 +375,7 @@ func TestRecoverPersistenceFailureLeavesTruthfulUnresolvedRecord(t *testing.T) {
 		t.Fatalf("Recover: %v", err)
 	}
 	final, _ := fx.svc.Snapshot(rec.ID)
-	if final.State == StateInterrupted || final.State == StateSucceeded {
+	if final.State == stateInterrupted || final.State == StateSucceeded {
 		t.Fatalf("recovery claimed %s despite persistence failure", final.State)
 	}
 	// Restore write access and reconcile again: it converges.
@@ -384,7 +384,7 @@ func TestRecoverPersistenceFailureLeavesTruthfulUnresolvedRecord(t *testing.T) {
 		t.Fatal(err)
 	}
 	after, _ := fx.svc.Snapshot(rec.ID)
-	if after.State != StateInterrupted {
+	if after.State != stateInterrupted {
 		t.Errorf("state = %s after retry, want interrupted", after.State)
 	}
 }
@@ -399,7 +399,7 @@ func TestSameKeyReplayAcrossRestartReturnsSucceededOperation(t *testing.T) {
 	svc2, err := New(Options{
 		StateDir: fx.stateDir,
 		Config:   func() *config.Config { return fx.cfg },
-		Runner:   newFakeRunner(succeedScript),
+		runner:   newFakeRunner(succeedScript),
 		Hooks:    Hooks{},
 	})
 	if err != nil {
@@ -418,19 +418,19 @@ func TestCancelOnRecoveredOperationWithoutWorker(t *testing.T) {
 	t.Parallel()
 	fx := newCrashFixture(t)
 	survivor := spawnSurvivor(t)
-	rec := fx.craftRecord(t, "clone-recovered-cancel", "k-rc", "widget", StateRunning, survivor, false)
+	rec := fx.craftRecord(t, "clone-recovered-cancel", "k-rc", "widget", stateRunning, survivor, false)
 
 	cancelling, err := fx.svc.Cancel(rec.ID)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if cancelling.State != StateCancelling {
+	if cancelling.State != stateCancelling {
 		t.Fatalf("state = %s, want cancelling", cancelling.State)
 	}
 	deadline := time.Now().Add(5 * time.Second)
 	for {
 		final, _ := fx.svc.Snapshot(rec.ID)
-		if final.State == StateCancelled {
+		if final.State == stateCancelled {
 			break
 		}
 		if time.Now().After(deadline) {
@@ -438,7 +438,7 @@ func TestCancelOnRecoveredOperationWithoutWorker(t *testing.T) {
 		}
 		time.Sleep(5 * time.Millisecond)
 	}
-	if IsProcessAlive(survivor.Pid) {
+	if isProcessAlive(survivor.Pid) {
 		t.Error("survivor still alive after recovered cancellation")
 	}
 }

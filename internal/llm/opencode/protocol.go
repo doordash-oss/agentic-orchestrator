@@ -24,6 +24,7 @@ import (
 	"net/url"
 	"os"
 	"regexp"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -71,9 +72,9 @@ type Protocol struct {
 	promptActive      bool
 	promptQueue       []string
 
-	negotiatedVersion int
-	acpSessionID      string
-	handshakeErr      error
+	negotiatedACPVersion int
+	acpSessionID         string
+	handshakeErr         error
 
 	// resumeSessionID, when non-empty, asks the handshake to resume that ACP
 	// session via session/load instead of creating a fresh one. loadSession
@@ -100,6 +101,10 @@ type Protocol struct {
 	lastEstimatedUsageEmitTokens          int
 	costUSD                               float64
 	usageSeen                             bool
+	// price is the catalog's advertised per-million-token pricing for the
+	// session model (nil when unknown). It is used only to estimate cost when
+	// OpenCode reports tokens but no positive cost amount.
+	price *llm.ModelCost
 
 	assistantBuf       strings.Builder
 	assistantMessageID string
@@ -140,8 +145,6 @@ type Protocol struct {
 	bridged     map[string]*bridgedRequest
 	bridgedDone map[string]bool
 	bridgeSeq   int
-
-	logFunc func(string, ...interface{})
 }
 
 // permissionOptions records the option ids a permission request offers, so an
@@ -154,6 +157,11 @@ type permissionOptions struct {
 }
 
 type toolCallState struct {
+	// name is the OpenCode tool identifier (read, grep, bash, ...). It is
+	// locked from the first update that carries one, because OpenCode reuses
+	// the ACP title for a display string (the read path, the grep pattern, the
+	// bash description) once the call completes.
+	name                string
 	title               string
 	kind                string
 	path                string
@@ -165,6 +173,12 @@ type toolCallState struct {
 	taskTerminalEmitted bool
 	estimatedInput      bool
 	estimatedOutput     bool
+	// lastProgressKey is the identity of the last tool_progress emitted for
+	// the call, so repeated updates carrying nothing new collapse into one.
+	lastProgressKey string
+	// lastPhase is the last non-empty status phase (active or terminal), so
+	// a bare update with no status keeps the previous phase.
+	lastPhase string
 }
 
 // NewProtocol creates a new OpenCode ACP protocol handler.
@@ -179,19 +193,10 @@ func NewProtocol(opts llm.ProtocolOpts) *Protocol {
 	if opts.Interactive && !opts.NativeToollessReview {
 		if client, ok := serverEndpointFromLaunch(opts.LaunchArgs, opts.LaunchEnv); ok {
 			client.directory = opts.WorkDir
-			p.bridge = newServerBridge(client, p.logDebug)
+			p.bridge = newServerBridge(client)
 		}
 	}
 	return p
-}
-
-// SetLogFunc sets a logging function for debug output.
-func (p *Protocol) SetLogFunc(f func(string, ...interface{})) { p.logFunc = f }
-
-func (p *Protocol) logDebug(format string, args ...interface{}) {
-	if p.logFunc != nil {
-		p.logFunc(format, args...)
-	}
 }
 
 func (p *Protocol) SetStdin(w io.Writer) {
@@ -365,7 +370,7 @@ func (p *Protocol) handshakeError() error {
 // or zero, means the tracer cannot safely proceed.
 func (p *Protocol) checkProtocolVersion() error {
 	p.mu.Lock()
-	v := p.negotiatedVersion
+	v := p.negotiatedACPVersion
 	p.mu.Unlock()
 	if v == 0 {
 		return fmt.Errorf("opencode did not negotiate an ACP protocol version")
@@ -386,9 +391,9 @@ func (p *Protocol) sendInitialize() error {
 	p.initID = id
 	p.mu.Unlock()
 
-	fsCapability := FSCapability{ReadTextFile: true, WriteTextFile: true}
+	caps := fsCapability{ReadTextFile: true, WriteTextFile: true}
 	if p.opts.NativeToollessReview {
-		fsCapability = FSCapability{}
+		caps = fsCapability{}
 	}
 	req := Request{
 		JSONRPC: "2.0",
@@ -400,8 +405,8 @@ func (p *Protocol) sendInitialize() error {
 				Name:    "agentic",
 				Version: "0.1.0",
 			},
-			ClientCapabilities: ClientCapabilities{
-				FS:       fsCapability,
+			ClientCapabilities: clientCapabilities{
+				FS:       caps,
 				Terminal: false,
 			},
 		},
@@ -422,7 +427,7 @@ func (p *Protocol) sendSessionNew() error {
 		JSONRPC: "2.0",
 		ID:      id,
 		Method:  "session/new",
-		Params: SessionNewParams{
+		Params: sessionNewParams{
 			Cwd:        p.opts.WorkDir,
 			MCPServers: []interface{}{},
 		},
@@ -447,7 +452,7 @@ func (p *Protocol) sendSessionLoad() error {
 		JSONRPC: "2.0",
 		ID:      id,
 		Method:  sessionLoadMethod,
-		Params: SessionLoadParams{
+		Params: sessionLoadParams{
 			SessionID:  resumeID,
 			Cwd:        p.opts.WorkDir,
 			MCPServers: []interface{}{},
@@ -497,7 +502,7 @@ func (p *Protocol) sendPrompt(text string) error {
 		JSONRPC: "2.0",
 		ID:      id,
 		Method:  "session/prompt",
-		Params: PromptParams{
+		Params: promptParams{
 			SessionID: sessionID,
 			Prompt:    []ContentBlock{{Type: "text", Text: text}},
 		},
@@ -509,9 +514,9 @@ func (p *Protocol) sendPrompt(text string) error {
 	return nil
 }
 
-// SetPromptModel selects the model for subsequent turns on the same ACP
+// setPromptModel selects the model for subsequent turns on the same ACP
 // session. OpenCode accepts session/set_model without a process relaunch.
-func (p *Protocol) SetPromptModel(model string) {
+func (p *Protocol) setPromptModel(model string) {
 	p.mu.Lock()
 	p.promptModel = BackendModel(model)
 	p.mu.Unlock()
@@ -524,7 +529,7 @@ func (p *Protocol) ApplySettings(ctx context.Context, model, _ string) error {
 	if !p.opts.Interactive {
 		return fmt.Errorf("OpenCode settings update requires an interactive session")
 	}
-	p.SetPromptModel(model)
+	p.setPromptModel(model)
 	done, err := p.sendModelChangeIfNeeded()
 	if err != nil {
 		return err
@@ -582,13 +587,7 @@ func (p *Protocol) writeJSON(v interface{}) error {
 	if w == nil {
 		return fmt.Errorf("opencode protocol: stdin not set")
 	}
-	data, err := json.Marshal(v)
-	if err != nil {
-		return fmt.Errorf("marshaling JSON: %w", err)
-	}
-	data = append(data, '\n')
-	_, err = w.Write(data)
-	return err
+	return llm.WriteJSONLine(w, v)
 }
 
 // ParseLine translates one JSON-RPC line from OpenCode's stdout into SDKMessages.
@@ -679,7 +678,6 @@ func (p *Protocol) ParseLine(line []byte) ([]llm.SDKMessage, error) {
 func (p *Protocol) malformedStdout(detail string) ([]llm.SDKMessage, error) {
 	msg, ok := p.terminalError(malformedStdoutDiagnostic(detail))
 	if !ok {
-		p.logDebug("[opencode] ignoring malformed stdout after terminal result: %s", detail)
 		return nil, nil
 	}
 	return []llm.SDKMessage{msg}, nil
@@ -703,7 +701,6 @@ func malformedStdoutDiagnostic(detail string) string {
 func (p *Protocol) handleResponse(env inboundEnvelope) []llm.SDKMessage {
 	id, err := parseID(env.ID)
 	if err != nil {
-		p.logDebug("[opencode] response with unparseable id %q", string(env.ID))
 		return nil
 	}
 
@@ -725,7 +722,7 @@ func (p *Protocol) handleResponse(env inboundEnvelope) []llm.SDKMessage {
 			return nil
 		}
 		p.mu.Lock()
-		p.negotiatedVersion = res.ProtocolVersion
+		p.negotiatedACPVersion = res.ProtocolVersion
 		p.loadSession = res.AgentCapabilities.LoadSession
 		p.mu.Unlock()
 		p.closeOnce(p.initDone)
@@ -736,7 +733,7 @@ func (p *Protocol) handleResponse(env inboundEnvelope) []llm.SDKMessage {
 			p.failHandshake(fmt.Errorf("opencode session/new failed: %s", rpcErrorDetail(env.Error)), p.sessionReady)
 			return nil
 		}
-		var res SessionNewResult
+		var res sessionNewResult
 		if jerr := json.Unmarshal(env.Result, &res); jerr != nil {
 			p.failHandshake(fmt.Errorf("parsing session/new result: %s", sanitizeDiagnostic(jerr.Error())), p.sessionReady)
 			return nil
@@ -827,7 +824,6 @@ func (p *Protocol) handleResponse(env inboundEnvelope) []llm.SDKMessage {
 		if p.opts.NativeToollessReview {
 			return seal(p.terminalError(fmt.Sprintf("OpenCode native tool-less review received unexpected response id %d", id)))
 		}
-		p.logDebug("[opencode] unhandled response for id %d", id)
 		return nil
 	}
 }
@@ -866,7 +862,7 @@ func (p *Protocol) handlePromptResponse(env inboundEnvelope, hasErr bool) []llm.
 	if hasErr {
 		return seal(p.terminalError(fmt.Sprintf("OpenCode prompt failed: %s", rpcErrorDetail(env.Error))))
 	}
-	var res PromptResult
+	var res promptResult
 	if jerr := json.Unmarshal(env.Result, &res); jerr != nil {
 		return seal(p.terminalError(fmt.Sprintf("malformed OpenCode prompt result: %v", jerr)))
 	}
@@ -950,7 +946,7 @@ func appendIfEmit(usageMsgs []llm.SDKMessage, term llm.SDKMessage, emit bool) []
 // cumulative totals and returns the resulting cumulative usage update (empty when
 // the result carried no usage). The streamed usage_update carries no token split,
 // so this is what delivers input/output/cache to the session's accumulation.
-func (p *Protocol) foldResultUsage(u *PromptUsage) []llm.SDKMessage {
+func (p *Protocol) foldResultUsage(u *promptUsage) []llm.SDKMessage {
 	if msg, ok := p.accumulateResultUsage(u); ok {
 		return []llm.SDKMessage{msg}
 	}
@@ -967,15 +963,13 @@ func (p *Protocol) parseNotification(method string, params json.RawMessage) []ll
 		if p.opts.NativeToollessReview {
 			return seal(p.terminalError(fmt.Sprintf("OpenCode native tool-less review received unexpected ACP notification %s", method)))
 		}
-		p.logDebug("[opencode] ignoring notification %s", method)
 		return nil
 	}
-	var su SessionUpdateParams
+	var su sessionUpdateParams
 	if err := json.Unmarshal(params, &su); err != nil {
 		if p.opts.NativeToollessReview {
 			return seal(p.terminalError("OpenCode native tool-less review received malformed session/update"))
 		}
-		p.logDebug("[opencode] failed to parse session/update: %v", err)
 		return nil
 	}
 	if p.opts.NativeToollessReview {
@@ -1054,11 +1048,12 @@ func (p *Protocol) parseNotification(method string, params json.RawMessage) []ll
 			out = append(out, msg)
 		}
 		out = append(out, p.taskLifecycleFromUpdate(su.Update)...)
-		progress := p.toolProgressFromUpdate(su.Update)
-		out = append(out, llm.SDKMessage{
-			Type:         "tool_progress",
-			ToolProgress: &progress,
-		})
+		if progress, ok := p.toolProgressFromUpdate(su.Update); ok {
+			out = append(out, llm.SDKMessage{
+				Type:         "tool_progress",
+				ToolProgress: &progress,
+			})
+		}
 		if msg, ok := p.estimatedUsageUpdate(); ok {
 			out = append(out, msg)
 		}
@@ -1096,7 +1091,7 @@ func (p *Protocol) parseNotification(method string, params json.RawMessage) []ll
 	return out
 }
 
-func (p *Protocol) childSessionUpdate(su SessionUpdateParams) []llm.SDKMessage {
+func (p *Protocol) childSessionUpdate(su sessionUpdateParams) []llm.SDKMessage {
 	if su.SessionID == "" {
 		return nil
 	}
@@ -1175,7 +1170,7 @@ func updateText(raw json.RawMessage) string {
 	if len(raw) == 0 {
 		return ""
 	}
-	var c UpdateContent
+	var c updateContent
 	if err := json.Unmarshal(raw, &c); err != nil {
 		return ""
 	}
@@ -1191,7 +1186,7 @@ func toolContentText(raw json.RawMessage) string {
 	}
 	var blocks []struct {
 		Text    string        `json:"text,omitempty"`
-		Content UpdateContent `json:"content,omitempty"`
+		Content updateContent `json:"content,omitempty"`
 	}
 	if err := json.Unmarshal(raw, &blocks); err != nil {
 		return ""
@@ -1317,30 +1312,64 @@ func (p *Protocol) taskLifecycleFromUpdate(update SessionUpdate) []llm.SDKMessag
 	return out
 }
 
-func (p *Protocol) toolProgressFromUpdate(update SessionUpdate) llm.ToolProgressMessage {
+// toolProgressFromUpdate folds an ACP tool_call/tool_call_update into the
+// call's state and returns the tool_progress to emit. It reports false when
+// the update adds nothing over the last record emitted for the same call id
+// (for example pending -> in_progress with no new input), so one tool call
+// yields one record per meaningful change rather than one per ACP update.
+func (p *Protocol) toolProgressFromUpdate(update SessionUpdate) (llm.ToolProgressMessage, bool) {
 	p.mu.Lock()
+	defer p.mu.Unlock()
 	if p.toolCalls == nil {
 		p.toolCalls = make(map[string]toolCallState)
 	}
-	state := p.toolCalls[update.ToolCallID]
-	state = mergeToolCallState(state, update)
-	if update.ToolCallID != "" {
-		p.toolCalls[update.ToolCallID] = state
+	state := mergeToolCallState(p.toolCalls[update.ToolCallID], update)
+	if phase := progressPhase(update.Status); phase != "" {
+		state.lastPhase = phase
 	}
-	p.mu.Unlock()
-
-	return llm.ToolProgressMessage{
+	progress := llm.ToolProgressMessage{
 		Type:      "tool_progress",
 		ToolUseID: update.ToolCallID,
 		ToolName:  normalizedProgressToolName(state),
 		Data:      normalizedProgressData(update.Status, state),
+		Summary:   progressSummaryLine(state),
 		TimeoutMS: state.timeoutMS,
+	}
+	key := strings.Join([]string{
+		progress.ToolName,
+		normalizedProgressData("", state),
+		state.lastPhase,
+		strconv.FormatInt(state.timeoutMS, 10),
+	}, "\x00")
+	duplicate := update.ToolCallID != "" && key == state.lastProgressKey
+	state.lastProgressKey = key
+	if update.ToolCallID != "" {
+		p.toolCalls[update.ToolCallID] = state
+	}
+	return progress, !duplicate
+}
+
+// progressPhase collapses ACP tool statuses into the phases that matter to
+// consumers: pending and in_progress are both "active" (the watchdog arms on
+// either), and each terminal status is its own phase.
+func progressPhase(status string) string {
+	switch status = strings.ToLower(strings.TrimSpace(status)); status {
+	case "":
+		return ""
+	case "pending", "in_progress":
+		return "active"
+	default:
+		return status
 	}
 }
 
 func mergeToolCallState(state toolCallState, update SessionUpdate) toolCallState {
-	if strings.TrimSpace(update.Title) != "" {
-		state.title = strings.TrimSpace(update.Title)
+	title := strings.TrimSpace(update.Title)
+	if state.name == "" && isToolIdentifierTitle(update.SessionUpdate, title) {
+		state.name = title
+	}
+	if title != "" {
+		state.title = title
 	}
 	if strings.TrimSpace(update.Kind) != "" {
 		state.kind = strings.TrimSpace(update.Kind)
@@ -1385,29 +1414,131 @@ func toolCallPath(update SessionUpdate, state toolCallState) string {
 	return ""
 }
 
+var toolIdentifierRe = regexp.MustCompile(`^[A-Za-z][A-Za-z0-9_-]*$`)
+
+// canonicalToolNames maps OpenCode tool identifiers to the canonical names the
+// rest of Agentico uses (Bash/Write/Edit drive file-change rows, Task marks a
+// subagent for the watchdog).
+var canonicalToolNames = map[string]string{
+	"bash":        "Bash",
+	"read":        "Read",
+	"write":       "Write",
+	"edit":        "Edit",
+	"multiedit":   "Edit",
+	"patch":       "Edit",
+	"apply_patch": "Edit",
+	"applypatch":  "Edit",
+	"grep":        "Grep",
+	"glob":        "Glob",
+	"list":        "LS",
+	"ls":          "LS",
+	"webfetch":    "WebFetch",
+	"websearch":   "WebSearch",
+	"task":        "Task",
+	"todowrite":   "TodoWrite",
+	"todoread":    "TodoRead",
+	"skill":       "Skill",
+	"question":    "AskUserQuestion",
+}
+
+// isToolIdentifierTitle reports whether an ACP title names the tool rather
+// than describing the call. OpenCode titles the initial tool_call with the
+// tool id; later updates may carry a display title (a path, a grep pattern,
+// a bash description), so on an update only a known tool id is trusted.
+func isToolIdentifierTitle(sessionUpdate, title string) bool {
+	if !toolIdentifierRe.MatchString(title) {
+		return false
+	}
+	if sessionUpdate == UpdateToolCall {
+		return true
+	}
+	_, known := canonicalToolNames[strings.ToLower(title)]
+	return known
+}
+
 func normalizedProgressToolName(state toolCallState) string {
+	if name := strings.TrimSpace(state.name); name != "" {
+		if canonical, ok := canonicalToolNames[strings.ToLower(name)]; ok {
+			return canonical
+		}
+		return name
+	}
 	kind := strings.ToLower(strings.TrimSpace(state.kind))
-	title := strings.TrimSpace(state.title)
 	switch kind {
 	case ToolKindExecute:
 		return "Bash"
 	case ToolKindEdit:
-		if strings.Contains(strings.ToLower(title), "write") {
+		if strings.Contains(strings.ToLower(state.title), "write") {
 			return "Write"
 		}
 		return "Edit"
+	case ToolKindRead:
+		return "Read"
+	case ToolKindSearch:
+		return "Search"
+	case ToolKindFetch:
+		return "WebFetch"
+	case ToolKindThink:
+		return "Task"
+	case "":
+		return "tool"
 	}
-	if title != "" {
-		return title
+	return kind
+}
+
+// progressSummary is the call's human detail: the display title OpenCode
+// attaches (read path, grep pattern, bash description) or the equivalent
+// input field, unless it merely repeats the tool name, command, or path.
+func progressSummary(state toolCallState) string {
+	summary := strings.TrimSpace(state.title)
+	if summary == "" || strings.EqualFold(summary, state.name) {
+		summary = firstStringField(state.rawInput, "", "description", "pattern", "query", "url")
 	}
-	if kind != "" {
-		return kind
+	path := strings.TrimSpace(state.path)
+	if summary == "" || summary == strings.TrimSpace(state.command) ||
+		(path != "" && strings.HasSuffix(path, summary)) {
+		// OpenCode titles a read with the worktree-relative path, which the
+		// File: line already carries in full.
+		return ""
 	}
-	return "tool"
+	if strings.EqualFold(summary, state.name) || strings.EqualFold(summary, normalizedProgressToolName(state)) {
+		return ""
+	}
+	return summary
+}
+
+// progressSummaryLine is the one line a transcript shows beside the tool
+// name: the call's title, else its description/pattern/query/url, command,
+// or path. It skips values that merely repeat the tool name, and a title
+// that is a suffix of the path (OpenCode titles a read with a relative path)
+// yields to the full path.
+func progressSummaryLine(state toolCallState) string {
+	title := strings.TrimSpace(state.title)
+	if path := strings.TrimSpace(state.path); title != "" && path != "" && strings.HasSuffix(path, title) {
+		title = path
+	}
+	candidates := []string{
+		title,
+		firstStringField(state.rawInput, "", "description", "pattern", "query", "url"),
+		state.command,
+		state.path,
+	}
+	for _, candidate := range candidates {
+		candidate = strings.TrimSpace(candidate)
+		if candidate == "" || strings.EqualFold(candidate, state.name) ||
+			strings.EqualFold(candidate, normalizedProgressToolName(state)) {
+			continue
+		}
+		return candidate
+	}
+	return ""
 }
 
 func normalizedProgressData(status string, state toolCallState) string {
 	var lines []string
+	if summary := progressSummary(state); summary != "" {
+		lines = append(lines, summary)
+	}
 	if strings.TrimSpace(state.command) != "" {
 		lines = append(lines, strings.TrimSpace(state.command))
 	}
@@ -1461,7 +1592,7 @@ func (p *Protocol) failClosed(rawID json.RawMessage, method string) (llm.SDKMess
 	_ = p.writeJSON(ErrorResponse{
 		JSONRPC: "2.0",
 		ID:      rawID,
-		Error: RPCError{
+		Error: rpcError{
 			Code:    jsonRPCMethodNotSupported,
 			Message: fmt.Sprintf("%s is not supported by the OpenCode tracer", method),
 		},
@@ -1473,7 +1604,7 @@ func (p *Protocol) failNativeToollessReviewInteraction(rawID json.RawMessage, me
 	_ = p.writeJSON(ErrorResponse{
 		JSONRPC: "2.0",
 		ID:      rawID,
-		Error: RPCError{
+		Error: rpcError{
 			Code:    jsonRPCMethodNotSupported,
 			Message: fmt.Sprintf("%s is unavailable during native tool-less review", method),
 		},
@@ -1496,8 +1627,8 @@ func unsupportedSurfaceDiagnostic(method string) string {
 // state and returns a cumulative usage update SDK message. Used is the tokens
 // currently in context and Size the model window — both SET, the latest snapshot
 // wins, and absent values leave context unavailable. Cost.Amount is the
-// cumulative session cost when the backend has pricing; absent or zero leaves the
-// zero-cost fallback. The emitted message carries the FULL cumulative snapshot
+// cumulative session cost when the backend has pricing; absent or zero leaves
+// costLocked's catalog estimate / unavailable fallback. The emitted message carries the FULL cumulative snapshot
 // (including the token split accumulated from prompt results) so the session
 // layer's SET-semantics accumulation stays correct across turns rather than being
 // zeroed by an update that carries no token split.
@@ -1524,7 +1655,7 @@ func (p *Protocol) applyUsageUpdate(u SessionUpdate) (llm.SDKMessage, bool) {
 // streamed usage_update has none), so each result's tokens are summed once into
 // the lifetime totals — a multi-turn session accumulates without double-counting.
 // ok is false when the result carried no usage, so callers emit nothing.
-func (p *Protocol) accumulateResultUsage(u *PromptUsage) (llm.SDKMessage, bool) {
+func (p *Protocol) accumulateResultUsage(u *promptUsage) (llm.SDKMessage, bool) {
 	if u == nil {
 		return llm.SDKMessage{}, false
 	}
@@ -1642,6 +1773,7 @@ func (p *Protocol) usageLocked() llm.Usage {
 	if contextFill == 0 {
 		contextFill = p.estimatedContextTokens
 	}
+	cost, source := p.costLocked()
 	return llm.Usage{
 		InputTokens:              p.inTok,
 		OutputTokens:             p.outTok,
@@ -1651,8 +1783,61 @@ func (p *Protocol) usageLocked() llm.Usage {
 		ContextTotalTokens:       contextFill,
 		ContextWindow:            p.contextWindow,
 		ContextBaseline:          0,
-		CostUSD:                  p.costUSD,
+		CostUSD:                  cost,
+		CostSource:               source,
 	}
+}
+
+// Cost sources for OpenCode sessions whose backend reported no positive cost.
+// An empty source means OpenCode's own cumulative cost is authoritative.
+const (
+	costSourceTokenEstimate = "token_estimate"
+	costSourceUnavailable   = "unavailable"
+)
+
+// costLocked returns the session cost and its source. OpenCode's reported
+// cumulative cost wins whenever it is positive. When OpenCode reports zero
+// (common for custom/proxy providers configured without pricing) but tokens
+// were consumed, the cost is estimated from the catalog's advertised prices;
+// with no usable price it stays zero and is marked unavailable so the zero is
+// not mistaken for a free session. Callers must hold p.mu.
+func (p *Protocol) costLocked() (float64, string) {
+	if p.costUSD > 0 {
+		return p.costUSD, ""
+	}
+	if p.inTok+p.outTok+p.cacheRead+p.cacheCreate == 0 {
+		return 0, ""
+	}
+	if estimate, ok := estimateTokenCost(p.price, p.inTok, p.outTok, p.cacheRead, p.cacheCreate); ok {
+		return estimate, costSourceTokenEstimate
+	}
+	return 0, costSourceUnavailable
+}
+
+// estimateTokenCost prices tokens at USD-per-million rates. Cache reads and
+// writes fall back to the input rate when no cache rate is advertised. A nil
+// price or one whose rates are all zero is treated as unknown: OpenCode
+// configs commonly declare zero cost for models whose real price is simply
+// not configured.
+func estimateTokenCost(price *llm.ModelCost, input, output, cacheRead, cacheWrite int) (float64, bool) {
+	if price == nil {
+		return 0, false
+	}
+	readRate, writeRate := price.Input, price.Input
+	if price.CacheRead != nil {
+		readRate = *price.CacheRead
+	}
+	if price.CacheWrite != nil {
+		writeRate = *price.CacheWrite
+	}
+	if price.Input <= 0 && price.Output <= 0 && readRate <= 0 && writeRate <= 0 {
+		return 0, false
+	}
+	cost := (float64(input)*price.Input +
+		float64(output)*price.Output +
+		float64(cacheRead)*readRate +
+		float64(cacheWrite)*writeRate) / 1_000_000
+	return cost, true
 }
 
 // resultUsage returns the cumulative usage to attach to a terminal result, or
@@ -1669,12 +1854,13 @@ func (p *Protocol) resultUsage() *llm.Usage {
 }
 
 // resultCost returns the cumulative session cost OpenCode reported via the latest
-// usage_update, or zero when OpenCode supplied no pricing. Agentico never invents
-// a figure; zero is the documented fallback.
+// usage_update, falling back to a catalog-price token estimate (or zero when no
+// price is known) as described on costLocked.
 func (p *Protocol) resultCost() float64 {
 	p.mu.Lock()
 	defer p.mu.Unlock()
-	return p.costUSD
+	cost, _ := p.costLocked()
+	return cost
 }
 
 // --- terminal result helpers ---
@@ -1712,9 +1898,9 @@ func (p *Protocol) terminalSuccess() (llm.SDKMessage, bool) {
 			Type:       "result",
 			Subtype:    "success",
 			StopReason: "end_turn",
-			// Cost is OpenCode's reported cumulative session cost (zero when the
-			// backend has no pricing) — never invented from tokens. Emitted token
-			// usage is preserved.
+			// Cost is OpenCode's reported cumulative session cost, or a
+			// catalog-price token estimate when OpenCode reports zero (see
+			// costLocked). Emitted token usage is preserved.
 			TotalCostUSD: p.resultCost(),
 			Usage:        p.resultUsage(),
 		},
@@ -1874,11 +2060,10 @@ func (p *Protocol) Interrupt() error {
 	if err := p.writeJSON(Notification{
 		JSONRPC: "2.0",
 		Method:  sessionCancelMethod,
-		Params:  SessionCancelParams{SessionID: sessionID},
+		Params:  sessionCancelParams{SessionID: sessionID},
 	}); err != nil {
 		// Falling back to the session-level interrupt is safer than reporting a
 		// hard error when the cancel notification cannot be written.
-		p.logDebug("[opencode] session/cancel write failed: %v", err)
 		return llm.ErrNotSupported
 	}
 	return nil
@@ -1914,53 +2099,3 @@ func (p *Protocol) Close() error {
 }
 
 // --- test accessors ---
-
-// ACPSessionID returns the internal ACP session id created during the handshake.
-func (p *Protocol) ACPSessionID() string {
-	p.mu.Lock()
-	defer p.mu.Unlock()
-	return p.acpSessionID
-}
-
-// NegotiatedVersion returns the ACP protocol version OpenCode negotiated.
-func (p *Protocol) NegotiatedVersion() int {
-	p.mu.Lock()
-	defer p.mu.Unlock()
-	return p.negotiatedVersion
-}
-
-// InitialPromptForTest returns the rendered phase prompt the protocol will send
-// as the first user turn.
-func (p *Protocol) InitialPromptForTest() string { return p.opts.InitialPrompt }
-
-// WorkDirForTest returns the resolved work directory used for session/new.
-func (p *Protocol) WorkDirForTest() string { return p.opts.WorkDir }
-
-// BackendModelForTest returns the backend "provider/model" the protocol selected.
-func (p *Protocol) BackendModelForTest() string { return p.model }
-
-// setRequestIDsForTest pins the handshake request ids so response-handling can
-// be exercised without running the full Handshake.
-func (p *Protocol) setRequestIDsForTest(initID, sessionNewID, promptID int) {
-	p.mu.Lock()
-	p.initID, p.sessionNewID, p.promptID = initID, sessionNewID, promptID
-	p.mu.Unlock()
-}
-
-// SetRequestIDsForTest pins the handshake request ids (including session/load) so
-// other packages can drive a real protocol through session establishment and
-// prompt responses without running the full ACP handshake. Test-only.
-func (p *Protocol) SetRequestIDsForTest(initID, sessionNewID, sessionLoadID, promptID int) {
-	p.mu.Lock()
-	p.initID, p.sessionNewID, p.sessionLoadID, p.promptID = initID, sessionNewID, sessionLoadID, promptID
-	p.mu.Unlock()
-}
-
-// promptIDForTest returns the id of the most recent session/prompt request,
-// which advances each time a follow-up turn (e.g. a reformat reminder or an
-// answer envelope) is sent.
-func (p *Protocol) promptIDForTest() int {
-	p.mu.Lock()
-	defer p.mu.Unlock()
-	return p.promptID
-}

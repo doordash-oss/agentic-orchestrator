@@ -61,7 +61,7 @@ func TestFeatureDetailRepoStatusCarriesCanonicalError(t *testing.T) {
 	if err := store.Save(f); err != nil {
 		t.Fatalf("Save feature: %v", err)
 	}
-	handler := NewHandler(HandlerOptions{Features: store, DisableHostValidation: true})
+	handler := NewHandler(HandlerOptions{Features: store, FeatureStore: store, DisableHostValidation: true})
 
 	detail := getJSONMap(t, handler, "/api/v1/features/"+f.ID)
 	if path := findJSONKey(detail, "last_error"); path != "" {
@@ -141,7 +141,7 @@ func TestFeatureDetailRepoStatusOmitsErrorWithoutRecord(t *testing.T) {
 	if err := store.Save(f); err != nil {
 		t.Fatalf("Save feature: %v", err)
 	}
-	handler := NewHandler(HandlerOptions{Features: store, DisableHostValidation: true})
+	handler := NewHandler(HandlerOptions{Features: store, FeatureStore: store, DisableHostValidation: true})
 
 	detail := getJSONMap(t, handler, "/api/v1/features/"+f.ID)
 	featureBody := detail[entityFeature].(map[string]any)

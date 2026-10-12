@@ -24,9 +24,9 @@ type needUserInputResumeTarget struct {
 	resumeCalls int
 }
 
-func (t *needUserInputResumeTarget) ResumeNeedUserInput(featureID string) (NeedUserInputResumeResponse, error) {
+func (t *needUserInputResumeTarget) RunFeatureLifecycle(featureID string, _ FeatureAction, _ GuardedFeatureActionRequest) (FeatureActionResponse, error) {
 	t.resumeCalls++
-	return NeedUserInputResumeResponse{FeatureID: featureID, Result: "resumed"}, nil
+	return FeatureActionResponse{FeatureID: featureID, Result: "resumed"}, nil
 }
 
 func TestNeedUserInputActionRejectsRetiredAbortPayload(t *testing.T) {

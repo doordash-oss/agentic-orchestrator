@@ -49,7 +49,7 @@ func NewDefault() *Config {
 			MaxConsecutiveNoProgress: 3,
 		},
 		Repos: make(map[string]RepoConfig),
-		Observability: ObservabilityConfig{
+		Observability: observabilityConfig{
 			Events:          true,
 			OTelServiceName: "agentico",
 		},

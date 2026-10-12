@@ -23,11 +23,11 @@ import (
 	"strings"
 )
 
-// ErrMergeCandidateNoChanges reports that childHead is already contained in
+// errMergeCandidateNoChanges reports that childHead is already contained in
 // parentTip, so git has nothing to merge and no merge commit can be created.
 // Callers that expect this case should treat the parent tip as the candidate
 // instead of asking for a merge.
-var ErrMergeCandidateNoChanges = errors.New("child head is already contained in parent tip")
+var errMergeCandidateNoChanges = errors.New("child head is already contained in parent tip")
 
 // MergeCandidateResult holds the outcome of creating a merge candidate without
 // advancing the parent ref.
@@ -36,7 +36,7 @@ type MergeCandidateResult struct {
 	ConflictFiles []string
 }
 
-// CreateMergeCandidate creates an explicit two-parent no-fast-forward merge
+// createMergeCandidate creates an explicit two-parent no-fast-forward merge
 // commit in a temporary detached worktree at parentTip, merging childHead
 // into it, and returns the resulting merge commit SHA. The parent ref and
 // parent worktree are never touched: the merge runs in a disposable worktree
@@ -50,10 +50,10 @@ type MergeCandidateResult struct {
 // On conflict, the temporary worktree is cleaned up and ConflictFiles is
 // populated; the returned error is a *MergeCandidateConflictError. When
 // childHead is already contained in parentTip the error wraps
-// ErrMergeCandidateNoChanges.
-func CreateMergeCandidate(mainRepo, parentTip, childHead, message string) (*MergeCandidateResult, error) {
+// errMergeCandidateNoChanges.
+func createMergeCandidate(mainRepo, parentTip, childHead, message string) (*MergeCandidateResult, error) {
 	if childHead == parentTip || IsAncestor(mainRepo, childHead, parentTip) {
-		return nil, fmt.Errorf("merge candidate for %s into %s: %w", childHead, parentTip, ErrMergeCandidateNoChanges)
+		return nil, fmt.Errorf("merge candidate for %s into %s: %w", childHead, parentTip, errMergeCandidateNoChanges)
 	}
 
 	// Create a temporary worktree detached at the parent tip. This does not
@@ -151,7 +151,7 @@ func extractConflictFiles(worktreePath string) []string {
 	return files
 }
 
-// CreateMergeCandidate exposes the package-level function on the manager.
+// createMergeCandidate exposes the package-level function on the manager.
 func (m *WorktreeManager) CreateMergeCandidate(mainRepo, parentTip, childHead, message string) (*MergeCandidateResult, error) {
-	return CreateMergeCandidate(mainRepo, parentTip, childHead, message)
+	return createMergeCandidate(mainRepo, parentTip, childHead, message)
 }

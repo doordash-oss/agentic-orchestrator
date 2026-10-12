@@ -61,9 +61,7 @@ go install github.com/doordash-oss/agentic-orchestrator/cmd/agentico@latest
 Running `agentico` with no subcommand launches or focuses the installed
 desktop app, which in turn starts and supervises its matched bundled server.
 Use `agentico server [flags]` to run the foreground loopback server for
-headless automation. Use `agentico update` to open desktop Settings >
-Updates when the app is registered, or to print non-mutating headless update
-guidance.
+headless automation.
 
 On first desktop launch, Agentic Orchestrator checks provider readiness — the only setup gate. With a provider installed and authenticated, the app opens the operational dashboard immediately; otherwise it shows what is missing and the command to fix it. Repositories are not configured up front: the Where step of feature creation adopts a folder as a workspace root, or initializes an empty one as a repository with your explicit consent.
 
@@ -264,13 +262,13 @@ keychain recovery), see
 ### REST Helper
 
 ```text
-agentico api [--runtime-dir <dir>] [--timeout <duration>] [--after <cursor>] METHOD /api/v1/<path>[?query] [json]
+agentico api [--timeout <duration>] [--after <cursor>] METHOD /api/v1/<path>[?query] [json]
 ```
 
 Run `agentico api` on the server machine to make one authenticated REST call
 without handling the bearer token: it reads the server's owner-only discovery
-file (from `--runtime-dir`, then `$AGENTICO_RUNTIME_DIR`, then
-`~/.agentic-orchestrator`), sends the token and trusted-client header itself,
+file (from `$AGENTICO_RUNTIME_DIR`, then `~/.agentic-orchestrator`), sends the
+token and trusted-client header itself,
 and prints the response body. A 2xx exits 0; any other status prints the
 server's error envelope and exits 1. Stream paths (`/api/v1/events`,
 `/api/v1/supervisor/events`, `/api/v1/sessions/<id>/output/stream`) require
@@ -282,18 +280,6 @@ agentico api GET /api/v1/features
 agentico api POST /api/v1/features '{"name":"my-feature"}'
 agentico api --timeout 30s GET /api/v1/events
 ```
-
-### Updating
-
-```text
-agentico update [--check|-n]
-```
-
-Run `agentico update` to focus or launch the desktop app directly into Settings
-Updates when it is registered. In standalone headless installs it prints
-format-aware package-manager or signed GitHub artifact guidance without
-modifying the executable. Use `agentico update --check` (alias `-n`) to perform
-a read-only stable-release metadata check and report current/latest versions.
 
 ## Development
 

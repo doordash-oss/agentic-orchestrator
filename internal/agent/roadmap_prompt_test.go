@@ -32,10 +32,7 @@ func TestBuildRoadmapPrompt(t *testing.T) {
 		Inquireness: feature.InquirenessMedium,
 	}
 
-	prompt := BuildRoadmapPrompt(f, "", "", "/path/to/design.md", nil, KBInfo{
-		IndexPath: "/kb/index.md",
-		RootDir:   "/kb/",
-	})
+	prompt := buildRoadmapPromptWithResearch(f, "/path/to/design.md", "", nil)
 
 	if !strings.Contains(prompt, "Design Document: /path/to/design.md") {
 		t.Error("prompt should contain Design Document line with design path")
@@ -64,7 +61,7 @@ func TestBuildRoadmapPromptIncludesResearchDocument(t *testing.T) {
 		Description: "A test feature",
 	}
 
-	prompt := BuildRoadmapPromptWithResearch(f, "", "", "/path/to/design.md", "/path/to/research.md", nil)
+	prompt := buildRoadmapPromptWithResearch(f, "/path/to/design.md", "/path/to/research.md", nil)
 
 	if !strings.Contains(prompt, "Design Document: /path/to/design.md") {
 		t.Fatalf("prompt missing design document path:\n%s", prompt)
@@ -80,7 +77,7 @@ func TestBuildRoadmapPromptUsesResearchAsPrimaryWhenDesignMissing(t *testing.T) 
 		Description: "A test feature",
 	}
 
-	prompt := BuildRoadmapPromptWithResearch(f, "", "", "", "/path/to/research.md", nil)
+	prompt := buildRoadmapPromptWithResearch(f, "", "/path/to/research.md", nil)
 
 	if strings.Contains(prompt, "Design Document") {
 		t.Fatalf("prompt should not label a research-only artifact as design:\n%s", prompt)
@@ -95,11 +92,7 @@ func TestBuildRoadmapPromptLeavesRoleSpecOwnedContentToSystemPrompt(t *testing.T
 		Name:        "Dark Mode",
 		Description: "Add dark theme support",
 	}
-	prompt := BuildRoadmapPrompt(f, "/skills", "/guidelines", "/path/to/design.md", nil, KBInfo{
-		Name:      "agentic",
-		IndexPath: "/kb/agentic/index.md",
-		RootDir:   "/kb/agentic",
-	})
+	prompt := buildRoadmapPromptWithResearch(f, "/path/to/design.md", "", nil)
 
 	for _, forbidden := range []string{
 		"Before starting your task, read the methodology instructions",
@@ -109,22 +102,18 @@ func TestBuildRoadmapPromptLeavesRoleSpecOwnedContentToSystemPrompt(t *testing.T
 		"/kb/agentic/index.md",
 	} {
 		if strings.Contains(prompt, forbidden) {
-			t.Fatalf("BuildRoadmapPrompt() contains RoleSpec-owned content %q:\n%s", forbidden, prompt)
+			t.Fatalf("BuildRoadmapPromptWithResearch() contains RoleSpec-owned content %q:\n%s", forbidden, prompt)
 		}
 	}
 	if !strings.Contains(prompt, "Design Document: /path/to/design.md") {
-		t.Fatalf("BuildRoadmapPrompt() missing per-call design path:\n%s", prompt)
+		t.Fatalf("BuildRoadmapPromptWithResearch() missing per-call design path:\n%s", prompt)
 	}
 }
 
 func TestBuildPhasePlanPromptLeavesRoleSpecOwnedContentToSystemPrompt(t *testing.T) {
 	f := &feature.Feature{Name: "Dark Mode", Description: "Add dark theme support"}
 	phase := RoadmapPhase{Number: 2, Name: "Preference persistence", Goal: "Persist selected theme"}
-	prompt := BuildPhasePlanPromptWithResearch(f, "/skills", "/guidelines", "/roadmap.md", "/research.md", phase, []string{"/answers.md"}, KBInfo{
-		Name:      "agentic",
-		IndexPath: "/kb/agentic/index.md",
-		RootDir:   "/kb/agentic",
-	})
+	prompt := buildPhasePlanPromptWithResearch(f, "/roadmap.md", "/research.md", phase, []string{"/answers.md"})
 
 	for _, forbidden := range []string{
 		"Before starting your task, read the methodology instructions",
@@ -134,12 +123,12 @@ func TestBuildPhasePlanPromptLeavesRoleSpecOwnedContentToSystemPrompt(t *testing
 		"/kb/agentic/index.md",
 	} {
 		if strings.Contains(prompt, forbidden) {
-			t.Fatalf("BuildPhasePlanPrompt() contains RoleSpec-owned content %q:\n%s", forbidden, prompt)
+			t.Fatalf("BuildPhasePlanPromptWithResearch() contains RoleSpec-owned content %q:\n%s", forbidden, prompt)
 		}
 	}
 	for _, want := range []string{"/roadmap.md", "/research.md", "/answers.md", "Persist selected theme"} {
 		if !strings.Contains(prompt, want) {
-			t.Fatalf("BuildPhasePlanPrompt() missing per-call content %q:\n%s", want, prompt)
+			t.Fatalf("BuildPhasePlanPromptWithResearch() missing per-call content %q:\n%s", want, prompt)
 		}
 	}
 }
@@ -155,12 +144,12 @@ func TestPlanningRevisionPromptsLeaveRoleSpecOwnedContentToSystemPrompt(t *testi
 	}{
 		{
 			name:      "roadmap revision",
-			prompt:    BuildRoadmapRevisionPrompt(f, "/skills", "/roadmap.md", "/prev.md", "Fix scope", "/design.md", 2, nil),
+			prompt:    buildRoadmapRevisionPrompt("/skills", "/prev.md", "Fix scope", 2, nil),
 			skillPath: "/skills/revise-roadmap/SKILL.md",
 		},
 		{
 			name:      "phase plan revision",
-			prompt:    BuildPhasePlanRevisionPrompt(f, "/skills", "/phase-plan.md", "Fix scope", "/design.md", phase, 2, nil),
+			prompt:    buildPhasePlanRevisionPrompt(f, "/skills", "/phase-plan.md", "Fix scope", phase, 2, nil),
 			skillPath: "/skills/revise-phase-plan/SKILL.md",
 		},
 	}
@@ -197,7 +186,7 @@ func TestBuildRoadmapPrompt_Medium(t *testing.T) {
 	}
 
 	// Medium: no design artifact — feature description must be in prompt
-	prompt := BuildRoadmapPrompt(f, "", "", "", nil)
+	prompt := buildRoadmapPromptWithResearch(f, "", "", nil)
 
 	if !strings.Contains(prompt, "Medium Feature") {
 		t.Error("prompt should contain feature name")
@@ -217,7 +206,7 @@ func TestBuildRoadmapPromptNoKB(t *testing.T) {
 		Inquireness: feature.InquirenessNone,
 	}
 
-	prompt := BuildRoadmapPrompt(f, "", "", "/path/to/design.md", nil)
+	prompt := buildRoadmapPromptWithResearch(f, "/path/to/design.md", "", nil)
 
 	if !strings.Contains(prompt, "/path/to/design.md") {
 		t.Error("prompt should contain design path")
@@ -242,7 +231,7 @@ func TestBuildRoadmapPrompt_MultiRepo(t *testing.T) {
 				{Name: "repo-b", Path: "/path/b"},
 			},
 		}
-		prompt := BuildRoadmapPrompt(f, "", "", "/tmp/design.md", nil)
+		prompt := buildRoadmapPromptWithResearch(f, "/tmp/design.md", "", nil)
 		if !strings.Contains(prompt, "Target Repositories") {
 			t.Error("expected 'Target Repositories' section")
 		}
@@ -261,7 +250,7 @@ func TestBuildRoadmapPrompt_MultiRepo(t *testing.T) {
 				{Name: "repo-b", Path: "/path/b"},
 			},
 		}
-		prompt := BuildRoadmapPrompt(f, "", "", "/tmp/design.md", nil)
+		prompt := buildRoadmapPromptWithResearch(f, "/tmp/design.md", "", nil)
 		if strings.Contains(prompt, "execution-order.yaml") {
 			t.Error("roadmap prompt should not mention execution-order.yaml")
 		}
@@ -274,7 +263,7 @@ func TestBuildRoadmapPrompt_MultiRepo(t *testing.T) {
 			Name:  "test-feature",
 			Repos: []feature.FeatureRepo{{Name: "repo-a", Path: "/path/a", WorktreePath: testWorktreePathA}},
 		}
-		prompt := BuildRoadmapPrompt(f, "", "", "/tmp/design.md", nil)
+		prompt := buildRoadmapPromptWithResearch(f, "/tmp/design.md", "", nil)
 		for _, want := range []string{"Target Repositories", "repo-a", testWorktreePathA} {
 			if !strings.Contains(prompt, want) {
 				t.Errorf("single-repo prompt missing %q:\n%s", want, prompt)
@@ -292,7 +281,7 @@ func TestBuildRoadmapPrompt_MultiRepo(t *testing.T) {
 				{Name: "repo-b", Path: "/path/b"},
 			},
 		}
-		prompt := BuildRoadmapPrompt(f, "", "", "/tmp/design.md", nil)
+		prompt := buildRoadmapPromptWithResearch(f, "/tmp/design.md", "", nil)
 		if !strings.Contains(prompt, testWorktreePathA) {
 			t.Error("expected worktree path for repo-a")
 		}
@@ -319,10 +308,7 @@ func TestBuildPhasePlanPromptOmitsPhaseType(t *testing.T) {
 		Goal:   "Build the E2E skeleton",
 	}
 
-	prompt := BuildPhasePlanPrompt(f, "", "", "/path/to/roadmap.md", phase, nil, KBInfo{
-		IndexPath: "/kb/index.md",
-		RootDir:   "/kb/",
-	})
+	prompt := buildPhasePlanPromptWithResearch(f, "/path/to/roadmap.md", "", phase, nil)
 
 	if !strings.Contains(prompt, "Phase 1") {
 		t.Error("prompt should contain phase number")
@@ -354,7 +340,7 @@ func TestBuildPhasePlanPromptLaterPhaseWithStubRetirements(t *testing.T) {
 		StubsToRetire: []string{"Parser stub", "Validator stub"},
 	}
 
-	prompt := BuildPhasePlanPrompt(f, "", "", "/roadmap.md", phase, nil)
+	prompt := buildPhasePlanPromptWithResearch(f, "/roadmap.md", "", phase, nil)
 
 	if !strings.Contains(prompt, "Phase 2") {
 		t.Error("prompt should contain phase number")
@@ -376,7 +362,7 @@ func TestBuildRoadmapPrompt_WithQAFiles(t *testing.T) {
 	}
 
 	qaFiles := []string{"/state/feat/inquire/qa-answers.md", "/state/feat/research/qa-answers.md"}
-	prompt := BuildRoadmapPrompt(f, "", "", "/path/to/design.md", qaFiles)
+	prompt := buildRoadmapPromptWithResearch(f, "/path/to/design.md", "", qaFiles)
 
 	if !strings.Contains(prompt, "User Decisions") {
 		t.Error("prompt should contain User Decisions section when QA files present")
@@ -398,7 +384,7 @@ func TestBuildRoadmapPrompt_NoQAFiles(t *testing.T) {
 		Description: "A test feature",
 	}
 
-	prompt := BuildRoadmapPrompt(f, "", "", "/path/to/design.md", nil)
+	prompt := buildRoadmapPromptWithResearch(f, "/path/to/design.md", "", nil)
 
 	if strings.Contains(prompt, "User Decisions") {
 		t.Error("prompt should not contain User Decisions section when no QA files")
@@ -422,16 +408,16 @@ func TestBuildPhasePlanPrompt_WithQAFiles(t *testing.T) {
 	}
 
 	qaFiles := []string{"/state/feat/design/qa-answers.md"}
-	prompt := BuildPhasePlanPrompt(f, "", "", "/roadmap.md", phase, qaFiles)
+	prompt := buildPhasePlanPromptWithResearch(f, "/roadmap.md", "", phase, qaFiles)
 
 	if !strings.Contains(prompt, "User Decisions") {
-		t.Errorf("BuildPhasePlanPrompt(...) missing User Decisions section")
+		t.Errorf("BuildPhasePlanPromptWithResearch(...) missing User Decisions section")
 	}
 	if !strings.Contains(prompt, "/state/feat/design/qa-answers.md") {
-		t.Errorf("BuildPhasePlanPrompt(...) missing Q&A file path %q", qaFiles[0])
+		t.Errorf("BuildPhasePlanPromptWithResearch(...) missing Q&A file path %q", qaFiles[0])
 	}
 	if !strings.Contains(prompt, "do not re-ask") {
-		t.Errorf("BuildPhasePlanPrompt(...) missing do-not-re-ask guidance")
+		t.Errorf("BuildPhasePlanPromptWithResearch(...) missing do-not-re-ask guidance")
 	}
 }
 
@@ -449,7 +435,7 @@ func TestBuildPhasePlanPrompt_WithRoadmapAssignedCommitments(t *testing.T) {
 		StubsToRetire: []string{"Validator stub"},
 	}
 
-	prompt := BuildPhasePlanPrompt(f, "", "", "/roadmap.md", phase, nil)
+	prompt := buildPhasePlanPromptWithResearch(f, "/roadmap.md", "", phase, nil)
 
 	if strings.Contains(prompt, "Prior Phase Context") {
 		t.Error("prompt should not contain Prior Phase Context")
@@ -474,7 +460,7 @@ func TestBuildPhasePlanPrompt_NoPriorPhases(t *testing.T) {
 		Type:   "tracer-bullet",
 	}
 
-	prompt := BuildPhasePlanPrompt(f, "", "", "/roadmap.md", phase, nil)
+	prompt := buildPhasePlanPromptWithResearch(f, "/roadmap.md", "", phase, nil)
 
 	if strings.Contains(prompt, "Prior Phase Context") {
 		t.Error("prompt should not contain Prior Phase Context for phase 1")
@@ -482,12 +468,7 @@ func TestBuildPhasePlanPrompt_NoPriorPhases(t *testing.T) {
 }
 
 func TestBuildRoadmapRevisionPrompt(t *testing.T) {
-	f := &feature.Feature{
-		Name:        "Test Feature",
-		Description: "A test",
-	}
-
-	prompt := BuildRoadmapRevisionPrompt(f, "", "/roadmap.md", "/prev.md", "Fix the stub inventory", "", 2, nil)
+	prompt := buildRoadmapRevisionPrompt("", "/prev.md", "Fix the stub inventory", 2, nil)
 
 	if !strings.Contains(prompt, "Revision") {
 		t.Error("prompt should mention revision")
@@ -504,14 +485,12 @@ func TestBuildRoadmapRevisionPrompt(t *testing.T) {
 }
 
 func TestBuildRoadmapRevisionPromptWithApprovals(t *testing.T) {
-	f := &feature.Feature{Name: "Test Feature", Description: "A test"}
-
-	approvals := []AxisApproval{
+	approvals := []axisApproval{
 		{Axis: "architecture", FrozenSections: []string{"Phase 3: Wire the hedging dispatcher", "Architecture Approach"}},
 		{Axis: "scope", FrozenSections: []string{"Deferred Work"}},
 	}
 
-	prompt := BuildRoadmapRevisionPrompt(f, "", "/roadmap.md", "/prev.md", "Testing axis flagged a gap", "", 3, approvals)
+	prompt := buildRoadmapRevisionPrompt("", "/prev.md", "Testing axis flagged a gap", 3, approvals)
 
 	for _, want := range []string{
 		"Prior Axis Approvals",
@@ -528,8 +507,8 @@ func TestBuildRoadmapRevisionPromptWithApprovals(t *testing.T) {
 	}
 
 	// Axis approved with no frozen sections still appears but with the placeholder bullet.
-	emptyApprovals := []AxisApproval{{Axis: "scope"}}
-	emptyPrompt := BuildRoadmapRevisionPrompt(f, "", "/r.md", "/p.md", "feedback", "", 2, emptyApprovals)
+	emptyApprovals := []axisApproval{{Axis: "scope"}}
+	emptyPrompt := buildRoadmapRevisionPrompt("", "/p.md", "feedback", 2, emptyApprovals)
 	if !strings.Contains(emptyPrompt, "(no specific sections listed") {
 		t.Errorf("expected placeholder for empty FrozenSections, got:\n%s", emptyPrompt)
 	}
@@ -546,7 +525,7 @@ func TestBuildPhasePlanRevisionPrompt(t *testing.T) {
 		Type:   "tdd-fill-in",
 	}
 
-	prompt := BuildPhasePlanRevisionPrompt(f, "", "/phase-plan.md", "Add missing tests", "", phase, 2, nil)
+	prompt := buildPhasePlanRevisionPrompt(f, "", "/phase-plan.md", "Add missing tests", phase, 2, nil)
 
 	if !strings.Contains(prompt, "Phase 2") {
 		t.Error("prompt should contain phase number")
@@ -566,12 +545,12 @@ func TestBuildPhasePlanRevisionPromptWithApprovals(t *testing.T) {
 	f := &feature.Feature{Name: "Test Feature"}
 	phase := RoadmapPhase{Number: 1, Name: "Tracer", Type: "tracer-bullet"}
 
-	approvals := []AxisApproval{
+	approvals := []axisApproval{
 		{Axis: "structural", FrozenSections: []string{"Desired End State", "Changes Required"}},
-		{Axis: testAxisGrounding, FrozenSections: []string{groundingSectionHeading}},
+		{Axis: testAxisGrounding, FrozenSections: []string{testGroundingSectionHeading}},
 	}
 
-	prompt := BuildPhasePlanRevisionPrompt(f, "", "/phase-plan.md", "Scope axis flagged drift", "", phase, 3, approvals)
+	prompt := buildPhasePlanRevisionPrompt(f, "", "/phase-plan.md", "Scope axis flagged drift", phase, 3, approvals)
 
 	for _, want := range []string{
 		"Prior Axis Approvals",
@@ -589,8 +568,8 @@ func TestBuildPhasePlanRevisionPromptWithApprovals(t *testing.T) {
 	}
 
 	// Axis approved with no frozen sections still appears with the placeholder bullet.
-	emptyApprovals := []AxisApproval{{Axis: "scope"}}
-	emptyPrompt := BuildPhasePlanRevisionPrompt(f, "", "/p.md", "feedback", "", phase, 2, emptyApprovals)
+	emptyApprovals := []axisApproval{{Axis: "scope"}}
+	emptyPrompt := buildPhasePlanRevisionPrompt(f, "", "/p.md", "feedback", phase, 2, emptyApprovals)
 	if !strings.Contains(emptyPrompt, "(no specific sections listed") {
 		t.Errorf("expected placeholder for empty FrozenSections, got:\n%s", emptyPrompt)
 	}
@@ -603,7 +582,7 @@ func TestBuildPhasePlanRevisionPrompt_OmitsPriorPhaseContext(t *testing.T) {
 	f := &feature.Feature{Name: "Test Feature"}
 	phase := RoadmapPhase{Number: 2, Name: "Fill-in", Type: "tdd-fill-in"}
 
-	prompt := BuildPhasePlanRevisionPrompt(f, "", "/p.md", "grounding axis failed", "", phase, 2, nil)
+	prompt := buildPhasePlanRevisionPrompt(f, "", "/p.md", "grounding axis failed", phase, 2, nil)
 
 	if strings.Contains(prompt, "## Prior Phase Context") {
 		t.Errorf("revision prompt should omit Prior Phase Context:\n%s", prompt)
@@ -614,7 +593,7 @@ func TestBuildPhasePlanRevisionPrompt_OmitsPriorPhaseContextForPhaseOne(t *testi
 	f := &feature.Feature{Name: "Test Feature"}
 	phase := RoadmapPhase{Number: 1, Name: "Tracer", Type: "tracer-bullet"}
 
-	prompt := BuildPhasePlanRevisionPrompt(f, "", "/p.md", "some feedback", "", phase, 2, nil)
+	prompt := buildPhasePlanRevisionPrompt(f, "", "/p.md", "some feedback", phase, 2, nil)
 
 	if strings.Contains(prompt, "## Prior Phase Context") {
 		t.Errorf("revision prompt should omit Prior Phase Context when no prior phases:\n%s", prompt)
@@ -625,13 +604,13 @@ func TestBuildPhasePlanPromptDeclaresAutomatedVerificationOnlyForNonMoonshotProf
 	phase := RoadmapPhase{Number: 2, Name: "Preference persistence", Goal: "Persist selected theme"}
 
 	large := &feature.Feature{Name: "Dark Mode", Pipeline: feature.PipelineLarge}
-	largePrompt := BuildPhasePlanPromptWithResearch(large, "", "", "/roadmap.md", "", phase, nil)
+	largePrompt := buildPhasePlanPromptWithResearch(large, "/roadmap.md", "", phase, nil)
 	if !strings.Contains(largePrompt, "## Verification Contracting Mode") {
 		t.Errorf("large-profile phase plan prompt should declare automated-only verification mode:\n%s", largePrompt)
 	}
 
 	moonshot := &feature.Feature{Name: "Dark Mode", Pipeline: feature.PipelineMoonshot}
-	moonshotPrompt := BuildPhasePlanPromptWithResearch(moonshot, "", "", "/roadmap.md", "", phase, nil)
+	moonshotPrompt := buildPhasePlanPromptWithResearch(moonshot, "/roadmap.md", "", phase, nil)
 	if strings.Contains(moonshotPrompt, "## Verification Contracting Mode") {
 		t.Errorf("moonshot-profile phase plan prompt should not declare automated-only verification mode:\n%s", moonshotPrompt)
 	}
@@ -641,13 +620,13 @@ func TestBuildPhasePlanRevisionPromptDeclaresAutomatedVerificationOnlyForNonMoon
 	phase := RoadmapPhase{Number: 2, Name: "Fill-in", Type: "tdd-fill-in"}
 
 	large := &feature.Feature{Name: "Dark Mode", Pipeline: feature.PipelineLarge}
-	largePrompt := BuildPhasePlanRevisionPrompt(large, "", "/p.md", "feedback", "", phase, 2, nil)
+	largePrompt := buildPhasePlanRevisionPrompt(large, "", "/p.md", "feedback", phase, 2, nil)
 	if !strings.Contains(largePrompt, "## Verification Contracting Mode") {
 		t.Errorf("large-profile phase plan revision prompt should declare automated-only verification mode:\n%s", largePrompt)
 	}
 
 	moonshot := &feature.Feature{Name: "Dark Mode", Pipeline: feature.PipelineMoonshot}
-	moonshotPrompt := BuildPhasePlanRevisionPrompt(moonshot, "", "/p.md", "feedback", "", phase, 2, nil)
+	moonshotPrompt := buildPhasePlanRevisionPrompt(moonshot, "", "/p.md", "feedback", phase, 2, nil)
 	if strings.Contains(moonshotPrompt, "## Verification Contracting Mode") {
 		t.Errorf("moonshot-profile phase plan revision prompt should not declare automated-only verification mode:\n%s", moonshotPrompt)
 	}

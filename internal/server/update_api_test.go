@@ -44,8 +44,8 @@ type nopMutationTarget struct {
 // StopFeature keeps the nop target safe for the handler-owned
 // install stopper: fixtures without a full mutation surface never panic
 // when an explicit-stop install dispatches through them.
-func (nopMutationTarget) StopFeature(featureID string) (FeatureStopResponse, error) {
-	return FeatureStopResponse{FeatureID: featureID, Result: "stopped"}, nil
+func (nopMutationTarget) RunFeatureLifecycle(featureID string, _ FeatureAction, _ GuardedFeatureActionRequest) (FeatureActionResponse, error) {
+	return FeatureActionResponse{FeatureID: featureID, Result: "stopped"}, nil
 }
 
 func newUpdateAPIFixture(t *testing.T, opts UpdateOptions) *updateAPIFixture {
@@ -86,7 +86,7 @@ func eligibleUpdateOptions() UpdateOptions {
 		Policy:         selfupdate.PolicyNotify,
 		Settings:       selfupdate.StartupSettings{Policy: selfupdate.PolicyNotify, Channel: "stable", CheckInterval: 6 * time.Hour, Strategy: "quiesce"},
 		CurrentVersion: "1.0.0",
-		Eligibility:    selfupdate.Eligibility{Supported: true, Install: selfupdate.InstallTarball},
+		Eligibility:    selfupdate.Eligibility{Supported: true, Install: "tarball"},
 	}
 }
 
@@ -96,13 +96,13 @@ func TestGetUpdateSnapshotRequiresBearer(t *testing.T) {
 
 	req := httptest.NewRequest(http.MethodGet, apiPathUpdate, nil)
 	w := httptest.NewRecorder()
-	fixture.handler.routes().ServeHTTP(w, req)
+	fixture.handler.ServeHTTP(w, req)
 	if w.Result().StatusCode != http.StatusUnauthorized {
 		t.Fatalf("unauthenticated status = %d, want 401", w.Code)
 	}
 
 	w = httptest.NewRecorder()
-	fixture.handler.routes().ServeHTTP(w, authorizedUpdateRequest(http.MethodGet, apiPathUpdate, nil))
+	fixture.handler.ServeHTTP(w, authorizedUpdateRequest(http.MethodGet, apiPathUpdate, nil))
 	resp := w.Result()
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
@@ -115,7 +115,7 @@ func TestGetUpdateSnapshotDisabledDefaultAndNoTraffic(t *testing.T) {
 	// A handler without update wiring serves the safe disabled snapshot.
 	fixture := newUpdateAPIFixture(t, UpdateOptions{})
 	w := httptest.NewRecorder()
-	fixture.handler.routes().ServeHTTP(w, authorizedUpdateRequest(http.MethodGet, apiPathUpdate, nil))
+	fixture.handler.ServeHTTP(w, authorizedUpdateRequest(http.MethodGet, apiPathUpdate, nil))
 	resp := w.Result()
 	defer resp.Body.Close()
 	snapshot := decodeUpdateSnapshot(t, resp)
@@ -134,7 +134,7 @@ func TestGetUpdateSnapshotEligibleNotifyIdle(t *testing.T) {
 	t.Parallel()
 	fixture := newUpdateAPIFixture(t, eligibleUpdateOptions())
 	w := httptest.NewRecorder()
-	fixture.handler.routes().ServeHTTP(w, authorizedUpdateRequest(http.MethodGet, apiPathUpdate, nil))
+	fixture.handler.ServeHTTP(w, authorizedUpdateRequest(http.MethodGet, apiPathUpdate, nil))
 	resp := w.Result()
 	defer resp.Body.Close()
 	snapshot := decodeUpdateSnapshot(t, resp)
@@ -180,7 +180,7 @@ func TestGetUpdateSnapshotNotModifiedByRevision(t *testing.T) {
 	t.Parallel()
 	fixture := newUpdateAPIFixture(t, eligibleUpdateOptions())
 	w := httptest.NewRecorder()
-	fixture.handler.routes().ServeHTTP(w, authorizedUpdateRequest(http.MethodGet, apiPathUpdate, nil))
+	fixture.handler.ServeHTTP(w, authorizedUpdateRequest(http.MethodGet, apiPathUpdate, nil))
 	first := w.Result()
 	revision := strings.Trim(first.Header.Get("ETag"), `"`)
 	first.Body.Close()
@@ -188,7 +188,7 @@ func TestGetUpdateSnapshotNotModifiedByRevision(t *testing.T) {
 	req := authorizedUpdateRequest(http.MethodGet, apiPathUpdate, nil)
 	req.Header.Set("If-None-Match", `"`+revision+`"`)
 	w = httptest.NewRecorder()
-	fixture.handler.routes().ServeHTTP(w, req)
+	fixture.handler.ServeHTTP(w, req)
 	if w.Result().StatusCode != http.StatusNotModified {
 		t.Fatalf("revision-matched status = %d, want 304", w.Code)
 	}
@@ -205,7 +205,7 @@ func TestPostUpdateCheckRefusedUnderOffWithoutTraffic(t *testing.T) {
 	req := authorizedUpdateRequest(http.MethodPost, apiPathUpdateCheck, []byte(`{}`))
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("X-Agentico-Client", trustedClientHeaderValue)
-	fixture.handler.routes().ServeHTTP(w, req)
+	fixture.handler.ServeHTTP(w, req)
 	resp := w.Result()
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusForbidden {
@@ -224,7 +224,7 @@ func TestPostUpdateCheckRefusedUnderOffWithoutTraffic(t *testing.T) {
 
 	// The disabled snapshot stays visible: off wins for status.
 	w = httptest.NewRecorder()
-	fixture.handler.routes().ServeHTTP(w, authorizedUpdateRequest(http.MethodGet, apiPathUpdate, nil))
+	fixture.handler.ServeHTTP(w, authorizedUpdateRequest(http.MethodGet, apiPathUpdate, nil))
 	snapshot := decodeUpdateSnapshot(t, w.Result())
 	if snapshot.Status != UpdateSnapshotStatusDisabled {
 		t.Fatalf("status = %q, want disabled", snapshot.Status)
@@ -236,8 +236,8 @@ func TestPostUpdateCheckRefusedUnsupportedInstall(t *testing.T) {
 	opts := eligibleUpdateOptions()
 	opts.Eligibility = selfupdate.Eligibility{
 		Supported:   false,
-		Install:     selfupdate.InstallAppBundle,
-		Reason:      selfupdate.UnsupportedBundled,
+		Install:     "app_bundle",
+		Reason:      "bundled",
 		Remediation: "install a standalone binary",
 	}
 	fixture := newUpdateAPIFixture(t, opts)
@@ -246,7 +246,7 @@ func TestPostUpdateCheckRefusedUnsupportedInstall(t *testing.T) {
 	req := authorizedUpdateRequest(http.MethodPost, apiPathUpdateCheck, []byte(`{}`))
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("X-Agentico-Client", trustedClientHeaderValue)
-	fixture.handler.routes().ServeHTTP(w, req)
+	fixture.handler.ServeHTTP(w, req)
 	resp := w.Result()
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusConflict {
@@ -268,7 +268,7 @@ func TestPostUpdateCheckRefusedUnsupportedInstall(t *testing.T) {
 
 	// The visible status under an enabled policy is unsupported.
 	w = httptest.NewRecorder()
-	fixture.handler.routes().ServeHTTP(w, authorizedUpdateRequest(http.MethodGet, apiPathUpdate, nil))
+	fixture.handler.ServeHTTP(w, authorizedUpdateRequest(http.MethodGet, apiPathUpdate, nil))
 	snapshot := decodeUpdateSnapshot(t, w.Result())
 	if snapshot.Status != UpdateSnapshotStatusUnsupported {
 		t.Fatalf("status = %q, want unsupported", snapshot.Status)
@@ -286,7 +286,7 @@ func TestPostUpdateCheckAccepted(t *testing.T) {
 	req := authorizedUpdateRequest(http.MethodPost, apiPathUpdateCheck, []byte(`{}`))
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("X-Agentico-Client", trustedClientHeaderValue)
-	fixture.handler.routes().ServeHTTP(w, req)
+	fixture.handler.ServeHTTP(w, req)
 	resp := w.Result()
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusAccepted {
@@ -309,7 +309,7 @@ func TestPostUpdateCheckMutationValidation(t *testing.T) {
 		req.Header.Set("Content-Type", "application/json")
 		req.Header.Set("X-Agentico-Client", trustedClientHeaderValue)
 		mutate(req)
-		fixture.handler.routes().ServeHTTP(w, req)
+		fixture.handler.ServeHTTP(w, req)
 		return w
 	}
 	tests := []struct {
@@ -341,7 +341,7 @@ func TestPostUpdateCheckMutationValidation(t *testing.T) {
 	req.Header.Set("X-Agentico-Client", trustedClientHeaderValue)
 	req.Body = http.NoBody
 	req.ContentLength = maxMutationBodyBytes + 1
-	fixture.handler.routes().ServeHTTP(w, req)
+	fixture.handler.ServeHTTP(w, req)
 	if w.Result().StatusCode != http.StatusRequestEntityTooLarge {
 		t.Fatalf("oversized status = %d, want 413", w.Code)
 	}
@@ -349,12 +349,39 @@ func TestPostUpdateCheckMutationValidation(t *testing.T) {
 
 func ioNopCloser(r *bytes.Reader) io.ReadCloser { return io.NopCloser(r) }
 
+// retryableFeedError drives one server-imposed retry deadline through the
+// exported fixture feed client: a loopback fixture server answers every
+// feed request with 429 and an exact HTTP-date Retry-After, and the feed
+// client converts it into the retryable feed error the coordinator parses.
+func retryableFeedError(t *testing.T, notBefore time.Time) error {
+	t.Helper()
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Retry-After", notBefore.Format(http.TimeFormat))
+		w.WriteHeader(http.StatusTooManyRequests)
+	}))
+	t.Cleanup(srv.Close)
+	client, err := selfupdate.NewFixtureFeedClient(srv.URL, "agentico")
+	if err != nil {
+		t.Fatalf("fixture feed client: %v", err)
+	}
+	_, feedErr := client.LatestStable(context.Background())
+	if feedErr == nil {
+		t.Fatal("fixture feed check: want a retryable feed error")
+	}
+	if _, ok := selfupdate.IsFeedRetryError(feedErr); !ok {
+		t.Fatalf("fixture feed error = %v; want a retryable feed error", feedErr)
+	}
+	return feedErr
+}
+
 func TestPostUpdateCheckRefusedDuringRetryDeadline(t *testing.T) {
 	t.Parallel()
 	opts := eligibleUpdateOptions()
 	fixture := newUpdateAPIFixture(t, opts)
-	notBefore := time.Now().UTC().Add(time.Hour)
-	feedErr := &selfupdate.FeedError{Reason: "feed rate limited", Retry: true, NotBefore: notBefore}
+	// A server-imposed retry deadline arrives through the exported fixture
+	// feed client as a 429 carrying an exact HTTP-date Retry-After.
+	notBefore := time.Now().UTC().Add(time.Hour).Truncate(time.Second)
+	feedErr := retryableFeedError(t, notBefore)
 	fixture.feed.err = feedErr
 
 	// Drive one failed check through the coordinator directly, then stop
@@ -373,7 +400,7 @@ func TestPostUpdateCheckRefusedDuringRetryDeadline(t *testing.T) {
 	req := authorizedUpdateRequest(http.MethodPost, apiPathUpdateCheck, []byte(`{}`))
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("X-Agentico-Client", trustedClientHeaderValue)
-	fixture.handler.routes().ServeHTTP(w, req)
+	fixture.handler.ServeHTTP(w, req)
 	resp := w.Result()
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusTooManyRequests {
@@ -397,7 +424,7 @@ func TestUpdateSettingsExcludedFromRuntimeConfigREST(t *testing.T) {
 	fixture := newUpdateAPIFixture(t, eligibleUpdateOptions())
 
 	w := httptest.NewRecorder()
-	fixture.handler.routes().ServeHTTP(w, authorizedUpdateRequest(http.MethodGet, apiPathConfigRuntime, nil))
+	fixture.handler.ServeHTTP(w, authorizedUpdateRequest(http.MethodGet, apiPathConfigRuntime, nil))
 	resp := w.Result()
 	defer resp.Body.Close()
 	var raw map[string]any
@@ -417,7 +444,7 @@ func TestUpdateSettingsExcludedFromRuntimeConfigREST(t *testing.T) {
 	req := authorizedUpdateRequest(http.MethodPatch, apiPathConfigRuntime, []byte(`{"server":{"updates":{"policy":"notify"}}}`))
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("X-Agentico-Client", trustedClientHeaderValue)
-	fixture.handler.routes().ServeHTTP(w, req)
+	fixture.handler.ServeHTTP(w, req)
 	if w.Result().StatusCode != http.StatusBadRequest {
 		t.Fatalf("runtime-config write of server.updates status = %d, want 400", w.Code)
 	}
@@ -427,12 +454,12 @@ func TestUpdateRouteMethodNotAllowed(t *testing.T) {
 	t.Parallel()
 	fixture := newUpdateAPIFixture(t, eligibleUpdateOptions())
 	w := httptest.NewRecorder()
-	fixture.handler.routes().ServeHTTP(w, authorizedUpdateRequest(http.MethodPut, apiPathUpdate, nil))
+	fixture.handler.ServeHTTP(w, authorizedUpdateRequest(http.MethodPut, apiPathUpdate, nil))
 	if w.Result().StatusCode != http.StatusMethodNotAllowed {
 		t.Fatalf("PUT status = %d, want 405", w.Code)
 	}
 	w = httptest.NewRecorder()
-	fixture.handler.routes().ServeHTTP(w, authorizedUpdateRequest(http.MethodGet, apiPathUpdateCheck, nil))
+	fixture.handler.ServeHTTP(w, authorizedUpdateRequest(http.MethodGet, apiPathUpdateCheck, nil))
 	if w.Result().StatusCode != http.StatusMethodNotAllowed {
 		t.Fatalf("GET check status = %d, want 405", w.Code)
 	}

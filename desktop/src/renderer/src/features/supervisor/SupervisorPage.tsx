@@ -130,6 +130,7 @@ import {
   type ProvisionalReply,
 } from './supervisorModel';
 import { SUPERVISOR_MESSAGE_MAX_CHARS } from '../../../../shared/ipc';
+import { defined } from '../../../../shared/defined';
 
 const NO_REPOSITORIES: readonly never[] = [];
 const NO_FILES: readonly never[] = [];
@@ -885,7 +886,7 @@ export function SupervisorPage({
         ...current,
         conversationId: result.state.conversationId,
         queue: [],
-        ...(nextDraft === undefined ? {} : { text: nextDraft }),
+        ...defined('text', nextDraft),
       }));
       setQueueFailures(new Map());
       setResetConfirm(null);
@@ -913,7 +914,7 @@ export function SupervisorPage({
   /** The one "New conversation" handler: confirms only when work would be lost. */
   const requestReset = (nextDraft?: string): void => {
     if (turnActive || queue.length > 0) {
-      setResetConfirm(nextDraft === undefined ? {} : { draft: nextDraft });
+      setResetConfirm(defined('draft', nextDraft));
       return;
     }
     void performReset(nextDraft);
@@ -962,10 +963,10 @@ export function SupervisorPage({
 
   const chooseSwitch = (harness: string, model?: string): void => {
     if (settingsChosen(settings) && harness !== settings.harness && (state?.headSeq ?? 0) > 0) {
-      setSwitchChoice({ harness, ...(model === undefined ? {} : { model }) });
+      setSwitchChoice({ harness, ...defined('model', model) });
       return;
     }
-    void commitSettings({ harness, ...(model === undefined ? {} : { model }) }).catch((error) =>
+    void commitSettings({ harness, ...defined('model', model) }).catch((error) =>
       setInlineError(parseIpcError(error)),
     );
   };

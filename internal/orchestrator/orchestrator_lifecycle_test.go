@@ -16,9 +16,10 @@ package orchestrator_test
 
 import (
 	"errors"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
-	"time"
 
 	"github.com/doordash-oss/agentic-orchestrator/internal/errcat"
 	"github.com/doordash-oss/agentic-orchestrator/internal/feature"
@@ -39,16 +40,15 @@ func TestOrchestrator_StartFeature_FirstPhase(t *testing.T) {
 		Pipeline: feature.PipelineLarge,
 		Repos:    nil, // no repos → KB skipped
 	}
-	lc := lifecycleForFeature(f)
-	fs := newFeatureStore(f)
+	fs, lc := newStoredFeatureFixture(t, f)
 
 	var phaseStartedCalled bool
 	var startedFeatureID string
 	var startedPhase feature.Phase
 
 	o := orchestrator.New(orchestrator.Deps{
-		Lifecycle: lc,
-		Store:     fs,
+		Manager: lc,
+		Store:   fs,
 	}, orchestrator.Hooks{
 		OnFeatureStarted: func(id string) { startedFeatureID = id },
 		OnPhaseStarted: func(id string, p feature.Phase) {
@@ -66,8 +66,9 @@ func TestOrchestrator_StartFeature_FirstPhase(t *testing.T) {
 	}
 
 	// KB was skipped (no repos), so Inquire should have started.
-	assertLifecycleCall(t, lc, "StartInquire")
-	refuteLifecycleCall(t, lc, "StartKnowledgeBase")
+	if stored := loadStoredFeature(t, fs, f.ID); stored.Status != feature.StatusInquiring || stored.CurrentPhase != feature.PhaseInquire {
+		t.Errorf("stored state = %s/%s, want Inquiring/Inquire", stored.Status, stored.CurrentPhase)
+	}
 
 	if !phaseStartedCalled {
 		t.Error("OnPhaseStarted was not called")
@@ -90,7 +91,6 @@ func TestOrchestrator_StartFeature_FirstPhase(t *testing.T) {
 }
 
 func TestOrchestrator_StartFeatureRunsQueuedSetupBeforeFirstPhase(t *testing.T) {
-	now := time.Now()
 	f := &feature.Feature{
 		ID:       "feat-setup-start",
 		Status:   feature.StatusSettingUpWorktrees,
@@ -99,31 +99,27 @@ func TestOrchestrator_StartFeatureRunsQueuedSetupBeforeFirstPhase(t *testing.T) 
 	}
 	f.SetRun(&feature.Run{
 		RunNumber: 1,
-		Setup:     feature.NewActiveSetupState(f.Repos, nil, nil, now),
+		Setup:     feature.NewQueuedSetupState(f.Repos, nil, nil),
 	})
-	lc := lifecycleForFeature(f)
-	lc.RunSetupFn = func(featureID string, opts ...feature.SetupRunnerOptions) error {
-		f.Status = feature.StatusCreated
-		f.Run().Setup.Status = feature.SetupStatusDone
-		for _, opt := range opts {
-			if opt.OnEvent != nil {
-				opt.OnEvent(feature.SetupEvent{Kind: feature.SetupEventCompleted, FeatureID: featureID, RunNumber: 1, Attempt: 1})
-			}
-		}
-		return nil
-	}
-	fs := newFeatureStore(f)
+	fs, lc := newStoredFeatureFixture(t, f)
+	worktrees := mocks.NewMockWorktreeOps()
+	worktreePath := filepath.Join(t.TempDir(), "worktree")
+	worktrees.ExpectedPathFn = func(_, _ string) string { return worktreePath }
+	worktrees.CreateFn = func(_, _, _, _ string) (string, error) { return worktreePath, nil }
+	lc.Worktrees = worktrees
 	o := orchestrator.New(orchestrator.Deps{
-		Lifecycle: lc,
+		Manager:   lc,
 		Store:     fs,
+		Worktrees: worktrees,
 	}, orchestrator.Hooks{})
 
 	if err := o.StartFeature(f.ID); err != nil {
 		t.Fatalf("StartFeature() error = %v, want queued setup then phase start", err)
 	}
 
-	assertLifecycleCall(t, lc, "RunSetup")
-	assertLifecycleCall(t, lc, "StartPlanning")
+	if stored := loadStoredFeature(t, fs, f.ID); stored.Run().Setup.Status != feature.SetupStatusDone || stored.Status != feature.StatusPlanning {
+		t.Fatalf("stored setup/status = %s/%s, want done/Planning", stored.Run().Setup.Status, stored.Status)
+	}
 	events := drainEvents(o)
 	if !hasEventType(events, ports.SetupCompleted) {
 		t.Fatalf("events = %+v, want setup completion before phase start", events)
@@ -134,7 +130,6 @@ func TestOrchestrator_StartFeatureRunsQueuedSetupBeforeFirstPhase(t *testing.T) 
 }
 
 func TestOrchestrator_StartFeaturePersistsSetupFailureWithoutPhaseStart(t *testing.T) {
-	now := time.Now()
 	f := &feature.Feature{
 		ID:       "feat-setup-fail",
 		Status:   feature.StatusSettingUpWorktrees,
@@ -143,32 +138,17 @@ func TestOrchestrator_StartFeaturePersistsSetupFailureWithoutPhaseStart(t *testi
 	}
 	f.SetRun(&feature.Run{
 		RunNumber: 1,
-		Setup:     feature.NewActiveSetupState(f.Repos, nil, nil, now),
+		Setup:     feature.NewQueuedSetupState(f.Repos, nil, nil),
 	})
-	lc := lifecycleForFeature(f)
+	fs, lc := newStoredFeatureFixture(t, f)
 	worktreeKey := "worktree:" + repoName
-	lc.RunSetupFn = func(featureID string, opts ...feature.SetupRunnerOptions) error {
-		f.Status = feature.StatusFailed
-		f.Run().Failure = &errcat.FailureRecord{
-			Code: errcat.WorktreeSetupFailed,
-			Context: &errcat.RecordContext{SetupTask: &errcat.CodeSetupTask{
-				Key: worktreeKey, Kind: "worktree", Label: "Worktree: " + repoName,
-			}},
-		}
-		f.Run().Setup.Status = feature.SetupStatusFailed
-		task := f.Run().Setup.Tasks[worktreeKey]
-		task.Status = feature.SetupStatusFailed
-		task.Error = &errcat.FailureRecord{
-			Code:        errcat.WorktreeSetupFailed,
-			Diagnostics: "git worktree add failed",
-		}
-		f.Run().Setup.Tasks[worktreeKey] = task
-		return errors.New("git worktree add failed")
-	}
-	fs := newFeatureStore(f)
+	worktrees := mocks.NewMockWorktreeOps()
+	worktrees.CreateFn = func(_, _, _, _ string) (string, error) { return "", errors.New("git worktree add failed") }
+	lc.Worktrees = worktrees
 	o := orchestrator.New(orchestrator.Deps{
-		Lifecycle: lc,
+		Manager:   lc,
 		Store:     fs,
+		Worktrees: worktrees,
 	}, orchestrator.Hooks{})
 
 	err := o.StartFeature(f.ID)
@@ -176,8 +156,7 @@ func TestOrchestrator_StartFeaturePersistsSetupFailureWithoutPhaseStart(t *testi
 		t.Fatalf("StartFeature() error = %v, want setup failure", err)
 	}
 
-	assertLifecycleCall(t, lc, "RunSetup")
-	refuteLifecycleCall(t, lc, "StartPlanning")
+	f = loadStoredFeature(t, fs, f.ID)
 	setupRec := f.FailureRecord()
 	if f.Status != feature.StatusFailed || setupRec == nil || setupRec.Code != errcat.WorktreeSetupFailed ||
 		setupRec.Context == nil || setupRec.Context.SetupTask == nil || setupRec.Context.SetupTask.Key != worktreeKey {
@@ -203,24 +182,20 @@ func TestOrchestrator_StartFeature_MediumPipeline(t *testing.T) {
 		Pipeline: feature.PipelineMedium,
 		Repos:    nil,
 	}
-	lc := lifecycleForFeature(f)
-	fs := newFeatureStore(f)
+	fs, lc := newStoredFeatureFixture(t, f)
 
 	o := orchestrator.New(orchestrator.Deps{
-		Lifecycle: lc,
-		Store:     fs,
+		Manager: lc,
+		Store:   fs,
 	}, orchestrator.Hooks{})
 
 	if err := o.StartFeature("feat-exp"); err != nil {
 		t.Fatalf("StartFeature: %v", err)
 	}
 
-	// Medium pre-transition mutates feature via Store.Modify.
-	if len(fs.ModifyCalls) == 0 {
-		t.Error("expected Store.Modify call for Created→PlanReady pre-transition")
+	if stored := loadStoredFeature(t, fs, f.ID); stored.Status != feature.StatusPlanning {
+		t.Errorf("stored status = %s, want Planning", stored.Status)
 	}
-
-	assertLifecycleCall(t, lc, "StartPlanning")
 
 	events := drainEvents(o)
 	if hasPhaseStarted(events, feature.PhasePlan) == nil {
@@ -248,15 +223,11 @@ func TestOrchestrator_StartFeature_ResumeInterrupted(t *testing.T) {
 	f.Repos = []feature.FeatureRepo{{Name: "test-repo", Path: "/tmp/test-repo"}}
 	writeExecOrderNextToPlan(t, planPath, f.Repos)
 
-	lc := lifecycleForFeature(f)
-	// startImplement → StartMultiRepoImplementation requires StatusImplementing.
-	lc.StartImplementationFn = func(id string) error { f.Status = feature.StatusImplementing; return nil }
-	lc.InitRepoImplFn = func(id string) error { return nil }
-	fs := newFeatureStore(f)
+	fs, lc := newStoredFeatureFixture(t, f)
 
 	o := orchestrator.New(orchestrator.Deps{
-		Lifecycle: lc,
-		Store:     fs,
+		Manager: lc,
+		Store:   fs,
 	}, orchestrator.Hooks{})
 	// No-op engine seam: the dispatch goroutine blocks on an empty channel.
 	o.SetRunMultiRepoImplFn(noopRunMultiRepoImplFn())
@@ -265,8 +236,9 @@ func TestOrchestrator_StartFeature_ResumeInterrupted(t *testing.T) {
 		t.Fatalf("StartFeature: %v", err)
 	}
 
-	assertLifecycleCall(t, lc, "StartImplementation")
-	refuteLifecycleCall(t, lc, "StartKnowledgeBase")
+	if stored := loadStoredFeature(t, fs, f.ID); stored.Status != feature.StatusImplementing || stored.CurrentPhase != feature.PhaseImplement {
+		t.Errorf("stored state = %s/%s, want Implementing/Implement", stored.Status, stored.CurrentPhase)
+	}
 
 	events := drainEvents(o)
 	if hasPhaseStarted(events, feature.PhaseImplement) == nil {
@@ -279,14 +251,12 @@ func TestOrchestrator_StartFeature_ResumeInterrupted(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 func TestOrchestrator_StartFeature_Error(t *testing.T) {
-	wantErr := errors.New("disk full")
-	lc := mocks.NewMockFeatureLifecycle()
-	lc.GetFn = func(id string) (*feature.Feature, error) { return nil, wantErr }
+	fs, lc := newStoredFeatureFixture(t)
 
 	var hookCalled bool
 	o := orchestrator.New(orchestrator.Deps{
-		Lifecycle: lc,
-		Store:     mocks.NewMockFeatureStore(),
+		Manager: lc,
+		Store:   fs,
 	}, orchestrator.Hooks{
 		OnFeatureStarted: func(id string) { hookCalled = true },
 	})
@@ -295,8 +265,8 @@ func TestOrchestrator_StartFeature_Error(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected error, got nil")
 	}
-	if !errors.Is(err, wantErr) {
-		t.Errorf("error = %v, want wrapped %v", err, wantErr)
+	if !errors.Is(err, os.ErrNotExist) {
+		t.Errorf("error = %v, want missing feature", err)
 	}
 	if hookCalled {
 		t.Error("OnFeatureStarted hook should NOT fire when Get fails")

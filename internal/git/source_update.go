@@ -39,71 +39,71 @@ type SourceUpdateExpectation struct {
 	CheckoutHeadSHA   string
 }
 
-// SourceUpdateResult is the typed outcome of one update attempt. Stale is a
+// sourceUpdateResult is the typed outcome of one update attempt. Stale is a
 // refusal that left the repository untouched, not a failure to run.
-type SourceUpdateResult string
+type sourceUpdateResult string
 
 const (
-	SourceUpdateUpdated         SourceUpdateResult = "updated"
-	SourceUpdateAlreadyUpToDate SourceUpdateResult = "already_up_to_date"
-	SourceUpdateStale           SourceUpdateResult = "stale"
+	SourceUpdateUpdated         sourceUpdateResult = "updated"
+	SourceUpdateAlreadyUpToDate sourceUpdateResult = "already_up_to_date"
+	SourceUpdateStale           sourceUpdateResult = "stale"
 )
 
-// SourceUpdateReason names one typed stale refusal.
-type SourceUpdateReason string
+// sourceUpdateReason names one typed stale refusal.
+type sourceUpdateReason string
 
 const (
-	// SourceUpdateReasonCheckoutChanged reports the observed checkout HEAD
+	// sourceUpdateReasonCheckoutChanged reports the observed checkout HEAD
 	// changed since display, even when the selected source is unchanged.
-	SourceUpdateReasonCheckoutChanged SourceUpdateReason = "checkout_changed"
-	// SourceUpdateReasonSourceChanged reports the selected source no longer
+	sourceUpdateReasonCheckoutChanged sourceUpdateReason = "checkout_changed"
+	// sourceUpdateReasonSourceChanged reports the selected source no longer
 	// matches (mode, kind, branch, or a disappeared local ref).
-	SourceUpdateReasonSourceChanged SourceUpdateReason = "source_changed"
-	// SourceUpdateReasonMappingChanged reports the origin mapping changed,
+	sourceUpdateReasonSourceChanged sourceUpdateReason = "source_changed"
+	// sourceUpdateReasonMappingChanged reports the origin mapping changed,
 	// including a missing origin or a non-origin upstream.
-	SourceUpdateReasonMappingChanged SourceUpdateReason = "mapping_changed"
-	// SourceUpdateReasonLocalTipChanged reports the local branch tip moved,
+	sourceUpdateReasonMappingChanged sourceUpdateReason = "mapping_changed"
+	// sourceUpdateReasonLocalTipChanged reports the local branch tip moved,
 	// including a ref change that failed the expected-old-value check.
-	SourceUpdateReasonLocalTipChanged SourceUpdateReason = "local_tip_changed"
-	// SourceUpdateReasonOriginTipChanged reports the freshly fetched origin
+	sourceUpdateReasonLocalTipChanged sourceUpdateReason = "local_tip_changed"
+	// sourceUpdateReasonOriginTipChanged reports the freshly fetched origin
 	// tip differs from the displayed one.
-	SourceUpdateReasonOriginTipChanged SourceUpdateReason = "origin_tip_changed"
-	// SourceUpdateReasonOriginBranchMissing reports this attempt proved the
+	sourceUpdateReasonOriginTipChanged sourceUpdateReason = "origin_tip_changed"
+	// sourceUpdateReasonOriginBranchMissing reports this attempt proved the
 	// mapped origin branch absent on the remote.
-	SourceUpdateReasonOriginBranchMissing SourceUpdateReason = "origin_branch_missing"
-	// SourceUpdateReasonNotFastForward reports the local branch is ahead of
+	sourceUpdateReasonOriginBranchMissing sourceUpdateReason = "origin_branch_missing"
+	// sourceUpdateReasonNotFastForward reports the local branch is ahead of
 	// or diverged from origin; only a proved fast-forward may advance it.
-	SourceUpdateReasonNotFastForward SourceUpdateReason = "not_fast_forward"
-	// SourceUpdateReasonBranchCheckedOut reports the branch is checked out
+	sourceUpdateReasonNotFastForward sourceUpdateReason = "not_fast_forward"
+	// sourceUpdateReasonBranchCheckedOut reports the branch is checked out
 	// in a linked worktree; that worktree's own checkout must be updated
 	// separately. A branch held only by the original catalog checkout is the
 	// eligible original-checkout path, never this refusal.
-	SourceUpdateReasonBranchCheckedOut SourceUpdateReason = "branch_checked_out"
-	// SourceUpdateReasonDirtyCheckout reports the original checkout holding
+	sourceUpdateReasonBranchCheckedOut sourceUpdateReason = "branch_checked_out"
+	// sourceUpdateReasonDirtyCheckout reports the original checkout holding
 	// the branch has staged, unstaged, or untracked content, so a
 	// working-tree-aware fast-forward refuses.
-	SourceUpdateReasonDirtyCheckout SourceUpdateReason = "dirty_checkout"
-	// SourceUpdateReasonCheckoutOperationInProgress reports a merge, rebase,
+	sourceUpdateReasonDirtyCheckout sourceUpdateReason = "dirty_checkout"
+	// sourceUpdateReasonCheckoutOperationInProgress reports a merge, rebase,
 	// cherry-pick, or revert — including a sequence between commits — is in
 	// progress in the original checkout.
-	SourceUpdateReasonCheckoutOperationInProgress SourceUpdateReason = "checkout_operation_in_progress"
-	// SourceUpdateReasonIgnoredPathCollision reports an incoming tracked
+	sourceUpdateReasonCheckoutOperationInProgress sourceUpdateReason = "checkout_operation_in_progress"
+	// sourceUpdateReasonIgnoredPathCollision reports an incoming tracked
 	// path of the fast-forward would overwrite ignored files or directories
 	// in the original checkout.
-	SourceUpdateReasonIgnoredPathCollision SourceUpdateReason = "ignored_path_collision"
-	// SourceUpdateReasonCheckoutConflict reports the working-tree-aware
+	sourceUpdateReasonIgnoredPathCollision sourceUpdateReason = "ignored_path_collision"
+	// sourceUpdateReasonCheckoutConflict reports the working-tree-aware
 	// fast-forward itself refused after every pre-mutation check passed, and
 	// the refusal was proved to have left the checkout untouched (typically
 	// a local change that raced the final checks).
-	SourceUpdateReasonCheckoutConflict SourceUpdateReason = "checkout_conflict"
+	sourceUpdateReasonCheckoutConflict sourceUpdateReason = "checkout_conflict"
 )
 
 // SourceUpdateOutcome is one update attempt's typed result. For stale
 // refusals the snapshot fields carry freshly resolved status evidence for
 // the current selection, never the displayed expectations.
 type SourceUpdateOutcome struct {
-	Result      SourceUpdateResult
-	Reason      SourceUpdateReason
+	Result      sourceUpdateResult
+	Reason      sourceUpdateReason
 	PreviousSHA string
 	LocalSHA    string
 	FetchedSHA  string
@@ -126,11 +126,11 @@ type SourceUpdateOutcome struct {
 	CheckoutHolders []string
 }
 
-// ErrSourceUpdateUnavailable reports an attempt that could not prove a safe
+// errSourceUpdateUnavailable reports an attempt that could not prove a safe
 // outcome: inspection failure, fetch failure, deadline expiry, or an
 // ambiguous mutation boundary. It never claims the branch was rolled back or
 // that a completed mutation failed.
-var ErrSourceUpdateUnavailable = errors.New("source update unavailable")
+var errSourceUpdateUnavailable = errors.New("source update unavailable")
 
 // SourceUpdateUnavailableError carries bounded, credential-redacted
 // diagnostics for an unprovable attempt.
@@ -140,24 +140,24 @@ type SourceUpdateUnavailableError struct {
 
 func (e *SourceUpdateUnavailableError) Error() string {
 	if e == nil || strings.TrimSpace(e.Diagnostics) == "" {
-		return ErrSourceUpdateUnavailable.Error()
+		return errSourceUpdateUnavailable.Error()
 	}
-	return fmt.Sprintf("%s: %s", ErrSourceUpdateUnavailable, e.Diagnostics)
+	return fmt.Sprintf("%s: %s", errSourceUpdateUnavailable, e.Diagnostics)
 }
 
-func (e *SourceUpdateUnavailableError) Unwrap() error { return ErrSourceUpdateUnavailable }
+func (e *SourceUpdateUnavailableError) Unwrap() error { return errSourceUpdateUnavailable }
 
-// SourceUpdateRefRunner performs the compare-and-swap ref mutation. It is a
-// separate boundary from BranchProbeRunner because the CAS needs stdin; the
+// sourceUpdateRefRunner performs the compare-and-swap ref mutation. It is a
+// separate boundary from branchProbeRunner because the CAS needs stdin; the
 // production runner reaps its process group under the attempt context.
-type SourceUpdateRefRunner interface {
-	Run(ctx context.Context, repoPath, stdin string, args []string, diagnosticLimit int) BranchProbeCommandResult
+type sourceUpdateRefRunner interface {
+	Run(ctx context.Context, repoPath, stdin string, args []string, diagnosticLimit int) branchProbeCommandResult
 }
 
-// ExecSourceUpdateRefRunner is the production argument-vector runner.
-type ExecSourceUpdateRefRunner struct{}
+// execSourceUpdateRefRunner is the production argument-vector runner.
+type execSourceUpdateRefRunner struct{}
 
-func (ExecSourceUpdateRefRunner) Run(ctx context.Context, repoPath, stdin string, args []string, diagnosticLimit int) BranchProbeCommandResult {
+func (execSourceUpdateRefRunner) Run(ctx context.Context, repoPath, stdin string, args []string, diagnosticLimit int) branchProbeCommandResult {
 	gitArgs := append([]string{"-C", repoPath}, args...)
 	cmd := exec.CommandContext(ctx, "git", gitArgs...)
 	cmd.Env = nonInteractiveGitEnv(cmd.Environ())
@@ -193,7 +193,7 @@ func (ExecSourceUpdateRefRunner) Run(ctx context.Context, repoPath, stdin string
 	if diagnostics == "" && err != nil {
 		diagnostics = err.Error()
 	}
-	return BranchProbeCommandResult{Stdout: stdout.String(), Diagnostics: diagnostics, ExitCode: exitCode, Err: err}
+	return branchProbeCommandResult{Stdout: stdout.String(), Diagnostics: diagnostics, ExitCode: exitCode, Err: err}
 }
 
 // SourceUpdateOptions carries per-call controls for the source update.
@@ -204,23 +204,23 @@ type SourceUpdateOptions struct {
 
 	// UpdateRefRunner performs the CAS mutation; nil uses the production
 	// runner.
-	UpdateRefRunner SourceUpdateRefRunner
+	UpdateRefRunner sourceUpdateRefRunner
 	// BeforeCAS runs under coordination immediately before the final
 	// revalidation and compare-and-swap. Production callers leave it nil;
 	// deterministic tests inject races here.
 	BeforeCAS func()
 }
 
-func (o SourceUpdateOptions) updateRefRunner() SourceUpdateRefRunner {
+func (o SourceUpdateOptions) updateRefRunner() sourceUpdateRefRunner {
 	if o.UpdateRefRunner != nil {
 		return o.UpdateRefRunner
 	}
-	return ExecSourceUpdateRefRunner{}
+	return execSourceUpdateRefRunner{}
 }
 
-// CheckoutHeadState is one observed checkout HEAD: the full symbolic ref or
+// checkoutHeadState is one observed checkout HEAD: the full symbolic ref or
 // the literal "detached", plus the resolved commit.
-type CheckoutHeadState struct {
+type checkoutHeadState struct {
 	Ref string
 	SHA string
 }
@@ -248,7 +248,7 @@ type CheckoutHeadState struct {
 // Stale refusals return an outcome rather than an error: the mutation was
 // refused, not attempted and failed. Unprovable attempts (inspection, fetch,
 // ancestry, or deadline failures, and ambiguous mutation boundaries) return
-// an error wrapping ErrSourceUpdateUnavailable and leave any claim about the
+// an error wrapping errSourceUpdateUnavailable and leave any claim about the
 // repository's final state unproved.
 func UpdateSourceFromOrigin(ctx context.Context, repoPath string, expected SourceUpdateExpectation, options SourceUpdateOptions) (SourceUpdateOutcome, error) {
 	if err := validateSourceUpdateExpectation(expected); err != nil {
@@ -266,17 +266,17 @@ func UpdateSourceFromOrigin(ctx context.Context, repoPath string, expected Sourc
 		// A terminal plan state (detached, local base missing, no origin,
 		// other upstream) is a changed selection or mapping, never a
 		// mutation target.
-		reason := SourceUpdateReasonSourceChanged
-		if plan.Status == OriginCheckNoOrigin || plan.Status == OriginCheckOtherUpstream {
-			reason = SourceUpdateReasonMappingChanged
+		reason := sourceUpdateReasonSourceChanged
+		if plan.Status == originCheckNoOrigin || plan.Status == originCheckOtherUpstream {
+			reason = sourceUpdateReasonMappingChanged
 		}
 		return staleOutcome(ctx, repoPath, plan, reason, nil, options)
 	}
 	if plan.Source.Kind != LocalSourceBranch || plan.Source.Branch != expected.Branch {
-		return staleOutcome(ctx, repoPath, plan, SourceUpdateReasonSourceChanged, nil, options)
+		return staleOutcome(ctx, repoPath, plan, sourceUpdateReasonSourceChanged, nil, options)
 	}
 	if plan.Mapping == nil || plan.Mapping.Branch != expected.OriginBranch {
-		return staleOutcome(ctx, repoPath, plan, SourceUpdateReasonMappingChanged, nil, options)
+		return staleOutcome(ctx, repoPath, plan, sourceUpdateReasonMappingChanged, nil, options)
 	}
 
 	localTip, err := readBranchTip(ctx, repoPath, expected.Branch, options.OriginCheckOptions)
@@ -307,13 +307,13 @@ func UpdateSourceFromOrigin(ctx context.Context, repoPath string, expected Sourc
 	// worktree's own checkout must be updated separately, and no checkout is
 	// ever switched to make the branch available.
 	if len(linkedHolders) > 0 {
-		outcome, err := staleOutcome(ctx, repoPath, plan, SourceUpdateReasonBranchCheckedOut, nil, options)
+		outcome, err := staleOutcome(ctx, repoPath, plan, sourceUpdateReasonBranchCheckedOut, nil, options)
 		if err != nil {
 			return SourceUpdateOutcome{}, err
 		}
 		outcome.CheckoutHolders = linkedHolders
 		for range linkedHolders {
-			outcome.Blockers = append(outcome.Blockers, UpdateBlockerBranchCheckedOutInWorktree)
+			outcome.Blockers = append(outcome.Blockers, updateBlockerBranchCheckedOutInWorktree)
 		}
 		return outcome, nil
 	}
@@ -323,7 +323,7 @@ func UpdateSourceFromOrigin(ctx context.Context, repoPath string, expected Sourc
 	// Unoccupied branch: the checkout's displayed HEAD is unrelated to the
 	// target branch; a checkout switch since display refuses the mutation.
 	if head.Ref != expected.CheckoutHeadRef || !strings.EqualFold(head.SHA, expected.CheckoutHeadSHA) {
-		return staleOutcome(ctx, repoPath, plan, SourceUpdateReasonCheckoutChanged, nil, options)
+		return staleOutcome(ctx, repoPath, plan, sourceUpdateReasonCheckoutChanged, nil, options)
 	}
 	return updateUnoccupiedBranch(ctx, repoPath, expected, plan, localTip, options)
 }
@@ -338,7 +338,7 @@ func updateUnoccupiedBranch(ctx context.Context, repoPath string, expected Sourc
 	fetch := FetchOriginBranch(ctx, repoPath, *plan.Mapping, options.OriginCheckOptions)
 	switch fetch.State {
 	case FetchOriginAbsent:
-		return staleOutcome(ctx, repoPath, plan, SourceUpdateReasonOriginBranchMissing, &fetch, options)
+		return staleOutcome(ctx, repoPath, plan, sourceUpdateReasonOriginBranchMissing, &fetch, options)
 	case FetchOriginUnavailable:
 		return SourceUpdateOutcome{}, &SourceUpdateUnavailableError{Diagnostics: nonemptyBranchProbeDiagnostic(fetch.Diagnostics)}
 	}
@@ -346,7 +346,7 @@ func updateUnoccupiedBranch(ctx context.Context, repoPath string, expected Sourc
 		return SourceUpdateOutcome{}, &SourceUpdateUnavailableError{Diagnostics: "source update deadline expired during fetch"}
 	}
 	if !strings.EqualFold(fetch.SHA, expected.ExpectedOriginSHA) {
-		return staleOutcome(ctx, repoPath, plan, SourceUpdateReasonOriginTipChanged, &fetch, options)
+		return staleOutcome(ctx, repoPath, plan, sourceUpdateReasonOriginTipChanged, &fetch, options)
 	}
 
 	// Equality is a no-op success: a repeated request may find the branch
@@ -359,7 +359,7 @@ func updateUnoccupiedBranch(ctx context.Context, repoPath string, expected Sourc
 		}, nil
 	}
 	if !strings.EqualFold(localTip, expected.ExpectedLocalSHA) {
-		return staleOutcome(ctx, repoPath, plan, SourceUpdateReasonLocalTipChanged, &fetch, options)
+		return staleOutcome(ctx, repoPath, plan, sourceUpdateReasonLocalTipChanged, &fetch, options)
 	}
 
 	fastForward, err := isAncestorOf(ctx, repoPath, localTip, fetch.SHA, options.OriginCheckOptions)
@@ -367,7 +367,7 @@ func updateUnoccupiedBranch(ctx context.Context, repoPath string, expected Sourc
 		return SourceUpdateOutcome{}, &SourceUpdateUnavailableError{Diagnostics: err.Error()}
 	}
 	if !fastForward {
-		outcome, err := staleOutcome(ctx, repoPath, plan, SourceUpdateReasonNotFastForward, &fetch, options)
+		outcome, err := staleOutcome(ctx, repoPath, plan, sourceUpdateReasonNotFastForward, &fetch, options)
 		if err != nil {
 			return SourceUpdateOutcome{}, err
 		}
@@ -398,10 +398,10 @@ func updateUnoccupiedBranch(ctx context.Context, repoPath string, expected Sourc
 		if refusal, ok := unwrapStaleRefusal(err); ok {
 			return enrichStaleRefusal(ctx, repoPath, refusal, plan, &fetch, options)
 		}
-		if errors.Is(err, ErrSourceUpdateRefCASMismatch) {
-			return staleOutcome(ctx, repoPath, plan, SourceUpdateReasonLocalTipChanged, &fetch, options)
+		if errors.Is(err, errSourceUpdateRefCASMismatch) {
+			return staleOutcome(ctx, repoPath, plan, sourceUpdateReasonLocalTipChanged, &fetch, options)
 		}
-		if errors.Is(err, ErrSourceUpdateUnavailable) {
+		if errors.Is(err, errSourceUpdateUnavailable) {
 			return SourceUpdateOutcome{}, err
 		}
 		return SourceUpdateOutcome{}, &SourceUpdateUnavailableError{Diagnostics: err.Error()}
@@ -434,13 +434,13 @@ func updateUnoccupiedBranch(ctx context.Context, repoPath string, expected Sourc
 // stash, clean, push, or local-content staging, Git ref/index locks are
 // respected without being deleted, and an outcome that cannot be proved is
 // reported as unavailability rather than as rollback or success.
-func updateOriginalCheckout(ctx context.Context, repoPath string, expected SourceUpdateExpectation, plan OriginCheckPlan, head CheckoutHeadState, localTip string, options SourceUpdateOptions) (SourceUpdateOutcome, error) {
+func updateOriginalCheckout(ctx context.Context, repoPath string, expected SourceUpdateExpectation, plan OriginCheckPlan, head checkoutHeadState, localTip string, options SourceUpdateOptions) (SourceUpdateOutcome, error) {
 	targetRef := "refs/heads/" + expected.Branch
 	// The displayed checkout HEAD must be the target branch itself: the
 	// binding identifies an original-checkout update, and a display that saw
 	// a different HEAD means the checkout has since switched.
 	if expected.CheckoutHeadRef != targetRef || head.Ref != targetRef {
-		return staleOutcome(ctx, repoPath, plan, SourceUpdateReasonCheckoutChanged, nil, options)
+		return staleOutcome(ctx, repoPath, plan, sourceUpdateReasonCheckoutChanged, nil, options)
 	}
 
 	// The fetch proves the mapped branch exists during this attempt; a
@@ -448,7 +448,7 @@ func updateOriginalCheckout(ctx context.Context, repoPath string, expected Sourc
 	fetch := FetchOriginBranch(ctx, repoPath, *plan.Mapping, options.OriginCheckOptions)
 	switch fetch.State {
 	case FetchOriginAbsent:
-		return staleOutcome(ctx, repoPath, plan, SourceUpdateReasonOriginBranchMissing, &fetch, options)
+		return staleOutcome(ctx, repoPath, plan, sourceUpdateReasonOriginBranchMissing, &fetch, options)
 	case FetchOriginUnavailable:
 		return SourceUpdateOutcome{}, &SourceUpdateUnavailableError{Diagnostics: nonemptyBranchProbeDiagnostic(fetch.Diagnostics)}
 	}
@@ -456,7 +456,7 @@ func updateOriginalCheckout(ctx context.Context, repoPath string, expected Sourc
 		return SourceUpdateOutcome{}, &SourceUpdateUnavailableError{Diagnostics: "source update deadline expired during fetch"}
 	}
 	if !strings.EqualFold(fetch.SHA, expected.ExpectedOriginSHA) {
-		return staleOutcome(ctx, repoPath, plan, SourceUpdateReasonOriginTipChanged, &fetch, options)
+		return staleOutcome(ctx, repoPath, plan, sourceUpdateReasonOriginTipChanged, &fetch, options)
 	}
 
 	// Equality is a no-op success once the checkout is consistent with it: a
@@ -470,13 +470,13 @@ func updateOriginalCheckout(ctx context.Context, repoPath string, expected Sourc
 				Plan: plan,
 			}, nil
 		}
-		return staleOutcome(ctx, repoPath, plan, SourceUpdateReasonCheckoutChanged, &fetch, options)
+		return staleOutcome(ctx, repoPath, plan, sourceUpdateReasonCheckoutChanged, &fetch, options)
 	}
 	if !strings.EqualFold(localTip, expected.ExpectedLocalSHA) {
-		return staleOutcome(ctx, repoPath, plan, SourceUpdateReasonLocalTipChanged, &fetch, options)
+		return staleOutcome(ctx, repoPath, plan, sourceUpdateReasonLocalTipChanged, &fetch, options)
 	}
 	if !strings.EqualFold(head.SHA, expected.CheckoutHeadSHA) {
-		return staleOutcome(ctx, repoPath, plan, SourceUpdateReasonCheckoutChanged, &fetch, options)
+		return staleOutcome(ctx, repoPath, plan, sourceUpdateReasonCheckoutChanged, &fetch, options)
 	}
 
 	fastForward, err := isAncestorOf(ctx, repoPath, localTip, fetch.SHA, options.OriginCheckOptions)
@@ -484,7 +484,7 @@ func updateOriginalCheckout(ctx context.Context, repoPath string, expected Sourc
 		return SourceUpdateOutcome{}, &SourceUpdateUnavailableError{Diagnostics: err.Error()}
 	}
 	if !fastForward {
-		outcome, err := staleOutcome(ctx, repoPath, plan, SourceUpdateReasonNotFastForward, &fetch, options)
+		outcome, err := staleOutcome(ctx, repoPath, plan, sourceUpdateReasonNotFastForward, &fetch, options)
 		if err != nil {
 			return SourceUpdateOutcome{}, err
 		}
@@ -524,17 +524,17 @@ func updateOriginalCheckout(ctx context.Context, repoPath string, expected Sourc
 // working tree including all untracked files, and no incoming tracked path
 // overwriting ignored content. An inspection failure is a failure to prove
 // safety, never evidence of it.
-func inspectOriginalCheckoutSafety(ctx context.Context, repoPath string, plan OriginCheckPlan, localTip, targetSHA string, fetch *FetchOriginBranchResult, options SourceUpdateOptions) (*SourceUpdateOutcome, error) {
+func inspectOriginalCheckoutSafety(ctx context.Context, repoPath string, plan OriginCheckPlan, localTip, targetSHA string, fetch *fetchOriginBranchResult, options SourceUpdateOptions) (*SourceUpdateOutcome, error) {
 	operation, err := checkoutOperationInProgress(ctx, repoPath, options.OriginCheckOptions)
 	if err != nil {
 		return nil, &SourceUpdateUnavailableError{Diagnostics: err.Error()}
 	}
 	if operation {
-		outcome, err := staleOutcome(ctx, repoPath, plan, SourceUpdateReasonCheckoutOperationInProgress, fetch, options)
+		outcome, err := staleOutcome(ctx, repoPath, plan, sourceUpdateReasonCheckoutOperationInProgress, fetch, options)
 		if err != nil {
 			return nil, err
 		}
-		outcome.Blockers = append(outcome.Blockers, UpdateBlockerCheckoutOperationInProgress)
+		outcome.Blockers = append(outcome.Blockers, updateBlockerCheckoutOperationInProgress)
 		return &outcome, nil
 	}
 	clean, err := checkoutStatusClean(ctx, repoPath, true, options.OriginCheckOptions)
@@ -542,11 +542,11 @@ func inspectOriginalCheckoutSafety(ctx context.Context, repoPath string, plan Or
 		return nil, &SourceUpdateUnavailableError{Diagnostics: err.Error()}
 	}
 	if !clean {
-		outcome, err := staleOutcome(ctx, repoPath, plan, SourceUpdateReasonDirtyCheckout, fetch, options)
+		outcome, err := staleOutcome(ctx, repoPath, plan, sourceUpdateReasonDirtyCheckout, fetch, options)
 		if err != nil {
 			return nil, err
 		}
-		outcome.Blockers = append(outcome.Blockers, UpdateBlockerDirtyTargetCheckout)
+		outcome.Blockers = append(outcome.Blockers, updateBlockerDirtyTargetCheckout)
 		return &outcome, nil
 	}
 	collision, err := checkoutIgnoredPathCollision(ctx, repoPath, localTip, targetSHA, options.OriginCheckOptions)
@@ -554,11 +554,11 @@ func inspectOriginalCheckoutSafety(ctx context.Context, repoPath string, plan Or
 		return nil, &SourceUpdateUnavailableError{Diagnostics: err.Error()}
 	}
 	if collision {
-		outcome, err := staleOutcome(ctx, repoPath, plan, SourceUpdateReasonIgnoredPathCollision, fetch, options)
+		outcome, err := staleOutcome(ctx, repoPath, plan, sourceUpdateReasonIgnoredPathCollision, fetch, options)
 		if err != nil {
 			return nil, err
 		}
-		outcome.Blockers = append(outcome.Blockers, UpdateBlockerIgnoredPathCollision)
+		outcome.Blockers = append(outcome.Blockers, updateBlockerIgnoredPathCollision)
 		return &outcome, nil
 	}
 	return nil, nil
@@ -569,13 +569,13 @@ func inspectOriginalCheckoutSafety(ctx context.Context, repoPath string, plan Or
 // returns the matching stale refusal; an inspection failure fails closed.
 // The attempt's own plan and fetch result supply the refusal's fresh
 // evidence, so revalidation never performs another network fetch.
-func revalidateOriginalCheckout(ctx context.Context, repoPath string, expected SourceUpdateExpectation, plan OriginCheckPlan, targetSHA string, fetch *FetchOriginBranchResult, options SourceUpdateOptions) (*SourceUpdateOutcome, error) {
+func revalidateOriginalCheckout(ctx context.Context, repoPath string, expected SourceUpdateExpectation, plan OriginCheckPlan, targetSHA string, fetch *fetchOriginBranchResult, options SourceUpdateOptions) (*SourceUpdateOutcome, error) {
 	localTip, err := readBranchTip(ctx, repoPath, expected.Branch, options.OriginCheckOptions)
 	if err != nil {
 		return nil, &SourceUpdateUnavailableError{Diagnostics: err.Error()}
 	}
 	if !strings.EqualFold(localTip, expected.ExpectedLocalSHA) {
-		return &SourceUpdateOutcome{Result: SourceUpdateStale, Reason: SourceUpdateReasonLocalTipChanged}, nil
+		return &SourceUpdateOutcome{Result: SourceUpdateStale, Reason: sourceUpdateReasonLocalTipChanged}, nil
 	}
 	head, err := observeCheckoutHead(ctx, repoPath, options.OriginCheckOptions)
 	if err != nil {
@@ -583,7 +583,7 @@ func revalidateOriginalCheckout(ctx context.Context, repoPath string, expected S
 	}
 	targetRef := "refs/heads/" + expected.Branch
 	if expected.CheckoutHeadRef != targetRef || head.Ref != targetRef || !strings.EqualFold(head.SHA, expected.CheckoutHeadSHA) {
-		return &SourceUpdateOutcome{Result: SourceUpdateStale, Reason: SourceUpdateReasonCheckoutChanged}, nil
+		return &SourceUpdateOutcome{Result: SourceUpdateStale, Reason: sourceUpdateReasonCheckoutChanged}, nil
 	}
 	checkouts, err := listWorktreeCheckouts(ctx, repoPath, options.OriginCheckOptions)
 	if err != nil {
@@ -599,15 +599,15 @@ func revalidateOriginalCheckout(ctx context.Context, repoPath string, expected S
 		}
 	}
 	if len(linkedHolders) > 0 {
-		outcome := &SourceUpdateOutcome{Result: SourceUpdateStale, Reason: SourceUpdateReasonBranchCheckedOut}
+		outcome := &SourceUpdateOutcome{Result: SourceUpdateStale, Reason: sourceUpdateReasonBranchCheckedOut}
 		outcome.CheckoutHolders = linkedHolders
 		for range linkedHolders {
-			outcome.Blockers = append(outcome.Blockers, UpdateBlockerBranchCheckedOutInWorktree)
+			outcome.Blockers = append(outcome.Blockers, updateBlockerBranchCheckedOutInWorktree)
 		}
 		return outcome, nil
 	}
 	if !originalHeld {
-		return &SourceUpdateOutcome{Result: SourceUpdateStale, Reason: SourceUpdateReasonCheckoutChanged}, nil
+		return &SourceUpdateOutcome{Result: SourceUpdateStale, Reason: sourceUpdateReasonCheckoutChanged}, nil
 	}
 	return inspectOriginalCheckoutSafety(ctx, repoPath, plan, localTip, targetSHA, fetch, options)
 }
@@ -627,7 +627,7 @@ var checkoutMergeArgs = func(target string) []string {
 // including old ones. A nonzero result that cannot be proved to have left
 // the checkout untouched is unavailability, never a claimed refusal or
 // rollback.
-func mergeFastForwardCheckout(ctx context.Context, repoPath string, expected SourceUpdateExpectation, plan OriginCheckPlan, localTip, targetSHA string, fetch FetchOriginBranchResult, options SourceUpdateOptions) (SourceUpdateOutcome, error) {
+func mergeFastForwardCheckout(ctx context.Context, repoPath string, expected SourceUpdateExpectation, plan OriginCheckPlan, localTip, targetSHA string, fetch fetchOriginBranchResult, options SourceUpdateOptions) (SourceUpdateOutcome, error) {
 	delay := 50 * time.Millisecond
 	for {
 		if err := ctx.Err(); err != nil {
@@ -693,7 +693,7 @@ func verifyCheckoutFastForward(ctx context.Context, repoPath string, expected So
 // is a typed refusal; anything else (including a possible partial write or a
 // competing change) is unavailability so the uncertain-update settlement
 // flow owns the outcome.
-func refusedOrUnknownCheckoutUpdate(ctx context.Context, repoPath string, expected SourceUpdateExpectation, plan OriginCheckPlan, fetch FetchOriginBranchResult, options SourceUpdateOptions) (SourceUpdateOutcome, error) {
+func refusedOrUnknownCheckoutUpdate(ctx context.Context, repoPath string, expected SourceUpdateExpectation, plan OriginCheckPlan, fetch fetchOriginBranchResult, options SourceUpdateOptions) (SourceUpdateOutcome, error) {
 	if err := ctx.Err(); err != nil {
 		return SourceUpdateOutcome{}, &SourceUpdateUnavailableError{Diagnostics: "the checkout update was interrupted before its outcome could be proved"}
 	}
@@ -726,16 +726,16 @@ func refusedOrUnknownCheckoutUpdate(ctx context.Context, repoPath string, expect
 	if operation {
 		return SourceUpdateOutcome{}, &SourceUpdateUnavailableError{Diagnostics: "a git operation started while the checkout update was refused"}
 	}
-	return staleOutcome(ctx, repoPath, plan, SourceUpdateReasonCheckoutConflict, &fetch, options)
+	return staleOutcome(ctx, repoPath, plan, sourceUpdateReasonCheckoutConflict, &fetch, options)
 }
 
 // enrichStaleRefusal fills the fresh snapshot fields of a CAS-layer stale
 // refusal, which carries only its typed reason and observed holders.
-func enrichStaleRefusal(ctx context.Context, repoPath string, refusal SourceUpdateOutcome, plan OriginCheckPlan, fetch *FetchOriginBranchResult, options SourceUpdateOptions) (SourceUpdateOutcome, error) {
+func enrichStaleRefusal(ctx context.Context, repoPath string, refusal SourceUpdateOutcome, plan OriginCheckPlan, fetch *fetchOriginBranchResult, options SourceUpdateOptions) (SourceUpdateOutcome, error) {
 	if refusal.Plan.Status == "" && refusal.Plan.Source.Mode == "" {
 		refusal.Plan = plan
 	}
-	if refusal.Comparison == nil && !refusal.RemoteBranchMissing && !refusal.FetchUnavailable && fetch != nil && fetch.State == FetchOriginFetched {
+	if refusal.Comparison == nil && !refusal.RemoteBranchMissing && !refusal.FetchUnavailable && fetch != nil && fetch.State == fetchOriginFetched {
 		if plan.Source.Commit != "" {
 			comparison, err := CompareOriginSource(ctx, repoPath, plan.Source.Commit, fetch.SHA, *plan.Mapping, options.OriginCheckOptions)
 			if err == nil {
@@ -752,7 +752,7 @@ func enrichStaleRefusal(ctx context.Context, repoPath string, refusal SourceUpda
 // attempt's own fetch result) produces the comparison for the current
 // selection; unprovable fetches mark the snapshot unavailable instead of
 // presenting old counts as current.
-func staleOutcome(ctx context.Context, repoPath string, plan OriginCheckPlan, reason SourceUpdateReason, fetch *FetchOriginBranchResult, options SourceUpdateOptions) (SourceUpdateOutcome, error) {
+func staleOutcome(ctx context.Context, repoPath string, plan OriginCheckPlan, reason sourceUpdateReason, fetch *fetchOriginBranchResult, options SourceUpdateOptions) (SourceUpdateOutcome, error) {
 	outcome := SourceUpdateOutcome{Result: SourceUpdateStale, Reason: reason, Plan: plan}
 	if plan.Mapping == nil {
 		return outcome, nil
@@ -793,14 +793,14 @@ func revalidateBeforeCAS(ctx context.Context, repoPath string, expected SourceUp
 		return nil, &SourceUpdateUnavailableError{Diagnostics: err.Error()}
 	}
 	if !strings.EqualFold(localTip, expected.ExpectedLocalSHA) {
-		return &SourceUpdateOutcome{Result: SourceUpdateStale, Reason: SourceUpdateReasonLocalTipChanged}, nil
+		return &SourceUpdateOutcome{Result: SourceUpdateStale, Reason: sourceUpdateReasonLocalTipChanged}, nil
 	}
 	head, err := observeCheckoutHead(ctx, repoPath, options)
 	if err != nil {
 		return nil, &SourceUpdateUnavailableError{Diagnostics: err.Error()}
 	}
 	if head.Ref != expected.CheckoutHeadRef || !strings.EqualFold(head.SHA, expected.CheckoutHeadSHA) {
-		return &SourceUpdateOutcome{Result: SourceUpdateStale, Reason: SourceUpdateReasonCheckoutChanged}, nil
+		return &SourceUpdateOutcome{Result: SourceUpdateStale, Reason: sourceUpdateReasonCheckoutChanged}, nil
 	}
 	checkouts, err := listWorktreeCheckouts(ctx, repoPath, options)
 	if err != nil {
@@ -810,19 +810,19 @@ func revalidateBeforeCAS(ctx context.Context, repoPath string, expected SourceUp
 	// original checkout holding the branch cannot happen here because the
 	// unoccupied path was selected under the same membership list.
 	if linkedHolders := linkedHoldersOfBranch(checkouts, repoPath, expected.Branch); len(linkedHolders) > 0 {
-		outcome := &SourceUpdateOutcome{Result: SourceUpdateStale, Reason: SourceUpdateReasonBranchCheckedOut}
+		outcome := &SourceUpdateOutcome{Result: SourceUpdateStale, Reason: sourceUpdateReasonBranchCheckedOut}
 		outcome.CheckoutHolders = linkedHolders
 		for range linkedHolders {
-			outcome.Blockers = append(outcome.Blockers, UpdateBlockerBranchCheckedOutInWorktree)
+			outcome.Blockers = append(outcome.Blockers, updateBlockerBranchCheckedOutInWorktree)
 		}
 		return outcome, nil
 	}
 	return nil, nil
 }
 
-// ErrSourceUpdateRefCASMismatch reports that the ref's current value no
+// errSourceUpdateRefCASMismatch reports that the ref's current value no
 // longer matches the expected old value, so the mutation was refused.
-var ErrSourceUpdateRefCASMismatch = errors.New("source update ref compare-and-swap mismatch")
+var errSourceUpdateRefCASMismatch = errors.New("source update ref compare-and-swap mismatch")
 
 // casUpdateBranchRef advances refs/heads/<branch> from oldSHA to newSHA with
 // Git's expected-old-value check. Lock contention is retried inside the
@@ -845,7 +845,7 @@ func casUpdateBranchRef(ctx context.Context, repoPath, branch, oldSHA, newSHA st
 		if readErr == nil && !strings.EqualFold(current, oldSHA) {
 			// Git's expected-old-value check refused a competing value;
 			// never overwrite it.
-			return fmt.Errorf("%w: ref %s expected %s observed %s", ErrSourceUpdateRefCASMismatch, fullRef, oldSHA, current)
+			return fmt.Errorf("%w: ref %s expected %s observed %s", errSourceUpdateRefCASMismatch, fullRef, oldSHA, current)
 		}
 		if _, contention := lockContention([]byte(result.Stdout + "\n" + result.Diagnostics)); !contention {
 			diagnostics := sanitizeBranchProbeDiagnostics(nonemptyBranchProbeDiagnostic(result.Diagnostics), options.diagnosticLimit())
@@ -922,27 +922,27 @@ func validateSourceUpdateExpectation(expected SourceUpdateExpectation) error {
 
 // observeCheckoutHead reads the checkout's HEAD as the displayed snapshot
 // did: the full symbolic ref or the literal "detached", plus the commit.
-func observeCheckoutHead(ctx context.Context, repoPath string, options OriginCheckOptions) (CheckoutHeadState, error) {
+func observeCheckoutHead(ctx context.Context, repoPath string, options OriginCheckOptions) (checkoutHeadState, error) {
 	symref := runOriginCommand(ctx, repoPath, []string{"symbolic-ref", "--quiet", "HEAD"}, options.commandTimeout(), options)
 	switch symref.ExitCode {
 	case 0:
 		ref := strings.TrimSpace(symref.Stdout)
 		if ref == "" || !strings.HasPrefix(ref, "refs/") {
-			return CheckoutHeadState{}, fmt.Errorf("checkout HEAD resolved to an unusable reference")
+			return checkoutHeadState{}, fmt.Errorf("checkout HEAD resolved to an unusable reference")
 		}
 		sha, err := resolveHeadCommit(ctx, repoPath, options)
 		if err != nil {
-			return CheckoutHeadState{}, err
+			return checkoutHeadState{}, err
 		}
-		return CheckoutHeadState{Ref: ref, SHA: sha}, nil
+		return checkoutHeadState{Ref: ref, SHA: sha}, nil
 	case 1:
 		sha, err := resolveHeadCommit(ctx, repoPath, options)
 		if err != nil {
-			return CheckoutHeadState{}, err
+			return checkoutHeadState{}, err
 		}
-		return CheckoutHeadState{Ref: "detached", SHA: sha}, nil
+		return checkoutHeadState{Ref: "detached", SHA: sha}, nil
 	default:
-		return CheckoutHeadState{}, fmt.Errorf("reading the checkout HEAD: %s", nonemptyBranchProbeDiagnostic(symref.Diagnostics))
+		return checkoutHeadState{}, fmt.Errorf("reading the checkout HEAD: %s", nonemptyBranchProbeDiagnostic(symref.Diagnostics))
 	}
 }
 
@@ -1063,6 +1063,6 @@ func linkedHoldersOfBranch(checkouts []worktreeCheckout, repoPath, branch string
 
 // ResolveCheckoutHead exposes the observed checkout HEAD for read-model
 // snapshots that bind Update expectations.
-func ResolveCheckoutHead(ctx context.Context, repoPath string, options OriginCheckOptions) (CheckoutHeadState, error) {
+func ResolveCheckoutHead(ctx context.Context, repoPath string, options OriginCheckOptions) (checkoutHeadState, error) {
 	return observeCheckoutHead(ctx, repoPath, options)
 }

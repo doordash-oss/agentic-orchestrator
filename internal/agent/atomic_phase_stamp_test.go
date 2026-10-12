@@ -60,7 +60,7 @@ func TestAtomicPhaseStamp_AllSuccess(t *testing.T) {
 	err := AtomicPhaseStamp(store, AtomicPhaseStampInput{
 		FeatureID: id,
 		Repos:     []string{testRepoNameAPI, testRepoNameWeb, testRepoNameInfra},
-		Outcome:   PhaseOutcomeReviewPassed,
+		Outcome:   phaseOutcomeReviewPassed,
 	})
 	if err != nil {
 		t.Fatalf("stamp: %v", err)
@@ -84,7 +84,7 @@ func TestAtomicPhaseStamp_AllFailed(t *testing.T) {
 	err := AtomicPhaseStamp(store, AtomicPhaseStampInput{
 		FeatureID: id,
 		Repos:     []string{testRepoNameAPI, testRepoNameWeb},
-		Outcome:   PhaseOutcomeFailed,
+		Outcome:   phaseOutcomeFailed,
 	})
 	if err != nil {
 		t.Fatalf("stamp: %v", err)
@@ -115,7 +115,7 @@ func TestAtomicPhaseStamp_NeedUserInputDoesNotMutateRepoStatus(t *testing.T) {
 	err := AtomicPhaseStamp(store, AtomicPhaseStampInput{
 		FeatureID: id,
 		Repos:     []string{testRepoNameAPI, testRepoNameWeb},
-		Outcome:   PhaseOutcomeNeedUserInput,
+		Outcome:   phaseOutcomeNeedUserInput,
 		GatePath:  "/state/runs/run-001/phase-01/implement/iteration-02/need-user-input.yaml",
 	})
 	if err != nil {
@@ -148,7 +148,7 @@ func TestAtomicPhaseStamp_DoesNotTouchOutsideRepos(t *testing.T) {
 	err := AtomicPhaseStamp(store, AtomicPhaseStampInput{
 		FeatureID: id,
 		Repos:     []string{testRepoNameAPI, testRepoNameWeb},
-		Outcome:   PhaseOutcomeReviewPassed,
+		Outcome:   phaseOutcomeReviewPassed,
 	})
 	if err != nil {
 		t.Fatalf("stamp: %v", err)
@@ -187,7 +187,7 @@ func TestAtomicPhaseStamp_PRURLsApplied(t *testing.T) {
 	err := AtomicPhaseStamp(store, AtomicPhaseStampInput{
 		FeatureID: id,
 		Repos:     []string{testRepoNameAPI, testRepoNameWeb},
-		Outcome:   PhaseOutcomeReviewPassed,
+		Outcome:   phaseOutcomeReviewPassed,
 		PRURLs:    map[string]string{testRepoNameAPI: testPRURLAPI},
 	})
 	if err != nil {
@@ -251,14 +251,14 @@ func TestAtomicPhaseStamp_TouchedIsMonotonic(t *testing.T) {
 	if err := AtomicPhaseStamp(store, AtomicPhaseStampInput{
 		FeatureID: id,
 		Repos:     []string{testRepoNameAPI},
-		Outcome:   PhaseOutcomeReviewPassed,
+		Outcome:   phaseOutcomeReviewPassed,
 	}); err != nil {
 		t.Fatalf("stamp 1: %v", err)
 	}
 	if err := AtomicPhaseStamp(store, AtomicPhaseStampInput{
 		FeatureID: id,
 		Repos:     []string{testRepoNameAPI},
-		Outcome:   PhaseOutcomeFailed,
+		Outcome:   phaseOutcomeFailed,
 	}); err != nil {
 		t.Fatalf("stamp 2: %v", err)
 	}

@@ -18,10 +18,14 @@ limitations under the License.
  * Drives the connected server's own update endpoints (GET /api/v1/update,
  * POST check/install, DELETE install) and projects the wire snapshot onto the
  * renderer-safe ServerUpdateState. Distinct from updates.ts, which updates
- * this app; a server that predates the endpoints reads as unsupported.
+ * this app.
  */
-import { z } from 'zod';
-import { CanonicalErrorSchema } from '../shared/api/parse';
+import {
+  CanonicalErrorSchema,
+  WireResponseSchema,
+  type WireSnapshotSchema,
+} from '../shared/api/parse';
+import type { z } from 'zod';
 import {
   ServerUpdateStateSchema,
   type ServerListRow,
@@ -30,41 +34,7 @@ import {
 } from '../shared/ipc';
 import { supervisorActivitySentence } from './quitCoordinator';
 import { mapServerError, type ServerTransport } from './serverClient';
-
-const WireSnapshotSchema = z
-  .object({
-    status: z.string(),
-    policy: z.string(),
-    current_version: z.string(),
-    latest_version: z.string().optional(),
-    target_version: z.string().optional(),
-    latest_release_url: z.string().optional(),
-    installation: z.string(),
-    remediation: z.string().optional(),
-    signature: z.string(),
-    method: z.string().optional(),
-    stop_active_work: z.boolean().optional(),
-    scheduled_for: z.string().nullable().optional(),
-    last_check_at: z.string().optional(),
-    next_check_at: z.string().optional(),
-    error: z.unknown().optional(),
-    active_work_summary: z
-      .object({
-        feature_count: z.number().int().nonnegative(),
-        supervisor_active: z.boolean(),
-        // Absent from servers that predate the waiting split.
-        supervisor_waiting: z.boolean().optional(),
-        clone_count: z.number().int().nonnegative(),
-        upload_count: z.number().int().nonnegative(),
-        origin_check_count: z.number().int().nonnegative(),
-        pending_admissions: z.number().int().nonnegative(),
-        detection_failed: z.boolean(),
-      })
-      .passthrough(),
-  })
-  .passthrough();
-
-const WireResponseSchema = z.object({ update: WireSnapshotSchema }).passthrough();
+import { defined, definedNonEmpty } from '../shared/defined';
 
 type WireSnapshot = z.output<typeof WireSnapshotSchema>;
 
@@ -80,7 +50,7 @@ export function describeActiveWork(
   if (repository > 0) parts.push(plural(repository, 'repository operation'));
   const supervisor = supervisorActivitySentence({
     supervisorActive: summary.supervisor_active,
-    supervisorWaiting: summary.supervisor_waiting === true,
+    supervisorWaiting: summary.supervisor_waiting,
   });
   const last = parts.pop();
   const list =
@@ -95,36 +65,25 @@ export function describeActiveWork(
 export function projectServerUpdate(raw: unknown): ServerUpdateState {
   const wire = WireResponseSchema.parse(raw).update;
   const error = CanonicalErrorSchema.safeParse(wire.error);
-  const optional = <T>(key: string, value: T | null | undefined): Record<string, T> =>
-    value === undefined || value === null || value === '' ? {} : { [key]: value };
   return ServerUpdateStateSchema.parse({
     status: wire.status,
     policy: wire.policy,
     currentVersion: wire.current_version,
     installation: wire.installation,
     signature: wire.signature,
-    ...optional('latestVersion', wire.latest_version),
-    ...optional('targetVersion', wire.target_version),
-    ...optional('releaseUrl', wire.latest_release_url),
-    ...optional('remediation', wire.remediation),
-    ...optional('method', wire.method),
-    ...(wire.stop_active_work === undefined ? {} : { stopActiveWork: wire.stop_active_work }),
-    ...optional('scheduledFor', wire.scheduled_for),
-    ...optional('lastCheckAt', wire.last_check_at),
-    ...optional('nextCheckAt', wire.next_check_at),
-    ...optional('activeWorkSummary', describeActiveWork(wire.active_work_summary)),
+    ...definedNonEmpty('latestVersion', wire.latest_version ?? undefined),
+    ...definedNonEmpty('targetVersion', wire.target_version ?? undefined),
+    ...definedNonEmpty('releaseUrl', wire.latest_release_url ?? undefined),
+    ...definedNonEmpty('remediation', wire.remediation ?? undefined),
+    ...definedNonEmpty('method', wire.method ?? undefined),
+    ...defined('stopActiveWork', wire.stop_active_work),
+    ...definedNonEmpty('scheduledFor', wire.scheduled_for ?? undefined),
+    ...definedNonEmpty('lastCheckAt', wire.last_check_at ?? undefined),
+    ...definedNonEmpty('nextCheckAt', wire.next_check_at ?? undefined),
+    ...definedNonEmpty('activeWorkSummary', describeActiveWork(wire.active_work_summary)),
     ...(error.success ? { error: error.data } : {}),
   });
 }
-
-const PREDATES_UPDATES: ServerUpdateState = {
-  status: 'unsupported',
-  policy: 'off',
-  currentVersion: 'unknown',
-  installation: 'unknown',
-  signature: 'unverified',
-  remediation: 'This server predates in-place updates. Upgrade it once by hand to enable them.',
-};
 
 export class ServerUpdateService {
   private last: ServerUpdateState | null = null;
@@ -187,10 +146,6 @@ export class ServerUpdateService {
     init: { method: 'POST' | 'DELETE'; body: unknown } | undefined,
   ): Promise<ServerUpdateState> {
     const result = await this.transport.apiRequest(path, init);
-    if (result.status === 404) {
-      this.last = PREDATES_UPDATES;
-      return PREDATES_UPDATES;
-    }
     if (result.status < 200 || result.status >= 300) {
       throw mapServerError(result);
     }

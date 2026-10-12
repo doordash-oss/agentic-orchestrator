@@ -87,32 +87,6 @@ const disabledStatusNotAllowed = "status_not_allowed"
 // Status value for a control request awaiting a user decision.
 const controlRequestStatusPending = "pending"
 
-// actionCleanup, actionDelete, actionMarkDone, actionMerge, actionPauseStop
-// and the entries below are feature action IDs shared between the action
-// catalog, the mutation dispatcher and the client request builder.
-const (
-	actionCleanup        = "cleanup"
-	actionDelete         = "delete"
-	actionDiscard        = "discard"
-	actionMarkDone       = "mark-done"
-	actionMerge          = "merge"
-	actionNeedUserInput  = "need-user-input"
-	actionNeedInputDraft = "need-user-input-draft"
-	// actionTestingContractWaive records user-authorized waivers on the
-	// current phase's testing contract outside the verification gate.
-	actionTestingContractWaive = "testing-contract-waive"
-	actionPauseStop            = "pause-stop"
-	actionPublish              = "publish"
-	actionRebase               = "rebase"
-	actionRefactor             = "refactor"
-	actionRestart              = "restart"
-	actionResume               = "resume"
-	actionSetup                = "setup"
-	actionStart                = "start"
-	actionRetry                = "retry"
-	actionRewind               = "rewind"
-)
-
 func revisionForAny(v any) string {
 	data, _ := json.Marshal(v)
 	sum := sha256.Sum256(data)
@@ -180,7 +154,7 @@ func (h *apiHandler) featureDetailDTO(f *feature.Feature) (FeatureDetail, error)
 			detail.ReviewFeedback = append(detail.ReviewFeedback, f.ReviewFeedback...)
 		}
 	} else {
-		children, err := h.relationshipChildrenOf(f.ID, nil)
+		children, err := h.relationshipChildrenOf(f.ID)
 		if err != nil {
 			return FeatureDetail{}, err
 		}
@@ -222,6 +196,7 @@ func (h *apiHandler) featureDetailDTO(f *feature.Feature) (FeatureDetail, error)
 		ReviewFixing:      f.ReviewFixing,
 		ValidatingPlan:    f.ValidatingPlan,
 		ValidatorStatuses: copyStringMap(f.ValidatorStatuses),
+		ValidatorErrors:   copyStringMap(f.ValidatorErrors),
 	}
 	for _, item := range f.VerificationItems {
 		detail.VerificationItems = append(detail.VerificationItems, VerificationItem{Name: item.Name, State: item.State})
@@ -230,21 +205,21 @@ func (h *apiHandler) featureDetailDTO(f *feature.Feature) (FeatureDetail, error)
 	// Destructive actions carry a server-authoritative impact preview so
 	// confirmations enumerate the exact relationship and resources at stake.
 	if f.IsChild() {
-		attachImpactPreview(detail.Actions, actionDiscard, h.childDiscardImpactPreview(f))
+		attachImpactPreview(detail.Actions, string(FeatureActionDiscard), h.childDiscardImpactPreview(f))
 	} else {
-		attachImpactPreview(detail.Actions, actionDelete, h.parentCascadeDeleteImpactPreview(f, relationshipChildren))
+		attachImpactPreview(detail.Actions, string(FeatureActionDelete), h.parentCascadeDeleteImpactPreview(f, relationshipChildren))
 	}
 	if childHasIntegrationAttention(activeRelationshipChild) {
 		appendDisabledReason(detail.Actions, ActionDisabledReason{
 			Code:    "integration_attention",
 			Message: "the active child relationship requires integration attention",
-		}, actionDelete)
+		}, string(FeatureActionDelete))
 	}
 	if !f.IsChild() && detail.ActiveChild == nil {
 		if reason, dirty := h.refactorEntryDisabledReason(f); dirty {
-			disableAction(detail.Actions, actionRefactor, reason)
-			disableAction(detail.Actions, actionReviewFeedback, reason)
-			disableAction(detail.Actions, actionRebase, reason)
+			disableAction(detail.Actions, string(FeatureActionRefactor), reason)
+			disableAction(detail.Actions, string(FeatureActionReviewFeedback), reason)
+			disableAction(detail.Actions, string(FeatureActionRebase), reason)
 		}
 	}
 	if rec := f.FailureRecord(); rec != nil {
@@ -472,51 +447,14 @@ func listChildHistory(closed []*feature.Feature) (entries []RelationshipChildSum
 	return relationshipChildSummaryDTOs(closed), total, truncated
 }
 
-func (h *apiHandler) relationshipChildrenOf(parentID string, loaded []*feature.Feature) (*feature.RelationshipChildren, error) {
+func (h *apiHandler) relationshipChildrenOf(parentID string) (*feature.RelationshipChildren, error) {
 	if parentID == "" {
 		return &feature.RelationshipChildren{}, nil
 	}
-	if reader, ok := h.store.(relationshipReader); ok {
-		children, err := reader.RelationshipChildren(parentID)
-		if err != nil {
-			return nil, fmt.Errorf("reading children of parent %s: %w", parentID, err)
-		}
-		return children, nil
+	children, err := h.store.RelationshipChildren(parentID)
+	if err != nil {
+		return nil, fmt.Errorf("reading children of parent %s: %w", parentID, err)
 	}
-	if loaded == nil {
-		var err error
-		loaded, _, err = listFeatures(h.features)
-		if err != nil {
-			return nil, fmt.Errorf("listing features for relationship lookup: %w", err)
-		}
-	}
-	children := &feature.RelationshipChildren{}
-	for _, candidate := range loaded {
-		if candidate == nil || !candidate.IsChild() || candidate.Parent.ParentID != parentID {
-			continue
-		}
-		if candidate.IsActiveChild() {
-			if children.Active != nil {
-				return nil, fmt.Errorf("parent %s has multiple active children", parentID)
-			}
-			children.Active = candidate
-			continue
-		}
-		children.Closed = append(children.Closed, candidate)
-	}
-	sort.Slice(children.Closed, func(i, j int) bool {
-		left, right := children.Closed[i], children.Closed[j]
-		if left.Parent.ClosedAt == nil || right.Parent.ClosedAt == nil {
-			return left.ID < right.ID
-		}
-		if !left.Parent.ClosedAt.Equal(*right.Parent.ClosedAt) {
-			return left.Parent.ClosedAt.After(*right.Parent.ClosedAt)
-		}
-		if !left.Created.Equal(right.Created) {
-			return left.Created.After(right.Created)
-		}
-		return left.ID < right.ID
-	})
 	return children, nil
 }
 
@@ -620,10 +558,18 @@ func wireIntegrationAttention(record *errcat.FailureRecord) *Error {
 	return wireStoredError(record)
 }
 
-// WireRepoError renders a stored repository publish-failure record through
-// the shared stored-record projection.
-func WireRepoError(record *errcat.FailureRecord) *Error {
-	return wireStoredError(record)
+// WireError projects either a rendered catalog error or a stored failure
+// record through the shared wire renderer. A nil record has no projection.
+func WireError(value any) *Error {
+	switch v := value.(type) {
+	case errcat.Error:
+		wire := wireError(v)
+		return &wire
+	case *errcat.FailureRecord:
+		return wireStoredError(v)
+	default:
+		panic("unsupported wire error input")
+	}
 }
 
 // relationshipChildDTO builds the detail projection: the summary plus the
@@ -678,10 +624,6 @@ func relationshipChildSummaryDTOs(children []*feature.Feature) []RelationshipChi
 		}
 	}
 	return out
-}
-
-func actionCatalogDTOs(f *feature.Feature) []Action {
-	return actionCatalogDTOsWithChildGuard(f, false)
 }
 
 // disabledParentHasActiveChild is the ActionDisabledReason used when a
@@ -782,27 +724,27 @@ func actionCatalogDTOsWithChildGuard(f *feature.Feature, hasActiveChild bool) []
 	}
 
 	return []Action{
-		action(actionSetup, canSetup, featureScope, nil, childGuardReason(canSetup, ActionDisabledReason{Code: "no_pending_setup", Message: "feature has no pending or failed setup work"})...),
-		action(actionStart, canStart, featureScope, nil, childGuardReason(canStart, disabledStatusReason(status))...),
-		action(actionPauseStop, canStop, featureScope, nil, childGuardReason(canStop, ActionDisabledReason{Code: "not_running", Message: "feature has no active work to pause or stop"})...),
-		action(actionResume, canResume, featureScope, nil, childGuardReason(canResume, ActionDisabledReason{Code: "not_paused", Message: "feature has no paused session or input gate"})...),
-		action(actionRestart, canRestart, featureScope, nil, childGuardReason(canRestart, ActionDisabledReason{Code: "running", Message: "feature must stop before restart"})...),
-		action(actionPublish, canPublish, featureScope, nil, childGuardReason(canPublish, publishDisabledReason(f))...),
-		action(actionMerge, canMerge, featureScope, nil, childGuardReason(canMerge, mergeDisabledReason(f))...),
-		action(actionRewind, canRewind, featureScope, []ActionInput{
+		action(string(FeatureActionSetup), canSetup, featureScope, nil, childGuardReason(canSetup, ActionDisabledReason{Code: "no_pending_setup", Message: "feature has no pending or failed setup work"})...),
+		action(string(FeatureActionStart), canStart, featureScope, nil, childGuardReason(canStart, disabledStatusReason(status))...),
+		action(string(FeatureActionPauseStop), canStop, featureScope, nil, childGuardReason(canStop, ActionDisabledReason{Code: "not_running", Message: "feature has no active work to pause or stop"})...),
+		action(string(FeatureActionResume), canResume, featureScope, nil, childGuardReason(canResume, ActionDisabledReason{Code: "not_paused", Message: "feature has no paused session or input gate"})...),
+		action(string(FeatureActionRestart), canRestart, featureScope, nil, childGuardReason(canRestart, ActionDisabledReason{Code: "running", Message: "feature must stop before restart"})...),
+		action(string(FeatureActionPublish), canPublish, featureScope, nil, childGuardReason(canPublish, publishDisabledReason(f))...),
+		action(string(FeatureActionMerge), canMerge, featureScope, nil, childGuardReason(canMerge, mergeDisabledReason(f))...),
+		action(string(FeatureActionRewind), canRewind, featureScope, []ActionInput{
 			{Name: "target_phase", Kind: actionInputKindEnum, Required: true, Options: rewindPhaseOptions(f)},
 			{Name: "roadmap_phase", Kind: "integer", Required: false},
 			{Name: "upgrade_pipeline", Kind: actionInputKindEnum, Required: false, Options: rewindUpgradePipelineOptions(f)},
 		}, childGuardReason(canRewind, ActionDisabledReason{Code: "no_rewind_targets", Message: "feature has no valid rewind targets"})...),
-		action(actionRebase, canPostPublishPass, featureScope, nil, childGuardReason(canPostPublishPass, postPublishPassDisabledReason(f))...),
-		action(actionReviewFeedback, canReviewFeedback, featureScope, nil, childGuardReason(canReviewFeedback, reviewFeedbackDisabledReason(f))...),
-		action(actionRefactor, canRefactor, featureScope, nil, childGuardReason(canRefactor, disabledStatusReason(status))...),
-		action(actionRetry, canRetry, featureScope, nil, childGuardReason(canRetry, ActionDisabledReason{Code: "not_failed", Message: "retry is only available for failed features"})...),
-		action(actionMarkDone, canMarkDone, featureScope, nil, childGuardReason(canMarkDone, ActionDisabledReason{Code: "not_complete", Message: "feature is not ready to mark done"})...),
-		action(actionCleanup, canCleanup, featureScope, []ActionInput{
+		action(string(FeatureActionRebase), canPostPublishPass, featureScope, nil, childGuardReason(canPostPublishPass, postPublishPassDisabledReason(f))...),
+		action(string(FeatureActionReviewFeedback), canReviewFeedback, featureScope, nil, childGuardReason(canReviewFeedback, reviewFeedbackDisabledReason(f))...),
+		action(string(FeatureActionRefactor), canRefactor, featureScope, nil, childGuardReason(canRefactor, disabledStatusReason(status))...),
+		action(string(FeatureActionRetry), canRetry, featureScope, nil, childGuardReason(canRetry, ActionDisabledReason{Code: "not_failed", Message: "retry is only available for failed features"})...),
+		action(string(FeatureActionMarkDone), canMarkDone, featureScope, nil, childGuardReason(canMarkDone, ActionDisabledReason{Code: "not_complete", Message: "feature is not ready to mark done"})...),
+		action(string(FeatureActionCleanup), canCleanup, featureScope, []ActionInput{
 			{Name: "target", Kind: actionInputKindEnum, Required: false, Options: []string{"worktrees"}},
 		}, childGuardReason(canCleanup, ActionDisabledReason{Code: "running", Message: "cleanup is disabled while work is running"})...),
-		action(actionDelete, canDelete, featureScope, nil),
+		action(string(FeatureActionDelete), canDelete, featureScope, nil),
 	}
 }
 
@@ -878,13 +820,13 @@ func childActionCatalogDTOs(f *feature.Feature, status feature.Status, running b
 			Message: "the child relationship is closed; automatic reconciliation owns any remaining cleanup",
 		}
 		return []Action{
-			action(actionStart, false, featureScope, nil, closed),
-			action(actionPauseStop, false, featureScope, nil, closed),
-			action(actionResume, false, featureScope, nil, closed),
-			action(actionRestart, false, featureScope, nil, closed),
-			action(actionSetup, false, featureScope, nil, closed),
-			action(actionRetry, false, featureScope, nil, closed),
-			action(actionDiscard, false, featureScope, nil, closed),
+			action(string(FeatureActionStart), false, featureScope, nil, closed),
+			action(string(FeatureActionPauseStop), false, featureScope, nil, closed),
+			action(string(FeatureActionResume), false, featureScope, nil, closed),
+			action(string(FeatureActionRestart), false, featureScope, nil, closed),
+			action(string(FeatureActionSetup), false, featureScope, nil, closed),
+			action(string(FeatureActionRetry), false, featureScope, nil, closed),
+			action(string(FeatureActionDiscard), false, featureScope, nil, closed),
 		}
 	}
 	blockErr := childExecutionBlockReason(f)
@@ -909,19 +851,19 @@ func childActionCatalogDTOs(f *feature.Feature, status feature.Status, running b
 	canRestart := runnable && !running
 
 	return []Action{
-		action(actionStart, canStart, featureScope, nil, blockedReason(disabledStatusReason(status))),
-		action(actionPauseStop, canStop, featureScope, nil, blockedReason(ActionDisabledReason{Code: "not_running", Message: "child has no active work to pause or stop"})),
-		action(actionResume, canResume, featureScope, nil, blockedReason(ActionDisabledReason{Code: "not_paused", Message: "child has no paused session or input gate"})),
-		action(actionRestart, canRestart, featureScope, nil, restartReason),
+		action(string(FeatureActionStart), canStart, featureScope, nil, blockedReason(disabledStatusReason(status))),
+		action(string(FeatureActionPauseStop), canStop, featureScope, nil, blockedReason(ActionDisabledReason{Code: "not_running", Message: "child has no active work to pause or stop"})),
+		action(string(FeatureActionResume), canResume, featureScope, nil, blockedReason(ActionDisabledReason{Code: "not_paused", Message: "child has no paused session or input gate"})),
+		action(string(FeatureActionRestart), canRestart, featureScope, nil, restartReason),
 		// Setup reruns only the unfinished tasks of a failed child setup and
 		// leaves the child parked at Created; the card resolves the action
 		// from this catalog with no client-side alias.
-		action(actionSetup, childSetupFailed(f), featureScope, nil, ActionDisabledReason{Code: "no_pending_setup", Message: "feature has no pending or failed setup work"}),
+		action(string(FeatureActionSetup), childSetupFailed(f), featureScope, nil, ActionDisabledReason{Code: "no_pending_setup", Message: "feature has no pending or failed setup work"}),
 		// Retry serves two child conditions: a failed setup the setup retry
 		// reruns, and a parked integration transaction (attention record,
 		// attention phase, or apply attention) whose retry re-enters
 		// integration through the restart path.
-		action(actionRetry, childSetupFailed(f) || childHasIntegrationAttention(f), featureScope, nil, ActionDisabledReason{Code: "not_failed", Message: "retry is only available for failed features or parked integration"}),
+		action(string(FeatureActionRetry), childSetupFailed(f) || childHasIntegrationAttention(f), featureScope, nil, ActionDisabledReason{Code: "not_failed", Message: "retry is only available for failed features or parked integration"}),
 		// Discard must be available for every active child — running,
 		// paused, failed, interrupted, review-gated, input-blocked, and
 		// already-discarding — because the durable discard state machine
@@ -929,7 +871,7 @@ func childActionCatalogDTOs(f *feature.Feature, status feature.Status, running b
 		// quiescence. Gating it on "stopped" would hide the primary
 		// abandon flow exactly when a running child needs it. Repeated
 		// requests converge on the same idempotent outcome.
-		action(actionDiscard, f.IsActiveChild(), featureScope, nil, ActionDisabledReason{Code: "not_active", Message: "discard is only available for active children"}),
+		action(string(FeatureActionDiscard), f.IsActiveChild(), featureScope, nil, ActionDisabledReason{Code: "not_active", Message: "discard is only available for active children"}),
 	}
 }
 
@@ -1189,7 +1131,7 @@ func (h *apiHandler) repoStatusDTOs(f *feature.Feature) []RepoStatus {
 		if state != nil {
 			dto.Touched = state.Touched
 			dto.PRURL = state.PRURL
-			dto.Error = WireRepoError(state.Error)
+			dto.Error = wireStoredError(state.Error)
 		}
 		if freshness != nil {
 			dto.Freshness = string(freshness[repo.Name])
@@ -1246,9 +1188,7 @@ func (h *apiHandler) handleRuntimeConfig(w http.ResponseWriter, r *http.Request)
 		},
 		Providers: providers,
 	}
-	revision := revisionForAny(resp)
-	resp.Meta = h.responseMeta(revision)
-	h.writeRevisionedJSON(w, r, revision, resp)
+	h.writeRevisionedResponse(w, r, resp, func(meta ResponseMeta) any { resp.Meta = meta; return resp })
 }
 
 func (h *apiHandler) handleFeatureConfig(w http.ResponseWriter, r *http.Request, featureID string) {
@@ -1277,16 +1217,12 @@ func (h *apiHandler) handleFeatureConfig(w http.ResponseWriter, r *http.Request,
 			Repos:         publishabilityByRepo(f),
 		},
 	}
-	revision := revisionForAny(resp)
-	resp.Meta = h.responseMeta(revision)
-	h.writeRevisionedJSON(w, r, revision, resp)
+	h.writeRevisionedResponse(w, r, resp, func(meta ResponseMeta) any { resp.Meta = meta; return resp })
 }
 
 func (h *apiHandler) handleModelCatalog(w http.ResponseWriter, r *http.Request) {
 	resp := h.modelCatalogSnapshot()
-	revision := revisionForAny(resp)
-	resp.Meta = h.responseMeta(revision)
-	h.writeRevisionedJSON(w, r, revision, resp)
+	h.writeRevisionedResponse(w, r, resp, func(meta ResponseMeta) any { resp.Meta = meta; return resp })
 }
 
 func (h *apiHandler) modelCatalogSnapshot() ModelCatalogResponse {
@@ -1357,28 +1293,19 @@ func (h *apiHandler) handleProviderModelRefreshRoute(w http.ResponseWriter, r *h
 
 	// Ensure a complete cached snapshot exists before replacing one entry.
 	if _, _, err := h.providerReadinessStatuses(r.Context(), false); err != nil {
-		if !h.writeAdmissionRefusal(w, err) {
-			writeAPIError(w, http.StatusInternalServerError, errcat.InternalError)
-		}
+		h.writeAdmissionOrInternal(w, err)
 		return
 	}
 	status, _, err := h.refreshProviderReadiness(r.Context(), req.Provider)
 	if err != nil {
-		if !h.writeAdmissionRefusal(w, err) {
-			writeAPIError(w, http.StatusInternalServerError, errcat.InternalError)
-		}
+		h.writeAdmissionOrInternal(w, err)
 		return
 	}
+	h.checkProviderEndpoints(r.Context(), true)
 	if status.Ready {
 		provider := h.registry.ByName(req.Provider)
-		discoverer, canDiscover := provider.(llm.CatalogDiscoverer)
-		enricher, canEnrich := provider.(llm.CatalogEnricher)
-		if !canDiscover || !canEnrich {
-			writeAPIError(w, http.StatusConflict, errcat.ProviderModelRefreshUnsupported)
-			return
-		}
 		discoveryCtx, cancel := context.WithTimeout(r.Context(), 45*time.Second)
-		models, err := discoverer.DiscoverModelCatalog(discoveryCtx)
+		models, err := provider.DiscoverModelCatalog(discoveryCtx)
 		cancel()
 		if err != nil {
 			writeAPIError(w, http.StatusBadGateway, errcat.ProviderModelRefreshFailed, errcat.WithDiagnostics("provider model refresh failed"))
@@ -1394,14 +1321,12 @@ func (h *apiHandler) handleProviderModelRefreshRoute(w http.ResponseWriter, r *h
 				return
 			}
 		}
-		enricher.SetModelCatalog(models)
+		provider.SetModelCatalog(models)
 	}
 
 	readiness, err := h.readinessSnapshot(r.Context(), false)
 	if err != nil {
-		if !h.writeAdmissionRefusal(w, err) {
-			writeAPIError(w, http.StatusInternalServerError, errcat.InternalError)
-		}
+		h.writeAdmissionOrInternal(w, err)
 		return
 	}
 	readinessRevision := revisionForAny(readiness)
@@ -1438,17 +1363,13 @@ func (h *apiHandler) handlePrompts(w http.ResponseWriter, r *http.Request) {
 		HelpQueue:        help,
 		NeedUserInputs:   gates,
 	}
-	revision := revisionForAny(resp)
-	resp.Meta = h.responseMeta(revision)
-	h.writeRevisionedJSON(w, r, revision, resp)
+	h.writeRevisionedResponse(w, r, resp, func(meta ResponseMeta) any { resp.Meta = meta; return resp })
 }
 
 func (h *apiHandler) handlePermissions(w http.ResponseWriter, r *http.Request) {
 	_, perms := h.pendingControls()
 	resp := PermissionSnapshotResponse{APIVersion: APIVersion, Requests: perms}
-	revision := revisionForAny(resp)
-	resp.Meta = h.responseMeta(revision)
-	h.writeRevisionedJSON(w, r, revision, resp)
+	h.writeRevisionedResponse(w, r, resp, func(meta ResponseMeta) any { resp.Meta = meta; return resp })
 }
 
 func (h *apiHandler) configOrDefault() *config.Config {
@@ -2243,7 +2164,10 @@ func safeAskUserQuestions(sess ports.SessionView, req *llm.ControlRequestMessage
 		return nil
 	}
 	if askUserBundleNeedsConfidence(bundle) && sess != nil && sess.MessageLog() != nil {
-		bundle = recoverAskUserConfidence(bundle, sess.MessageLog())
+		// A miss keeps the bundle the control request carried.
+		bundle, _ = askuser.RecoverConfidence(bundle, sess.MessageLog().ToolUseBlocks(), func(block llm.ContentBlock) (string, []byte) {
+			return block.Name, block.Input
+		})
 	}
 	return askUserQuestionDTOs(bundle.Display(askuser.Limits{
 		Question:    askUserQuestionDisplayLimit,
@@ -2285,26 +2209,6 @@ func askUserBundleNeedsConfidence(bundle askuser.Bundle) bool {
 		}
 	}
 	return false
-}
-
-// recoverAskUserConfidence merges option confidence from the newest assistant
-// AskUserQuestion tool-use block whose auto-pick signature matches bundle.
-func recoverAskUserConfidence(bundle askuser.Bundle, log ports.MessageLog) askuser.Bundle {
-	blocks := log.ToolUseBlocks()
-	for i := len(blocks) - 1; i >= 0; i-- {
-		block := blocks[i]
-		if block.Name != toolNameAskUserQuestion || len(block.Input) == 0 {
-			continue
-		}
-		source, err := askuser.Parse(block.Input)
-		if err != nil {
-			continue
-		}
-		if merged, ok := bundle.MergeConfidence(source); ok {
-			return merged
-		}
-	}
-	return bundle
 }
 
 func SafeDisplayText(s string, limit int) string {

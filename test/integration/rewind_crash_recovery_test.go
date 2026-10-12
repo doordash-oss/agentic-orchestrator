@@ -54,7 +54,7 @@ func (f *fakeRecoveryNoop) ExecuteRecovery(
 // TestRewindCrashAndRetry is the headline Phase 3 integration test. It
 // drives a full feature lifecycle through an injected mid-populate crash,
 // constructs a fresh orchestrator as the "restart", invokes ScanRecovery
-// (which calls cleanup before the scan), then re-triggers RewindToPhase
+// (which calls cleanup before the scan), then re-triggers RewindWithRequest
 // end-to-end. On-disk state is asserted at every checkpoint.
 //
 // Real Store, real Manager, fake recovery op (scan returns zero items).
@@ -110,12 +110,12 @@ func TestRewindCrashAndRetry(t *testing.T) {
 		name string
 		fn   func(string) error
 	}{
-		{"StartInquire", mgr.StartInquire},
-		{"CompleteInquire", mgr.CompleteInquire},
-		{"StartResearch", mgr.StartResearch},
-		{"CompleteResearch", mgr.CompleteResearch},
-		{"StartDesign", mgr.StartDesign},
-		{"CompleteDesign", mgr.CompleteDesign},
+		{"StartInquire", func(id string) error { return mgr.StartPhase(id, feature.PhaseInquire) }},
+		{"CompleteInquire", func(id string) error { return mgr.Transition(id, feature.StatusInquireReady) }},
+		{"StartResearch", func(id string) error { return mgr.StartPhase(id, feature.PhaseResearch) }},
+		{"CompleteResearch", func(id string) error { return mgr.Transition(id, feature.StatusDesignReady) }},
+		{"StartDesign", func(id string) error { return mgr.StartPhase(id, feature.PhaseDesign) }},
+		{"CompleteDesign", func(id string) error { return mgr.Transition(id, feature.StatusPlanReady) }},
 	} {
 		if err := step.fn(f.ID); err != nil {
 			t.Fatalf("%s: %v", step.name, err)
@@ -216,7 +216,7 @@ func TestRewindCrashAndRetry(t *testing.T) {
 	// --- Step 3: Restart simulation — fresh Orchestrator + ScanRecovery ---
 	fakeRec := &fakeRecoveryNoop{}
 	orch := orchestrator.New(
-		orchestrator.Deps{Store: store, Recovery: fakeRec},
+		orchestrator.Deps{Manager: feature.NewManager(store, cfg), Store: store, Recovery: fakeRec},
 		orchestrator.Hooks{},
 	)
 	items, err := orch.ScanRecovery(context.Background())
@@ -253,16 +253,16 @@ func TestRewindCrashAndRetry(t *testing.T) {
 
 	// --- Step 4: Re-trigger the rewind via the manager ----------------------
 	// Post-cleanup the feature's Status is whatever it was before the crash:
-	// the crash simulation bypassed the manager's RewindToPhase lifecycle
+	// the crash simulation bypassed the manager's RewindWithRequest lifecycle
 	// marking, so Status is still StatusPlanReady. Drive back into
-	// Implementing so the second RewindToPhase target is legal.
+	// Implementing so the second RewindWithRequest target is legal.
 	_ = store.Modify(f.ID, func(fe *feature.Feature) error {
 		fe.Status = feature.StatusImplementing
 		fe.CurrentPhase = feature.PhaseImplement
 		return nil
 	})
-	if _, _, err := mgr.RewindToPhase(f.ID, feature.PhaseResearch); err != nil {
-		t.Fatalf("RewindToPhase after recovery: %v", err)
+	if _, _, err := mgr.RewindWithRequest(f.ID, feature.RewindRequest{TargetPhase: feature.PhaseResearch}); err != nil {
+		t.Fatalf("RewindWithRequest after recovery: %v", err)
 	}
 
 	// Post-rewind assertions:
@@ -303,7 +303,7 @@ func TestRewindCrashAndRetry(t *testing.T) {
 	if _, err := os.Stat(markerPath); err != nil {
 		t.Errorf("run-002/inquire/marker.txt missing post-rewind: %v", err)
 	}
-	reloaded, err := mgr.Get(f.ID)
+	reloaded, err := mgr.Store.Load(f.ID)
 	if err != nil {
 		t.Fatalf("Get post-rewind: %v", err)
 	}

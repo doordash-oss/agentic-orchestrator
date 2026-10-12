@@ -52,6 +52,11 @@ const REPOSITORY_DIFF_PATH_PATTERN = new RegExp(
 );
 const CLONE_LIST_PATH_PATTERN = /^\/api\/v1\/workspace\/repositories\/clone$/i;
 const UPLOADS_PATH_PATTERN = /^\/api\/v1\/uploads$/i;
+const EVENTS_PATH_PATTERN = /^\/api\/v1\/events$/i;
+const SESSION_OUTPUT_STREAM_PATH_PATTERN = new RegExp(
+  `^/api/v1/sessions/${SESSION_ID_SEGMENT_PATTERN}/output/stream$`,
+  'i',
+);
 const SUPERVISOR_NAMESPACE_PATTERN = /^\/api\/v1\/supervisor(?:\/|$)/i;
 
 /** The upper bound accepted for the supervisor stream's `heartbeat_ms`. */
@@ -88,6 +93,19 @@ export function isAllowedApiPath(path: string, method: string = 'GET'): boolean 
   if (pathname.split('/').some((segment) => segment === '.' || segment === '..')) return false;
   if (SUPERVISOR_NAMESPACE_PATTERN.test(pathname)) {
     return isAllowedSupervisorRequest(parts, method);
+  }
+  if (EVENTS_PATH_PATTERN.test(pathname)) {
+    return (
+      method === 'GET' &&
+      (parts.length === 1 || (parts.length === 2 && hasEventsQuery(parts[1] ?? '')))
+    );
+  }
+  if (SESSION_OUTPUT_STREAM_PATH_PATTERN.test(pathname)) {
+    return (
+      method === 'GET' &&
+      (parts.length === 1 ||
+        (parts.length === 2 && hasBoundedIntegerQuery(parts[1] ?? '', { from: { min: 0 } })))
+    );
   }
   if (UPLOADS_PATH_PATTERN.test(pathname)) {
     // Uploads require the mutually-required kind/name query; a queryless
@@ -168,6 +186,19 @@ function hasBoundedIntegerQuery(
     seen.add(key);
   }
   return seen.size > 0;
+}
+
+function hasEventsQuery(rawQuery: string): boolean {
+  if (rawQuery === '') return false;
+  const seen = new Set<string>();
+  for (const [key, value] of new URLSearchParams(rawQuery)) {
+    if (seen.has(key)) return false;
+    seen.add(key);
+    if (key === 'after' && isBoundedInteger(value, 0)) continue;
+    if (key === 'epoch' && value !== '') continue;
+    return false;
+  }
+  return seen.size > 0 && (!seen.has('epoch') || seen.has('after'));
 }
 
 function hasRewindPreviewQuery(rawQuery: string): boolean {

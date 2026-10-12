@@ -18,7 +18,6 @@ import { describe, expect, it, vi } from 'vitest';
 import { supervisorMarkerRecord, supervisorRecord } from '../../test/agenticoMock';
 import type { SupervisorStatusInput } from './supervisorModel';
 import {
-  buildSupervisorConversation,
   harnessLabel,
   markerNoticeText,
   mergeRecords,
@@ -28,6 +27,14 @@ import {
   supervisorChipLabel,
   supervisorStatusLine,
 } from './supervisorModel';
+
+/** The full conversation: the committed history followed by its live tail. */
+function buildSupervisorConversation(
+  records: Parameters<typeof supervisorConversationBuilder.committed>[0],
+  options: Parameters<typeof supervisorConversationTail>[1] = {},
+): ReturnType<typeof supervisorConversationTail> {
+  return supervisorConversationTail(supervisorConversationBuilder.committed(records), options);
+}
 
 describe('supervisorModel', () => {
   it('labels harnesses and the chip, with an empty effort reading Default', () => {

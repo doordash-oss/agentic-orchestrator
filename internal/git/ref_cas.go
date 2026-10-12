@@ -46,7 +46,7 @@ func ReadRefSHA(repoPath, ref string) (string, error) {
 	return sha, nil
 }
 
-// UpdateRefCAS performs a compare-and-swap ref update: the ref is updated
+// updateRefCAS performs a compare-and-swap ref update: the ref is updated
 // to newSHA only if its current value equals oldSHA. If the current value
 // differs, an *RefCASMismatchError is returned with the observed SHA. The
 // update is atomic (git update-ref is atomic on the ref file).
@@ -54,7 +54,7 @@ func ReadRefSHA(repoPath, ref string) (string, error) {
 // The ref should be a full ref path (e.g. "refs/heads/main") or a short name
 // that git can resolve. The repoPath is the main repository path (not a
 // worktree), since ref updates operate on the shared object database.
-func UpdateRefCAS(repoPath, ref, oldSHA, newSHA string) error {
+func updateRefCAS(repoPath, ref, oldSHA, newSHA string) error {
 	// First read the current ref to detect CAS mismatch early and capture
 	// the observed SHA for diagnostics.
 	current, err := ReadRefSHA(repoPath, ref)
@@ -87,5 +87,5 @@ func (m *WorktreeManager) RefSHA(repoPath, ref string) (string, error) {
 
 // UpdateRef performs a compare-and-swap ref update on the given repo.
 func (m *WorktreeManager) UpdateRef(repoPath, ref, oldSHA, newSHA string) error {
-	return UpdateRefCAS(repoPath, ref, oldSHA, newSHA)
+	return updateRefCAS(repoPath, ref, oldSHA, newSHA)
 }

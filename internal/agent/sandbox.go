@@ -20,10 +20,6 @@ type boundedHelperSandboxProvider interface {
 	UsesBoundedHelperSandbox() bool
 }
 
-type sessionResumeProvider interface {
-	SupportsSessionResume() bool
-}
-
 // maybeWrapHelperSandbox wraps a bounded-helper command so the reviewed worktree
 // is read-only at the kernel layer while the helper's shell runs unrestricted —
 // a worktree write then fails as an ordinary shell error the model absorbs,

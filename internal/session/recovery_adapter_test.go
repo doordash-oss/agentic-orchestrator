@@ -44,7 +44,7 @@ func TestRecoveryAdapter_SatisfiesRecoveryOperator(t *testing.T) {
 	}
 }
 
-// A3: ScanForRecovery delegates to the package-level session.ScanForRecovery.
+// A3: ScanForRecovery reads the adapter's own state directory.
 // Seeds one PID file under the adapter's StateDir and confirms the adapter
 // returns exactly that item.
 func TestRecoveryAdapter_ScanDelegatesToPackageFunction(t *testing.T) {
@@ -75,9 +75,9 @@ func TestRecoveryAdapter_ScanDelegatesToPackageFunction(t *testing.T) {
 	}
 }
 
-// A4: ExecuteRecovery delegates to the package-level session.ExecuteRecovery.
-// Seeds a stale PID file and issues RecoverySkip for it; package-level
-// ExecuteRecovery removes the stale file on skip when the process is dead.
+// A4: ExecuteRecovery applies the adapter's own feature manager.
+// Seeds a stale PID file and issues RecoverySkip for it; ExecuteRecovery
+// removes the stale file on skip when the process is dead.
 func TestRecoveryAdapter_ExecuteDelegatesToPackageFunction(t *testing.T) {
 	stateDir := t.TempDir()
 

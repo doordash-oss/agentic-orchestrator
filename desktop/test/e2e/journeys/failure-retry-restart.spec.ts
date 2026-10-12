@@ -248,10 +248,10 @@ test('partial setup failure, retry on the same feature, restart persistence', as
   }
 });
 
-test('iteration-budget failure restart extends the budget and clears the card', async ({}, testInfo) => {
+test('iteration-budget failure retry extends the budget and clears the card', async ({}, testInfo) => {
   const transcript = new Transcript(
     'failure-retry-restart-budget',
-    'Iteration-budget failure → card Restart → budget-extension dialog → extended restart',
+    'Iteration-budget failure → card Retry → extended phase retry',
   );
   const world = createWorld('failure-budget', {
     auth: { loggedIn: true, authMethod: 'oauth', email: 'e2e@example.invalid' },
@@ -304,7 +304,7 @@ test('iteration-budget failure restart extends the budget and clears the card', 
       'seeded Failed@implement with an iteration_budget_exhausted record and max_iterations 5',
     );
 
-    transcript.section('Relaunch; the card offers Restart with the budget-extension dialog');
+    transcript.section('Relaunch; the card offers Retry with the budget extension');
     handle = await launchApp(world, testInfo, { traceName: 'failure-budget-relaunch' });
     const cockpit = handle.page.getByLabel(`Feature ${featureName}`);
     await expect(cockpit).toBeVisible({ timeout: 60_000 });
@@ -317,34 +317,34 @@ test('iteration-budget failure restart extends the budget and clears the card', 
     await expect(failureCard.locator('.error-surface__title')).toHaveText(
       'Iteration budget exhausted',
     );
-    const restartButton = failureCard.getByRole('button', { name: 'Restart' });
-    await expect(restartButton).toBeEnabled();
+    const retryButton = failureCard.getByRole('button', { name: 'Retry' });
+    await expect(retryButton).toBeEnabled();
     await evidenceShotBothThemes(handle, 'iteration-budget-failure');
 
-    await restartButton.click();
-    const dialog = handle.page.getByRole('dialog', { name: `Restart ${featureName}?` });
-    await expect(dialog).toBeVisible();
-    await expect(dialog).toContainText('maximum-iteration restart');
-    transcript.step(
-      'the card Restart opened the confirmation dialog with the budget-extension copy',
-    );
-
-    await dialog.getByRole('button', { name: 'Confirm restart' }).click();
-    const afterRestart = await handle.page.evaluate(
+    await retryButton.click();
+    transcript.step('the card Retry dispatched the failed phase with its budget extension');
+    await expect
+      .poll(async () => {
+        const feature = await handle!.page.evaluate(
+          (id) => window.agentico.getFeature(id),
+          featureId,
+        );
+        return feature.status === 'Failed' || feature.failure !== undefined;
+      })
+      .toBe(false);
+    const afterRetry = await handle.page.evaluate(
       (id) => window.agentico.getFeature(id),
       featureId,
     );
-    expect(afterRestart.status).not.toBe('Failed');
-    expect(afterRestart.failure).toBeUndefined();
     // The durable card is gone; an ephemeral action rejection may remain as
     // the pre-existing compact surface, so scope to the full variant.
     await expect(cockpit.locator('.error-surface--full')).toHaveCount(0);
-    transcript.json('authoritative snapshot after the budget-extension restart', afterRestart);
+    transcript.json('authoritative snapshot after the budget-extension retry', afterRetry);
     transcript.step('the feature left Failed with the failure card gone');
 
     const seededBudget = fs.readFileSync(featurePath, 'utf8');
     expect(seededBudget).toContain('max_iterations: 15');
-    transcript.step('the restart extended max_iterations from 5 to 15');
+    transcript.step('the retry extended max_iterations from 5 to 15');
 
     persistAppLogs(handle, 'failure-budget-second-run');
     await closeApp(handle);

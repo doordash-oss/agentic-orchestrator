@@ -80,6 +80,8 @@ function attachDeps(record: {
       euid: 501,
       isProcessAlive: () => true,
     },
+    openSse: () =>
+      Promise.resolve({ status: 200, lines: (async function* () {})(), close: () => undefined }),
     fetchJson: async (url) => {
       record.urls.push(url);
       if (url.endsWith('/api/v1/health')) {
@@ -415,5 +417,35 @@ describe('gateway API path allowlist for the supervisor namespace', () => {
     ]) {
       expect(isAllowedApiPath(`/api/v1/supervisor/events?${query}`, 'GET'), query).toBe(false);
     }
+  });
+});
+
+describe('gateway event stream paths', () => {
+  it('accepts global event cursors and session output offsets', () => {
+    for (const path of [
+      '/api/v1/events',
+      '/api/v1/events?after=0',
+      '/api/v1/events?after=41&epoch=abc',
+      '/api/v1/sessions/session-1/output/stream',
+      '/api/v1/sessions/session-1/output/stream?from=0',
+    ]) {
+      expect(isAllowedApiPath(path, 'GET'), path).toBe(true);
+    }
+  });
+
+  it('rejects malformed and repeated stream cursors', () => {
+    for (const path of [
+      '/api/v1/events?epoch=abc',
+      '/api/v1/events?after=1&after=2',
+      '/api/v1/events?after=-1',
+      '/api/v1/events?after=1&epoch=',
+      '/api/v1/sessions/session-1/output/stream?from=-1',
+      '/api/v1/sessions/session-1/output/stream?from=1&from=2',
+      '/api/v1/sessions/session-1/output/stream?from=1.5',
+    ]) {
+      expect(isAllowedApiPath(path, 'GET'), path).toBe(false);
+    }
+    expect(isAllowedApiPath('/api/v1/events', 'POST')).toBe(false);
+    expect(isAllowedApiPath('/api/v1/sessions/session-1/output/stream', 'POST')).toBe(false);
   });
 });

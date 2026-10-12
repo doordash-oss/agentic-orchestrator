@@ -61,11 +61,15 @@ import { assertCompatibleApiVersion } from '../shared/apiVersion';
 import { assertNoPrototypePollution, assertWithinByteSize } from '../shared/sanitize';
 import { SseBlockAssembler, type SseBlock, type SseStream } from './gateway/events';
 import type { ApiRequestInit, HttpResult } from './gateway/runtimeGateway';
+import { defined } from '../shared/defined';
 
 /** The authenticated transport surface the runtime gateway provides. */
 export interface ServerTransport {
   apiRequest(path: string, init?: ApiRequestInit): Promise<HttpResult>;
-  openSessionOutputStream?(sessionId: string, options?: { from?: number }): Promise<SseStream>;
+}
+
+export interface SessionTransport extends ServerTransport {
+  openSessionOutputStream(sessionId: string, options?: { from?: number }): Promise<SseStream>;
 }
 
 /**
@@ -106,7 +110,7 @@ export class SessionService {
   >();
 
   constructor(
-    private readonly transport: ServerTransport,
+    private readonly transport: SessionTransport,
     private readonly makeSubscriptionId: () => string = randomUUID,
   ) {}
 
@@ -180,12 +184,8 @@ export class SessionService {
     emit: (event: SessionOutputEvent) => void,
   ): Promise<void> {
     try {
-      const openStream = this.transport.openSessionOutputStream;
-      if (openStream === undefined) {
-        throw new CanonicalErrorException(buildCanonicalError('E_SSE_UNAVAILABLE'));
-      }
-      const stream = await openStream.call(this.transport, input.sessionId, {
-        ...(input.from === undefined ? {} : { from: input.from }),
+      const stream = await this.transport.openSessionOutputStream(input.sessionId, {
+        ...defined('from', input.from),
       });
       state.stream = stream;
       if (state.cancelled) return;
@@ -257,7 +257,7 @@ export class SessionService {
   }
 }
 
-export type ParsedSessionOutput =
+type ParsedSessionOutput =
   | { type: 'record'; sessionId: string; index: number; message: TranscriptMessage }
   | { type: 'done'; sessionId: string; nextIndex: number };
 
@@ -291,45 +291,39 @@ export function toSessionSummary(session: ServerSessionSummary): SessionSummary 
       featureId: session.feature_id,
       runNumber: session.run_number,
       phase: session.phase,
-      ...(session.repo === undefined ? {} : { repo: session.repo }),
+      ...defined('repo', session.repo),
       kind: session.kind,
-      ...(session.label === undefined ? {} : { label: session.label }),
-      ...(session.provider === undefined ? {} : { provider: session.provider }),
-      ...(session.model === undefined ? {} : { model: session.model }),
+      ...defined('label', session.label),
+      ...defined('provider', session.provider),
+      ...defined('model', session.model),
       status: session.status,
-      ...(session.turn_state === undefined ? {} : { turnState: session.turn_state }),
+      ...defined('turnState', session.turn_state),
       startedAt: session.started_at,
-      ...(session.iteration === undefined ? {} : { iteration: session.iteration }),
-      ...(session.context_percentage === undefined
-        ? {}
-        : { contextPercentage: session.context_percentage }),
+      ...defined('iteration', session.iteration),
+      ...defined('contextPercentage', session.context_percentage),
       taskActivities: session.task_activities.map((task) => ({
         taskId: task.task_id,
-        ...(task.tool_use_id === undefined ? {} : { toolUseId: task.tool_use_id }),
-        ...(task.child_session_id === undefined ? {} : { childSessionId: task.child_session_id }),
-        ...(task.description === undefined ? {} : { description: task.description }),
+        ...defined('toolUseId', task.tool_use_id),
+        ...defined('childSessionId', task.child_session_id),
+        ...defined('description', task.description),
         state: task.state,
-        ...(task.last_tool_name === undefined ? {} : { lastToolName: task.last_tool_name }),
-        ...(task.last_path === undefined ? {} : { lastPath: task.last_path }),
-        ...(task.status === undefined ? {} : { status: task.status }),
-        ...(task.summary === undefined ? {} : { summary: task.summary }),
-        ...(task.output_file === undefined ? {} : { outputFile: task.output_file }),
-        ...(task.usage?.total_tokens === undefined ? {} : { totalTokens: task.usage.total_tokens }),
-        ...(task.usage?.tool_uses === undefined ? {} : { toolUses: task.usage.tool_uses }),
-        ...(task.usage?.duration_ms === undefined ? {} : { durationMs: task.usage.duration_ms }),
+        ...defined('lastToolName', task.last_tool_name),
+        ...defined('lastPath', task.last_path),
+        ...defined('status', task.status),
+        ...defined('summary', task.summary),
+        ...defined('outputFile', task.output_file),
+        ...defined('totalTokens', task.usage?.total_tokens),
+        ...defined('toolUses', task.usage?.tool_uses),
+        ...defined('durationMs', task.usage?.duration_ms),
         startedAt: task.started_at,
         updatedAt: task.updated_at,
-        ...(task.finished_at === undefined ? {} : { finishedAt: task.finished_at }),
+        ...defined('finishedAt', task.finished_at),
       })),
       runningTaskCount: session.running_task_count,
       usage: {
-        ...(session.usage.input_tokens === undefined
-          ? {}
-          : { inputTokens: session.usage.input_tokens }),
-        ...(session.usage.output_tokens === undefined
-          ? {}
-          : { outputTokens: session.usage.output_tokens }),
-        ...(session.usage.cost_usd === undefined ? {} : { costUsd: session.usage.cost_usd }),
+        ...defined('inputTokens', session.usage.input_tokens),
+        ...defined('outputTokens', session.usage.output_tokens),
+        ...defined('costUsd', session.usage.cost_usd),
       },
     },
     SessionSummarySchema,
@@ -342,7 +336,7 @@ function toSessionDetail(session: ServerSessionDetail): SessionDetail {
       ...toSessionSummary(session),
       transcriptCursor: session.transcript_cursor,
       pendingControlCount: session.pending_controls.length,
-      ...(session.initial_prompt === undefined ? {} : { initialPrompt: session.initial_prompt }),
+      ...defined('initialPrompt', session.initial_prompt),
       canAttach: session.can_attach,
       logAvailable: session.log_available,
     },
@@ -353,79 +347,51 @@ function toSessionDetail(session: ServerSessionDetail): SessionDetail {
 export function toTranscriptMessage(message: ServerTranscriptMessage): TranscriptMessage {
   return {
     index: message.index,
-    ...(message.block_index === undefined ? {} : { blockIndex: message.block_index }),
+    ...defined('blockIndex', message.block_index),
     role: message.role,
     type: message.type,
-    ...(message.text === undefined ? {} : { text: message.text }),
-    ...(message.tool === undefined ? {} : { tool: message.tool }),
-    ...(message.status === undefined ? {} : { status: message.status }),
-    ...(message.redacted === undefined ? {} : { redacted: message.redacted }),
-    ...(message.locally_appended === undefined
-      ? {}
-      : { locallyAppended: message.locally_appended }),
-    ...(message.auto_picked === undefined ? {} : { autoPicked: message.auto_picked }),
-    ...(message.auto_pick_question === undefined
-      ? {}
-      : { autoPickQuestion: message.auto_pick_question }),
-    ...(message.auto_pick_confidence === undefined
-      ? {}
-      : { autoPickConfidence: message.auto_pick_confidence }),
+    ...defined('text', message.text),
+    ...defined('tool', message.tool),
+    ...defined('status', message.status),
+    ...defined('redacted', message.redacted),
+    ...defined('locallyAppended', message.locally_appended),
+    ...defined('autoPicked', message.auto_picked),
+    ...defined('autoPickQuestion', message.auto_pick_question),
+    ...defined('autoPickConfidence', message.auto_pick_confidence),
     ...(message.file_change === undefined
       ? {}
       : {
           fileChange: {
-            ...(message.file_change.path === undefined ? {} : { path: message.file_change.path }),
-            ...(message.file_change.old_path === undefined
-              ? {}
-              : { oldPath: message.file_change.old_path }),
-            ...(message.file_change.operation === undefined
-              ? {}
-              : { operation: message.file_change.operation }),
-            ...(message.file_change.detail === undefined
-              ? {}
-              : { detail: message.file_change.detail }),
-            ...(message.file_change.added_lines === undefined
-              ? {}
-              : { addedLines: message.file_change.added_lines }),
-            ...(message.file_change.removed_lines === undefined
-              ? {}
-              : { removedLines: message.file_change.removed_lines }),
-            ...(message.file_change.has_diff_patch === undefined
-              ? {}
-              : { hasDiffPatch: message.file_change.has_diff_patch }),
+            ...defined('path', message.file_change.path),
+            ...defined('oldPath', message.file_change.old_path),
+            ...defined('operation', message.file_change.operation),
+            ...defined('detail', message.file_change.detail),
+            ...defined('addedLines', message.file_change.added_lines),
+            ...defined('removedLines', message.file_change.removed_lines),
+            ...defined('hasDiffPatch', message.file_change.has_diff_patch),
           },
         }),
     ...(message.tool_call === undefined
       ? {}
       : {
           toolCall: {
-            ...(message.tool_call.summary === undefined
-              ? {}
-              : { summary: message.tool_call.summary }),
-            ...(message.tool_call.prompt === undefined ? {} : { prompt: message.tool_call.prompt }),
+            ...defined('summary', message.tool_call.summary),
+            ...defined('prompt', message.tool_call.prompt),
           },
         }),
     ...(message.task === undefined
       ? {}
       : {
           task: {
-            ...(message.task.id === undefined ? {} : { id: message.task.id }),
-            ...(message.task.tool_use_id === undefined
-              ? {}
-              : { toolUseId: message.task.tool_use_id }),
-            ...(message.task.description === undefined
-              ? {}
-              : { description: message.task.description }),
-            ...(message.task.task_type === undefined ? {} : { taskType: message.task.task_type }),
-            ...(message.task.prompt === undefined ? {} : { prompt: message.task.prompt }),
-            ...(message.task.last_tool_name === undefined
-              ? {}
-              : { lastToolName: message.task.last_tool_name }),
-            ...(message.task.status === undefined ? {} : { status: message.task.status }),
-            ...(message.task.summary === undefined ? {} : { summary: message.task.summary }),
-            ...(message.task.output_file === undefined
-              ? {}
-              : { outputFile: message.task.output_file }),
+            ...defined('id', message.task.id),
+            ...defined('toolUseId', message.task.tool_use_id),
+            ...defined('description', message.task.description),
+            ...defined('taskType', message.task.task_type),
+            ...defined('prompt', message.task.prompt),
+            ...defined('lastToolName', message.task.last_tool_name),
+            ...defined('status', message.task.status),
+            ...defined('summary', message.task.summary),
+            ...defined('outputFile', message.task.output_file),
           },
         }),
   };

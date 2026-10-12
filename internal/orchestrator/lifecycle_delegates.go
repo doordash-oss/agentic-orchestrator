@@ -16,7 +16,7 @@
 // boundary instead of allowing clients to call feature.Manager directly.
 // The orchestrator is the mutation chokepoint: several delegates
 // intentionally enforce relationship guards and other cross-cutting behavior
-// before delegating to the underlying ports.FeatureLifecycle call. The
+// before calling the feature manager. The
 // transitions remain in feature.Manager; the orchestrator owns the call sites
 // so observer emission, relationship guards, and cross-cutting concerns share
 // one chokepoint.
@@ -55,7 +55,7 @@ func (o *Orchestrator) resetPlanStatusForRoadmap(featureID string, budgetBump in
 // rejects a roadmap. Best-effort; errors are swallowed so a retry is not
 // blocked by diagnostic bookkeeping.
 func (o *Orchestrator) recordRoadmapRejection(featureID, feedback string) {
-	f, err := o.deps.Lifecycle.Get(featureID)
+	f, err := o.deps.Store.Load(featureID)
 	if err != nil {
 		return
 	}
@@ -97,7 +97,7 @@ func (o *Orchestrator) MarkDone(featureID string) error {
 		return err
 	}
 	if o.hooks.OnFeatureSummaryNeeded != nil {
-		if f, err := o.deps.Lifecycle.Get(featureID); err == nil {
+		if f, err := o.deps.Store.Load(featureID); err == nil {
 			o.hooks.OnFeatureSummaryNeeded(featureID, f)
 		} else {
 			o.hooks.OnFeatureSummaryNeeded(featureID, nil)
@@ -108,22 +108,6 @@ func (o *Orchestrator) MarkDone(featureID string) error {
 
 // transitionTo transitions a feature to a caller-selected status while keeping
 // lifecycle mutations behind the orchestrator boundary.
-func (o *Orchestrator) transitionTo(featureID string, status feature.Status) error {
-	return o.deps.Store.Modify(featureID, func(f *feature.Feature) error {
-		return f.Transition(status)
-	})
-}
-
-// setDesignReady transitions a feature into StatusDesignReady without
-// going through Transition (the Design slot has a non-linear entry path). Used
-// by the restart/resume flows for a failed Design phase.
-func (o *Orchestrator) setDesignReady(featureID string) error {
-	return o.deps.Store.Modify(featureID, func(f *feature.Feature) error {
-		f.Status = feature.StatusDesignReady
-		return nil
-	})
-}
-
 // rewindWithRequestLocked is the lock-held rewind entry point. Callers must
 // hold the relationship read lock so the guard check and the rewind execute
 // atomically with any preceding mutations (e.g. pipeline upgrade).
@@ -132,7 +116,7 @@ func (o *Orchestrator) rewindWithRequestLocked(featureID string, request feature
 		return nil, 0, err
 	}
 	sourceRun := o.currentRunNumber(featureID)
-	warnings, effectiveTarget, err := o.deps.Lifecycle.RewindWithRequest(featureID, request)
+	warnings, effectiveTarget, err := o.deps.Manager.RewindWithRequest(featureID, request)
 	if err != nil {
 		return warnings, effectiveTarget, err
 	}
@@ -148,7 +132,7 @@ func (o *Orchestrator) rewindWithUpgradeLocked(featureID string, request feature
 		return nil, 0, err
 	}
 	if upgradePipeline != "" {
-		if err := o.deps.Lifecycle.UpgradePipeline(featureID, upgradePipeline); err != nil {
+		if err := o.deps.Manager.UpgradePipeline(featureID, upgradePipeline); err != nil {
 			return nil, 0, err
 		}
 	}
@@ -157,7 +141,7 @@ func (o *Orchestrator) rewindWithUpgradeLocked(featureID string, request feature
 }
 
 func (o *Orchestrator) currentRunNumber(featureID string) int {
-	if o == nil || o.deps.Store == nil {
+	if o == nil {
 		return 0
 	}
 	f, err := o.deps.Store.Load(featureID)
@@ -172,10 +156,8 @@ func (o *Orchestrator) fireFeatureRewoundHook(featureID string, request feature.
 		return
 	}
 	newRun := 0
-	if o.deps.Store != nil {
-		if f, err := o.deps.Store.Load(featureID); err == nil && f != nil {
-			newRun = f.ActiveRun
-		}
+	if f, err := o.deps.Store.Load(featureID); err == nil && f != nil {
+		newRun = f.ActiveRun
 	}
 	o.hooks.OnFeatureRewound(featureID, request, effectiveTarget, sourceRun, newRun)
 }
@@ -189,7 +171,7 @@ func (o *Orchestrator) CleanWorktree(featureID string) error {
 	if err := o.relationshipGuard(featureID, mutationCleanup); err != nil {
 		return err
 	}
-	return o.deps.Lifecycle.CleanWorktree(featureID)
+	return o.deps.Manager.CleanWorktree(featureID)
 }
 
 // MergeFeatureLocal commits any uncommitted changes in each repo's worktree
@@ -202,7 +184,7 @@ func (o *Orchestrator) MergeFeatureLocal(featureID string) error {
 	if err := o.relationshipGuard(featureID, mutationMerge); err != nil {
 		return err
 	}
-	f, err := o.deps.Lifecycle.Get(featureID)
+	f, err := o.deps.Store.Load(featureID)
 	if err != nil {
 		return fmt.Errorf("load feature: %w", err)
 	}
@@ -241,7 +223,7 @@ func (o *Orchestrator) MergeFeatureLocal(featureID string) error {
 	if f.Status == feature.StatusDone {
 		return nil
 	}
-	return o.deps.Lifecycle.MarkDone(featureID)
+	return o.deps.Manager.Transition(featureID, feature.StatusDone)
 }
 
 // UpdateFeatureConfigInput carries the editable per-feature config axes
@@ -471,7 +453,7 @@ func (o *Orchestrator) restartPhaseLocked(featureID string, maxIterationsDelta, 
 	if err := o.checkChildExecution(featureID); err != nil {
 		return RestartOutcome{}, err
 	}
-	f, err := o.deps.Lifecycle.Get(featureID)
+	f, err := o.deps.Store.Load(featureID)
 	if err != nil {
 		return RestartOutcome{}, fmt.Errorf("load feature: %w", err)
 	}
@@ -499,7 +481,7 @@ func (o *Orchestrator) restartPhaseLocked(featureID string, maxIterationsDelta, 
 		// StatusReviewPassed + CurrentPhase=PhaseFinalReview. restartPhaseLocked
 		// must dispatch Final Review so the pipeline reruns it without
 		// replaying Plan or Implement.
-		f, err = o.deps.Lifecycle.Get(featureID)
+		f, err = o.deps.Store.Load(featureID)
 		if err != nil {
 			return RestartOutcome{}, fmt.Errorf("reload after integration: %w", err)
 		}
@@ -576,30 +558,30 @@ func (o *Orchestrator) restartPhaseLocked(featureID string, maxIterationsDelta, 
 	case feature.StatusFailed:
 		switch phase {
 		case feature.PhaseKnowledgeBase:
-			if err := o.transitionTo(featureID, feature.StatusCreated); err != nil {
+			if err := o.deps.Manager.Transition(featureID, feature.StatusCreated); err != nil {
 				return RestartOutcome{}, err
 			}
 		case feature.PhaseInquire:
-			if err := o.transitionTo(featureID, feature.StatusInquiring); err != nil {
+			if err := o.deps.Manager.Transition(featureID, feature.StatusInquiring); err != nil {
 				return RestartOutcome{}, err
 			}
 		case feature.PhaseResearch:
-			if err := o.transitionTo(featureID, feature.StatusResearching); err != nil {
+			if err := o.deps.Manager.Transition(featureID, feature.StatusResearching); err != nil {
 				return RestartOutcome{}, err
 			}
 		case feature.PhaseDesign:
-			if err := o.setDesignReady(featureID); err != nil {
+			if err := o.deps.Store.Modify(featureID, func(f *feature.Feature) error { f.Status = feature.StatusDesignReady; return nil }); err != nil {
 				return RestartOutcome{}, err
 			}
 		case feature.PhasePlan:
-			if err := o.transitionTo(featureID, feature.StatusResearching); err != nil {
+			if err := o.deps.Manager.Transition(featureID, feature.StatusResearching); err != nil {
 				return RestartOutcome{}, err
 			}
-			if err := o.transitionTo(featureID, feature.StatusPlanReady); err != nil {
+			if err := o.deps.Manager.Transition(featureID, feature.StatusPlanReady); err != nil {
 				return RestartOutcome{}, err
 			}
 		case feature.PhaseImplement:
-			if err := o.transitionTo(featureID, feature.StatusImplementReady); err != nil {
+			if err := o.deps.Manager.Transition(featureID, feature.StatusImplementReady); err != nil {
 				return RestartOutcome{}, err
 			}
 		case feature.PhaseReview, feature.PhaseFinalReview:
@@ -608,7 +590,7 @@ func (o *Orchestrator) restartPhaseLocked(featureID string, maxIterationsDelta, 
 			}
 			phase = feature.PhaseFinalReview
 		case feature.PhasePublish:
-			if err := o.transitionTo(featureID, feature.StatusCodeReady); err != nil {
+			if err := o.deps.Manager.Transition(featureID, feature.StatusCodeReady); err != nil {
 				return RestartOutcome{}, err
 			}
 		default:
@@ -617,11 +599,11 @@ func (o *Orchestrator) restartPhaseLocked(featureID string, maxIterationsDelta, 
 	default:
 		switch phase {
 		case feature.PhaseKnowledgeBase, feature.PhaseInquire, feature.PhaseResearch, feature.PhaseDesign, feature.PhasePlan:
-			if err := o.transitionTo(featureID, feature.StatusInterrupted); err != nil {
+			if err := o.deps.Manager.Transition(featureID, feature.StatusInterrupted); err != nil {
 				return RestartOutcome{}, err
 			}
 		case feature.PhaseImplement:
-			if err := o.transitionTo(featureID, feature.StatusImplementReady); err != nil {
+			if err := o.deps.Manager.Transition(featureID, feature.StatusImplementReady); err != nil {
 				return RestartOutcome{}, err
 			}
 		case feature.PhasePublish:

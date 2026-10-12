@@ -79,7 +79,7 @@ function isRecord(value) {
 }
 
 /** Dereference either a lightweight or annotated Git tag to its commit SHA. */
-export async function dereferenceRemoteTag({ tag, request }) {
+async function dereferenceRemoteTag({ tag, request }) {
   const refPath = tagRefPath(tag);
   const ref = await request(refPath);
   if (ref.status === 404) return null;
@@ -98,15 +98,6 @@ export async function dereferenceRemoteTag({ tag, request }) {
     throw new Error(`GitHub tag ${tag} does not dereference to a commit`);
   }
   return object.sha;
-}
-
-/** Fail safely if this version is already owned by a remote Git tag. */
-export async function checkRemoteTagPreflight({ tag, request }) {
-  const commit = await dereferenceRemoteTag({ tag, request });
-  if (commit === null) return { tag, absent: true };
-  throw new Error(
-    `remote tag ${tag} already exists (dereferences to ${commit}); refusing to publish`,
-  );
 }
 
 /** Atomically reserve the release subject with a lightweight remote tag. */
@@ -260,7 +251,7 @@ function localPublicationDigests(evidence) {
   );
 }
 
-export async function runReleasePublicationCli({
+async function runReleasePublicationCli({
   args = process.argv.slice(2),
   request = githubRequest,
   loadEvidence = readReleaseEvidence,

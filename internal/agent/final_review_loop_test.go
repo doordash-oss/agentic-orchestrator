@@ -28,7 +28,6 @@ import (
 
 	"github.com/doordash-oss/agentic-orchestrator/internal/feature"
 	"github.com/doordash-oss/agentic-orchestrator/internal/llm"
-	"github.com/doordash-oss/agentic-orchestrator/internal/observe"
 	"github.com/doordash-oss/agentic-orchestrator/internal/ports"
 	"github.com/doordash-oss/agentic-orchestrator/internal/session"
 	"github.com/doordash-oss/agentic-orchestrator/test/testutil"
@@ -129,7 +128,7 @@ func runFinalReviewWithFixScript(t *testing.T, fixBody func(artDir string) strin
 		}),
 	}
 
-	result, err := RunFeatureFinalReviewLoop(cfg, sm)
+	result, err := runFeatureFinalReviewLoop(cfg, sm)
 	if err != nil {
 		t.Fatalf("RunFeatureFinalReviewLoop() error = %v", err)
 	}
@@ -171,7 +170,7 @@ func runFinalReviewWithReviewScriptAndResult(t *testing.T, reviewBody func(artDi
 		BuildSession:   mockBuildSessionByModel(map[string]string{"reviewer": reviewScript}),
 	}
 
-	result, err := RunFeatureFinalReviewLoop(cfg, sm)
+	result, err := runFeatureFinalReviewLoop(cfg, sm)
 	if err != nil {
 		t.Fatalf("RunFeatureFinalReviewLoop() error = %v", err)
 	}
@@ -215,13 +214,13 @@ func TestRunFeatureFinalReviewLoop_SessionsCarryFinalReviewPhase(t *testing.T) {
 		}
 
 		sess := newUtilityTestSession()
-		sess.id = id
-		sess.featureID = featureID
-		sess.phase = phase
+		sess.IDVal = id
+		sess.FeatureIDVal = featureID
+		sess.PhaseVal = phase
 		sess.setRootIntent(validSuccessCompletionIntent())
-		sess.result = &llm.ResultMessage{Type: testResultMessageType, Subtype: testResultSuccessValue, SessionID: testMockIdentifier, StopReason: "end_turn"}
-		sess.statusCh <- agentStatusSuccess
-		close(sess.done)
+		sess.CostVal = &llm.ResultMessage{Type: testResultMessageType, Subtype: testResultSuccessValue, SessionID: testMockIdentifier, StopReason: "end_turn"}
+		sess.StatusChVal <- agentStatusSuccess
+		close(sess.DoneChVal)
 		return sess, nil
 	}
 
@@ -238,7 +237,7 @@ func TestRunFeatureFinalReviewLoop_SessionsCarryFinalReviewPhase(t *testing.T) {
 		},
 	}
 
-	result, err := RunFeatureFinalReviewLoop(cfg, sm)
+	result, err := runFeatureFinalReviewLoop(cfg, sm)
 	if err != nil {
 		t.Fatalf("RunFeatureFinalReviewLoop() error = %v", err)
 	}
@@ -291,12 +290,12 @@ func TestPriorImplementationEvidenceContextForRunListsReferencedEvidenceArtifact
 		t.Fatalf("write testing contract: %v", err)
 	}
 	implementDir := filepath.Join(phaseDir, feature.PhaseImplement.DirName())
-	am := NewArtifactManager(implementDir)
-	iterDir, err := am.CreateIterationDir(2)
+	am := newArtifactManager(implementDir)
+	iterDir, err := am.createIterationDir(2)
 	if err != nil {
 		t.Fatalf("CreateIterationDir() error = %v", err)
 	}
-	if err := am.WriteMeta(iterDir, IterationMeta{
+	if err := am.writeMeta(iterDir, iterationMeta{
 		Iteration:    2,
 		AgentStatus:  agentStatusSuccess,
 		ReviewStatus: ReviewApproved.String(),
@@ -398,7 +397,7 @@ func TestRunFeatureFinalReviewLoop_ReviewApprovedAtomicallyStampsAllRepos(t *tes
 		BuildSession:   mockBuildSessionByModel(map[string]string{"reviewer": approveScript}),
 	}
 
-	result, err := RunFeatureFinalReviewLoop(cfg, sm)
+	result, err := runFeatureFinalReviewLoop(cfg, sm)
 	if err != nil {
 		t.Fatalf("loop: %v", err)
 	}
@@ -475,7 +474,7 @@ done
 		},
 	}
 
-	result, err := RunFeatureFinalReviewLoop(cfg, sm)
+	result, err := runFeatureFinalReviewLoop(cfg, sm)
 	if err != nil {
 		t.Fatalf("loop: %v", err)
 	}
@@ -525,7 +524,7 @@ func TestRunFeatureFinalReviewLoop_ReviewerRepoMutationTripsProtocolViolationAnd
 		BuildSession:   mockBuildSessionByModel(map[string]string{"reviewer": reviewScript}),
 	}
 
-	result, err := RunFeatureFinalReviewLoop(cfg, sm)
+	result, err := runFeatureFinalReviewLoop(cfg, sm)
 	if err != nil {
 		t.Fatalf("RunFeatureFinalReviewLoop() error = %v", err)
 	}
@@ -624,7 +623,7 @@ fi`,
 		}),
 	}
 
-	result, err := RunFeatureFinalReviewLoop(cfg, sm)
+	result, err := runFeatureFinalReviewLoop(cfg, sm)
 	if err != nil {
 		t.Fatalf("loop: %v", err)
 	}
@@ -721,7 +720,7 @@ fi
 		}),
 	}
 
-	result, err := RunFeatureFinalReviewLoop(cfg, sm)
+	result, err := runFeatureFinalReviewLoop(cfg, sm)
 	if err != nil {
 		t.Fatalf("loop: %v", err)
 	}
@@ -794,7 +793,7 @@ fi`,
 		GuidelinesDir:  filepath.Join(env.stateDir, "guidelines"),
 	}
 
-	if _, err := RunFeatureFinalReviewLoop(cfg, sm); err != nil {
+	if _, err := runFeatureFinalReviewLoop(cfg, sm); err != nil {
 		t.Fatalf("loop: %v", err)
 	}
 
@@ -826,9 +825,6 @@ fi`,
 				t.Errorf("fix call %d SystemPrompt missing %q:\n%s", i, want, opts.SystemPrompt)
 			}
 		}
-		if !opts.SystemPromptHasUsefulResources {
-			t.Errorf("fix call %d SystemPromptHasUsefulResources = false, want true", i)
-		}
 	}
 	// The reviewer call should also see every repo worktree.
 	for _, opts := range *captured {
@@ -850,9 +846,6 @@ fi`,
 			if !strings.Contains(opts.SystemPrompt, want) {
 				t.Errorf("reviewer SystemPrompt missing %q:\n%s", want, opts.SystemPrompt)
 			}
-		}
-		if !opts.SystemPromptHasUsefulResources {
-			t.Errorf("reviewer SystemPromptHasUsefulResources = false, want true")
 		}
 		if got, want := strings.Join(opts.AgentNames, ","), strings.Join(explorationAgentNames(), ","); got != want {
 			t.Errorf("reviewer AgentNames = %v, want exploration set %v", opts.AgentNames, explorationAgentNames())
@@ -909,10 +902,10 @@ func TestRunFeatureFinalReviewLoop_FinalGateRunsAxesAndAggregates(t *testing.T) 
 		BuildSession:   bs,
 		SkillsDir:      filepath.Join(env.stateDir, "skills"),
 		GuidelinesDir:  filepath.Join(env.stateDir, "guidelines"),
-		Observer:       observe.New(true, observeDir, false, "", false, "test"),
+		Observer:       observerFromModule(t, true, observeDir, "test"),
 	}
 
-	result, err := RunFeatureFinalReviewLoop(cfg, sm)
+	result, err := runFeatureFinalReviewLoop(cfg, sm)
 	if err != nil {
 		t.Fatalf("RunFeatureFinalReviewLoop() error = %v", err)
 	}
@@ -1019,7 +1012,7 @@ func TestRunFeatureFinalReviewLoop_QAAxisUsesLiveRunPosture(t *testing.T) {
 	sm := session.NewManager(eventCh)
 	defer sm.Shutdown()
 
-	result, err := RunFeatureFinalReviewLoop(OrchestratorConfig{
+	result, err := runFeatureFinalReviewLoop(OrchestratorConfig{
 		Feature:        f,
 		FeatureStore:   store,
 		StateDir:       env.stateDir,
@@ -1029,7 +1022,7 @@ func TestRunFeatureFinalReviewLoop_QAAxisUsesLiveRunPosture(t *testing.T) {
 		BuildSession:   bs,
 		SkillsDir:      filepath.Join(env.stateDir, "skills"),
 		GuidelinesDir:  filepath.Join(env.stateDir, "guidelines"),
-		Observer:       observe.New(false, "", false, "", false, "test"),
+		Observer:       observerFromModule(t, false, "", "test"),
 	}, sm)
 	if err != nil {
 		t.Fatalf("RunFeatureFinalReviewLoop() error = %v", err)
@@ -1106,7 +1099,7 @@ func TestRunFeatureFinalReviewLoop_FrontendDesignAxisUsesLiveRunPosture(t *testi
 	sm := session.NewManager(eventCh)
 	defer sm.Shutdown()
 
-	result, err := RunFeatureFinalReviewLoop(OrchestratorConfig{
+	result, err := runFeatureFinalReviewLoop(OrchestratorConfig{
 		Feature:        f,
 		FeatureStore:   store,
 		StateDir:       env.stateDir,
@@ -1116,7 +1109,7 @@ func TestRunFeatureFinalReviewLoop_FrontendDesignAxisUsesLiveRunPosture(t *testi
 		BuildSession:   bs,
 		SkillsDir:      filepath.Join(env.stateDir, "skills"),
 		GuidelinesDir:  filepath.Join(env.stateDir, "guidelines"),
-		Observer:       observe.New(false, "", false, "", false, "test"),
+		Observer:       observerFromModule(t, false, "", "test"),
 	}, sm)
 	if err != nil {
 		t.Fatalf("RunFeatureFinalReviewLoop() error = %v", err)
@@ -1253,7 +1246,7 @@ func TestRunFeatureFinalReviewLoop_MaxIterationsAtomicFailureStamp(t *testing.T)
 		}),
 	}
 
-	result, err := RunFeatureFinalReviewLoop(cfg, sm)
+	result, err := runFeatureFinalReviewLoop(cfg, sm)
 	if err != nil {
 		t.Fatalf("loop: %v", err)
 	}
@@ -1316,7 +1309,7 @@ func TestRunFeatureFinalReviewLoop_ConsecutiveFailuresSafetyRail(t *testing.T) {
 		}),
 	}
 
-	result, err := RunFeatureFinalReviewLoop(cfg, sm)
+	result, err := runFeatureFinalReviewLoop(cfg, sm)
 	if err != nil {
 		t.Fatalf("loop: %v", err)
 	}
@@ -1389,15 +1382,12 @@ fi`,
 		}),
 	}
 
-	result, err := RunFeatureFinalReviewLoop(cfg, sm)
+	result, err := runFeatureFinalReviewLoop(cfg, sm)
 	if err != nil {
 		t.Fatalf("RunFeatureFinalReviewLoop() error = %v", err)
 	}
 	if result.FinalStatus != finalStatusReviewPassed {
 		t.Fatalf("FinalStatus = %q, want review_passed", result.FinalStatus)
-	}
-	if result.PlanRevisionFeedback != "" {
-		t.Fatalf("PlanRevisionFeedback = %q, want empty", result.PlanRevisionFeedback)
 	}
 	if result.Iterations != 2 {
 		t.Fatalf("Iterations = %d, want 2 after fix-agent iteration", result.Iterations)
@@ -1414,11 +1404,11 @@ fi`,
 		filepath.Join(artDir, "iteration-02", "qa"),
 		filepath.Join(artDir, "iteration-02", "cleanliness"),
 	} {
-		if _, err := ReadCompletionReceipt(dir); err != nil {
+		if _, err := readCompletionReceipt(dir); err != nil {
 			t.Fatalf("harness completion receipt missing from %q: %v", dir, err)
 		}
 	}
-	if _, err := ReadCompletionReceipt(filepath.Join(artDir, "iteration-02")); err == nil {
+	if _, err := readCompletionReceipt(filepath.Join(artDir, "iteration-02")); err == nil {
 		t.Fatal("approved review iteration unexpectedly has an aggregate fixer receipt")
 	}
 }
@@ -1489,12 +1479,12 @@ fi`,
 		}),
 	}
 
-	result, err := RunFeatureFinalReviewLoop(cfg, sm)
+	result, err := runFeatureFinalReviewLoop(cfg, sm)
 	if err != nil {
 		t.Fatalf("loop: %v", err)
 	}
 	if result.FinalStatus != finalStatusReviewPassed {
-		t.Fatalf("FinalStatus = %q, want review_passed; feedback:\n%s", result.FinalStatus, result.PlanRevisionFeedback)
+		t.Fatalf("FinalStatus = %q, want review_passed; last error: %s", result.FinalStatus, result.LastError)
 	}
 	if _, err := os.Stat(fixMarker); err != nil {
 		t.Fatalf("fix marker was not written: %v", err)
@@ -1595,8 +1585,8 @@ func TestRunFeatureFinalReviewLoop_CrashRecoveryResumesFromInterruptedIter(t *te
 	if err := os.MkdirAll(iter01, 0o755); err != nil {
 		t.Fatalf("mkdir iter01: %v", err)
 	}
-	am := NewArtifactManager(artDir)
-	if err := am.WriteMeta(iter01, IterationMeta{
+	am := newArtifactManager(artDir)
+	if err := am.writeMeta(iter01, iterationMeta{
 		Iteration:    1,
 		ReviewStatus: "changes_requested",
 		StartedAt:    time.Now(),
@@ -1636,7 +1626,7 @@ func TestRunFeatureFinalReviewLoop_CrashRecoveryResumesFromInterruptedIter(t *te
 		}),
 	}
 
-	result, err := RunFeatureFinalReviewLoop(cfg, sm)
+	result, err := runFeatureFinalReviewLoop(cfg, sm)
 	if err != nil {
 		t.Fatalf("loop: %v", err)
 	}
@@ -1685,7 +1675,7 @@ func TestRunFeatureFinalReviewLoop_NoStagedReposShortCircuits(t *testing.T) {
 		FeatureStore: store,
 		StateDir:     env.stateDir,
 	}
-	result, err := RunFeatureFinalReviewLoop(cfg, nil)
+	result, err := runFeatureFinalReviewLoop(cfg, nil)
 	if err != nil {
 		t.Fatalf("loop: %v", err)
 	}
@@ -1729,7 +1719,7 @@ func TestRunFeatureFinalReviewLoop_DoesNotPersistReviewerTestingContract(t *test
 		BuildSession:   mockBuildSessionByModel(map[string]string{"reviewer": approveScript}),
 	}
 
-	if _, err := RunFeatureFinalReviewLoop(cfg, sm); err != nil {
+	if _, err := runFeatureFinalReviewLoop(cfg, sm); err != nil {
 		t.Fatalf("loop: %v", err)
 	}
 

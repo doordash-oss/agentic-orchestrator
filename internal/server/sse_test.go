@@ -20,6 +20,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -203,22 +204,101 @@ func TestEventBrokerReplayRingBoundaries(t *testing.T) {
 	}
 }
 
-func TestEventBrokerCursorWithoutEpochReturnsReset(t *testing.T) {
+// TestEventBrokerCursorWithoutEpochReplaysCurrentEpoch pins that a cursor
+// carrying only a seq (snapshots expose meta.as_of_seq but no epoch, and the
+// `agentico api --after` helper forwards only Last-Event-ID) resumes in the
+// current epoch: retained events replay, out-of-window cursors still reset.
+func TestEventBrokerCursorWithoutEpochReplaysCurrentEpoch(t *testing.T) {
 	t.Parallel()
 
 	b := newEventBrokerWithOptions(eventBrokerOptions{Epoch: testEventEpoch, ReplayLimit: 4})
-	b.publish(SSEEvent{Kind: testEventKindFeatureState, Resource: Resource{Type: entityFeature, ID: testFeatureID}})
+	for i := 1; i <= 6; i++ {
+		b.publish(SSEEvent{Kind: testEventKindFeatureState, Resource: Resource{Type: entityFeature, ID: fmt.Sprintf("F-%d", i)}})
+	}
 
-	ch, replay, reset := b.subscribeAfter(1, "")
+	ch, replay, reset := b.subscribeAfter(3, "")
 	defer b.unsubscribe(ch)
-	if len(replay) != 0 {
-		t.Fatalf("replay len = %d, want reset only when cursor has no epoch", len(replay))
+	if reset != nil {
+		t.Fatalf("epoch-less retained cursor reset = %+v, want replay", *reset)
 	}
-	if reset == nil {
-		t.Fatal("reset = nil, want stream.reset for epoch-less cursor")
+	if got := eventSeqs(replay); fmt.Sprint(got) != "[4 5 6]" {
+		t.Fatalf("replay seqs = %v, want [4 5 6]", got)
 	}
-	if reset.Kind != sseEventStreamReset || reset.Epoch != testEventEpoch {
-		t.Fatalf("reset = %+v, want stream.reset with current epoch", *reset)
+
+	fresh := newEventBrokerWithOptions(eventBrokerOptions{Epoch: testEventEpoch})
+	ch, replay, reset = fresh.subscribeAfter(9, "")
+	defer fresh.unsubscribe(ch)
+	if reset == nil || len(replay) != 0 {
+		t.Fatalf("future cursor on empty broker replay=%v reset=%v, want reset only", eventSeqs(replay), reset)
+	}
+
+	for _, after := range []uint64{1, 7} {
+		ch, replay, reset := b.subscribeAfter(after, "")
+		defer b.unsubscribe(ch)
+		if reset == nil || len(replay) != 0 {
+			t.Fatalf("epoch-less cursor %d replay=%v reset=%v, want reset only", after, eventSeqs(replay), reset)
+		}
+		if reset.Kind != sseEventStreamReset || reset.Epoch != testEventEpoch {
+			t.Fatalf("reset = %+v, want stream.reset with current epoch", *reset)
+		}
+	}
+}
+
+// TestEventsResumeAfterRecentSeqReplaysMissedEvents reproduces the
+// `agentico api --after <seq> GET /api/v1/events` resume: a cursor a few
+// events old, sent as Last-Event-ID or ?after= without an epoch, must replay
+// the missed events in order instead of emitting stream.reset.
+func TestEventsResumeAfterRecentSeqReplaysMissedEvents(t *testing.T) {
+	t.Parallel()
+
+	h := newAPIHandler(HandlerOptions{DisableHostValidation: true})
+	srv := httptest.NewServer(h)
+	defer srv.Close()
+	for i := 0; i < 5; i++ {
+		h.broker.publish(SSEEvent{Kind: sseEventLifecycleUpdated, Resource: Resource{Type: entityFeature, FeatureID: fmt.Sprintf("F-%d", i)}})
+	}
+
+	for name, configure := range map[string]func(*http.Request){
+		"last-event-id": func(r *http.Request) { r.Header.Set("Last-Event-ID", "2") },
+		"query":         func(r *http.Request) { r.URL.RawQuery += "&after=2" },
+	} {
+		t.Run(name, func(t *testing.T) {
+			req, err := http.NewRequestWithContext(context.Background(), http.MethodGet, srv.URL+"/api/v1/events?heartbeat_ms=5000", nil)
+			if err != nil {
+				t.Fatalf("build request: %v", err)
+			}
+			configure(req)
+			resp, err := srv.Client().Do(req)
+			if err != nil {
+				t.Fatalf("connect: %v", err)
+			}
+			defer resp.Body.Close()
+
+			reader := bufio.NewReader(resp.Body)
+			for _, wantID := range []string{"3", "4", "5"} {
+				block := nextSSEBlock(t, reader)
+				want := "id: " + wantID + "\nevent: " + sseEventLifecycleUpdated
+				if !strings.HasPrefix(block, want) {
+					t.Fatalf("SSE block = %q, want prefix %q (replay, not stream.reset)", block, want)
+				}
+			}
+		})
+	}
+}
+
+func nextSSEBlock(t *testing.T, r *bufio.Reader) string {
+	t.Helper()
+	var lines []string
+	for {
+		line, err := r.ReadString('\n')
+		if err != nil {
+			t.Fatalf("read SSE line: %v", err)
+		}
+		line = strings.TrimRight(line, "\r\n")
+		if line == "" {
+			return strings.Join(lines, "\n")
+		}
+		lines = append(lines, line)
 	}
 }
 
@@ -515,7 +595,7 @@ func TestEventsConnectedSurvivesRingEvictionForCursorlessClient(t *testing.T) {
 		h.broker.publish(SSEEvent{Kind: sseEventLifecycleUpdated, Resource: Resource{Type: resourceTypeRuntime}})
 	}
 
-	srv := httptest.NewServer(h.routes())
+	srv := httptest.NewServer(h)
 	defer srv.Close()
 
 	req, err := http.NewRequestWithContext(context.Background(), http.MethodGet, srv.URL+"/api/v1/events?heartbeat_ms=10", nil)

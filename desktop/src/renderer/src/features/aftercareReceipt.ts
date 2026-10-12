@@ -89,7 +89,7 @@ function pendingCommitTotal(preflight: CompletionPreflightResult | null): number
   return carried && total > 0 ? total : null;
 }
 
-export interface VerificationFact {
+interface VerificationFact {
   summary: string;
   /** Check names, in contract order; empty when the snapshot carries none. */
   names: string[];
@@ -112,7 +112,7 @@ export function verificationFact(
   };
 }
 
-export interface PullRequestRow {
+interface PullRequestRow {
   repo: string;
   url: string;
   /** `#412` when the URL carries a number; the bare host path otherwise. */
@@ -190,7 +190,7 @@ function unresolvedClause(repo: string, feedback: FetchReviewFeedbackResult | nu
   return `${count} unresolved comment${count === 1 ? '' : 's'}`;
 }
 
-export interface PhasesFact {
+interface PhasesFact {
   /** Pipeline stage count, for the fully completed pip row. */
   stages: number;
   /** Plain-language summary, or null when the run detail carries no per-phase record. */

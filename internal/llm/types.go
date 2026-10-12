@@ -50,9 +50,13 @@ type ModelCapabilities struct {
 }
 
 // ModelCost records advertised USD per million tokens. Nil means unknown.
+// CacheRead and CacheWrite are optional; nil means the provider advertised no
+// separate cache rate.
 type ModelCost struct {
-	Input  float64 `yaml:"input" json:"input"`
-	Output float64 `yaml:"output" json:"output"`
+	Input      float64  `yaml:"input" json:"input"`
+	Output     float64  `yaml:"output" json:"output"`
+	CacheRead  *float64 `yaml:"cache_read,omitempty" json:"cache_read,omitempty"`
+	CacheWrite *float64 `yaml:"cache_write,omitempty" json:"cache_write,omitempty"`
 }
 
 // ContextWindowLabel formats a token window for compact model IDs.
@@ -138,10 +142,4 @@ func AppendUniqueAlias(aliases []string, id, alias string) []string {
 		}
 	}
 	return append(aliases, alias)
-}
-
-// CatalogEnricher is implemented by providers whose model catalog can be
-// overridden at runtime, either from provider CLI discovery or from tests.
-type CatalogEnricher interface {
-	SetModelCatalog(models []ModelInfo)
 }

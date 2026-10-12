@@ -1854,7 +1854,6 @@ describe('FeatureCockpit warnings', () => {
       featureId: FEATURE_ID,
       action: 'rewind',
       result: 'rewound',
-      sessionIds: [],
       sourceRunNumber: 3,
       newRunNumber: 4,
       warnings: [
@@ -2546,7 +2545,6 @@ describe('FeatureCockpit convergence', () => {
       featureId: FEATURE_ID,
       action: 'start',
       result: 'started',
-      sessionIds: [],
     });
     renderCockpit(mock);
     const user = userEvent.setup();
@@ -2993,34 +2991,33 @@ describe('FeatureCockpit Restart', () => {
     );
   });
 
-  it('restarts an iteration-budget failure from the card with the budget-extension dialog', async () => {
+  it('retries an iteration-budget failure from the card', async () => {
     const mock = installAgenticoMock({
       feature: featureSnapshot({
         status: 'Failed',
         currentPhase: 'Implement',
-        failure: iterationBudgetFailure(),
-        actions: [{ id: 'restart', enabled: true, disabledReasons: [] }],
+        failure: {
+          ...iterationBudgetFailure(),
+          remediation: { hint: 'Retry the failed phase.', actions: ['retry', 'restart'] },
+        },
+        actions: [
+          { id: 'retry', enabled: true, disabledReasons: [] },
+          { id: 'restart', enabled: true, disabledReasons: [] },
+        ],
       }),
     });
     renderCockpit(mock);
     const user = userEvent.setup();
     await screen.findByRole('region', { name: 'Feature Search revamp' });
 
-    // The card's own Restart button is the primary action for this code.
+    // The card follows the catalog's primary retry action.
     const alert = screen.getByRole('alert');
-    await user.click(within(alert).getByRole('button', { name: 'Restart' }));
-    const dialog = await screen.findByRole('dialog', { name: 'Restart Search revamp?' });
-    expect(dialog).toHaveTextContent('maximum-iteration restart');
-    await user.click(within(dialog).getByRole('button', { name: 'Confirm restart' }));
+    await user.click(within(alert).getByRole('button', { name: 'Retry' }));
 
     await waitFor(() =>
       expect(mock.api.dispatchFeatureAction).toHaveBeenCalledWith({
         featureId: FEATURE_ID,
-        action: 'restart',
-        body: {
-          max_iterations_delta: 10,
-          max_plan_iterations_delta: 2,
-        },
+        action: 'retry',
       }),
     );
   });
@@ -3185,7 +3182,6 @@ describe('FeatureCockpit Stop', () => {
               featureId: FEATURE_ID,
               action: 'pause-stop',
               result: 'stopped',
-              sessionIds: [],
             });
         }),
     );

@@ -26,15 +26,15 @@ import (
 // status line. The implementer then retried without the needed context. This test locks in
 // that the finding actually appears in the rendered markdown.
 func TestFormatGateFeedback_UnclosedDeferralRendersSection(t *testing.T) {
-	result := ReportGateResult{
+	result := reportGateResult{
 		Rejected: true,
-		Findings: []ReportGateFinding{{
-			Category: GateCategoryDeferral,
-			Kind:     KindDeferralUnclosed,
+		Findings: []reportGateFinding{{
+			Category: gateCategoryDeferral,
+			Kind:     kindDeferralUnclosed,
 			Detail:   "deferral D-a3f1c0 (\"Install Tailwind\"; created in phase 1) is due by this phase (3) and is still open.",
 		}},
 	}
-	out := FormatGateFeedback(result)
+	out := formatGateFeedback(result)
 	if !strings.Contains(out, "Cross-phase deferrals") {
 		t.Errorf("missing Cross-phase deferrals section header; got:\n%s", out)
 	}
@@ -57,15 +57,15 @@ func TestFormatGateFeedback_UnclosedDeferralRendersSection(t *testing.T) {
 }
 
 func TestFormatGateFeedback_MissingReasonRendersSection(t *testing.T) {
-	result := ReportGateResult{
+	result := reportGateResult{
 		Rejected: true,
-		Findings: []ReportGateFinding{{
-			Category: GateCategoryDeferral,
-			Kind:     KindDeferralMissingReason,
+		Findings: []reportGateFinding{{
+			Category: gateCategoryDeferral,
+			Kind:     kindDeferralMissingReason,
 			Detail:   "deferrals entry with description \"Migrate session store\" and due_by_phase=5 has an empty `reason`",
 		}},
 	}
-	out := FormatGateFeedback(result)
+	out := formatGateFeedback(result)
 	if !strings.Contains(out, "missing a `reason`") {
 		t.Errorf("missing reason-gap section header; got:\n%s", out)
 	}
@@ -78,29 +78,29 @@ func TestFormatGateFeedback_MissingReasonRendersSection(t *testing.T) {
 // case where the gate rejects for schema + hedge + deferral findings at
 // once. All three sections must appear in output.
 func TestFormatGateFeedback_MixedCategoriesAllRender(t *testing.T) {
-	result := ReportGateResult{
+	result := reportGateResult{
 		Rejected: true,
-		Findings: []ReportGateFinding{
+		Findings: []reportGateFinding{
 			{
 				CheckName: "build",
-				Category:  GateCategorySchema,
-				Kind:      KindEmptyEvidence,
+				Category:  gateCategorySchema,
+				Kind:      kindEmptyEvidence,
 				Detail:    "status is passed but evidence is empty",
 			},
 			{
 				CheckName: "tests",
-				Category:  GateCategoryHedge,
-				Kind:      KindHedgePhrase,
+				Category:  gateCategoryHedge,
+				Kind:      kindHedgePhrase,
 				Detail:    "status is passed but evidence text contains hedge phrases that describe failure",
 			},
 			{
-				Category: GateCategoryDeferral,
-				Kind:     KindDeferralUnclosed,
+				Category: gateCategoryDeferral,
+				Kind:     kindDeferralUnclosed,
 				Detail:   "deferral D-abc123 is due by this phase (2) and is still open",
 			},
 		},
 	}
-	out := FormatGateFeedback(result)
+	out := formatGateFeedback(result)
 	for _, want := range []string{
 		"Schema integrity",
 		"Pass claims contradicted by their own evidence",
@@ -117,16 +117,16 @@ func TestFormatGateFeedback_MixedCategoriesAllRender(t *testing.T) {
 // a pure schema rejection should not carry an empty Cross-phase deferrals
 // section.
 func TestFormatGateFeedback_NoDeferralFindingsNoSection(t *testing.T) {
-	result := ReportGateResult{
+	result := reportGateResult{
 		Rejected: true,
-		Findings: []ReportGateFinding{{
+		Findings: []reportGateFinding{{
 			CheckName: "build",
-			Category:  GateCategorySchema,
-			Kind:      KindEmptyEvidence,
+			Category:  gateCategorySchema,
+			Kind:      kindEmptyEvidence,
 			Detail:    "status is passed but evidence is empty",
 		}},
 	}
-	out := FormatGateFeedback(result)
+	out := formatGateFeedback(result)
 	if strings.Contains(out, "Cross-phase deferrals") {
 		t.Errorf("unexpected Cross-phase section when no deferral findings; got:\n%s", out)
 	}

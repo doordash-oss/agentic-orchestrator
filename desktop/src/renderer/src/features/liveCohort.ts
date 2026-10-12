@@ -20,8 +20,9 @@ import {
   type SessionSummary,
 } from '../../../shared/ipc';
 import { orderRunSessions, sessionDisplayLabel, sessionGroup } from './reviewModel';
+import { defined } from '../../../shared/defined';
 
-export type CohortTabStatus = 'running' | 'completed' | 'failed';
+type CohortTabStatus = 'running' | 'completed' | 'failed';
 
 const FAILED_STATUSES = ['failed', 'error', 'cancelled', 'canceled', 'stopped', 'crashed'];
 const COMPLETED_STATUSES = ['complete', 'completed', 'done', 'ended', 'succeeded'];
@@ -43,7 +44,7 @@ export function cohortTabStatus(session: SessionSummary): CohortTabStatus {
   return 'running';
 }
 
-export interface CohortMembership {
+interface CohortMembership {
   /** Ordered session ids that make up the visible cohort. */
   sessionIds: string[];
   /** Feature phase this cohort was captured at; a change resets retention. */
@@ -121,7 +122,7 @@ export function computeCohort(
   return {
     sessionIds: ordered,
     phase: currentPhase,
-    ...(currentIteration === undefined ? {} : { iteration: currentIteration }),
+    ...defined('iteration', currentIteration),
   };
 }
 
@@ -138,7 +139,7 @@ export function resolveCohortSelection(
   return (active ?? cohort[0]!).id;
 }
 
-export interface CohortSection {
+interface CohortSection {
   key: string;
   title: string;
   sessions: SessionSummary[];

@@ -119,12 +119,12 @@ func TestImplementationReviewAxesForGate(t *testing.T) {
 				got = append(got, axis.Name)
 				switch axis.Name {
 				case "QA", "Design":
-					if axis.ExecutionPosture != implementationReviewPostureLiveRun {
-						t.Errorf("axis %s ExecutionPosture = %q, want %q", axis.Name, axis.ExecutionPosture, implementationReviewPostureLiveRun)
+					if axis.ExecutionPosture != reviewPostureLiveRun {
+						t.Errorf("axis %s ExecutionPosture = %q, want %q", axis.Name, axis.ExecutionPosture, reviewPostureLiveRun)
 					}
 				default:
-					if axis.ExecutionPosture != implementationReviewPostureReadOnly {
-						t.Errorf("axis %s ExecutionPosture = %q, want %q", axis.Name, axis.ExecutionPosture, implementationReviewPostureReadOnly)
+					if axis.ExecutionPosture != reviewPostureReadOnly {
+						t.Errorf("axis %s ExecutionPosture = %q, want %q", axis.Name, axis.ExecutionPosture, reviewPostureReadOnly)
 					}
 				}
 				if axis.SkillName == "" || axis.ShortName == "" || axis.Role == "" {
@@ -141,10 +141,10 @@ func TestImplementationReviewAxesForGate(t *testing.T) {
 func TestImplementationReviewAxisRegistryProducesWellFormedRoleSpecs(t *testing.T) {
 	wantSkills := map[string]Role{
 		"review-implementation-craft":                  RoleImplementationReviewCraft,
-		"review-implementation-functionality-evidence": RoleImplementationReviewFunctionalityEvidence,
-		"review-implementation-cleanliness":            RoleImplementationReviewCleanliness,
-		"review-implementation-qa":                     RoleImplementationReviewQA,
-		"review-implementation-design":                 RoleImplementationReviewDesign,
+		"review-implementation-functionality-evidence": roleImplementationReviewFunctionalityEvidence,
+		"review-implementation-cleanliness":            roleImplementationReviewCleanliness,
+		"review-implementation-qa":                     roleImplementationReviewQA,
+		"review-implementation-design":                 roleImplementationReviewDesign,
 	}
 	if len(implementationReviewAxisRegistry) != len(wantSkills) {
 		t.Fatalf("implementationReviewAxisRegistry length = %d, want %d", len(implementationReviewAxisRegistry), len(wantSkills))
@@ -197,7 +197,7 @@ func TestImplementationReviewAxisRegistryProducesWellFormedRoleSpecs(t *testing.
 func TestComposeImplementationReviewFeedbackUsesStrictAllApprove(t *testing.T) {
 	results := []reviewAxisResult{
 		{Axis: "Craft", Status: ReviewApproved, Feedback: "## Findings\n- (none)\n\n## Suggestions\n- (none)\n\n## Verdict\nAPPROVED\n"},
-		{Axis: "Functionality/Evidence", Status: ReviewChangesRequested, Feedback: "## Findings\n- **Critical**: missing required verification evidence\n\n## Suggestions\n- (none)\n\n## Verdict\nCHANGES_REQUESTED\n"},
+		{Axis: "Functionality/Evidence", Status: reviewChangesRequested, Feedback: "## Findings\n- **Critical**: missing required verification evidence\n\n## Suggestions\n- (none)\n\n## Verdict\nCHANGES_REQUESTED\n"},
 		{Axis: "Cleanliness", Status: ReviewApproved, Feedback: "## Findings\n- (none)\n\n## Suggestions\n- **Low**: tidy temporary note\n\n## Verdict\nAPPROVED\n"},
 	}
 
@@ -205,7 +205,7 @@ func TestComposeImplementationReviewFeedbackUsesStrictAllApprove(t *testing.T) {
 	if err != nil {
 		t.Fatalf("composeImplementationReviewFeedback() error = %v", err)
 	}
-	if status != ReviewChangesRequested {
+	if status != reviewChangesRequested {
 		t.Fatalf("composeImplementationReviewFeedback() status = %s, want CHANGES_REQUESTED", status)
 	}
 	for _, want := range []string{
@@ -226,7 +226,7 @@ func TestComposeImplementationReviewFeedbackUsesStrictAllApprove(t *testing.T) {
 	if err != nil {
 		t.Fatalf("composeImplementationReviewFeedback(fewer results) error = %v", err)
 	}
-	if status != ReviewChangesRequested {
+	if status != reviewChangesRequested {
 		t.Fatalf("composeImplementationReviewFeedback(fewer results) status = %s, want CHANGES_REQUESTED", status)
 	}
 }
@@ -234,14 +234,14 @@ func TestComposeImplementationReviewFeedbackUsesStrictAllApprove(t *testing.T) {
 func TestComposeImplementationReviewFeedbackPoolsDesignOriginalityBlock(t *testing.T) {
 	results := []reviewAxisResult{
 		{Axis: "Craft", Status: ReviewApproved, Feedback: "## Findings\n- (none)\n\n## Suggestions\n- (none)\n\n## Verdict\nAPPROVED\n"},
-		{Axis: "Design", Status: ReviewChangesRequested, Feedback: "## Findings\n- **High**: generic card grid contradicts the approved editorial direction and violates the frontend-design review rubric's distinctiveness dimension\n\n## Suggestions\n- (none)\n\n## Verdict\nCHANGES_REQUESTED\n"},
+		{Axis: "Design", Status: reviewChangesRequested, Feedback: "## Findings\n- **High**: generic card grid contradicts the approved editorial direction and violates the frontend-design review rubric's distinctiveness dimension\n\n## Suggestions\n- (none)\n\n## Verdict\nCHANGES_REQUESTED\n"},
 	}
 
 	status, feedback, err := composeImplementationReviewFeedback(results, 2)
 	if err != nil {
 		t.Fatalf("composeImplementationReviewFeedback() error = %v", err)
 	}
-	if status != ReviewChangesRequested {
+	if status != reviewChangesRequested {
 		t.Fatalf("composeImplementationReviewFeedback() status = %s, want CHANGES_REQUESTED", status)
 	}
 	for _, want := range []string{
@@ -256,43 +256,8 @@ func TestComposeImplementationReviewFeedbackPoolsDesignOriginalityBlock(t *testi
 	}
 }
 
-func TestBuildImplementationReviewAxisPromptIncludesSingleReviewerContextPlusAxis(t *testing.T) {
-	got := BuildImplementationReviewAxisPrompt(
-		"/plan.md",
-		"Feature fully implemented",
-		"/progress.md",
-		"/iter-01",
-		"/testing-contract.yaml",
-		"/iter-01/verification-report.yaml",
-		1,
-		[]RequiredVerificationItem{{Name: "Build passes", Requirement: "go build ./..."}},
-		"/roadmap.md",
-		"tdd-fill-in",
-		"/iter-01/review/craft/review-feedback.md",
-		"Craft",
-	)
-
-	for _, want := range []string{
-		"Axis under review: Craft",
-		"Iteration under review: 1",
-		"Iteration artifacts directory: /iter-01",
-		"Read the approved roadmap at: /roadmap.md",
-		"Read the implementation plan (source of truth) at: /plan.md",
-		"Feature fully implemented",
-		"Read the verification report at: /iter-01/verification-report.yaml",
-		"Read the binding testing contract at: /testing-contract.yaml",
-		"Read the current progress at: /progress.md",
-		"This is a **tdd-fill-in** phase",
-		"Review feedback output: /iter-01/review/craft/review-feedback.md",
-	} {
-		if !strings.Contains(got, want) {
-			t.Fatalf("BuildImplementationReviewAxisPrompt() missing %q in:\n%s", want, got)
-		}
-	}
-}
-
 func TestBuildImplementationReviewAxisPromptIncludesFinalGateContext(t *testing.T) {
-	got := BuildImplementationReviewAxisPromptWithOpts(ImplementationReviewAxisPromptOpts{
+	got := buildImplementationReviewAxisPromptWithOpts(implementationReviewAxisPromptOpts{
 		Gate:                                 implementationReviewGateFinal,
 		AxisLabel:                            "Functionality/Evidence",
 		FeatureDescription:                   "Assembled feature intent.",
@@ -343,7 +308,7 @@ func TestBuildImplementationReviewAxisPromptIncludesFinalGateContext(t *testing.
 }
 
 func TestBuildImplementationReviewAxisPromptLiveRunFinalGuidance(t *testing.T) {
-	got := BuildImplementationReviewAxisPromptWithOpts(ImplementationReviewAxisPromptOpts{
+	got := buildImplementationReviewAxisPromptWithOpts(implementationReviewAxisPromptOpts{
 		Gate:             implementationReviewGateFinal,
 		AxisLabel:        "QA",
 		LiveRunAxis:      true,
@@ -370,7 +335,7 @@ func TestBuildImplementationReviewAxisPromptLiveRunFinalGuidance(t *testing.T) {
 }
 
 func TestBuildImplementationReviewAxisPromptLiveRunPerPhaseGuidance(t *testing.T) {
-	got := BuildImplementationReviewAxisPromptWithOpts(ImplementationReviewAxisPromptOpts{
+	got := buildImplementationReviewAxisPromptWithOpts(implementationReviewAxisPromptOpts{
 		Gate:               implementationReviewGatePerPhase,
 		AxisLabel:          "Design",
 		FeatureDescription: "Frontend app intent.",
@@ -402,7 +367,7 @@ func TestBuildImplementationReviewAxisPromptLiveRunPerPhaseGuidance(t *testing.T
 }
 
 func TestBuildImplementationReviewAxisPromptReadOnlyOmitsLiveRunGuidance(t *testing.T) {
-	got := BuildImplementationReviewAxisPromptWithOpts(ImplementationReviewAxisPromptOpts{
+	got := buildImplementationReviewAxisPromptWithOpts(implementationReviewAxisPromptOpts{
 		Gate:         implementationReviewGatePerPhase,
 		AxisLabel:    "Craft",
 		LiveRunAxis:  false,
@@ -480,7 +445,7 @@ func TestRunImplementationReviewAxesUsesLiveRunPostureForFrontendDesign(t *testi
 		ArtifactDir:  artifactDir,
 		StateDir:     stateDir,
 		BuildSession: buildSession,
-		Observer:     observe.New(false, "", false, "", false, "test"),
+		Observer:     observerFromModule(t, false, "", "test"),
 	}
 	status, feedback, err := runImplementationReviewAxes(
 		cfg,
@@ -594,7 +559,7 @@ func TestRunImplementationReviewAxesEmitsEventsAndPersistsStatus(t *testing.T) {
 		ArtifactDir:  artifactDir,
 		StateDir:     stateDir,
 		BuildSession: mockBuildSession("", reviewScript),
-		Observer:     observe.New(true, observeDir, false, "", false, "test"),
+		Observer:     observerFromModule(t, true, observeDir, "test"),
 	}
 	status, feedback, err := runImplementationReviewAxes(
 		cfg,
@@ -726,7 +691,7 @@ func TestRunImplementationReviewAxesPerPhaseGateOmitsAcceptanceClause(t *testing
 		ArtifactDir:  artifactDir,
 		StateDir:     stateDir,
 		BuildSession: buildSession,
-		Observer:     observe.New(false, "", false, "", false, "test"),
+		Observer:     observerFromModule(t, false, "", "test"),
 	}
 	status, feedback, err := runImplementationReviewAxes(
 		cfg,

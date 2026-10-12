@@ -37,7 +37,7 @@ import { useModalDismiss } from '../components/useModalDismiss';
 import { serverDescriptor } from './cloneViews';
 import { CreateRepositoryForm, type CreateRepositoryStartInput } from './createViews';
 
-export interface PickerCreateDialogProps {
+interface PickerCreateDialogProps {
   connection: ConnectionState;
   workspaceRoots: readonly WorkspaceRootState[];
   /** Performs the server-owned creation; rejects with the canonical error. */

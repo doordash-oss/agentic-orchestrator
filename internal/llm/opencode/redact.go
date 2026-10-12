@@ -302,7 +302,7 @@ func rpcErrorDetail(raw json.RawMessage) string {
 	if len(raw) == 0 || string(raw) == "null" {
 		return ""
 	}
-	var e RPCError
+	var e rpcError
 	if err := json.Unmarshal(raw, &e); err != nil {
 		return sanitizeDiagnostic(string(raw))
 	}

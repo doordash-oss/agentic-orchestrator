@@ -15,6 +15,7 @@
 package testutil
 
 import (
+	"context"
 	"encoding/json"
 	"os"
 	"path/filepath"
@@ -220,7 +221,7 @@ func NewFakeOpenCodeProvider(t testing.TB, script string) *FakeOpenCodeProvider 
 	if err != nil {
 		t.Fatalf("resolve test executable: %v", err)
 	}
-	inner := opencode.NewWithBinary(exe)
+	inner := opencode.New(exe, nil)
 	inner.SetModelCatalog(fakeOpenCodeCatalog())
 	return &FakeOpenCodeProvider{Script: script, inner: inner}
 }
@@ -255,7 +256,6 @@ func (p *FakeOpenCodeProvider) InstallHint() string           { return "" }
 func (p *FakeOpenCodeProvider) VersionInfo() (string, error)  { return FakeOpenCodeVersion, nil }
 func (p *FakeOpenCodeProvider) MinVersion() [3]int            { return [3]int{} }
 func (p *FakeOpenCodeProvider) EnvVarsToExclude() []string    { return nil }
-func (p *FakeOpenCodeProvider) SupportsSessionResume() bool   { return p.inner.SupportsSessionResume() }
 func (p *FakeOpenCodeProvider) ModelCatalog() []llm.ModelInfo { return fakeOpenCodeCatalog() }
 func (p *FakeOpenCodeProvider) AvailableModels() []string {
 	return []string{FakeOpenCodeModel, FakeOpenCodeSecondModel}
@@ -264,8 +264,51 @@ func (p *FakeOpenCodeProvider) MatchesModel(model string) bool {
 	backend := opencode.BackendModel(model)
 	return backend == FakeOpenCodeModel || backend == FakeOpenCodeSecondModel
 }
-func (p *FakeOpenCodeProvider) ComputeCost(string, int64, int64) float64 { return 0 }
-func (p *FakeOpenCodeProvider) ContextWindowForModel(string) int         { return 200000 }
+func (p *FakeOpenCodeProvider) ContextWindowForModel(string) int { return 200000 }
+
+// SupportsNativeToollessReview attests the same audited boundary as the real
+// OpenCode provider the fake wraps.
+func (p *FakeOpenCodeProvider) SupportsNativeToollessReview() bool {
+	return p.inner.SupportsNativeToollessReview()
+}
+
+// AskingQuestionsClause returns an empty clause: the fake pins the pre-fold
+// prompt behavior (no provider-specific asking section) so suites that render
+// prompts against it stay byte-identical.
+func (p *FakeOpenCodeProvider) AskingQuestionsClause() string { return "" }
+
+// CheckReadiness reports the fake as always ready, matching the readiness
+// behavior its suites relied on before the capability became mandatory.
+func (p *FakeOpenCodeProvider) CheckReadiness(context.Context) llm.ProviderReadiness {
+	return llm.ProviderReadiness{Ready: true}
+}
+
+// ReviewPreferenceBand is the real OpenCode ranking over the fake catalog.
+func (p *FakeOpenCodeProvider) ReviewPreferenceBand(model llm.ModelInfo) (int, bool) {
+	return p.inner.ReviewPreferenceBand(model)
+}
+
+// DiscoverModelCatalog returns the fake catalog without launching anything.
+func (p *FakeOpenCodeProvider) DiscoverModelCatalog(context.Context) ([]llm.ModelInfo, error) {
+	return p.ModelCatalog(), nil
+}
+
+// DiscoverModelCatalogWithProgress streams the fake catalog to report before
+// returning it.
+func (p *FakeOpenCodeProvider) DiscoverModelCatalogWithProgress(ctx context.Context, report llm.ModelDiscoveryReporter) ([]llm.ModelInfo, error) {
+	models, err := p.DiscoverModelCatalog(ctx)
+	if err == nil && report != nil {
+		for _, model := range models {
+			report(model)
+		}
+	}
+	return models, err
+}
+
+// SetModelCatalog delegates to the wrapped real provider's catalog store.
+func (p *FakeOpenCodeProvider) SetModelCatalog(models []llm.ModelInfo) {
+	p.inner.SetModelCatalog(models)
+}
 
 // BuildCommand is the real OpenCode command with the fake's environment
 // added.

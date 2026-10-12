@@ -39,9 +39,10 @@ import (
 	"github.com/doordash-oss/agentic-orchestrator/internal/errcat"
 	"github.com/doordash-oss/agentic-orchestrator/internal/feature"
 	"github.com/doordash-oss/agentic-orchestrator/internal/llm"
-	"github.com/doordash-oss/agentic-orchestrator/internal/llm/askuser"
 	"github.com/doordash-oss/agentic-orchestrator/internal/ports"
+	"github.com/doordash-oss/agentic-orchestrator/internal/session"
 	"github.com/doordash-oss/agentic-orchestrator/internal/supervisor"
+	"github.com/doordash-oss/agentic-orchestrator/test/testutil/mocks"
 )
 
 // Fixture literals used repeatedly across this file's contract assertions.
@@ -89,6 +90,7 @@ func TestReadAPISnapshotsRevisionAndStructuredErrors(t *testing.T) {
 	handler := NewHandler(HandlerOptions{
 		Runtime:               RuntimeIdentity{RuntimeDir: filepath.Dir(store.BaseDir), StateDir: store.BaseDir, Config: filepath.Join(filepath.Dir(store.BaseDir), "config.yaml")},
 		Features:              store,
+		FeatureStore:          store,
 		DisableHostValidation: true,
 	})
 
@@ -204,7 +206,7 @@ func TestFeatureDetailIncludesDurableSetupFailureState(t *testing.T) {
 		SchemaVersion: feature.SchemaVersionCurrent,
 		Repos:         []feature.FeatureRepo{{Name: "repo-a", Branch: "feature/setup-failed"}},
 	}
-	setup := feature.NewActiveSetupState(f.Repos, nil, nil, now)
+	setup := feature.NewQueuedSetupState(f.Repos, nil, nil)
 	setup.Status = feature.SetupStatusFailed
 	setup.CompletedAt = &now
 	setup.LatestLogPath = "/tmp/agentico/setup.log"
@@ -229,7 +231,7 @@ func TestFeatureDetailIncludesDurableSetupFailureState(t *testing.T) {
 	if err := store.Save(f); err != nil {
 		t.Fatalf("Save feature: %v", err)
 	}
-	handler := NewHandler(HandlerOptions{Features: store, DisableHostValidation: true})
+	handler := NewHandler(HandlerOptions{Features: store, FeatureStore: store, DisableHostValidation: true})
 
 	detail := getJSONMap(t, handler, "/api/v1/features/"+f.ID)
 	featureBody := detail[entityFeature].(map[string]any)
@@ -383,7 +385,7 @@ func TestFeatureDetailIncludesSanitizedKBWaitReason(t *testing.T) {
 	if err := store.Save(f); err != nil {
 		t.Fatalf("Save feature: %v", err)
 	}
-	handler := NewHandler(HandlerOptions{Features: store, DisableHostValidation: true})
+	handler := NewHandler(HandlerOptions{Features: store, FeatureStore: store, DisableHostValidation: true})
 
 	detail := getJSONMap(t, handler, "/api/v1/features/"+f.ID)
 	featureBody := detail[entityFeature].(map[string]any)
@@ -426,6 +428,52 @@ func TestTranscriptDTOsAssignBlockIndexToConversationRows(t *testing.T) {
 	}
 	if rows[0].Text != "first section" || rows[1].Text != "second section" {
 		t.Fatalf("transcript rows lost text order: %+v", rows)
+	}
+}
+
+func TestTranscriptDTOsSummarizeToolProgressRows(t *testing.T) {
+	t.Parallel()
+
+	progress := func(tool, data, summary string) llm.SDKMessage {
+		return llm.SDKMessage{Type: transcriptTypeToolProgress, ToolProgress: &llm.ToolProgressMessage{
+			Type: transcriptTypeToolProgress, ToolName: tool, Data: data, Summary: summary,
+		}}
+	}
+	long := strings.Repeat("é", 250)
+	cases := []struct {
+		name string
+		msg  llm.SDKMessage
+		want string
+	}{
+		// Codex streams command output in Data; only the command is summarized.
+		{"codex command", progress(toolNameBash, "private-token output body", "go test ./..."), "go test ./..."},
+		{"codex file change", progress(toolNameWrite, "", "/work/repo/internal/a.go"), "internal/a.go"},
+		{"opencode read", progress("Read", "File: /work/repo/README.md\nStatus: completed", "README.md"), "README.md"},
+		{"opencode grep", progress("Grep", "TODO\nStatus: running", "TODO"), "TODO"},
+		{"data alone is never summarized", progress(toolNameBash, "private-token output body", ""), ""},
+		{"empty", progress("Read", "", "  \n "), ""},
+		{"repeats tool name", progress("Read", "", "read"), ""},
+		{"multiline is one line", progress(toolNameBash, "", "\n  npm   run\tbuild \nsecond line"), "npm run build"},
+		{"long is truncated", progress(toolNameBash, "", long), strings.Repeat("é", 200) + "..."},
+	}
+	for _, tc := range cases {
+		rows := transcriptDTOs([]llm.SDKMessage{tc.msg}, 0, "/work/repo")
+		if len(rows) != 1 {
+			t.Fatalf("%s: rows = %+v, want one", tc.name, rows)
+		}
+		got := ""
+		if rows[0].ToolCall != nil {
+			got = rows[0].ToolCall.Summary
+			if got == "" {
+				t.Fatalf("%s: tool_call present with empty summary", tc.name)
+			}
+		}
+		if got != tc.want {
+			t.Fatalf("%s: summary = %q, want %q", tc.name, got, tc.want)
+		}
+		if strings.Contains(got, "private-token") || strings.Contains(got, "output body") {
+			t.Fatalf("%s: summary leaked tool output: %q", tc.name, got)
+		}
 	}
 }
 
@@ -504,8 +552,10 @@ func TestConfigCatalogPromptPermissionSnapshots(t *testing.T) {
 	}
 	sessions := fakeSessionManager{views: []ports.SessionView{
 		&fakeSessionView{
-			id: fixtureAskSessionID, featureID: f.ID, phase: feature.PhaseImplement, status: ports.SessionWaitingHelp,
-			initialPrompt: "raw initial prompt with private-token",
+			MockSessionView: &mocks.MockSessionView{
+				IDVal: fixtureAskSessionID, FeatureIDVal: f.ID, PhaseVal: feature.PhaseImplement, StatusVal: ports.SessionWaitingHelp,
+				InitialPromptVal: "raw initial prompt with private-token",
+			},
 			pending: []*llm.ControlRequestMessage{{
 				Type:      transcriptTypeControlRequest,
 				RequestID: "ask-1",
@@ -517,7 +567,9 @@ func TestConfigCatalogPromptPermissionSnapshots(t *testing.T) {
 			}},
 		},
 		&fakeSessionView{
-			id: "sess-perm", featureID: f.ID, phase: feature.PhasePlan, status: ports.SessionWaitingPermission,
+			MockSessionView: &mocks.MockSessionView{
+				IDVal: "sess-perm", FeatureIDVal: f.ID, PhaseVal: feature.PhasePlan, StatusVal: ports.SessionWaitingPermission,
+			},
 			pending: []*llm.ControlRequestMessage{{
 				Type:      transcriptTypeControlRequest,
 				RequestID: fixturePermissionRequestID,
@@ -1101,7 +1153,9 @@ func TestPromptSnapshotPreservesReadableAskUserQuestionText(t *testing.T) {
 	}
 	sessions := fakeSessionManager{views: []ports.SessionView{
 		&fakeSessionView{
-			id: fixtureAskSessionID, featureID: f.ID, phase: feature.PhaseDesign, status: ports.SessionWaitingHelp,
+			MockSessionView: &mocks.MockSessionView{
+				IDVal: fixtureAskSessionID, FeatureIDVal: f.ID, PhaseVal: feature.PhaseDesign, StatusVal: ports.SessionWaitingHelp,
+			},
 			pending: []*llm.ControlRequestMessage{{
 				Type:      transcriptTypeControlRequest,
 				RequestID: "ask-long",
@@ -1158,7 +1212,9 @@ func TestPromptSnapshotEmitsOneBasedAskUserQuestionIndex(t *testing.T) {
 		},
 	}))
 	sess := &fakeSessionView{
-		id: fixtureAskSessionID, featureID: f.ID, phase: feature.PhaseDesign, status: ports.SessionWaitingHelp,
+		MockSessionView: &mocks.MockSessionView{
+			IDVal: fixtureAskSessionID, FeatureIDVal: f.ID, PhaseVal: feature.PhaseDesign, StatusVal: ports.SessionWaitingHelp,
+		},
 		pending: []*llm.ControlRequestMessage{{
 			Type:      transcriptTypeControlRequest,
 			RequestID: "ask-index",
@@ -1232,7 +1288,9 @@ func TestPromptSnapshotRecoversAskUserConfidenceFromAssistantToolUse(t *testing.
 	}))
 	sessions := fakeSessionManager{views: []ports.SessionView{
 		&fakeSessionView{
-			id: fixtureAskSessionID, featureID: f.ID, phase: feature.PhaseDesign, status: ports.SessionWaitingHelp,
+			MockSessionView: &mocks.MockSessionView{
+				IDVal: fixtureAskSessionID, FeatureIDVal: f.ID, PhaseVal: feature.PhaseDesign, StatusVal: ports.SessionWaitingHelp,
+			},
 			messages: []llm.SDKMessage{{
 				Type: roleAssistant,
 				Assistant: &llm.AssistantMessage{Message: llm.ConversationMsg{
@@ -1383,21 +1441,21 @@ func TestFeatureDetailActionCatalogStableAndRedacted(t *testing.T) {
 		}
 	}
 	wantIDs := []string{
-		actionSetup,
+		string(FeatureActionSetup),
 		"start",
-		actionPauseStop,
-		actionResume,
-		actionRestart,
-		actionPublish,
-		actionMerge,
-		actionRewind,
-		actionRebase,
-		actionReviewFeedback,
-		actionRefactor,
-		actionRetry,
-		actionMarkDone,
-		actionCleanup,
-		actionDelete,
+		string(FeatureActionPauseStop),
+		string(FeatureActionResume),
+		string(FeatureActionRestart),
+		string(FeatureActionPublish),
+		string(FeatureActionMerge),
+		string(FeatureActionRewind),
+		string(FeatureActionRebase),
+		string(FeatureActionReviewFeedback),
+		string(FeatureActionRefactor),
+		string(FeatureActionRetry),
+		string(FeatureActionMarkDone),
+		string(FeatureActionCleanup),
+		string(FeatureActionDelete),
 	}
 	if strings.Join(gotIDs, ",") != strings.Join(wantIDs, ",") {
 		t.Fatalf("action ids = %v; want %v", gotIDs, wantIDs)
@@ -1407,29 +1465,29 @@ func TestFeatureDetailActionCatalogStableAndRedacted(t *testing.T) {
 		action := rawAction.(map[string]any)
 		actionsByID[action["id"].(string)] = action
 	}
-	assertActionScope(t, actionsByID[actionPublish], "")
-	assertActionInputNames(t, actionsByID[actionPublish])
-	assertActionScope(t, actionsByID[actionMerge], "")
-	assertActionInputNames(t, actionsByID[actionMerge])
-	assertActionInputNames(t, actionsByID[actionRewind], "target_phase", "roadmap_phase", "upgrade_pipeline")
-	assertActionInputRequired(t, actionsByID[actionRewind], "target_phase", true)
-	assertActionInputRequired(t, actionsByID[actionRewind], "roadmap_phase", false)
-	assertActionInputRequired(t, actionsByID[actionRewind], "upgrade_pipeline", false)
-	assertActionScope(t, actionsByID[actionRebase], "")
-	assertActionInputNames(t, actionsByID[actionRebase])
-	assertActionScope(t, actionsByID[actionReviewFeedback], "")
-	assertActionInputNames(t, actionsByID[actionReviewFeedback])
-	assertActionScope(t, actionsByID[actionCleanup], "")
-	assertActionInputNames(t, actionsByID[actionCleanup], "target")
-	assertActionInputOptions(t, actionsByID[actionCleanup], "target", "worktrees")
-	assertActionScope(t, actionsByID[actionDelete], "")
+	assertActionScope(t, actionsByID[string(FeatureActionPublish)], "")
+	assertActionInputNames(t, actionsByID[string(FeatureActionPublish)])
+	assertActionScope(t, actionsByID[string(FeatureActionMerge)], "")
+	assertActionInputNames(t, actionsByID[string(FeatureActionMerge)])
+	assertActionInputNames(t, actionsByID[string(FeatureActionRewind)], "target_phase", "roadmap_phase", "upgrade_pipeline")
+	assertActionInputRequired(t, actionsByID[string(FeatureActionRewind)], "target_phase", true)
+	assertActionInputRequired(t, actionsByID[string(FeatureActionRewind)], "roadmap_phase", false)
+	assertActionInputRequired(t, actionsByID[string(FeatureActionRewind)], "upgrade_pipeline", false)
+	assertActionScope(t, actionsByID[string(FeatureActionRebase)], "")
+	assertActionInputNames(t, actionsByID[string(FeatureActionRebase)])
+	assertActionScope(t, actionsByID[string(FeatureActionReviewFeedback)], "")
+	assertActionInputNames(t, actionsByID[string(FeatureActionReviewFeedback)])
+	assertActionScope(t, actionsByID[string(FeatureActionCleanup)], "")
+	assertActionInputNames(t, actionsByID[string(FeatureActionCleanup)], "target")
+	assertActionInputOptions(t, actionsByID[string(FeatureActionCleanup)], "target", "worktrees")
+	assertActionScope(t, actionsByID[string(FeatureActionDelete)], "")
 	// The seeded parent is Published, so the refactor child-launch action is
 	// offered with feature scope and no required inputs.
-	if got := actionsByID[actionRefactor]["enabled"]; got != true {
+	if got := actionsByID[string(FeatureActionRefactor)]["enabled"]; got != true {
 		t.Fatalf("refactor action enabled = %v; want true for a published parent", got)
 	}
-	assertActionScope(t, actionsByID[actionRefactor], "")
-	assertActionInputNames(t, actionsByID[actionRefactor])
+	assertActionScope(t, actionsByID[string(FeatureActionRefactor)], "")
+	assertActionInputNames(t, actionsByID[string(FeatureActionRefactor)])
 	raw := mustMarshalJSON(t, rawActions)
 	for _, forbidden := range []string{secretTokenLiteral, "raw prompt", testRepoPath, worktreePathLiteral} {
 		if strings.Contains(raw, forbidden) {
@@ -1468,8 +1526,8 @@ func TestChildFeatureActionCatalogRestricted(t *testing.T) {
 	publishable := true
 
 	deliveryActions := []string{
-		actionPublish, actionMerge, actionRewind,
-		actionRebase, actionRefactor, actionMarkDone,
+		string(FeatureActionPublish), string(FeatureActionMerge), string(FeatureActionRewind),
+		string(FeatureActionRebase), string(FeatureActionRefactor), string(FeatureActionMarkDone),
 	}
 
 	assertNoDeliveryActions := func(t *testing.T, actions []Action) {
@@ -1502,16 +1560,16 @@ func TestChildFeatureActionCatalogRestricted(t *testing.T) {
 		f.Pipeline = feature.PipelineMedium
 		f.Parent = &feature.ChildRelationship{ParentID: "parent-1", Kind: feature.ChildKindRefactor}
 
-		actions := actionCatalogDTOs(f)
+		actions := actionCatalogDTOsWithChildGuard(f, false)
 		assertNoDeliveryActions(t, actions)
-		if start := actionDTOByID(t, actions, actionStart); !start.Enabled {
+		if start := actionDTOByID(t, actions, string(FeatureActionStart)); !start.Enabled {
 			t.Fatalf("start disabled = %+v; want enabled for an eligible child", start.DisabledReasons)
 		}
-		if restart := actionDTOByID(t, actions, actionRestart); !restart.Enabled {
+		if restart := actionDTOByID(t, actions, string(FeatureActionRestart)); !restart.Enabled {
 			t.Fatalf("restart disabled = %+v; want enabled for an eligible child", restart.DisabledReasons)
 		}
-		assertDisabledCode(t, actionDTOByID(t, actions, actionResume), "not_paused")
-		retry := actionDTOByID(t, actions, actionRetry)
+		assertDisabledCode(t, actionDTOByID(t, actions, string(FeatureActionResume)), "not_paused")
+		retry := actionDTOByID(t, actions, string(FeatureActionRetry))
 		if retry.Enabled {
 			t.Fatalf("retry enabled = true; want false until setup fails")
 		}
@@ -1530,15 +1588,15 @@ func TestChildFeatureActionCatalogRestricted(t *testing.T) {
 			}},
 		}
 
-		actions := actionCatalogDTOs(f)
+		actions := actionCatalogDTOsWithChildGuard(f, false)
 		assertNoDeliveryActions(t, actions)
-		if setup := actionDTOByID(t, actions, actionSetup); !setup.Enabled {
+		if setup := actionDTOByID(t, actions, string(FeatureActionSetup)); !setup.Enabled {
 			t.Fatalf("child setup action = %+v; want enabled for a failed child setup", setup)
 		}
-		if retry := actionDTOByID(t, actions, actionRetry); !retry.Enabled {
+		if retry := actionDTOByID(t, actions, string(FeatureActionRetry)); !retry.Enabled {
 			t.Fatalf("child retry action = %+v; want unchanged and enabled for a failed child setup", retry)
 		}
-		assertDisabledCode(t, actionDTOByID(t, actions, actionStart), disabledChildSetupIncomplete)
+		assertDisabledCode(t, actionDTOByID(t, actions, string(FeatureActionStart)), disabledChildSetupIncomplete)
 	})
 
 	t.Run("queued child disables setup", func(t *testing.T) {
@@ -1548,10 +1606,10 @@ func TestChildFeatureActionCatalogRestricted(t *testing.T) {
 		f.Parent = &feature.ChildRelationship{ParentID: "parent-1", Kind: feature.ChildKindRefactor}
 		f.Run().Setup = &feature.SetupState{Status: feature.SetupStatusRunning}
 
-		actions := actionCatalogDTOs(f)
+		actions := actionCatalogDTOsWithChildGuard(f, false)
 		assertNoDeliveryActions(t, actions)
-		assertDisabledCode(t, actionDTOByID(t, actions, actionSetup), "no_pending_setup")
-		assertDisabledCode(t, actionDTOByID(t, actions, actionRetry), "not_failed")
+		assertDisabledCode(t, actionDTOByID(t, actions, string(FeatureActionSetup)), "no_pending_setup")
+		assertDisabledCode(t, actionDTOByID(t, actions, string(FeatureActionRetry)), "not_failed")
 	})
 
 	t.Run("queued child reports setup_incomplete", func(t *testing.T) {
@@ -1560,11 +1618,11 @@ func TestChildFeatureActionCatalogRestricted(t *testing.T) {
 		f.Pipeline = feature.PipelineMedium
 		f.Parent = &feature.ChildRelationship{ParentID: "parent-1", Kind: feature.ChildKindRefactor}
 
-		actions := actionCatalogDTOs(f)
+		actions := actionCatalogDTOsWithChildGuard(f, false)
 		assertNoDeliveryActions(t, actions)
-		assertDisabledCode(t, actionDTOByID(t, actions, actionStart), disabledChildSetupIncomplete)
-		assertDisabledCode(t, actionDTOByID(t, actions, actionResume), disabledChildSetupIncomplete)
-		assertDisabledCode(t, actionDTOByID(t, actions, actionRestart), disabledChildSetupIncomplete)
+		assertDisabledCode(t, actionDTOByID(t, actions, string(FeatureActionStart)), disabledChildSetupIncomplete)
+		assertDisabledCode(t, actionDTOByID(t, actions, string(FeatureActionResume)), disabledChildSetupIncomplete)
+		assertDisabledCode(t, actionDTOByID(t, actions, string(FeatureActionRestart)), disabledChildSetupIncomplete)
 	})
 
 	t.Run("large child is eligible to execute", func(t *testing.T) {
@@ -1573,15 +1631,15 @@ func TestChildFeatureActionCatalogRestricted(t *testing.T) {
 		f.Pipeline = feature.PipelineLarge
 		f.Parent = &feature.ChildRelationship{ParentID: "parent-1", Kind: feature.ChildKindRefactor}
 
-		actions := actionCatalogDTOs(f)
+		actions := actionCatalogDTOsWithChildGuard(f, false)
 		assertNoDeliveryActions(t, actions)
-		if start := actionDTOByID(t, actions, actionStart); !start.Enabled {
+		if start := actionDTOByID(t, actions, string(FeatureActionStart)); !start.Enabled {
 			t.Fatalf("start disabled = %+v; want enabled for an eligible large child", start.DisabledReasons)
 		}
-		if restart := actionDTOByID(t, actions, actionRestart); !restart.Enabled {
+		if restart := actionDTOByID(t, actions, string(FeatureActionRestart)); !restart.Enabled {
 			t.Fatalf("restart disabled = %+v; want enabled for an eligible large child", restart.DisabledReasons)
 		}
-		assertDisabledCode(t, actionDTOByID(t, actions, actionResume), "not_paused")
+		assertDisabledCode(t, actionDTOByID(t, actions, string(FeatureActionResume)), "not_paused")
 	})
 
 	t.Run("multi-repo child no longer restricted by repo count", func(t *testing.T) {
@@ -1591,11 +1649,11 @@ func TestChildFeatureActionCatalogRestricted(t *testing.T) {
 		f.Repos = append(f.Repos, feature.FeatureRepo{Name: "repoB", Publishable: &publishable})
 		f.Parent = &feature.ChildRelationship{ParentID: "parent-1", Kind: feature.ChildKindRefactor}
 
-		actions := actionCatalogDTOs(f)
+		actions := actionCatalogDTOsWithChildGuard(f, false)
 		assertNoDeliveryActions(t, actions)
 		// Multi-repo children are now supported — start should not be
 		// disabled by repo count.
-		startAction := actionDTOByID(t, actions, actionStart)
+		startAction := actionDTOByID(t, actions, string(FeatureActionStart))
 		if !startAction.Enabled {
 			t.Fatalf("start action disabled for multi-repo child; multi-repo restriction should be retired: %+v", startAction.DisabledReasons)
 		}
@@ -1622,11 +1680,11 @@ func TestChildFeatureActionCatalogRestricted(t *testing.T) {
 			},
 		}
 
-		actions := actionCatalogDTOs(f)
+		actions := actionCatalogDTOsWithChildGuard(f, false)
 		assertNoDeliveryActions(t, actions)
-		assertDisabledCode(t, actionDTOByID(t, actions, actionStart), disabledChildRelationshipClosed)
-		assertDisabledCode(t, actionDTOByID(t, actions, actionResume), disabledChildRelationshipClosed)
-		assertDisabledCode(t, actionDTOByID(t, actions, actionRestart), disabledChildRelationshipClosed)
+		assertDisabledCode(t, actionDTOByID(t, actions, string(FeatureActionStart)), disabledChildRelationshipClosed)
+		assertDisabledCode(t, actionDTOByID(t, actions, string(FeatureActionResume)), disabledChildRelationshipClosed)
+		assertDisabledCode(t, actionDTOByID(t, actions, string(FeatureActionRestart)), disabledChildRelationshipClosed)
 	})
 
 	t.Run("closed child cleanup tail remains automatic", func(t *testing.T) {
@@ -1655,7 +1713,7 @@ func TestChildFeatureActionCatalogRestricted(t *testing.T) {
 			},
 		}
 
-		actions := actionCatalogDTOs(f)
+		actions := actionCatalogDTOsWithChildGuard(f, false)
 		assertNoDeliveryActions(t, actions)
 		for _, action := range actions {
 			assertDisabledCode(t, action, disabledChildRelationshipClosed)
@@ -1675,12 +1733,12 @@ func TestChildFeatureActionCatalogRestricted(t *testing.T) {
 			Diagnostics: gitWorktreeAddFailedMsg,
 		}
 
-		actions := actionCatalogDTOs(f)
-		retry := actionDTOByID(t, actions, actionRetry)
+		actions := actionCatalogDTOsWithChildGuard(f, false)
+		retry := actionDTOByID(t, actions, string(FeatureActionRetry))
 		if !retry.Enabled {
 			t.Fatalf("retry enabled = false; want true for a failed-setup child")
 		}
-		assertDisabledCode(t, actionDTOByID(t, actions, actionStart), disabledChildSetupIncomplete)
+		assertDisabledCode(t, actionDTOByID(t, actions, string(FeatureActionStart)), disabledChildSetupIncomplete)
 	})
 }
 
@@ -1703,9 +1761,9 @@ func TestFeatureDetailActionCatalogStateMatrix(t *testing.T) {
 				enabled      bool
 				disabledCode string
 			}{
-				actionPublish: {enabled: true},
-				actionMerge:   {disabledCode: disabledNotLocalOnly},
-				actionRebase:  {disabledCode: disabledStatusNotAllowed},
+				string(FeatureActionPublish): {enabled: true},
+				string(FeatureActionMerge):   {disabledCode: disabledNotLocalOnly},
+				string(FeatureActionRebase):  {disabledCode: disabledStatusNotAllowed},
 			},
 		},
 		{
@@ -1717,9 +1775,9 @@ func TestFeatureDetailActionCatalogStateMatrix(t *testing.T) {
 			}{
 				// The manual-publish checkpoint no longer gates the action:
 				// a repository publish failure is retried through publish.
-				actionPublish:  {enabled: true},
-				actionRebase:   {enabled: true},
-				actionMarkDone: {enabled: true},
+				string(FeatureActionPublish):  {enabled: true},
+				string(FeatureActionRebase):   {enabled: true},
+				string(FeatureActionMarkDone): {enabled: true},
 			},
 		},
 		{
@@ -1729,8 +1787,8 @@ func TestFeatureDetailActionCatalogStateMatrix(t *testing.T) {
 				enabled      bool
 				disabledCode string
 			}{
-				actionPublish: {disabledCode: "local_only"},
-				actionMerge:   {enabled: true},
+				string(FeatureActionPublish): {disabledCode: "local_only"},
+				string(FeatureActionMerge):   {enabled: true},
 			},
 		},
 		{
@@ -1740,7 +1798,7 @@ func TestFeatureDetailActionCatalogStateMatrix(t *testing.T) {
 				enabled      bool
 				disabledCode string
 			}{
-				actionMerge: {disabledCode: disabledStatusNotAllowed},
+				string(FeatureActionMerge): {disabledCode: disabledStatusNotAllowed},
 			},
 		},
 		{
@@ -1754,7 +1812,7 @@ func TestFeatureDetailActionCatalogStateMatrix(t *testing.T) {
 				enabled      bool
 				disabledCode string
 			}{
-				actionRewind: {disabledCode: "no_rewind_targets"},
+				string(FeatureActionRewind): {disabledCode: "no_rewind_targets"},
 			},
 		},
 		{
@@ -1766,10 +1824,10 @@ func TestFeatureDetailActionCatalogStateMatrix(t *testing.T) {
 			}{
 				// Published features keep publish enabled: a repository
 				// publish failure is retried through it.
-				actionPublish: {enabled: true},
-				actionMerge:   {disabledCode: disabledNotLocalOnly},
-				actionRebase:  {enabled: true},
-				actionCleanup: {enabled: true},
+				string(FeatureActionPublish): {enabled: true},
+				string(FeatureActionMerge):   {disabledCode: disabledNotLocalOnly},
+				string(FeatureActionRebase):  {enabled: true},
+				string(FeatureActionCleanup): {enabled: true},
 			},
 		},
 		{
@@ -1779,7 +1837,7 @@ func TestFeatureDetailActionCatalogStateMatrix(t *testing.T) {
 				enabled      bool
 				disabledCode string
 			}{
-				actionPublish: {disabledCode: disabledStatusNotAllowed},
+				string(FeatureActionPublish): {disabledCode: disabledStatusNotAllowed},
 			},
 		},
 		{
@@ -1793,8 +1851,8 @@ func TestFeatureDetailActionCatalogStateMatrix(t *testing.T) {
 				enabled      bool
 				disabledCode string
 			}{
-				actionPauseStop: {enabled: true},
-				actionResume:    {enabled: true},
+				string(FeatureActionPauseStop): {enabled: true},
+				string(FeatureActionResume):    {enabled: true},
 			},
 		},
 		{
@@ -1804,8 +1862,8 @@ func TestFeatureDetailActionCatalogStateMatrix(t *testing.T) {
 				enabled      bool
 				disabledCode string
 			}{
-				actionCleanup: {disabledCode: "running"},
-				actionDelete:  {enabled: true},
+				string(FeatureActionCleanup): {disabledCode: "running"},
+				string(FeatureActionDelete):  {enabled: true},
 			},
 		},
 		{
@@ -1819,14 +1877,14 @@ func TestFeatureDetailActionCatalogStateMatrix(t *testing.T) {
 				enabled      bool
 				disabledCode string
 			}{
-				actionRewind: {enabled: true},
+				string(FeatureActionRewind): {enabled: true},
 			},
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			actions := actionCatalogDTOs(tt.f)
+			actions := actionCatalogDTOsWithChildGuard(tt.f, false)
 			for id, want := range tt.want {
 				got := actionDTOByID(t, actions, id)
 				if got.Enabled != want.enabled {
@@ -1852,7 +1910,7 @@ func TestFeatureDetailActionCatalogMediumPlanReviewAdvertisesPlanAndUpgradeTarge
 	f := actionCatalogTestFeature(feature.StatusPlanNeedsReview, feature.Checkpoints{}, &publishable)
 	f.Pipeline = feature.PipelineMedium
 
-	rewind := actionDTOByID(t, actionCatalogDTOs(f), actionRewind)
+	rewind := actionDTOByID(t, actionCatalogDTOsWithChildGuard(f, false), string(FeatureActionRewind))
 	if !rewind.Enabled {
 		t.Fatalf("rewind enabled = false; want true")
 	}
@@ -1873,7 +1931,7 @@ func TestFeatureDetailActionCatalogDesignReviewExcludesUnstartedPlan(t *testing.
 	f.CurrentPhase = feature.PhaseDesign
 	f.Pipeline = feature.PipelineMoonshot
 
-	rewind := actionDTOByID(t, actionCatalogDTOs(f), actionRewind)
+	rewind := actionDTOByID(t, actionCatalogDTOsWithChildGuard(f, false), string(FeatureActionRewind))
 	if !rewind.Enabled {
 		t.Fatalf("rewind enabled = false; want true")
 	}
@@ -1922,16 +1980,20 @@ func TestPromptPermissionSnapshotsPreserveFIFOOrdering(t *testing.T) {
 
 	sessions := fakeSessionManager{views: []ports.SessionView{
 		&fakeSessionView{
-			id: "new-session", featureID: newest.ID, phase: feature.PhaseImplement, status: ports.SessionWaitingPermission,
-			startedAt: time.Date(2026, 6, 13, 12, 10, 0, 0, time.UTC),
+			MockSessionView: &mocks.MockSessionView{
+				IDVal: "new-session", FeatureIDVal: newest.ID, PhaseVal: feature.PhaseImplement, StatusVal: ports.SessionWaitingPermission,
+				StartedAtVal: time.Date(2026, 6, 13, 12, 10, 0, 0, time.UTC),
+			},
 			pending: []*llm.ControlRequestMessage{
 				pendingReadControl("new-perm", toolNameBash, `{}`),
 				pendingReadControl("new-ask", toolNameAskUserQuestion, `{"questions":[{"question":"new ask"}]}`),
 			},
 		},
 		&fakeSessionView{
-			id: "old-session", featureID: oldest.ID, phase: feature.PhasePlan, status: ports.SessionWaitingHelp,
-			startedAt: time.Date(2026, 6, 13, 12, 1, 0, 0, time.UTC),
+			MockSessionView: &mocks.MockSessionView{
+				IDVal: "old-session", FeatureIDVal: oldest.ID, PhaseVal: feature.PhasePlan, StatusVal: ports.SessionWaitingHelp,
+				StartedAtVal: time.Date(2026, 6, 13, 12, 1, 0, 0, time.UTC),
+			},
 			pending: []*llm.ControlRequestMessage{
 				pendingReadControl("old-ask", toolNameAskUserQuestion, `{"questions":[{"question":"old ask"}]}`),
 				pendingReadControl("old-perm", toolNameBash, `{}`),
@@ -1979,11 +2041,15 @@ func TestPromptAndPermissionSnapshotsExposeStableWaitingSince(t *testing.T) {
 
 	sessions := fakeSessionManager{views: []ports.SessionView{
 		&fakeSessionView{
-			id: "waiting-since-permission", featureID: f.ID, phase: feature.PhaseImplement, status: ports.SessionWaitingPermission,
+			MockSessionView: &mocks.MockSessionView{
+				IDVal: "waiting-since-permission", FeatureIDVal: f.ID, PhaseVal: feature.PhaseImplement, StatusVal: ports.SessionWaitingPermission,
+			},
 			pending: []*llm.ControlRequestMessage{pendingReadControl("permission-waiting-since", toolNameBash, `{}`)},
 		},
 		&fakeSessionView{
-			id: "waiting-since-question", featureID: f.ID, phase: feature.PhasePlan, status: ports.SessionWaitingHelp,
+			MockSessionView: &mocks.MockSessionView{
+				IDVal: "waiting-since-question", FeatureIDVal: f.ID, PhaseVal: feature.PhasePlan, StatusVal: ports.SessionWaitingHelp,
+			},
 			pending: []*llm.ControlRequestMessage{pendingReadControl("question-waiting-since", toolNameAskUserQuestion, `{"questions":[{"question":"Which option?"}]}`)},
 		},
 	}}
@@ -2052,12 +2118,11 @@ func TestPromptSnapshotIncludesWaitingHelpSessionWithoutControlRequest(t *testin
 	waitingSince := time.Date(2026, 6, 13, 12, 30, 0, 0, time.UTC)
 	sessions := fakeSessionManager{views: []ports.SessionView{
 		&fakeSessionView{
-			id:           "sess-waiting-help",
-			featureID:    f.ID,
-			phase:        feature.PhaseDesign,
-			status:       ports.SessionWaitingHelp,
-			startedAt:    time.Date(2026, 6, 13, 12, 3, 0, 0, time.UTC),
-			waitingSince: waitingSince,
+			MockSessionView: &mocks.MockSessionView{
+				IDVal: "sess-waiting-help", FeatureIDVal: f.ID, PhaseVal: feature.PhaseDesign,
+				StatusVal: ports.SessionWaitingHelp, StartedAtVal: time.Date(2026, 6, 13, 12, 3, 0, 0, time.UTC),
+				WaitingSinceVal: waitingSince,
+			},
 		},
 	}}
 	opts := baseReadHandlerOptions(store)
@@ -2081,6 +2146,30 @@ func TestPromptSnapshotIncludesWaitingHelpSessionWithoutControlRequest(t *testin
 	}
 	if got := stringFieldFromJSON(t, prompts["ask_user_questions"], requestIDKey); len(got) != 0 {
 		t.Fatalf("prompt ask_user_questions = %v; want empty without control request", got)
+	}
+}
+
+// The synthetic coordinating entry is derived from live session status, so it
+// must disappear as soon as the session resumes instead of lingering until the
+// session ends.
+func TestPromptSnapshotDropsCoordinatingEntryWhenSessionResumes(t *testing.T) {
+	t.Parallel()
+	store, f := seedReadFeature(t)
+	sess := session.NewSession("sess-resume", f.ID, feature.PhaseImplement)
+	sess.SetStatus(ports.SessionWaitingHelp)
+	opts := baseReadHandlerOptions(store)
+	opts.Sessions = fakeSessionManager{views: []ports.SessionView{sess}}
+	handler := NewHandler(opts)
+
+	prompts := getJSONMap(t, handler, apiPathPrompts)
+	if got := stringFieldFromJSON(t, prompts["help_queue"], questionFieldKey); len(got) != 1 || got[0] != agentQuestionPrompt {
+		t.Fatalf("help_queue while WaitingHelp = %v; want one coordinating entry", got)
+	}
+
+	sess.SetStatus(ports.SessionRunning)
+	prompts = getJSONMap(t, handler, apiPathPrompts)
+	if got := stringFieldFromJSON(t, prompts["help_queue"], questionFieldKey); len(got) != 0 {
+		t.Fatalf("help_queue after resume = %v; want empty", got)
 	}
 }
 
@@ -2112,7 +2201,9 @@ func TestPermissionSnapshotIncludesToolInputAndActionableSummary(t *testing.T) {
 	store, f := seedReadFeature(t)
 	sessions := fakeSessionManager{views: []ports.SessionView{
 		&fakeSessionView{
-			id: fixtureSessionID, featureID: f.ID, phase: feature.PhaseImplement, status: ports.SessionWaitingPermission,
+			MockSessionView: &mocks.MockSessionView{
+				IDVal: fixtureSessionID, FeatureIDVal: f.ID, PhaseVal: feature.PhaseImplement, StatusVal: ports.SessionWaitingPermission,
+			},
 			pending: []*llm.ControlRequestMessage{
 				pendingReadControl(fixturePermissionRequestID, toolNameBash, `{"command":"go test ./internal/server"}`),
 			},
@@ -2143,9 +2234,10 @@ func TestPermissionSnapshotIncludesRememberPreview(t *testing.T) {
 	input := json.RawMessage(`{"command":"go test ./internal/server -run TestAPIApp"}`)
 	store, f := seedReadFeature(t)
 	sess := &fakeSessionView{
-		id: "sess-remember", featureID: f.ID, phase: feature.PhaseImplement,
-		status:         ports.SessionWaitingPermission,
-		permCacheScope: repoNameSelf,
+		MockSessionView: &mocks.MockSessionView{
+			IDVal: "sess-remember", FeatureIDVal: f.ID, PhaseVal: feature.PhaseImplement,
+			StatusVal: ports.SessionWaitingPermission, PermCacheScopeVal: repoNameSelf,
+		},
 		pending: []*llm.ControlRequestMessage{{
 			Type:      transcriptTypeControlRequest,
 			RequestID: "perm-remember",
@@ -2183,9 +2275,10 @@ func TestPermissionSnapshotIncludesAutoApproveOffer(t *testing.T) {
 
 	store, f := seedReadFeature(t)
 	sess := &fakeSessionView{
-		id: "sess-auto-approve", featureID: f.ID, phase: feature.PhaseImplement,
-		status:         ports.SessionWaitingPermission,
-		permCacheScope: repoNameSelf,
+		MockSessionView: &mocks.MockSessionView{
+			IDVal: "sess-auto-approve", FeatureIDVal: f.ID, PhaseVal: feature.PhaseImplement,
+			StatusVal: ports.SessionWaitingPermission, PermCacheScopeVal: repoNameSelf,
+		},
 		pending: []*llm.ControlRequestMessage{
 			{
 				Type:      transcriptTypeControlRequest,
@@ -2245,8 +2338,10 @@ func TestPermissionSnapshotRememberPreviewDoesNotLeakSensitiveInput(t *testing.T
 	input := json.RawMessage(`{"command":"echo private-token"}`)
 	store, f := seedReadFeature(t)
 	sess := &fakeSessionView{
-		id: "sess-remember-secret", featureID: f.ID, phase: feature.PhaseImplement,
-		status: ports.SessionWaitingPermission,
+		MockSessionView: &mocks.MockSessionView{
+			IDVal: "sess-remember-secret", FeatureIDVal: f.ID, PhaseVal: feature.PhaseImplement,
+			StatusVal: ports.SessionWaitingPermission,
+		},
 		pending: []*llm.ControlRequestMessage{{
 			Type:      transcriptTypeControlRequest,
 			RequestID: "perm-remember-secret",
@@ -2299,8 +2394,10 @@ func TestPermissionSnapshotRememberPreviewDoesNotLeakUnsafeRawInput(t *testing.T
 
 			store, f := seedReadFeature(t)
 			sess := &fakeSessionView{
-				id: "sess-remember-unsafe-" + tt.name, featureID: f.ID, phase: feature.PhaseImplement,
-				status: ports.SessionWaitingPermission,
+				MockSessionView: &mocks.MockSessionView{
+					IDVal: "sess-remember-unsafe-" + tt.name, FeatureIDVal: f.ID, PhaseVal: feature.PhaseImplement,
+					StatusVal: ports.SessionWaitingPermission,
+				},
 				pending: []*llm.ControlRequestMessage{{
 					Type:      transcriptTypeControlRequest,
 					RequestID: "perm-remember-unsafe-" + tt.name,
@@ -2377,16 +2474,23 @@ func TestSessionListIncludesActiveAndRecentFeatureSessions(t *testing.T) {
 	now := time.Date(2026, 6, 13, 13, 0, 0, 0, time.UTC)
 	sessions := fakeSessionManager{views: []ports.SessionView{
 		&fakeSessionView{
-			id: "sess-running", featureID: f.ID, phase: feature.PhaseImplement,
-			kind: ports.KindPhase, status: ports.SessionRunning, startedAt: now.Add(-2 * time.Minute), runNumber: 3,
+			MockSessionView: &mocks.MockSessionView{
+				IDVal: "sess-running", FeatureIDVal: f.ID, PhaseVal: feature.PhaseImplement,
+				KindVal: ports.KindPhase, StatusVal: ports.SessionRunning, StartedAtVal: now.Add(-2 * time.Minute),
+			},
+			runNumber: 3,
 		},
 		&fakeSessionView{
-			id: "sess-completed", featureID: f.ID, phase: feature.PhasePlan,
-			kind: ports.KindPhase, status: ports.SessionDone, startedAt: now.Add(-1 * time.Minute),
+			MockSessionView: &mocks.MockSessionView{
+				IDVal: "sess-completed", FeatureIDVal: f.ID, PhaseVal: feature.PhasePlan,
+				KindVal: ports.KindPhase, StatusVal: ports.SessionDone, StartedAtVal: now.Add(-1 * time.Minute),
+			},
 		},
 		&fakeSessionView{
-			id: "sess-failed", featureID: f.ID, phase: feature.PhaseResearch,
-			kind: ports.KindPhase, status: ports.SessionFailed, startedAt: now.Add(-3 * time.Minute),
+			MockSessionView: &mocks.MockSessionView{
+				IDVal: "sess-failed", FeatureIDVal: f.ID, PhaseVal: feature.PhaseResearch,
+				KindVal: ports.KindPhase, StatusVal: ports.SessionFailed, StartedAtVal: now.Add(-3 * time.Minute),
+			},
 		},
 	}}
 	opts := baseReadHandlerOptions(store)
@@ -2417,8 +2521,11 @@ func TestSessionListOmitsUnavailableContextPercentage(t *testing.T) {
 	unavailable := -1
 	opts := baseReadHandlerOptions(store)
 	opts.Sessions = fakeSessionManager{views: []ports.SessionView{&fakeSessionView{
-		id: "sess-restored", featureID: f.ID, phase: feature.PhaseImplement,
-		kind: ports.KindPhase, status: ports.SessionRunning, contextPct: &unavailable,
+		MockSessionView: &mocks.MockSessionView{
+			IDVal: "sess-restored", FeatureIDVal: f.ID, PhaseVal: feature.PhaseImplement,
+			KindVal: ports.KindPhase, StatusVal: ports.SessionRunning,
+		},
+		contextPct: &unavailable,
 	}}}
 
 	body := getJSONMap(t, NewHandler(opts), apiPathSessions)
@@ -2433,20 +2540,16 @@ func TestSessionListExposesSupervisorSessionKind(t *testing.T) {
 	store, _ := seedReadFeature(t)
 	sessions := fakeSessionManager{views: []ports.SessionView{
 		&fakeSessionView{
-			id:        "supervisor-idle",
-			featureID: supervisor.FeatureID,
-			phase:     feature.PhaseResearch,
-			kind:      ports.KindSupervisor,
-			label:     supervisorLabel,
-			status:    ports.SessionWaitingHelp,
+			MockSessionView: &mocks.MockSessionView{
+				IDVal: "supervisor-idle", FeatureIDVal: supervisor.FeatureID, PhaseVal: feature.PhaseResearch,
+				KindVal: ports.KindSupervisor, LabelVal: supervisorLabel, StatusVal: ports.SessionWaitingHelp,
+			},
 		},
 		&fakeSessionView{
-			id:        "supervisor-ask",
-			featureID: supervisor.FeatureID,
-			phase:     feature.PhaseResearch,
-			kind:      ports.KindSupervisor,
-			label:     supervisorLabel,
-			status:    ports.SessionWaitingHelp,
+			MockSessionView: &mocks.MockSessionView{
+				IDVal: "supervisor-ask", FeatureIDVal: supervisor.FeatureID, PhaseVal: feature.PhaseResearch,
+				KindVal: ports.KindSupervisor, LabelVal: supervisorLabel, StatusVal: ports.SessionWaitingHelp,
+			},
 			pending: []*llm.ControlRequestMessage{{
 				RequestID: "ask-1",
 				Request:   llm.ControlRequest{ToolName: toolNameAskUserQuestion},
@@ -2487,13 +2590,17 @@ func TestSessionListUsesBoundedRecentSessionsWithoutFeatureScan(t *testing.T) {
 	store, f := seedReadFeature(t)
 	now := time.Date(2026, 6, 13, 13, 0, 0, 0, time.UTC)
 	views := []ports.SessionView{&fakeSessionView{
-		id: "sess-active-old", featureID: f.ID, phase: feature.PhaseImplement,
-		kind: ports.KindPhase, status: ports.SessionRunning, startedAt: now.Add(-2 * time.Hour),
+		MockSessionView: &mocks.MockSessionView{
+			IDVal: "sess-active-old", FeatureIDVal: f.ID, PhaseVal: feature.PhaseImplement,
+			KindVal: ports.KindPhase, StatusVal: ports.SessionRunning, StartedAtVal: now.Add(-2 * time.Hour),
+		},
 	}}
 	for i := 0; i < 60; i++ {
 		views = append(views, &fakeSessionView{
-			id: "sess-done-" + twoDigit(i), featureID: f.ID, phase: feature.PhasePlan,
-			kind: ports.KindPhase, status: ports.SessionDone, startedAt: now.Add(-time.Duration(i) * time.Minute),
+			MockSessionView: &mocks.MockSessionView{
+				IDVal: "sess-done-" + twoDigit(i), FeatureIDVal: f.ID, PhaseVal: feature.PhasePlan,
+				KindVal: ports.KindPhase, StatusVal: ports.SessionDone, StartedAtVal: now.Add(-time.Duration(i) * time.Minute),
+			},
 		})
 	}
 	var featureSessionCalls int
@@ -2532,8 +2639,10 @@ func TestSessionDetailAndTranscriptDoNotScanFeatureSessionsOnLookupMiss(t *testi
 	var featureSessionCalls int
 	sessions := fakeSessionManager{
 		views: []ports.SessionView{&fakeSessionView{
-			id: "sess-historical", featureID: f.ID, phase: feature.PhaseImplement,
-			kind: ports.KindPhase, status: ports.SessionDone,
+			MockSessionView: &mocks.MockSessionView{
+				IDVal: "sess-historical", FeatureIDVal: f.ID, PhaseVal: feature.PhaseImplement,
+				KindVal: ports.KindPhase, StatusVal: ports.SessionDone,
+			},
 		}},
 		getSessionMiss:       true,
 		featureSessionsCalls: &featureSessionCalls,
@@ -2555,8 +2664,10 @@ func TestSessionTranscriptPreservesProtocolPromptsAndLocalUserEchoes(t *testing.
 	protocolPrompt := "Translate README in Neapolitan.\n" + strings.Repeat("Preserve this sentence. ", 30) + "tail marker"
 	sessions := fakeSessionManager{
 		views: []ports.SessionView{&fakeSessionView{
-			id: "sess-local-echo", featureID: f.ID, phase: feature.PhaseImplement,
-			kind: ports.KindPhase, status: ports.SessionRunning,
+			MockSessionView: &mocks.MockSessionView{
+				IDVal: "sess-local-echo", FeatureIDVal: f.ID, PhaseVal: feature.PhaseImplement,
+				KindVal: ports.KindPhase, StatusVal: ports.SessionRunning,
+			},
 			messages: []llm.SDKMessage{
 				{Type: roleUser, User: &llm.UserMessage{Message: llm.ConversationMsg{
 					Role:    roleUser,
@@ -2604,8 +2715,10 @@ func TestSessionTranscriptDoesNotTruncateAssistantText(t *testing.T) {
 		"tail marker"
 	sessions := fakeSessionManager{
 		views: []ports.SessionView{&fakeSessionView{
-			id: "sess-supervisor-long-answer", featureID: f.ID, phase: feature.PhaseResearch,
-			kind: ports.KindSupervisor, status: ports.SessionRunning,
+			MockSessionView: &mocks.MockSessionView{
+				IDVal: "sess-supervisor-long-answer", FeatureIDVal: f.ID, PhaseVal: feature.PhaseResearch,
+				KindVal: ports.KindSupervisor, StatusVal: ports.SessionRunning,
+			},
 			messages: []llm.SDKMessage{{
 				Type: roleAssistant,
 				Assistant: &llm.AssistantMessage{Message: llm.ConversationMsg{
@@ -2637,8 +2750,10 @@ func TestLivePreviewUsesBoundedRecentSessionsWithoutFeatureScan(t *testing.T) {
 	views := make([]ports.SessionView, 0, 60)
 	for i := 0; i < 60; i++ {
 		views = append(views, &fakeSessionView{
-			id: "sess-done-" + twoDigit(i), featureID: f.ID, phase: feature.PhaseImplement,
-			kind: ports.KindPhase, status: ports.SessionDone, startedAt: now.Add(-time.Duration(i) * time.Minute),
+			MockSessionView: &mocks.MockSessionView{
+				IDVal: "sess-done-" + twoDigit(i), FeatureIDVal: f.ID, PhaseVal: feature.PhaseImplement,
+				KindVal: ports.KindPhase, StatusVal: ports.SessionDone, StartedAtVal: now.Add(-time.Duration(i) * time.Minute),
+			},
 		})
 	}
 	var featureSessionCalls int
@@ -2718,13 +2833,11 @@ func TestLivePreviewSessionIncludesRunningCost(t *testing.T) {
 	t.Parallel()
 	store, f := seedReadFeature(t)
 	sessions := fakeSessionManager{views: []ports.SessionView{&fakeSessionView{
-		id:        "sess-running-cost",
-		featureID: f.ID,
-		runNumber: 1,
-		phase:     feature.PhaseResearch,
-		kind:      ports.KindPhase,
-		status:    ports.SessionRunning,
-		usage:     &llm.Usage{InputTokens: 100, OutputTokens: 20, CostUSD: 0.42},
+		MockSessionView: &mocks.MockSessionView{
+			IDVal: "sess-running-cost", FeatureIDVal: f.ID, PhaseVal: feature.PhaseResearch,
+			KindVal: ports.KindPhase, StatusVal: ports.SessionRunning,
+		},
+		runNumber: 1, usage: &llm.Usage{InputTokens: 100, OutputTokens: 20, CostUSD: 0.42},
 	}}}
 	opts := baseReadHandlerOptions(store)
 	opts.Sessions = sessions
@@ -2748,6 +2861,7 @@ func TestLivePreviewIncludesExtendedTranscriptTailAndToolProgressRows(t *testing
 			ToolUseID: "toolu-bash-1",
 			ToolName:  toolNameBash,
 			Data:      "private-token output must stay redacted",
+			Summary:   "go test ./...",
 		},
 	}}
 	for i := 1; i <= 6; i++ {
@@ -2760,8 +2874,10 @@ func TestLivePreviewIncludesExtendedTranscriptTailAndToolProgressRows(t *testing
 		})
 	}
 	sessions := fakeSessionManager{views: []ports.SessionView{&fakeSessionView{
-		id: "sess-live", featureID: f.ID, phase: feature.PhaseImplement,
-		kind: ports.KindPhase, status: ports.SessionRunning, provider: providerCodex,
+		MockSessionView: &mocks.MockSessionView{
+			IDVal: "sess-live", FeatureIDVal: f.ID, PhaseVal: feature.PhaseImplement,
+			KindVal: ports.KindPhase, StatusVal: ports.SessionRunning, ProviderNameVal: providerCodex,
+		},
 		messages: msgs,
 	}}}
 	opts := baseReadHandlerOptions(store)
@@ -2784,6 +2900,9 @@ func TestLivePreviewIncludesExtendedTranscriptTailAndToolProgressRows(t *testing
 	if tool["type"] != transcriptTypeToolProgress || tool["tool"] != toolNameBash || tool["redacted"] != true {
 		t.Fatalf("tool progress transcript row = %+v; want redacted Bash tool_progress row", tool)
 	}
+	if call, _ := tool["tool_call"].(map[string]any); call["summary"] != "go test ./..." {
+		t.Fatalf("tool progress tool_call = %+v; want the command summary", tool["tool_call"])
+	}
 }
 
 func TestSessionTranscriptIncludesSanitizedFileChangeRows(t *testing.T) {
@@ -2805,8 +2924,10 @@ func TestSessionTranscriptIncludesSanitizedFileChangeRows(t *testing.T) {
 		}},
 	}
 	sessions := fakeSessionManager{views: []ports.SessionView{&fakeSessionView{
-		id: fixtureSessionID, featureID: f.ID, phase: feature.PhaseImplement,
-		kind: ports.KindPhase, status: ports.SessionRunning, provider: providerCodex,
+		MockSessionView: &mocks.MockSessionView{
+			IDVal: fixtureSessionID, FeatureIDVal: f.ID, PhaseVal: feature.PhaseImplement,
+			KindVal: ports.KindPhase, StatusVal: ports.SessionRunning, ProviderNameVal: providerCodex,
+		},
 		messages: msgs,
 	}}}
 	opts := baseReadHandlerOptions(store)
@@ -2845,9 +2966,11 @@ func TestSessionTranscriptIncludesStructuredCodexFileChangeDiffRows(t *testing.T
 		}},
 	}}
 	sessions := fakeSessionManager{views: []ports.SessionView{&fakeSessionView{
-		id: fixtureSessionID, featureID: f.ID, phase: feature.PhaseImplement,
-		kind: ports.KindPhase, status: ports.SessionRunning, provider: providerCodex,
-		workDir:  "/work/repo",
+		MockSessionView: &mocks.MockSessionView{
+			IDVal: fixtureSessionID, FeatureIDVal: f.ID, PhaseVal: feature.PhaseImplement,
+			KindVal: ports.KindPhase, StatusVal: ports.SessionRunning, ProviderNameVal: providerCodex,
+			WorkDirVal: "/work/repo",
+		},
 		messages: msgs,
 	}}}
 	opts := baseReadHandlerOptions(store)
@@ -2899,8 +3022,10 @@ func TestSessionTranscriptIncludesTaskLifecycleAndDelegationMetadata(t *testing.
 		}},
 	}
 	sessions := fakeSessionManager{views: []ports.SessionView{&fakeSessionView{
-		id: fixtureSessionID, featureID: f.ID, phase: feature.PhaseImplement,
-		kind: ports.KindPhase, status: ports.SessionRunning, provider: providerClaude,
+		MockSessionView: &mocks.MockSessionView{
+			IDVal: fixtureSessionID, FeatureIDVal: f.ID, PhaseVal: feature.PhaseImplement,
+			KindVal: ports.KindPhase, StatusVal: ports.SessionRunning, ProviderNameVal: providerClaude,
+		},
 		messages: msgs,
 	}}}
 	opts := baseReadHandlerOptions(store)
@@ -2945,10 +3070,13 @@ func TestArtifactLogLivePreviewAndSessionReadsAreBoundedAndRedacted(t *testing.T
 		{Type: roleUser, User: &llm.UserMessage{Message: llm.ConversationMsg{Role: roleUser, Content: []llm.ContentBlock{{Type: blockTypeText, Text: "raw prompt private-token"}}}}},
 	}
 	sessions := fakeSessionManager{views: []ports.SessionView{&fakeSessionView{
-		id: fixtureSessionID, featureID: f.ID, phase: feature.PhaseImplement, repoName: repoNameSelf,
-		kind: ports.KindPhase, status: ports.SessionRunning, provider: providerCodex, model: modelGPT54,
-		logPath: filepath.Join(runDir, feature.PhaseResearch.DirName(), "output.txt"), messages: msgs,
-		initialPrompt: "private-token initial prompt",
+		MockSessionView: &mocks.MockSessionView{
+			IDVal: fixtureSessionID, FeatureIDVal: f.ID, PhaseVal: feature.PhaseImplement, RepoNameVal: repoNameSelf,
+			KindVal: ports.KindPhase, StatusVal: ports.SessionRunning, ProviderNameVal: providerCodex, ModelVal: modelGPT54,
+			LogFilePathVal:   filepath.Join(runDir, feature.PhaseResearch.DirName(), "output.txt"),
+			InitialPromptVal: "private-token initial prompt",
+		},
+		messages: msgs,
 	}}}
 	opts := baseReadHandlerOptions(store)
 	opts.Sessions = sessions
@@ -3027,6 +3155,49 @@ func TestArtifactReadsAllowAbsolutePathsWithinSameRun(t *testing.T) {
 	content := getJSONMap(t, handler, "/api/v1/features/"+f.ID+"/runs/1/artifacts/roadmap?offset=2&limit=7")
 	if content[blockTypeText] != "Roadmap" {
 		t.Fatalf("roadmap content = %q; want Roadmap", content[blockTypeText])
+	}
+}
+
+func TestArtifactListSinglePhaseRunListsPhasePlanOnce(t *testing.T) {
+	t.Parallel()
+	store, f := seedReadFeature(t)
+	runDir := store.RunDir(f.ID, 1)
+	roadmapPath := filepath.Join(runDir, artifactIDRoadmap, "roadmap.md")
+	planPath := filepath.Join(runDir, "phase-01", targetPhasePlan, "phase-plan.md")
+	writeFile(t, roadmapPath, "# Roadmap\n")
+	writeFile(t, planPath, "# Phase plan\n")
+	// The orchestrator persists the per-phase id and the "plan" current-phase
+	// alias; the alias here is run-relative to cover path normalization.
+	f.Artifacts = map[string]string{
+		artifactIDRoadmap:   roadmapPath,
+		"phase-1-plan":      planPath,
+		artifactIDPlanAlias: filepath.Join("phase-01", targetPhasePlan, "phase-plan.md"),
+	}
+	if err := store.Save(f); err != nil {
+		t.Fatalf("Save() error = %v", err)
+	}
+	handler := NewHandler(baseReadHandlerOptions(store))
+
+	list := getJSONMap(t, handler, "/api/v1/features/"+f.ID+"/runs/1/artifacts")
+	seen := map[string]string{}
+	var ids []string
+	for _, raw := range list["artifacts"].([]any) {
+		artifact := raw.(map[string]any)
+		id, path := artifact["id"].(string), artifact["path"].(string)
+		if prev, dup := seen[path]; dup {
+			t.Fatalf("artifact path %s listed twice (ids %q and %q)", path, prev, id)
+		}
+		seen[path] = id
+		ids = append(ids, id)
+	}
+	if want := []string{"phase-1-plan", artifactIDRoadmap}; !reflect.DeepEqual(ids, want) {
+		t.Fatalf("artifact ids = %v; want %v", ids, want)
+	}
+
+	// The legacy alias still resolves on lookup.
+	content := getJSONMap(t, handler, "/api/v1/features/"+f.ID+"/runs/1/artifacts/plan?offset=2&limit=5")
+	if content[blockTypeText] != "Phase" {
+		t.Fatalf("plan alias content = %q; want Phase", content[blockTypeText])
 	}
 }
 
@@ -3145,7 +3316,7 @@ func TestSSEEmitsShutdownFromDomainEvents(t *testing.T) {
 }
 
 func TestRuntimeServerCloseEmitsShutdownNotification(t *testing.T) {
-	srv, err := Start(context.Background(), Options{AuthToken: testAuthToken})
+	srv, err := Start(context.Background(), Options{HandlerOptions: HandlerOptions{AuthToken: testAuthToken}})
 	if err != nil {
 		t.Fatalf("Start() error = %v", err)
 	}
@@ -3195,6 +3366,7 @@ func baseReadHandlerOptions(store *feature.Store) HandlerOptions {
 	return HandlerOptions{
 		Runtime:               RuntimeIdentity{RuntimeDir: runtimeDirLiteral, StateDir: store.BaseDir, Config: testRuntimeConfigPath},
 		Features:              store,
+		FeatureStore:          store,
 		DisableHostValidation: true,
 	}
 }
@@ -3524,6 +3696,40 @@ func (p fakeProvider) ModelCatalog() []llm.ModelInfo {
 	return out
 }
 
+// SetModelCatalog is a no-op: the fake's catalog is fixed at construction. No
+// caller enriches the fake; the method exists to satisfy the provider
+// interface.
+func (fakeProvider) SetModelCatalog([]llm.ModelInfo) {}
+
+func (p fakeProvider) DiscoverModelCatalog(context.Context) ([]llm.ModelInfo, error) {
+	return p.ModelCatalog(), nil
+}
+
+func (p fakeProvider) DiscoverModelCatalogWithProgress(ctx context.Context, report llm.ModelDiscoveryReporter) ([]llm.ModelInfo, error) {
+	models, err := p.DiscoverModelCatalog(ctx)
+	if err == nil && report != nil {
+		for _, model := range models {
+			report(model)
+		}
+	}
+	return models, err
+}
+
+func (p fakeProvider) ContextWindowForModel(model string) int {
+	if entry, ok := llm.LookupModel(p.ModelCatalog(), model); ok && entry.ContextWindow > 0 {
+		return entry.ContextWindow
+	}
+	return 0
+}
+
+func (p fakeProvider) AskingQuestionsClause() string { return "" }
+
+func (p fakeProvider) CheckReadiness(context.Context) llm.ProviderReadiness {
+	return llm.ProviderReadiness{Ready: true}
+}
+
+func (p fakeProvider) ReviewPreferenceBand(llm.ModelInfo) (int, bool) { return 0, false }
+
 type countingFeatureReader struct {
 	feature         *feature.Feature
 	loadRunNumbers  []int
@@ -3557,6 +3763,27 @@ func (r *countingFeatureReader) ListRuns(_ string) ([]int, error) {
 	}
 	return r.listRunsNumbers, nil
 }
+
+func (r *countingFeatureReader) RelationshipChildren(string) (*feature.RelationshipChildren, error) {
+	return &feature.RelationshipChildren{}, nil
+}
+func (r *countingFeatureReader) AllRelationshipChildren() (map[string]*feature.RelationshipChildren, error) {
+	return nil, nil
+}
+func (r *countingFeatureReader) LoadAddressedReviewFeedbackIDs(string, string) (map[int]bool, error) {
+	return nil, nil
+}
+func (r *countingFeatureReader) LoadReviewFeedbackDraft(string) (*feature.ReviewFeedbackDraft, error) {
+	return nil, nil
+}
+func (r *countingFeatureReader) SaveReviewFeedbackDraft(string, *feature.ReviewFeedbackDraft, int64) error {
+	return nil
+}
+func (r *countingFeatureReader) ActiveReviewFeedbackLaunchReceipt(string) (*feature.Feature, *feature.ReviewFeedbackLaunchReceipt, error) {
+	return nil, nil, nil
+}
+func (r *countingFeatureReader) DeleteReviewFeedbackDraftIfRevision(string, int64) error { return nil }
+func (r *countingFeatureReader) BaseDirectory() string                                   { return "" }
 
 type fakeSessionManager struct {
 	views                []ports.SessionView
@@ -3623,83 +3850,51 @@ func (m fakeSessionManager) FeatureSessions(featureID string) []ports.SessionVie
 	return out
 }
 
-func (m fakeSessionManager) SendInput(string, []byte) error { return nil }
-
-func (m fakeSessionManager) Attach(id string) (ports.SessionView, error) {
-	return m.GetSession(id), nil
-}
-
-func (m fakeSessionManager) Detach() {}
-
 func (m fakeSessionManager) Shutdown() {}
 
 func (m fakeSessionManager) IsShuttingDown() bool { return false }
 
+// fakeSessionView embeds the shared session-view mock and keeps only the
+// overrides whose hand-rolled behavior the contract tests in this file pin:
+// the fixed StartedAt fallback (and WaitingSince deriving from it),
+// status-derived IsActive, the fake message log, the pending-control-request
+// derivations, and nil session channels. Construction sites set the mock's
+// *Val fields on a zero-valued MockSessionView so unset fields keep the fake's
+// historical zero-value defaults.
 type fakeSessionView struct {
-	id             string
-	featureID      string
+	*mocks.MockSessionView
+
 	runNumber      int
-	phase          feature.Phase
-	repoName       string
-	kind           ports.SessionKind
-	label          string
-	status         ports.SessionStatus
-	startedAt      time.Time
-	waitingSince   time.Time
-	iteration      int
-	initialPrompt  string
-	provider       string
-	model          string
-	workDir        string
-	logPath        string
 	messages       []llm.SDKMessage
 	log            ports.MessageLog
 	pending        []*llm.ControlRequestMessage
-	permCacheScope string
 	contextPct     *int
 	usage          *llm.Usage
 	taskActivities []llm.TaskActivity
 }
 
-func (s *fakeSessionView) ID() string                  { return s.id }
-func (s *fakeSessionView) FeatureID() string           { return s.featureID }
-func (s *fakeSessionView) RunNumber() int              { return s.runNumber }
-func (s *fakeSessionView) Phase() feature.Phase        { return s.phase }
-func (s *fakeSessionView) RepoName() string            { return s.repoName }
-func (s *fakeSessionView) PermCacheScope() string      { return s.permCacheScope }
-func (s *fakeSessionView) Kind() ports.SessionKind     { return s.kind }
-func (s *fakeSessionView) Label() string               { return s.label }
-func (s *fakeSessionView) Status() ports.SessionStatus { return s.status }
+func (s *fakeSessionView) RunNumber() int { return s.runNumber }
 func (s *fakeSessionView) IsActive() bool {
-	return s.status == ports.SessionRunning || s.status == ports.SessionWaitingHelp || s.status == ports.SessionWaitingPermission
+	return s.StatusVal == ports.SessionRunning || s.StatusVal == ports.SessionWaitingHelp || s.StatusVal == ports.SessionWaitingPermission
 }
-func (s *fakeSessionView) Iteration() int { return s.iteration }
 func (s *fakeSessionView) StartedAt() time.Time {
-	if s.startedAt.IsZero() {
+	if s.StartedAtVal.IsZero() {
 		return time.Date(2026, 6, 13, 12, 0, 0, 0, time.UTC)
 	}
-	return s.startedAt
+	return s.StartedAtVal
 }
 func (s *fakeSessionView) WaitingSince() time.Time {
-	if s.waitingSince.IsZero() {
+	if s.WaitingSinceVal.IsZero() {
 		return s.StartedAt()
 	}
-	return s.waitingSince
+	return s.WaitingSinceVal
 }
-func (s *fakeSessionView) InitialPrompt() string            { return s.initialPrompt }
-func (s *fakeSessionView) ProviderName() string             { return s.provider }
-func (s *fakeSessionView) Model() string                    { return s.model }
-func (s *fakeSessionView) WorkDir() string                  { return s.workDir }
-func (s *fakeSessionView) EffectiveEffort() llm.EffortLevel { return "" }
-func (s *fakeSessionView) EffortSource() llm.EffortSource   { return "" }
 func (s *fakeSessionView) MessageLog() ports.MessageLog {
 	if s.log != nil {
 		return s.log
 	}
 	return fakeMessageLog{messages: s.messages}
 }
-func (s *fakeSessionView) Cost() *llm.ResultMessage { return nil }
-func (s *fakeSessionView) LatestUsage() *llm.Usage  { return nil }
 func (s *fakeSessionView) AccumulatedUsage() llm.Usage {
 	if s.usage != nil {
 		return *s.usage
@@ -3715,16 +3910,12 @@ func (s *fakeSessionView) LastControlRequest() *llm.ControlRequestMessage {
 func (s *fakeSessionView) PendingControlRequests() []*llm.ControlRequestMessage {
 	return append([]*llm.ControlRequestMessage(nil), s.pending...)
 }
-func (s *fakeSessionView) QALog() []ports.QAPair { return nil }
-func (s *fakeSessionView) LogFilePath() string   { return s.logPath }
 func (s *fakeSessionView) ContextPercentage() int {
 	if s.contextPct != nil {
 		return *s.contextPct
 	}
 	return 42
 }
-func (s *fakeSessionView) ErrorDetail() string             { return "" }
-func (s *fakeSessionView) ExitCodeDetail() string          { return "" }
 func (s *fakeSessionView) LastStdoutAt() time.Time         { return s.StartedAt() }
 func (s *fakeSessionView) StatusCh() <-chan string         { return nil }
 func (s *fakeSessionView) AttachCh() <-chan llm.SDKMessage { return nil }
@@ -3745,9 +3936,6 @@ func (s *fakeSessionView) HasPendingRootAskUserQuestion() bool {
 	}
 	return false
 }
-func (s *fakeSessionView) RootCompletionIntent() llm.CompletionIntent {
-	return llm.CompletionIntent{}
-}
 func (s *fakeSessionView) LiveBackgroundTaskCount() int {
 	count := 0
 	for _, activity := range s.taskActivities {
@@ -3760,22 +3948,13 @@ func (s *fakeSessionView) LiveBackgroundTaskCount() int {
 func (s *fakeSessionView) TaskActivities() []llm.TaskActivity {
 	return append([]llm.TaskActivity(nil), s.taskActivities...)
 }
-func (s *fakeSessionView) SendUserMessage(string) error                { return nil }
-func (s *fakeSessionView) RespondToControl(string, bool, string) error { return nil }
-func (s *fakeSessionView) RespondToAskUser(string, askuser.Resolved) error {
-	return nil
-}
-func (s *fakeSessionView) Stop() error      { return nil }
-func (s *fakeSessionView) Interrupt() error { return nil }
-func (s *fakeSessionView) Wait()            {}
 
 type fakeMessageLog struct {
 	messages []llm.SDKMessage
 }
 
-func (l fakeMessageLog) Append(llm.SDKMessage)                     {}
-func (l fakeMessageLog) UpdateLast(llm.SDKMessage)                 {}
-func (l fakeMessageLog) UpdateLastAssistantPartial(llm.SDKMessage) {}
+func (l fakeMessageLog) Append(llm.SDKMessage) int                     { return len(l.messages) - 1 }
+func (l fakeMessageLog) UpdateLastAssistantPartial(llm.SDKMessage) int { return 0 }
 func (l fakeMessageLog) Messages() []llm.SDKMessage {
 	return append([]llm.SDKMessage(nil), l.messages...)
 }

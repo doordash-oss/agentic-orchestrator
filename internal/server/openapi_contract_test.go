@@ -53,6 +53,7 @@ type openAPISpec struct {
 	Paths      map[string]map[string]openAPIOperation `yaml:"paths"`
 	Components struct {
 		SecuritySchemes map[string]map[string]any  `yaml:"securitySchemes"`
+		Parameters      map[string]map[string]any  `yaml:"parameters"`
 		Responses       map[string]openAPIResponse `yaml:"responses"`
 		Schemas         map[string]any             `yaml:"schemas"`
 	} `yaml:"components"`
@@ -261,11 +262,78 @@ func TestRefactorOperationBindsTypedSchemas(t *testing.T) {
 	}
 	resp201 := declaredOpenAPIResponse(t, op, "201")
 	respSchemaRef := nestedYAMLRef(t, responseContentMap(t, resp201), "schema")
-	if respSchemaRef != "#/components/schemas/RefactorFeatureResponse" {
-		t.Fatalf("refactorFeature 201 schema = %q, want RefactorFeatureResponse", respSchemaRef)
+	if respSchemaRef != "#/components/schemas/ChildLaunchResponse" {
+		t.Fatalf("refactorFeature 201 schema = %q, want ChildLaunchResponse", respSchemaRef)
 	}
 	declaredOpenAPIResponse(t, op, "404")
 	declaredOpenAPIResponse(t, op, "409")
+}
+
+func TestMutationOperationsBindConcreteResponses(t *testing.T) {
+	spec := loadOpenAPISpec(t)
+	if _, ok := spec.Components.Schemas["ActionResponse"]; ok {
+		t.Fatal("unused ActionResponse union schema must be absent")
+	}
+	if _, ok := spec.Components.Responses["ActionResponse"]; ok {
+		t.Fatal("unused ActionResponse component response must be absent")
+	}
+	for _, tc := range []struct {
+		method, path, status, response string
+	}{
+		{http.MethodPost, "/api/v1/features", "201", "CreateFeatureResponse"},
+		{http.MethodPost, "/api/v1/features/{feature_id}/config", "200", "FeatureActionResponse"},
+		{http.MethodPatch, "/api/v1/config/runtime", "200", "RuntimeConfigUpdateResponse"},
+		{http.MethodPost, "/api/v1/prompts/ask-user/answer", "200", "AskUserAnswerResponse"},
+		{http.MethodPost, "/api/v1/prompts/help/send", "200", "HelpSendResponse"},
+		{http.MethodPost, "/api/v1/permissions/answer", "200", "PermissionAnswerResponse"},
+		{http.MethodPost, "/api/v1/recovery/actions", "200", "RecoveryActionResponse"},
+	} {
+		op := lookupOpenAPIOperation(t, spec, tc.method, tc.path)
+		resp := declaredOpenAPIResponse(t, op, tc.status)
+		want := "#/components/responses/" + tc.response
+		if resp.Ref != want {
+			t.Errorf("%s %s response %s = %q, want %q", tc.method, tc.path, tc.status, resp.Ref, want)
+		}
+	}
+}
+
+func TestGenericActionChildLaunchAndSelectionBindings(t *testing.T) {
+	spec := loadOpenAPISpec(t)
+	path := "/api/v1/features/{feature_id}/actions/{action}"
+	op := lookupOpenAPIOperation(t, spec, http.MethodPost, path)
+	resp201 := declaredOpenAPIResponse(t, op, "201")
+	if ref := nestedYAMLRef(t, responseContentMap(t, resp201), "schema"); ref != "#/components/schemas/ChildLaunchResponse" {
+		t.Fatalf("generic action 201 schema = %q, want ChildLaunchResponse", ref)
+	}
+	resp200 := declaredOpenAPIResponse(t, op, "200")
+	if resp200.Ref != "#/components/responses/FeatureActionResponse" {
+		t.Fatalf("generic action 200 response = %q, want FeatureActionResponse", resp200.Ref)
+	}
+	if _, ok := spec.Paths[strings.Replace(path, "{action}", "rebase", 1)]; ok {
+		t.Fatal("static rebase operation must be absent; generic action route serves its URL")
+	}
+	param := spec.Components.Parameters["FeatureSubaction"]
+	schema, ok := param["schema"].(map[string]any)
+	if !ok {
+		t.Fatal("FeatureSubaction schema missing")
+	}
+	enum, ok := schema["enum"].([]any)
+	if !ok {
+		t.Fatal("FeatureSubaction enum missing")
+	}
+	want := map[string]bool{"description": false, "fetch": false, "selection": false}
+	for _, value := range enum {
+		if name, ok := value.(string); ok {
+			if _, present := want[name]; present {
+				want[name] = true
+			}
+		}
+	}
+	for name, present := range want {
+		if !present {
+			t.Fatalf("FeatureSubaction enum missing %q", name)
+		}
+	}
 }
 
 func TestReviewFeedbackFetchOperationBindsTypedSchemas(t *testing.T) {
@@ -364,8 +432,8 @@ func TestReviewFeedbackLaunchOperationBindsTypedSchemas(t *testing.T) {
 // time), the generated action enum includes refactor, and no hand-maintained
 // duplicate redefines the type.
 func TestGeneratedRefactorSurfaceIsTyped(t *testing.T) {
-	if FeatureActionRefactor != FeatureAction(actionRefactor) || !FeatureActionRefactor.Valid() {
-		t.Fatalf("generated action enum must include %q", actionRefactor)
+	if FeatureActionRefactor != FeatureAction(string(FeatureActionRefactor)) || !FeatureActionRefactor.Valid() {
+		t.Fatalf("generated action enum must include %q", string(FeatureActionRefactor))
 	}
 	req := RefactorFeatureRequest{
 		Name:         "Rework auth",
@@ -420,7 +488,7 @@ func responseContentMap(t *testing.T, resp openAPIResponse) map[string]any {
 
 func TestOpenAPIRepresentativeResponsesAreDeclared(t *testing.T) {
 	spec := loadOpenAPISpec(t)
-	handler := NewHandler(HandlerOptions{AuthToken: testAuthToken, DisableHostValidation: true})
+	handler := NewHandler(HandlerOptions{AuthToken: testAuthToken, FeatureStore: feature.NewStore(t.TempDir()), DisableHostValidation: true})
 	cases := []struct {
 		name        string
 		method      string
@@ -609,7 +677,6 @@ func documentedServerRoutes() []documentedRoute {
 		{method: httpMethodPost, path: "/api/v1/features/{feature_id}/reviews/{review_id}/decision", mutation: true},
 		{method: httpMethodPost, path: "/api/v1/features/{feature_id}/actions/{action}", mutation: true},
 		{method: httpMethodPost, path: "/api/v1/features/{feature_id}/actions/refactor", mutation: true},
-		{method: httpMethodPost, path: "/api/v1/features/{feature_id}/actions/rebase", mutation: true},
 		{method: httpMethodPost, path: apiPathReviewFeedbackAction, mutation: true},
 		{method: httpMethodPost, path: apiPathReviewFeedbackFetch, mutation: true},
 		{method: httpMethodPost, path: apiPathReviewFeedbackSelection, mutation: true},

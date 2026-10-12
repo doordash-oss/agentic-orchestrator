@@ -31,16 +31,16 @@ import (
 
 type scriptedBranchProbeRunner struct {
 	mu      sync.Mutex
-	results []BranchProbeCommandResult
+	results []branchProbeCommandResult
 	args    [][]string
 }
 
-func (r *scriptedBranchProbeRunner) Run(_ context.Context, _ string, args []string, _ int) BranchProbeCommandResult {
+func (r *scriptedBranchProbeRunner) Run(_ context.Context, _ string, args []string, _ int) branchProbeCommandResult {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	r.args = append(r.args, append([]string(nil), args...))
 	if len(r.results) == 0 {
-		return BranchProbeCommandResult{ExitCode: -1, Err: errors.New("unexpected probe")}
+		return branchProbeCommandResult{ExitCode: -1, Err: errors.New("unexpected probe")}
 	}
 	result := r.results[0]
 	r.results = r.results[1:]
@@ -65,16 +65,16 @@ func TestProbeRemoteBranchDistinguishesCollisionAndAbsence(t *testing.T) {
 	testutil.SimulatePush(t, localDir, bareDir, "feature/existing-branch", "feature/existing-branch")
 
 	t.Run("existing branch returns true", func(t *testing.T) {
-		result := ProbeRemoteBranch(context.Background(), localDir, "feature/existing-branch", BranchProbeOptions{OperationTimeout: time.Second})
+		result := probeRemoteBranch(context.Background(), localDir, "feature/existing-branch", BranchProbeOptions{OperationTimeout: time.Second})
 		if result.State != BranchProbeCollision {
 			t.Fatalf("state = %q, want %q (diagnostics=%q)", result.State, BranchProbeCollision, result.Diagnostics)
 		}
 	})
 
 	t.Run("non-existing branch returns false", func(t *testing.T) {
-		result := ProbeRemoteBranch(context.Background(), localDir, "feature/nonexistent", BranchProbeOptions{OperationTimeout: time.Second})
-		if result.State != BranchProbeAbsent {
-			t.Fatalf("state = %q, want %q (diagnostics=%q)", result.State, BranchProbeAbsent, result.Diagnostics)
+		result := probeRemoteBranch(context.Background(), localDir, "feature/nonexistent", BranchProbeOptions{OperationTimeout: time.Second})
+		if result.State != branchProbeAbsent {
+			t.Fatalf("state = %q, want %q (diagnostics=%q)", result.State, branchProbeAbsent, result.Diagnostics)
 		}
 	})
 }
@@ -83,7 +83,7 @@ func TestProbeBranchCandidateChecksLocalBeforeUnavailableOrigin(t *testing.T) {
 	t.Parallel()
 
 	t.Run("local collision avoids remote probe", func(t *testing.T) {
-		runner := &scriptedBranchProbeRunner{results: []BranchProbeCommandResult{{ExitCode: 0}}}
+		runner := &scriptedBranchProbeRunner{results: []branchProbeCommandResult{{ExitCode: 0}}}
 		result, err := ProbeBranchCandidate(context.Background(), []BranchProbeRepository{{Name: "repo-a", Path: "/repo-a", ProbeOrigin: true}}, "feature/name", BranchProbeOptions{Runner: runner})
 		if err != nil {
 			t.Fatalf("ProbeBranchCandidate() error = %v", err)
@@ -94,7 +94,7 @@ func TestProbeBranchCandidateChecksLocalBeforeUnavailableOrigin(t *testing.T) {
 	})
 
 	t.Run("unavailable origin preserves locally unique candidate", func(t *testing.T) {
-		runner := &scriptedBranchProbeRunner{results: []BranchProbeCommandResult{
+		runner := &scriptedBranchProbeRunner{results: []branchProbeCommandResult{
 			{ExitCode: 1},
 			{ExitCode: 128, Diagnostics: "fatal: unable to access 'https://user:secret@example.test/repo': offline\x1b[31m", Err: errors.New("exit status 128")},
 		}}
@@ -102,7 +102,7 @@ func TestProbeBranchCandidateChecksLocalBeforeUnavailableOrigin(t *testing.T) {
 		if err != nil {
 			t.Fatalf("ProbeBranchCandidate() error = %v", err)
 		}
-		if result.State != BranchProbeUnavailable || len(result.Warnings) != 1 {
+		if result.State != branchProbeUnavailable || len(result.Warnings) != 1 {
 			t.Fatalf("result = %+v, want unavailable with one warning", result)
 		}
 		if got := result.Warnings[0].Diagnostics; strings.Contains(got, "secret") || strings.ContainsRune(got, '\x1b') || !strings.Contains(got, "[redacted]") {
@@ -129,7 +129,7 @@ func TestProbeBranchCandidateDetectsRealLocalBranch(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ProbeBranchCandidate(unique) error = %v", err)
 	}
-	if result.State != BranchProbeAbsent {
+	if result.State != branchProbeAbsent {
 		t.Fatalf("unique state = %q, want absent", result.State)
 	}
 }
@@ -176,11 +176,11 @@ func TestExecBranchProbeRunnerCancellationKillsProcessTree(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	t.Cleanup(cancel)
 	started := make(chan struct{})
-	results := make(chan BranchProbeResult, 1)
+	results := make(chan branchProbeResult, 1)
 	go func() {
-		results <- ProbeRemoteBranch(ctx, t.TempDir(), "feature/hung-helper", BranchProbeOptions{
+		results <- probeRemoteBranch(ctx, t.TempDir(), "feature/hung-helper", BranchProbeOptions{
 			OperationTimeout: 30 * time.Second,
-			Runner: ExecBranchProbeRunner{
+			Runner: execBranchProbeRunner{
 				Executable: filepath.Join(binDir, "git"),
 				afterStart: func() { close(started) },
 			},
@@ -203,7 +203,7 @@ func TestExecBranchProbeRunnerCancellationKillsProcessTree(t *testing.T) {
 	}
 	cancel()
 	result := <-results
-	if result.State != BranchProbeUnavailable {
+	if result.State != branchProbeUnavailable {
 		t.Fatalf("result = %+v, want unavailable cancellation", result)
 	}
 	data, err := os.ReadFile(pidFile)
@@ -231,12 +231,12 @@ func TestExecBranchProbeRunnerDrainsAndBoundsDiagnostics(t *testing.T) {
 		t.Fatalf("write fake git: %v", err)
 	}
 
-	result := ProbeRemoteBranch(context.Background(), t.TempDir(), "feature/noisy-helper", BranchProbeOptions{
+	result := probeRemoteBranch(context.Background(), t.TempDir(), "feature/noisy-helper", BranchProbeOptions{
 		OperationTimeout: 2 * time.Second,
 		DiagnosticLimit:  64,
-		Runner:           ExecBranchProbeRunner{Executable: scriptPath},
+		Runner:           execBranchProbeRunner{Executable: scriptPath},
 	})
-	if result.State != BranchProbeUnavailable {
+	if result.State != branchProbeUnavailable {
 		t.Fatalf("state = %q, want unavailable", result.State)
 	}
 	if len(result.Diagnostics) == 0 || len(result.Diagnostics) > 64 {

@@ -29,53 +29,26 @@ import (
 	"github.com/cli/go-gh/v2/pkg/auth"
 )
 
-// Client bundles the REST and GraphQL clients for one GitHub host.
-type Client struct {
+// client bundles the REST and GraphQL clients for one GitHub host.
+type client struct {
 	rest *api.RESTClient
 	gql  *api.GraphQLClient
 }
 
-// NoCredentialsError reports that no token could be resolved for a host.
-type NoCredentialsError struct{ Host string }
+// noCredentialsError reports that no token could be resolved for a host.
+type noCredentialsError struct{ Host string }
 
-func (e *NoCredentialsError) Error() string {
+func (e *noCredentialsError) Error() string {
 	return fmt.Sprintf("no GitHub credentials for %s: set GH_TOKEN or run 'gh auth login'", e.Host)
 }
 
-type testOverride struct {
-	target *url.URL
-	token  string
-}
-
 var (
-	mu       sync.Mutex
-	cache    = map[string]*Client{}
-	override *testOverride
+	mu    sync.Mutex
+	cache = map[string]*client{}
 )
 
-// OverrideForTest routes every subsequent client at the given base URL
-// with the given token, bypassing credential resolution and the cache.
-// The returned func undoes the override.
-func OverrideForTest(baseURL, token string) (restore func()) {
-	target, err := url.Parse(baseURL)
-	if err != nil {
-		panic(fmt.Sprintf("OverrideForTest: bad base URL %q: %v", baseURL, err))
-	}
-	mu.Lock()
-	prev := override
-	override = &testOverride{target: target, token: token}
-	cache = map[string]*Client{}
-	mu.Unlock()
-	return func() {
-		mu.Lock()
-		override = prev
-		cache = map[string]*Client{}
-		mu.Unlock()
-	}
-}
-
 // rewriteTransport redirects every request to a fixed scheme+host,
-// preserving path and query. Used only by test overrides.
+// preserving path and query. Used only by the envGitHubAPIBase route.
 type rewriteTransport struct{ target *url.URL }
 
 func (t rewriteTransport) RoundTrip(req *http.Request) (*http.Response, error) {
@@ -84,24 +57,28 @@ func (t rewriteTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 	return http.DefaultTransport.RoundTrip(req)
 }
 
-// EnvGitHubAPIBase is the environment variable that, when set, routes
+// envGitHubAPIBase is the environment variable that, when set, routes
 // every GitHub API request to the given base URL with a dummy token,
 // bypassing credential resolution. This is the seam packaged e2e
 // journeys use to serve fixture responses from a local HTTP server
-// without needing real gh credentials or a gh binary on PATH.
-const EnvGitHubAPIBase = "AGENTICO_GITHUB_API_BASE"
+// without needing real gh credentials or a gh binary on PATH, and the
+// seam test mains set to a dead address so no test reaches real GitHub.
+const envGitHubAPIBase = "AGENTICO_GITHUB_API_BASE"
 
 // ForHost returns a client for the given GitHub host ("" means
-// github.com). Clients are cached per host.
-func ForHost(host string) (*Client, error) {
+// github.com). Credentialed clients are cached per host; when
+// envGitHubAPIBase is set every call builds a fresh client routed at it, so
+// a per-test fixture URL takes effect immediately.
+func ForHost(host string) (*client, error) {
 	if host == "" {
 		host = "github.com"
 	}
-	mu.Lock()
-	ov := override
-	mu.Unlock()
-	if ov != nil {
-		return newClient(host, ov.token, rewriteTransport{target: ov.target})
+	if base := os.Getenv(envGitHubAPIBase); base != "" {
+		target, err := url.Parse(base)
+		if err != nil {
+			return nil, fmt.Errorf("%s: bad URL %q: %w", envGitHubAPIBase, base, err)
+		}
+		return newClient(host, "e2e-test-token", rewriteTransport{target: target})
 	}
 	mu.Lock()
 	cached, ok := cache[host]
@@ -109,23 +86,9 @@ func ForHost(host string) (*Client, error) {
 	if ok {
 		return cached, nil
 	}
-	if base := os.Getenv(EnvGitHubAPIBase); base != "" {
-		target, err := url.Parse(base)
-		if err != nil {
-			return nil, fmt.Errorf("%s: bad URL %q: %w", EnvGitHubAPIBase, base, err)
-		}
-		client, err := newClient(host, "e2e-test-token", rewriteTransport{target: target})
-		if err != nil {
-			return nil, err
-		}
-		mu.Lock()
-		cache[host] = client
-		mu.Unlock()
-		return client, nil
-	}
 	token, _ := auth.TokenForHost(host)
 	if token == "" {
-		return nil, &NoCredentialsError{Host: host}
+		return nil, &noCredentialsError{Host: host}
 	}
 	client, err := newClient(host, token, nil)
 	if err != nil {
@@ -137,7 +100,7 @@ func ForHost(host string) (*Client, error) {
 	return client, nil
 }
 
-func newClient(host, token string, transport http.RoundTripper) (*Client, error) {
+func newClient(host, token string, transport http.RoundTripper) (*client, error) {
 	opts := api.ClientOptions{Host: host, AuthToken: token, Transport: transport}
 	rest, err := api.NewRESTClient(opts)
 	if err != nil {
@@ -147,5 +110,5 @@ func newClient(host, token string, transport http.RoundTripper) (*Client, error)
 	if err != nil {
 		return nil, fmt.Errorf("building GitHub GraphQL client for %s: %w", host, err)
 	}
-	return &Client{rest: rest, gql: gql}, nil
+	return &client{rest: rest, gql: gql}, nil
 }

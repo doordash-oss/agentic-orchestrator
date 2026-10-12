@@ -19,16 +19,16 @@ import (
 	"github.com/doordash-oss/agentic-orchestrator/internal/feature"
 )
 
-// RolePlanRoadmapReviser is the top-level roadmap revision session.
-const RolePlanRoadmapReviser Role = "plan_roadmap_reviser"
+// rolePlanRoadmapReviser is the top-level roadmap revision session.
+const rolePlanRoadmapReviser Role = "plan_roadmap_reviser"
 
 var roadmapReviserRoleSpec = roleSpec{
 	Phase:     feature.PhasePlan,
-	Role:      RolePlanRoadmapReviser,
+	Role:      rolePlanRoadmapReviser,
 	SkillName: "revise-roadmap",
 	OutputRoots: []outputRootSpec{
-		artifactDirOutputRoot("Shared roadmap artifact root. Revisions update the roadmap markdown here across attempts."),
-		attemptDirOutputRoot("Active roadmap revision attempt directory. Debug prompts, attempt metadata, and validator output are written here; the harness records its completion receipt here after validation."),
+		iterationParentOutputRoot("artifact_dir", "Shared roadmap artifact root. Revisions update `roadmap.md` directly here; it persists across attempts."),
+		iterationOutputRoot("attempt_dir", "Active roadmap revision attempt directory. Debug prompts, attempt metadata, and validator output are written here; the harness records its completion receipt here after validation. Never write the roadmap markdown here."),
 	},
 	Artifacts: []roleArtifactSpec{
 		roadmapMarkdownRoleArtifact(),

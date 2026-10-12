@@ -42,13 +42,13 @@ export const electronNotificationSink: NotificationSink = {
   create: (options) => new Notification(options),
 };
 
-export interface AttentionNotificationCoordinatorDeps {
+interface AttentionNotificationCoordinatorDeps {
   sink: NotificationSink;
   shouldNotify(): boolean;
   show(): void;
 }
 
-export interface AttentionNotificationOptions {
+interface AttentionNotificationOptions {
   previewEnabled: boolean;
   featureLabel(featureId: string): string;
 }

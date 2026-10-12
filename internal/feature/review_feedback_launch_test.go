@@ -15,12 +15,12 @@
 package feature_test
 
 import (
+	"encoding/json"
 	"errors"
 	"strings"
 	"testing"
 
 	"github.com/doordash-oss/agentic-orchestrator/internal/feature"
-	gitadapter "github.com/doordash-oss/agentic-orchestrator/internal/git"
 )
 
 func launchTestParent() *feature.Feature {
@@ -54,15 +54,22 @@ func reviewedComments() map[string][]feature.ReviewFeedbackComment {
 	}
 }
 
-func launchComment(id int, typ, login, body string) gitadapter.ReviewComment {
-	c := gitadapter.ReviewComment{ID: id, Type: typ, Body: body}
-	c.User.Login = login
-	return c
+func launchComment(id int, typ, login, body string) []byte {
+	data, err := json.Marshal(map[string]any{
+		"id":   id,
+		"type": typ,
+		"body": body,
+		"user": map[string]any{"login": login},
+	})
+	if err != nil {
+		panic(err)
+	}
+	return data
 }
 
-func installLaunchFetchStub(t *testing.T, byRepo map[string][]gitadapter.ReviewComment) {
+func installLaunchFetchStub(t *testing.T, byRepo map[string][][]byte) {
 	t.Helper()
-	restore := feature.SwapFetchPRCommentsForTest(func(_ string, prURL string) ([]gitadapter.ReviewComment, error) {
+	restore := feature.SwapFetchPRCommentsForTest(func(_ string, prURL string) ([][]byte, error) {
 		if strings.Contains(prURL, "/api/") {
 			return byRepo["api"], nil
 		}
@@ -87,7 +94,7 @@ func TestLaunchFromDraftReconcilesCurrentContentAndClearsDraft(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	installLaunchFetchStub(t, map[string][]gitadapter.ReviewComment{
+	installLaunchFetchStub(t, map[string][][]byte{
 		"api": {
 			launchComment(11, feature.ReviewFeedbackCommentTypeReview, "alice", "fix this"),
 			launchComment(12, feature.ReviewFeedbackCommentTypeReview, "bob", "edited after review"),
@@ -137,7 +144,7 @@ func TestLaunchFromDraftZeroLaunchablePreservesDraft(t *testing.T) {
 		t.Fatal(err)
 	}
 	// The only selected comment was deleted before launch.
-	installLaunchFetchStub(t, map[string][]gitadapter.ReviewComment{"api": {}})
+	installLaunchFetchStub(t, map[string][][]byte{"api": {}})
 
 	var zero *feature.ReviewFeedbackZeroLaunchableSelectionError
 	if _, err := mgr.LaunchReviewFeedbackChildFromDraft(parent.ID, draft.Revision, nil); !errors.As(err, &zero) {
@@ -191,11 +198,19 @@ func TestLaunchFromDraftCarriesLargeCurrentContent(t *testing.T) {
 	if err := mgr.Store.SaveReviewFeedbackDraft(parent.ID, draft, 0); err != nil {
 		t.Fatal(err)
 	}
-	installLaunchFetchStub(t, map[string][]gitadapter.ReviewComment{
-		"api": {func() gitadapter.ReviewComment {
-			c := launchComment(11, feature.ReviewFeedbackCommentTypeReview, "alice", big+"y")
-			c.DiffHunk = big
-			return c
+	installLaunchFetchStub(t, map[string][][]byte{
+		"api": {func() []byte {
+			data, err := json.Marshal(map[string]any{
+				"id":        11,
+				"type":      feature.ReviewFeedbackCommentTypeReview,
+				"body":      big + "y",
+				"user":      map[string]any{"login": "alice"},
+				"diff_hunk": big,
+			})
+			if err != nil {
+				panic(err)
+			}
+			return data
 		}()},
 	})
 

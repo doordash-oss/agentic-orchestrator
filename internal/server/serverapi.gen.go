@@ -1668,6 +1668,7 @@ func (e UpdateSnapshotUnsupportedReason) Valid() bool {
 const (
 	FeatureSubactionDescription FeatureSubaction = "description"
 	FeatureSubactionFetch       FeatureSubaction = "fetch"
+	FeatureSubactionSelection   FeatureSubaction = "selection"
 )
 
 // Valid indicates whether the value is a known member of the FeatureSubaction enum.
@@ -1676,6 +1677,8 @@ func (e FeatureSubaction) Valid() bool {
 	case FeatureSubactionDescription:
 		return true
 	case FeatureSubactionFetch:
+		return true
+	case FeatureSubactionSelection:
 		return true
 	default:
 		return false
@@ -1736,21 +1739,6 @@ const (
 func (e CreateFeatureParamsXAgenticoClient) Valid() bool {
 	switch e {
 	case CreateFeatureParamsXAgenticoClientLocal:
-		return true
-	default:
-		return false
-	}
-}
-
-// Defines values for RebaseFeatureParamsXAgenticoClient.
-const (
-	RebaseFeatureParamsXAgenticoClientLocal RebaseFeatureParamsXAgenticoClient = "local"
-)
-
-// Valid indicates whether the value is a known member of the RebaseFeatureParamsXAgenticoClient enum.
-func (e RebaseFeatureParamsXAgenticoClient) Valid() bool {
-	switch e {
-	case RebaseFeatureParamsXAgenticoClientLocal:
 		return true
 	default:
 		return false
@@ -1851,6 +1839,7 @@ func (e RunFeatureSubactionParamsXAgenticoClient) Valid() bool {
 const (
 	RunFeatureSubactionParamsSubactionDescription RunFeatureSubactionParamsSubaction = "description"
 	RunFeatureSubactionParamsSubactionFetch       RunFeatureSubactionParamsSubaction = "fetch"
+	RunFeatureSubactionParamsSubactionSelection   RunFeatureSubactionParamsSubaction = "selection"
 )
 
 // Valid indicates whether the value is a known member of the RunFeatureSubactionParamsSubaction enum.
@@ -1859,6 +1848,8 @@ func (e RunFeatureSubactionParamsSubaction) Valid() bool {
 	case RunFeatureSubactionParamsSubactionDescription:
 		return true
 	case RunFeatureSubactionParamsSubactionFetch:
+		return true
+	case RunFeatureSubactionParamsSubactionSelection:
 		return true
 	default:
 		return false
@@ -2347,13 +2338,13 @@ func (e InspectWorkspaceRepositorySourcesParamsXAgenticoClient) Valid() bool {
 
 // Defines values for UpdateWorkspaceRepositorySourceParamsXAgenticoClient.
 const (
-	UpdateWorkspaceRepositorySourceParamsXAgenticoClientLocal UpdateWorkspaceRepositorySourceParamsXAgenticoClient = "local"
+	Local UpdateWorkspaceRepositorySourceParamsXAgenticoClient = "local"
 )
 
 // Valid indicates whether the value is a known member of the UpdateWorkspaceRepositorySourceParamsXAgenticoClient enum.
 func (e UpdateWorkspaceRepositorySourceParamsXAgenticoClient) Valid() bool {
 	switch e {
-	case UpdateWorkspaceRepositorySourceParamsXAgenticoClientLocal:
+	case Local:
 		return true
 	default:
 		return false
@@ -2417,37 +2408,6 @@ type ActionInput struct {
 	Name      string   `json:"name"`
 	Options   []string `json:"options,omitempty"`
 	Required  bool     `json:"required"`
-}
-
-// ActionResponse defines model for ActionResponse.
-type ActionResponse struct {
-	APIVersion                  string                      `json:"api_version"`
-	AskUserAnswerResponse       AskUserAnswerResponse       `json:"ask_user_answer_response,omitempty"`
-	CleanupFeatureResponse      CleanupFeatureResponse      `json:"cleanup_feature_response,omitempty"`
-	CreateFeatureResponse       CreateFeatureResponse       `json:"create_feature_response,omitempty"`
-	DeleteFeatureResponse       DeleteFeatureResponse       `json:"delete_feature_response,omitempty"`
-	DiscardChildResponse        DiscardChildResponse        `json:"discard_child_response,omitempty"`
-	FeatureConfigUpdateResponse FeatureConfigUpdateResponse `json:"feature_config_update_response,omitempty"`
-	FeatureRestartResponse      FeatureRestartResponse      `json:"feature_restart_response,omitempty"`
-
-	// FeatureSetupResponse Result of the setup action: durable server-owned setup (fresh run or retry of unfinished tasks) has been dispatched without starting orchestration. Progress is reported through the feature detail setup state and SSE invalidation events; on success the feature reaches a startable pre-orchestration state.
-	FeatureSetupResponse         FeatureSetupResponse         `json:"feature_setup_response,omitempty"`
-	FeatureStartResponse         FeatureStartResponse         `json:"feature_start_response,omitempty"`
-	FeatureStopResponse          FeatureStopResponse          `json:"feature_stop_response,omitempty"`
-	HelpSendResponse             HelpSendResponse             `json:"help_send_response,omitempty"`
-	MarkDoneResponse             MarkDoneResponse             `json:"mark_done_response,omitempty"`
-	MergeFeatureResponse         MergeFeatureResponse         `json:"merge_feature_response,omitempty"`
-	Meta                         ResponseMeta                 `json:"meta,omitempty"`
-	NeedUserInputDraftResponse   NeedUserInputDraftResponse   `json:"need_user_input_draft_response,omitempty"`
-	NeedUserInputResumeResponse  NeedUserInputResumeResponse  `json:"need_user_input_resume_response,omitempty"`
-	PermissionAnswerResponse     PermissionAnswerResponse     `json:"permission_answer_response,omitempty"`
-	PublishDescriptionResponse   PublishDescriptionResponse   `json:"publish_description_response,omitempty"`
-	PublishFeatureResponse       PublishFeatureResponse       `json:"publish_feature_response,omitempty"`
-	RecoveryActionResponse       RecoveryActionResponse       `json:"recovery_action_response,omitempty"`
-	RetryFeatureResponse         RetryFeatureResponse         `json:"retry_feature_response,omitempty"`
-	RewindFeatureResponse        RewindFeatureResponse        `json:"rewind_feature_response,omitempty"`
-	RuntimeConfigUpdateResponse  RuntimeConfigUpdateResponse  `json:"runtime_config_update_response,omitempty"`
-	TestingContractWaiveResponse TestingContractWaiveResponse `json:"testing_contract_waive_response,omitempty"`
 }
 
 // ActionResult defines model for ActionResult.
@@ -2545,8 +2505,8 @@ type Checkpoints struct {
 	RoadmapReview   bool `json:"roadmap_review"`
 }
 
-// ChildFeatureResponse defines model for ChildFeatureResponse.
-type ChildFeatureResponse struct {
+// ChildLaunchResponse defines model for ChildLaunchResponse.
+type ChildLaunchResponse struct {
 	APIVersion string       `json:"api_version"`
 	FeatureID  string       `json:"feature_id"`
 	Meta       ResponseMeta `json:"meta,omitempty"`
@@ -2886,15 +2846,8 @@ type DeleteFeatureResponse struct {
 	FeatureID   string                      `json:"feature_id"`
 	Meta        ResponseMeta                `json:"meta,omitempty"`
 	OperationID string                      `json:"operation_id"`
+	Retryable   bool                        `json:"retryable,omitempty"`
 	Status      feature.CascadeDeleteStatus `json:"status"`
-}
-
-// DiscardChildResponse defines model for DiscardChildResponse.
-type DiscardChildResponse struct {
-	APIVersion string       `json:"api_version"`
-	FeatureID  string       `json:"feature_id"`
-	Meta       ResponseMeta `json:"meta,omitempty"`
-	Result     string       `json:"result"`
 }
 
 // EffortConfig defines model for EffortConfig.
@@ -3011,8 +2964,16 @@ type ErrorSetupTaskContext struct {
 	Label string `json:"label"`
 }
 
-// FeatureAction Feature lifecycle action identifier.
+// FeatureAction Feature lifecycle action identifier. `setup` dispatches a feature's queued durable setup (required after create unless the client dispatches `start`) or reruns only the unfinished tasks of a failed setup, asynchronously and without starting orchestration; the feature becomes `Created` when setup completes.
 type FeatureAction string
+
+// FeatureActionResponse defines model for FeatureActionResponse.
+type FeatureActionResponse struct {
+	APIVersion string       `json:"api_version"`
+	FeatureID  string       `json:"feature_id"`
+	Meta       ResponseMeta `json:"meta,omitempty"`
+	Result     string       `json:"result"`
+}
 
 // FeatureActionResult defines model for FeatureActionResult.
 type FeatureActionResult struct {
@@ -3049,14 +3010,6 @@ type FeatureConfigResponse struct {
 	Meta       ResponseMeta   `json:"meta,omitempty"`
 	Original   FeatureConfig  `json:"original"`
 	Publish    Publishability `json:"publishability"`
-}
-
-// FeatureConfigUpdateResponse defines model for FeatureConfigUpdateResponse.
-type FeatureConfigUpdateResponse struct {
-	APIVersion string       `json:"api_version"`
-	FeatureID  string       `json:"feature_id"`
-	Meta       ResponseMeta `json:"meta,omitempty"`
-	Result     string       `json:"result"`
 }
 
 // FeatureDefaults defines model for FeatureDefaults.
@@ -3177,43 +3130,6 @@ type FeatureProgress struct {
 	CurrentPhaseStatus  string `json:"current_phase_status,omitempty"`
 	CurrentRoadmapPhase int    `json:"current_roadmap_phase,omitempty"`
 	TotalRoadmapPhases  int    `json:"total_roadmap_phases,omitempty"`
-}
-
-// FeatureRestartResponse defines model for FeatureRestartResponse.
-type FeatureRestartResponse struct {
-	APIVersion string       `json:"api_version"`
-	Dispatch   string       `json:"dispatch,omitempty"`
-	FeatureID  string       `json:"feature_id"`
-	Meta       ResponseMeta `json:"meta,omitempty"`
-	Phase      string       `json:"phase,omitempty"`
-	Result     string       `json:"result"`
-	SessionIDs []string     `json:"session_ids,omitempty"`
-}
-
-// FeatureSetupResponse defines model for FeatureSetupResponse.
-type FeatureSetupResponse struct {
-	APIVersion string       `json:"api_version"`
-	FeatureID  string       `json:"feature_id"`
-	Meta       ResponseMeta `json:"meta,omitempty"`
-	Result     string       `json:"result"`
-}
-
-// FeatureStartResponse defines model for FeatureStartResponse.
-type FeatureStartResponse struct {
-	APIVersion string       `json:"api_version"`
-	FeatureID  string       `json:"feature_id"`
-	Meta       ResponseMeta `json:"meta,omitempty"`
-	Phase      string       `json:"phase,omitempty"`
-	Result     string       `json:"result"`
-	SessionIDs []string     `json:"session_ids,omitempty"`
-}
-
-// FeatureStopResponse defines model for FeatureStopResponse.
-type FeatureStopResponse struct {
-	APIVersion string       `json:"api_version"`
-	FeatureID  string       `json:"feature_id"`
-	Meta       ResponseMeta `json:"meta,omitempty"`
-	Result     string       `json:"result"`
 }
 
 // FeatureSummary defines model for FeatureSummary.
@@ -3366,22 +3282,6 @@ type LivePreviewResponse struct {
 	Transcript []TranscriptMessage `json:"transcript"`
 }
 
-// MarkDoneResponse defines model for MarkDoneResponse.
-type MarkDoneResponse struct {
-	APIVersion string       `json:"api_version"`
-	FeatureID  string       `json:"feature_id"`
-	Meta       ResponseMeta `json:"meta,omitempty"`
-	Result     string       `json:"result"`
-}
-
-// MergeFeatureResponse defines model for MergeFeatureResponse.
-type MergeFeatureResponse struct {
-	APIVersion string       `json:"api_version"`
-	FeatureID  string       `json:"feature_id"`
-	Meta       ResponseMeta `json:"meta,omitempty"`
-	Result     string       `json:"result"`
-}
-
 // Model defines model for Model.
 type Model struct {
 	Aliases            []string `json:"aliases,omitempty"`
@@ -3415,14 +3315,6 @@ type ModelReadiness struct {
 	Models []string `json:"models,omitempty"`
 }
 
-// NeedUserInputDraftResponse defines model for NeedUserInputDraftResponse.
-type NeedUserInputDraftResponse struct {
-	APIVersion string       `json:"api_version"`
-	FeatureID  string       `json:"feature_id"`
-	Meta       ResponseMeta `json:"meta,omitempty"`
-	Result     string       `json:"result"`
-}
-
 // NeedUserInputGate defines model for NeedUserInputGate.
 type NeedUserInputGate struct {
 	FeatureID          string                     `json:"feature_id,omitempty"`
@@ -3442,14 +3334,6 @@ type NeedUserInputQuestion struct {
 	Answer string `json:"answer,omitempty"`
 	Index  int    `json:"index"`
 	Prompt string `json:"prompt,omitempty"`
-}
-
-// NeedUserInputResumeResponse defines model for NeedUserInputResumeResponse.
-type NeedUserInputResumeResponse struct {
-	APIVersion string       `json:"api_version"`
-	FeatureID  string       `json:"feature_id"`
-	Meta       ResponseMeta `json:"meta,omitempty"`
-	Result     string       `json:"result"`
 }
 
 // NeedUserInputVerification defines model for NeedUserInputVerification.
@@ -3600,13 +3484,18 @@ type ProviderModelRefreshResponse struct {
 
 // ProviderReadiness defines model for ProviderReadiness.
 type ProviderReadiness struct {
-	Installed bool `json:"installed"`
+	// EndpointReachable Result of a bounded, unauthenticated reachability probe of the custom API endpoint(s) the provider CLI is configured to call (any HTTP response counts as reachable). Absent when the provider has no custom endpoint or the background check has not finished. Never affects `ready`.
+	EndpointReachable *bool `json:"endpoint_reachable,omitempty"`
+	Installed         bool  `json:"installed"`
 
 	// Issue Canonical catalog-rendered error.
 	Issue   *Error `json:"issue,omitempty"`
 	Name    string `json:"name"`
 	Ready   bool   `json:"ready"`
 	Version string `json:"version,omitempty"`
+
+	// Warning Non-blocking warning (provider_endpoint_unreachable) for a provider whose configured endpoint is unreachable.
+	Warning *Error `json:"warning,omitempty"`
 }
 
 // PublishDescriptionResponse defines model for PublishDescriptionResponse.
@@ -3617,14 +3506,6 @@ type PublishDescriptionResponse struct {
 	Meta       ResponseMeta `json:"meta,omitempty"`
 	Result     string       `json:"result"`
 	Title      string       `json:"title"`
-}
-
-// PublishFeatureResponse defines model for PublishFeatureResponse.
-type PublishFeatureResponse struct {
-	APIVersion string       `json:"api_version"`
-	FeatureID  string       `json:"feature_id"`
-	Meta       ResponseMeta `json:"meta,omitempty"`
-	Result     string       `json:"result"`
 }
 
 // Publishability defines model for Publishability.
@@ -3650,18 +3531,6 @@ type ReadinessResponse struct {
 	// Ready Mandatory readiness — true when at least one provider is usable, models are available, and the configuration is valid. Feature creation is gated on this value.
 	Ready     bool               `json:"ready"`
 	Workspace WorkspaceReadiness `json:"workspace"`
-}
-
-// RebaseFeatureRequest Zero-input request. Any JSON body (including the legacy source_revision payload) is accepted and ignored; the rebase child launch takes no user input.
-type RebaseFeatureRequest map[string]interface{}
-
-// RebaseFeatureResponse defines model for RebaseFeatureResponse.
-type RebaseFeatureResponse struct {
-	APIVersion string       `json:"api_version"`
-	FeatureID  string       `json:"feature_id"`
-	Meta       ResponseMeta `json:"meta,omitempty"`
-	ParentID   string       `json:"parent_id"`
-	Result     string       `json:"result"`
 }
 
 // RecoveryActionResponse defines model for RecoveryActionResponse.
@@ -3714,15 +3583,6 @@ type RefactorFeatureRequest struct {
 	Name              string                  `json:"name"`
 	Pipeline          feature.PipelineProfile `json:"pipeline,omitempty"`
 	RiskLevel         feature.RiskLevel       `json:"risk_level,omitempty"`
-}
-
-// RefactorFeatureResponse defines model for RefactorFeatureResponse.
-type RefactorFeatureResponse struct {
-	APIVersion string       `json:"api_version"`
-	FeatureID  string       `json:"feature_id"`
-	Meta       ResponseMeta `json:"meta,omitempty"`
-	ParentID   string       `json:"parent_id"`
-	Result     string       `json:"result"`
 }
 
 // RelationshipChild defines model for RelationshipChild.
@@ -4261,14 +4121,6 @@ type ResponseMeta struct {
 	Revision    string    `json:"revision"`
 }
 
-// RetryFeatureResponse defines model for RetryFeatureResponse.
-type RetryFeatureResponse struct {
-	APIVersion string       `json:"api_version"`
-	FeatureID  string       `json:"feature_id"`
-	Meta       ResponseMeta `json:"meta,omitempty"`
-	Result     string       `json:"result"`
-}
-
 // ReviewDraftUpdateRequest defines model for ReviewDraftUpdateRequest.
 type ReviewDraftUpdateRequest struct {
 	BaseRevision string `json:"base_revision"`
@@ -4396,9 +4248,14 @@ type ReviewFeedbackSelectionUpdate struct {
 
 // ReviewGate defines model for ReviewGate.
 type ReviewGate struct {
-	ReviewFixing      bool              `json:"review_fixing"`
-	ReviewingGate     bool              `json:"reviewing_gate"`
-	ValidatingPlan    bool              `json:"validating_plan"`
+	ReviewFixing   bool `json:"review_fixing"`
+	ReviewingGate  bool `json:"reviewing_gate"`
+	ValidatingPlan bool `json:"validating_plan"`
+
+	// ValidatorErrors Last error of each validator that failed or is retrying, keyed like validator_statuses.
+	ValidatorErrors map[string]string `json:"validator_errors,omitempty"`
+
+	// ValidatorStatuses Live state per validator: running, retrying, interrupted, error, or its verdict.
 	ValidatorStatuses map[string]string `json:"validator_statuses,omitempty"`
 }
 
@@ -4531,25 +4388,28 @@ type RunDetail struct {
 	CarriedPhases     []string `json:"carried_phases,omitempty"`
 
 	// Committing True while a forked run's carry-forward copy is in flight (crash-recovery signal); a reconnecting client treats this as "requires safe retry" until startup cleanup reconciles.
-	Committing                      bool       `json:"committing,omitempty"`
-	Cost                            Cost       `json:"cost"`
-	CurrentPhase                    string     `json:"current_phase,omitempty"`
-	HasNeedUserGate                 bool       `json:"has_need_user_gate,omitempty"`
-	IsRewind                        bool       `json:"is_rewind,omitempty"`
-	Iteration                       int        `json:"iteration,omitempty"`
-	PendingReviewPhase              string     `json:"pending_review_phase,omitempty"`
-	PendingRewindReviewRoadmapPhase int        `json:"pending_rewind_review_roadmap_phase,omitempty"`
-	PhaseStatus                     string     `json:"phase_status,omitempty"`
-	RewindRoadmapPhase              int        `json:"rewind_roadmap_phase,omitempty"`
-	RewindTarget                    string     `json:"rewind_target,omitempty"`
-	RoadmapPhase                    int        `json:"roadmap_phase,omitempty"`
-	RoadmapTotal                    int        `json:"roadmap_total,omitempty"`
-	RunNumber                       int        `json:"run_number"`
-	SealReason                      string     `json:"seal_reason,omitempty"`
-	SealedAt                        *time.Time `json:"sealed_at,omitempty"`
-	Setup                           *Setup     `json:"setup,omitempty"`
-	StartedAt                       *time.Time `json:"started_at,omitempty"`
-	Timing                          Timing     `json:"timing"`
+	Committing                      bool   `json:"committing,omitempty"`
+	Cost                            Cost   `json:"cost"`
+	CurrentPhase                    string `json:"current_phase,omitempty"`
+	HasNeedUserGate                 bool   `json:"has_need_user_gate,omitempty"`
+	IsRewind                        bool   `json:"is_rewind,omitempty"`
+	Iteration                       int    `json:"iteration,omitempty"`
+	PendingReviewPhase              string `json:"pending_review_phase,omitempty"`
+	PendingRewindReviewRoadmapPhase int    `json:"pending_rewind_review_roadmap_phase,omitempty"`
+	PhaseStatus                     string `json:"phase_status,omitempty"`
+	RewindRoadmapPhase              int    `json:"rewind_roadmap_phase,omitempty"`
+	RewindTarget                    string `json:"rewind_target,omitempty"`
+	RoadmapPhase                    int    `json:"roadmap_phase,omitempty"`
+	RoadmapTotal                    int    `json:"roadmap_total,omitempty"`
+	RunNumber                       int    `json:"run_number"`
+
+	// Sandbox Present only when this run executed harness verification commands or launched review validators while the OS verification sandbox was unavailable (for example nested macOS sandbox-exec); those commands ran unconfined.
+	Sandbox    *RunSandbox `json:"sandbox,omitempty"`
+	SealReason string      `json:"seal_reason,omitempty"`
+	SealedAt   *time.Time  `json:"sealed_at,omitempty"`
+	Setup      *Setup      `json:"setup,omitempty"`
+	StartedAt  *time.Time  `json:"started_at,omitempty"`
+	Timing     Timing      `json:"timing"`
 }
 
 // RunDetailResponse defines model for RunDetailResponse.
@@ -4585,6 +4445,15 @@ type RunLogListResponse struct {
 	APIVersion string       `json:"api_version"`
 	Logs       []RunLog     `json:"logs"`
 	Meta       ResponseMeta `json:"meta,omitempty"`
+}
+
+// RunSandbox Present only when this run executed harness verification commands or launched review validators while the OS verification sandbox was unavailable (for example nested macOS sandbox-exec); those commands ran unconfined.
+type RunSandbox struct {
+	// Available Always false when present.
+	Available bool `json:"available"`
+
+	// Reason Why the sandbox probe failed.
+	Reason string `json:"reason,omitempty"`
 }
 
 // RunSessionListResponse defines model for RunSessionListResponse.
@@ -4773,13 +4642,17 @@ type SessionSummary struct {
 
 // Setup defines model for Setup.
 type Setup struct {
-	Attempt       int                  `json:"attempt,omitempty"`
-	CompletedAt   *time.Time           `json:"completed_at,omitempty"`
-	LatestLogPath string               `json:"latest_log_path,omitempty"`
-	StartedAt     *time.Time           `json:"started_at,omitempty"`
-	Status        string               `json:"status"`
-	TaskOrder     []string             `json:"task_order,omitempty"`
-	Tasks         map[string]SetupTask `json:"tasks,omitempty"`
+	Attempt       int        `json:"attempt,omitempty"`
+	CompletedAt   *time.Time `json:"completed_at,omitempty"`
+	LatestLogPath string     `json:"latest_log_path,omitempty"`
+
+	// StartedAt Start of the latest dispatched attempt; absent while setup is queued.
+	StartedAt *time.Time `json:"started_at,omitempty"`
+
+	// Status `queued` (created, awaiting the `setup` or `start` action), `running` (dispatched), `done`, or `failed`.
+	Status    string               `json:"status"`
+	TaskOrder []string             `json:"task_order,omitempty"`
+	Tasks     map[string]SetupTask `json:"tasks,omitempty"`
 }
 
 // SetupTask defines model for SetupTask.
@@ -5300,8 +5173,10 @@ type TranscriptMessage struct {
 	Task               *Task       `json:"task,omitempty"`
 	Text               string      `json:"text,omitempty"`
 	Tool               string      `json:"tool,omitempty"`
-	ToolCall           *ToolCall   `json:"tool_call,omitempty"`
-	Type               string      `json:"type"`
+
+	// ToolCall Sanitized tool call detail on tool_use and tool_progress rows. On tool_progress rows only summary is set: one line (at most 200 characters) naming what the tool acts on (title, path, pattern, or command), never its output; absent when the provider reports nothing beyond the tool name.
+	ToolCall *ToolCall `json:"tool_call,omitempty"`
+	Type     string    `json:"type"`
 }
 
 // TranscriptResponse defines model for TranscriptResponse.
@@ -5643,15 +5518,6 @@ type CreateFeatureParams struct {
 
 // CreateFeatureParamsXAgenticoClient defines parameters for CreateFeature.
 type CreateFeatureParamsXAgenticoClient string
-
-// RebaseFeatureParams defines parameters for RebaseFeature.
-type RebaseFeatureParams struct {
-	// XAgenticoClient CSRF defense-in-depth for local browser-origin mutations. Bearer auth is still required.
-	XAgenticoClient RebaseFeatureParamsXAgenticoClient `json:"X-Agentico-Client"`
-}
-
-// RebaseFeatureParamsXAgenticoClient defines parameters for RebaseFeature.
-type RebaseFeatureParamsXAgenticoClient string
 
 // RefactorFeatureParams defines parameters for RefactorFeature.
 type RefactorFeatureParams struct {
@@ -6147,9 +6013,6 @@ type PatchRuntimeConfigJSONRequestBody PatchRuntimeConfigJSONBody
 
 // CreateFeatureJSONRequestBody defines body for CreateFeature for application/json ContentType.
 type CreateFeatureJSONRequestBody = CreateFeatureMutationRequest
-
-// RebaseFeatureJSONRequestBody defines body for RebaseFeature for application/json ContentType.
-type RebaseFeatureJSONRequestBody = RebaseFeatureRequest
 
 // RefactorFeatureJSONRequestBody defines body for RefactorFeature for application/json ContentType.
 type RefactorFeatureJSONRequestBody = RefactorFeatureRequest

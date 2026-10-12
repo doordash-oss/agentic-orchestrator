@@ -204,7 +204,7 @@ func newChatContextTestAPI(t *testing.T, store *feature.Store) chatContextTestAP
 		opts.Features = store
 	}
 	api := newAPIHandler(opts)
-	return chatContextTestAPI{api: api, handler: api.routes(), stateDir: stateDir}
+	return chatContextTestAPI{api: api, handler: api, stateDir: stateDir}
 }
 
 func chatContextSaveFeature(t *testing.T, store *feature.Store, f *feature.Feature) {

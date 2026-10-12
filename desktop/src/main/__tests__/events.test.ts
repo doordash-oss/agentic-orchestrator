@@ -17,7 +17,7 @@ limitations under the License.
 import { describe, expect, it } from 'vitest';
 import { AppEventSchema, type AppEvent } from '../../shared/ipc';
 import {
-  EventCursorTracker,
+  ingestEvent,
   EventStreamSupervisor,
   SseBlockAssembler,
   parseSseEvent,
@@ -90,9 +90,15 @@ describe('parseSseEvent', () => {
     expect(evt.snapshot_required).toBe(true);
   });
 
-  it('falls back to the block event/id when the payload omits kind/seq', () => {
+  it('falls back to the block id when the payload omits seq', () => {
     const evt = parseSseEvent(
-      JSON.stringify({ api_version: 'v1', at: 'x', resource: { type: 'runtime' } }),
+      JSON.stringify({
+        api_version: 'v1',
+        at: 'x',
+        kind: 'heartbeat',
+        resource: { type: 'runtime' },
+        snapshot_required: false,
+      }),
       { id: '42', event: 'heartbeat' },
     );
     expect(evt).not.toBeNull();
@@ -117,22 +123,40 @@ describe('parseSseEvent', () => {
 
 // --- cursor tracking / convergence -------------------------------------------
 
+function makeTracker() {
+  let cursor = { seq: 0, epoch: '' };
+  return {
+    ingest(event: ReturnType<typeof parsed>) {
+      const result = ingestEvent(event, cursor);
+      cursor = result.cursor;
+      return result.decision;
+    },
+    getCursor: () => ({ ...cursor }),
+    reset: () => {
+      cursor = { seq: 0, epoch: '' };
+    },
+  };
+}
+
 describe('EventCursorTracker', () => {
   it('invalidates and advances the cursor on a fresh snapshot-required event', () => {
-    const tracker = new EventCursorTracker();
+    const tracker = makeTracker();
     const decision = tracker.ingest(parsed());
     expect(decision).toEqual({
       action: 'invalidate',
-      kind: 'feature.updated',
-      resourceType: 'feature',
-      resourceId: 'feat1234',
-      featureId: 'feat1234',
+      event: {
+        type: 'invalidated',
+        kind: 'feature.updated',
+        resourceType: 'feature',
+        resourceId: 'feat1234',
+        featureId: 'feat1234',
+      },
     });
     expect(tracker.getCursor()).toEqual({ seq: 7, epoch: 'epoch-a' });
   });
 
   it('carries relationship identifiers and completed deletion state atomically', () => {
-    const tracker = new EventCursorTracker();
+    const tracker = makeTracker();
     const decision = tracker.ingest(
       parsed({
         kind: 'relationship.deleted',
@@ -148,42 +172,41 @@ describe('EventCursorTracker', () => {
     );
     expect(decision).toEqual({
       action: 'invalidate',
-      kind: 'relationship.deleted',
-      resourceType: 'relationship',
-      resourceId: 'parent1234:child1234',
-      featureId: 'parent1234',
-      parentId: 'parent1234',
-      childId: 'child1234',
-      relationshipDeleted: true,
+      event: {
+        type: 'invalidated',
+        kind: 'relationship.deleted',
+        resourceType: 'relationship',
+        resourceId: 'parent1234:child1234',
+        featureId: 'parent1234',
+        parentId: 'parent1234',
+        childId: 'child1234',
+        relationshipDeleted: true,
+      },
     });
     if (decision.action !== 'invalidate') throw new Error('expected invalidation');
     expect(
       AppEventSchema.parse({
-        type: 'invalidated',
-        kind: decision.kind,
-        parentId: decision.parentId,
-        childId: decision.childId,
-        relationshipDeleted: decision.relationshipDeleted,
+        ...decision.event,
       }),
     ).toMatchObject({ relationshipDeleted: true });
   });
 
   it('ignores duplicate events by sequence', () => {
-    const tracker = new EventCursorTracker();
+    const tracker = makeTracker();
     tracker.ingest(parsed({ seq: 7 }));
     expect(tracker.ingest(parsed({ seq: 7 }))).toEqual({ action: 'ignore' });
     expect(tracker.getCursor().seq).toBe(7);
   });
 
   it('ignores out-of-order older events without regressing the cursor', () => {
-    const tracker = new EventCursorTracker();
+    const tracker = makeTracker();
     tracker.ingest(parsed({ seq: 9 }));
     expect(tracker.ingest(parsed({ seq: 8 }))).toEqual({ action: 'ignore' });
     expect(tracker.getCursor().seq).toBe(9);
   });
 
   it('accepts forward sequence gaps (the broker coalesces per resource)', () => {
-    const tracker = new EventCursorTracker();
+    const tracker = makeTracker();
     tracker.ingest(parsed({ seq: 2 }));
     const decision = tracker.ingest(parsed({ seq: 40 }));
     expect(decision.action).toBe('invalidate');
@@ -191,7 +214,7 @@ describe('EventCursorTracker', () => {
   });
 
   it('requests a resync when the epoch changes and adopts the new cursor', () => {
-    const tracker = new EventCursorTracker();
+    const tracker = makeTracker();
     tracker.ingest(parsed({ seq: 7, epoch: 'epoch-a' }));
     const decision = tracker.ingest(parsed({ seq: 3, epoch: 'epoch-b' }));
     expect(decision).toEqual({ action: 'resync' });
@@ -199,7 +222,7 @@ describe('EventCursorTracker', () => {
   });
 
   it('requests a resync on connected and stream.reset events', () => {
-    const tracker = new EventCursorTracker();
+    const tracker = makeTracker();
     expect(tracker.ingest(parsed({ kind: 'connected', seq: 5 }))).toEqual({ action: 'resync' });
     expect(tracker.getCursor().seq).toBe(5);
     expect(tracker.ingest(parsed({ kind: 'stream.reset', seq: 6 }))).toEqual({ action: 'resync' });
@@ -207,7 +230,7 @@ describe('EventCursorTracker', () => {
   });
 
   it('advances the cursor on heartbeats without invalidating', () => {
-    const tracker = new EventCursorTracker();
+    const tracker = makeTracker();
     const decision = tracker.ingest(
       parsed({ kind: 'heartbeat', seq: 11, snapshot_required: false }),
     );
@@ -216,14 +239,14 @@ describe('EventCursorTracker', () => {
   });
 
   it('treats a snapshot-required heartbeat as a forced resync', () => {
-    const tracker = new EventCursorTracker();
+    const tracker = makeTracker();
     expect(tracker.ingest(parsed({ kind: 'heartbeat', seq: 4, snapshot_required: true }))).toEqual({
       action: 'resync',
     });
   });
 
   it('ignores activity events that require no snapshot', () => {
-    const tracker = new EventCursorTracker();
+    const tracker = makeTracker();
     const decision = tracker.ingest(
       parsed({ kind: 'session.output.activity', snapshot_required: false }),
     );
@@ -231,7 +254,7 @@ describe('EventCursorTracker', () => {
   });
 
   it('converges after a reconnect replay of already-seen events', () => {
-    const tracker = new EventCursorTracker();
+    const tracker = makeTracker();
     tracker.ingest(parsed({ seq: 5 }));
     tracker.ingest(parsed({ seq: 6 }));
     // Reconnect replays 5..7 from the ring buffer: only 7 invalidates.

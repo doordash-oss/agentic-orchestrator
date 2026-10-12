@@ -34,72 +34,18 @@ const APIVersion = "v1"
 const discoveryFilename = ".agentico-server.json"
 
 type Options struct {
-	Runtime      RuntimeIdentity
-	LaunchPolicy LaunchPolicy
-	StartMode    string
-	Owner        instancelock.Owner
-	AuthToken    string
+	HandlerOptions
+	StartMode string
 	// ListenAddr overrides the TCP bind address (normalized via
 	// ResolveListenAddr). Empty keeps the default ephemeral 127.0.0.1 bind.
 	ListenAddr string
-	// RuntimePolicy overrides the declared runtime policy selected from the
-	// resolved listen address. Empty keeps the bind-driven selection. Only
-	// tests exercise this; production derives the policy from ListenAddr.
-	RuntimePolicy string
-	// Name is the resolved server display name surfaced in the startup
-	// line, health payload, and discovery record.
-	Name string
 	// AllowUnauthenticated is only for tests that intentionally exercise the
 	// server without discovery bootstrap. Production Start requires AuthToken.
 	AllowUnauthenticated bool
-	Features             FeatureLister
-	FeatureStore         FeatureReader
-	Freshness            RepoFreshnessProvider
-	Config               *config.Config
-	Registry             *llm.Registry
-	Sessions             ports.SessionManager
-	Events               <-chan interface{}
-	DomainEvents         <-chan ports.Event
-	Mutations            MutationTarget
-	// PersistProviderModelCatalog writes a successfully discovered provider
-	// catalog before the server installs it in memory. Nil keeps live refreshes
-	// in memory only.
-	PersistProviderModelCatalog func(llm.LLMProvider, []llm.ModelInfo) error
-	// InitGitRepository overrides the git-init implementation used by the
-	// workspace repository-initialization endpoint. Nil means the default
-	// git adapter (internal/git.InitRepository).
-	InitGitRepository func(path string) error
-	// InitializeGitRepository overrides the explicit unborn-clone
-	// initialization implementation. Nil means the default git adapter
-	// (internal/git.InitializeRepository).
-	InitializeGitRepository func(ctx context.Context, dir string) (git.InitializeOutcome, error)
-	// clones is an in-package test seam for the clone lifecycle service. Nil,
-	// the only production value, constructs the
-	// default service from the runtime state dir.
-	clones cloneService
-	// Worktrees inspects parent worktrees so a dirty refactor entry can
-	// attach the same structured diagnostics the launch-time error carries.
-	// Nil is tolerated: the dirty_parent disabled reason then ships without
-	// a diagnostics target.
-	Worktrees feature.WorktreeOps
-	// Updates carries the resolved release-availability startup inputs
-	// (policy, settings, eligibility, recovery outcome, feed). The zero
-	// value serves a disabled snapshot.
-	Updates UpdateOptions
-	// Admission is the runtime work-admission boundary shared with
-	// orchestration, sessions, and repository work. Nil disables the
-	// boundary.
-	Admission *workadmission.Coordinator
 	// Lifetime bounds the server's long-lived background loops (sweepers,
 	// update checks). Nil uses the Start context, which callers may bound
 	// to startup only.
-	Lifetime context.Context
-	// probeActivity is an in-package test seam for the read-launched probe
-	// counter; nil, the only production value, creates the handler's own.
-	probeActivity *probeActivity
-	// Supervisor owns the supervisor conversation; nil serves 503 on the
-	// supervisor namespace.
-	Supervisor  SupervisorService
+	Lifetime    context.Context
 	HTTPMetrics HTTPMetrics
 }
 
@@ -119,9 +65,9 @@ type HandlerOptions struct {
 	// network). Empty defaults to the loopback policy, which enforces the
 	// loopback-only Host-header rule.
 	RuntimePolicy               string
-	Features                    FeatureLister
-	FeatureStore                FeatureReader
-	Freshness                   RepoFreshnessProvider
+	Features                    featureLister
+	FeatureStore                featureReader
+	Freshness                   repoFreshnessProvider
 	Config                      *config.Config
 	Registry                    *llm.Registry
 	Sessions                    ports.SessionManager
@@ -155,29 +101,27 @@ type HandlerOptions struct {
 	probeActivity *probeActivity
 	// Supervisor owns the supervisor conversation; nil serves 503 on the
 	// supervisor namespace.
-	Supervisor SupervisorService
+	Supervisor supervisorService
 }
 
-type FeatureLister interface {
+type featureLister interface {
 	List() ([]*feature.Feature, error)
 }
 
-type FeatureReader interface {
-	FeatureLister
+type featureReader interface {
+	featureLister
 	Load(id string) (*feature.Feature, error)
 	LoadRun(featureID string, runNumber int) (*feature.Run, error)
 	RunDir(featureID string, runNumber int) string
 	ListRuns(featureID string) ([]int, error)
-}
-
-type relationshipReader interface {
 	RelationshipChildren(parentID string) (*feature.RelationshipChildren, error)
-}
-
-// bulkRelationshipReader resolves every parent's children in one store pass
-// so list-shaped endpoints avoid a per-parent directory rescan.
-type bulkRelationshipReader interface {
 	AllRelationshipChildren() (map[string]*feature.RelationshipChildren, error)
+	LoadAddressedReviewFeedbackIDs(parentID, repoName string) (map[int]bool, error)
+	LoadReviewFeedbackDraft(parentID string) (*feature.ReviewFeedbackDraft, error)
+	SaveReviewFeedbackDraft(parentID string, draft *feature.ReviewFeedbackDraft, expectedRevision int64) error
+	ActiveReviewFeedbackLaunchReceipt(parentID string) (*feature.Feature, *feature.ReviewFeedbackLaunchReceipt, error)
+	DeleteReviewFeedbackDraftIfRevision(parentID string, revision int64) error
+	BaseDirectory() string
 }
 
 // OwnerFromInstanceOwner drops local filesystem paths from lock owner

@@ -27,72 +27,73 @@ import (
 	"github.com/doordash-oss/agentic-orchestrator/internal/feature"
 )
 
-// ReportGateCategory classifies a gate finding so downstream feedback can
+// reportGateCategory classifies a gate finding so downstream feedback can
 // group by failure mode.
-type ReportGateCategory string
+type reportGateCategory string
 
 const (
-	// GateCategorySchema covers structural integrity issues: missing
+	// gateCategorySchema covers structural integrity issues: missing
 	// required checks, empty evidence on pass, unknown status values, or
 	// not_run entries when completion is requested.
-	GateCategorySchema ReportGateCategory = "schema"
+	gateCategorySchema reportGateCategory = "schema"
 
-	// GateCategoryHedge covers pass claims whose evidence text describes a
+	// gateCategoryHedge covers pass claims whose evidence text describes a
 	// failure — the agent marking passed while its own prose admits it
 	// didn't.
-	GateCategoryHedge ReportGateCategory = "hedge"
+	gateCategoryHedge reportGateCategory = "hedge"
 
-	// GateCategoryDeferral covers structured cross-phase commitment failures.
-	GateCategoryDeferral ReportGateCategory = "deferral"
+	// gateCategoryDeferral covers structured cross-phase commitment failures.
+	gateCategoryDeferral reportGateCategory = "deferral"
 )
 
-// ReportGateKind is a fine-grained finding type within a category. It
+// reportGateKind is a fine-grained finding type within a category. It
 // drives feedback consolidation: findings sharing the same Kind are
 // collapsed into a single bullet when many fire at once, so the agent
 // reads one actionable signal instead of N repetitions of the same fact.
-type ReportGateKind string
+type reportGateKind string
 
 const (
-	KindMissingRequired       ReportGateKind = "missing_required"
-	KindUnknownItemID         ReportGateKind = "unknown_item_id"
-	KindEmptyEvidence         ReportGateKind = "empty_evidence"
-	KindNotRunAtCompletion    ReportGateKind = "not_run_at_completion"
-	KindUnknownStatus         ReportGateKind = "unknown_status"
-	KindHedgePhrase           ReportGateKind = "hedge_phrase"
-	KindStaleRevision         ReportGateKind = "stale_contract_revision"
-	KindBlockedReason         ReportGateKind = "missing_blocked_reason"
-	KindSubstituteItem        ReportGateKind = "invalid_substitute_item"
-	KindPolicyViolation       ReportGateKind = "policy_violation"
-	KindEvidenceFile          ReportGateKind = "invalid_evidence_file"
-	KindDeferralUnclosed      ReportGateKind = "deferral_unclosed_due_this_phase"
-	KindDeferralMissingReason ReportGateKind = "deferral_missing_reason"
-	KindEvidenceIntegrity     ReportGateKind = "evidence_integrity"
-	KindEvidenceDuplicate     ReportGateKind = "evidence_duplicate"
+	kindMissingRequired       reportGateKind = "missing_required"
+	kindUnknownItemID         reportGateKind = "unknown_item_id"
+	kindEmptyEvidence         reportGateKind = "empty_evidence"
+	kindNotRunAtCompletion    reportGateKind = "not_run_at_completion"
+	kindUnknownStatus         reportGateKind = "unknown_status"
+	kindHedgePhrase           reportGateKind = "hedge_phrase"
+	kindStaleRevision         reportGateKind = "stale_contract_revision"
+	kindBlockedReason         reportGateKind = "missing_blocked_reason"
+	kindSubstituteItem        reportGateKind = "invalid_substitute_item"
+	kindPolicyViolation       reportGateKind = "policy_violation"
+	kindEvidenceFile          reportGateKind = "invalid_evidence_file"
+	kindDeferralUnclosed      reportGateKind = "deferral_unclosed_due_this_phase"
+	kindDeferralMissingReason reportGateKind = "deferral_missing_reason"
+	kindEvidenceIntegrity     reportGateKind = "evidence_integrity"
+	kindEvidenceDuplicate     reportGateKind = "evidence_duplicate"
 )
 
-// ReportGateFinding describes a single integrity issue found in a
+// reportGateFinding describes a single integrity issue found in a
 // verification report. The CheckName is empty for report-level issues that
 // aren't scoped to one check (e.g. "missing required item").
-type ReportGateFinding struct {
+type reportGateFinding struct {
 	CheckName string
-	Category  ReportGateCategory
-	Kind      ReportGateKind
+	Category  reportGateCategory
+	Kind      reportGateKind
 	Detail    string
 }
 
-// ReportGateResult is what ValidateVerificationReport returns. Rejected is
-// true iff any blocking findings exist. KnownCaveats is populated with the
-// report's known_caveats map for downstream surfacing to the LLM reviewer.
-type ReportGateResult struct {
+// reportGateResult is what ValidateVerificationReportWithContext returns.
+// Rejected is true iff any blocking findings exist. KnownCaveats is populated
+// with the report's known_caveats map for downstream surfacing to the LLM
+// reviewer.
+type reportGateResult struct {
 	Rejected     bool
-	Findings     []ReportGateFinding
+	Findings     []reportGateFinding
 	KnownCaveats map[string]string
 }
 
-// VerificationReportValidationContext carries optional filesystem context for
+// verificationReportValidationContext carries optional filesystem context for
 // contract-backed evidence-file validation. IterationDir is the trust root for
 // evidence.primary and evidence.attachments paths.
-type VerificationReportValidationContext struct {
+type verificationReportValidationContext struct {
 	IterationDir string
 	Contract     *TestingContract
 	// DeclinedWaiverItemIDs names items the user declined to waive at an
@@ -119,8 +120,8 @@ var hedgePhrases = []string{
 	"cannot be verified",
 }
 
-// ValidateVerificationReport runs the deterministic integrity gate over a
-// verification report. Returns a result describing any blocking findings.
+// validateVerificationReportWithContext runs the deterministic integrity gate
+// over a verification report. Returns a result describing any blocking findings.
 //
 // The gate is designed to catch two classes of over-claim cheaply:
 //
@@ -133,17 +134,11 @@ var hedgePhrases = []string{
 // rootSuccess reflects whether the root agent emitted a structured success
 // outcome. When true, any not_run required check is a contradiction and blocks
 // the gate.
-func ValidateVerificationReport(report *VerificationReport, required []RequiredVerificationItem, contract *TestingContract, rootSuccess bool) ReportGateResult {
-	return ValidateVerificationReportWithContext(report, required, rootSuccess, VerificationReportValidationContext{
-		Contract: contract,
-	})
-}
-
-// ValidateVerificationReportWithContext runs the deterministic integrity gate
-// and, when supplied with an iteration directory, validates file-backed visual
-// and behavioral evidence under that iteration root.
-func ValidateVerificationReportWithContext(report *VerificationReport, required []RequiredVerificationItem, rootSuccess bool, ctx VerificationReportValidationContext) ReportGateResult {
-	result := ReportGateResult{KnownCaveats: report.KnownCaveats}
+//
+// When ctx carries an iteration directory, file-backed visual and behavioral
+// evidence is validated under that iteration root.
+func validateVerificationReportWithContext(report *verificationReport, required []requiredVerificationItem, rootSuccess bool, ctx verificationReportValidationContext) reportGateResult {
+	result := reportGateResult{KnownCaveats: report.KnownCaveats}
 
 	checks := reportChecks(report)
 	contract := ctx.Contract
@@ -158,26 +153,26 @@ func ValidateVerificationReportWithContext(report *VerificationReport, required 
 	for i := range checks {
 		c := &checks[i]
 		name := checkDisplayName(c)
-		status := NormalizeStatus(c.Status)
+		status := normalizeStatus(c.Status)
 
 		switch status {
-		case VerificationStatusPassed:
+		case verificationStatusPassed:
 			evidenceText := verificationEvidenceText(c)
 			if contractBacked && !hasStructuredEvidence(c.EvidenceData) {
-				result.Findings = append(result.Findings, ReportGateFinding{
+				result.Findings = append(result.Findings, reportGateFinding{
 					CheckName: name,
-					Category:  GateCategorySchema,
-					Kind:      KindEmptyEvidence,
+					Category:  gateCategorySchema,
+					Kind:      kindEmptyEvidence,
 					Detail:    "status is passed but structured evidence is empty — every passed contract item must record structured command evidence",
 				})
 				continue
 			}
 			// Empty evidence on pass is a schema lie.
 			if strings.TrimSpace(evidenceText) == "" && !artifactEvidenceHasPrimary(c) {
-				result.Findings = append(result.Findings, ReportGateFinding{
+				result.Findings = append(result.Findings, reportGateFinding{
 					CheckName: name,
-					Category:  GateCategorySchema,
-					Kind:      KindEmptyEvidence,
+					Category:  gateCategorySchema,
+					Kind:      kindEmptyEvidence,
 					Detail:    "status is passed but evidence is empty — every passed check must include what you ran and the result",
 				})
 				continue
@@ -185,57 +180,57 @@ func ValidateVerificationReportWithContext(report *VerificationReport, required 
 			// Prose lie: hedge phrases inside evidence for a pass claim.
 			if evidenceText != "" {
 				if hits := findHedgePhrases(evidenceText); len(hits) > 0 {
-					result.Findings = append(result.Findings, ReportGateFinding{
+					result.Findings = append(result.Findings, reportGateFinding{
 						CheckName: name,
-						Category:  GateCategoryHedge,
-						Kind:      KindHedgePhrase,
+						Category:  gateCategoryHedge,
+						Kind:      kindHedgePhrase,
 						Detail:    fmt.Sprintf("status is passed but evidence text contains hedge phrases that describe failure: %s — if the check actually failed, mark status as failed and say so plainly", strings.Join(quoted(hits), ", ")),
 					})
 				}
 			}
 
-		case VerificationStatusPendingHuman:
-			if contractBacked && c.Mode != VerificationModeManual && !isArtifactEvidenceMode(c.Mode) {
-				result.Findings = append(result.Findings, ReportGateFinding{
+		case verificationStatusPendingHuman:
+			if contractBacked && c.Mode != verificationModeManual && !isArtifactEvidenceMode(c.Mode) {
+				result.Findings = append(result.Findings, reportGateFinding{
 					CheckName: name,
-					Category:  GateCategorySchema,
-					Kind:      KindPolicyViolation,
+					Category:  gateCategorySchema,
+					Kind:      kindPolicyViolation,
 					Detail:    "status is pending_human but the contract item is not mode: manual, visual, or behavioral",
 				})
 				continue
 			}
-			if contractBacked && c.Mode == VerificationModeManual &&
+			if contractBacked && c.Mode == verificationModeManual &&
 				strings.TrimSpace(c.BlockedReason) == "" &&
 				strings.TrimSpace(c.Notes) == "" &&
 				strings.TrimSpace(verificationEvidenceText(c)) == "" {
-				result.Findings = append(result.Findings, ReportGateFinding{
+				result.Findings = append(result.Findings, reportGateFinding{
 					CheckName: name,
-					Category:  GateCategorySchema,
-					Kind:      KindBlockedReason,
+					Category:  gateCategorySchema,
+					Kind:      kindBlockedReason,
 					Detail:    "status is pending_human for a manual item but no blocked_reason, notes, or evidence names the downstream owner",
 				})
 			}
 
-		case VerificationStatusNotRun:
+		case verificationStatusNotRun:
 			if rootSuccess {
-				result.Findings = append(result.Findings, ReportGateFinding{
+				result.Findings = append(result.Findings, reportGateFinding{
 					CheckName: name,
-					Category:  GateCategorySchema,
-					Kind:      KindNotRunAtCompletion,
+					Category:  gateCategorySchema,
+					Kind:      kindNotRunAtCompletion,
 					Detail:    "status is not_run but the root outcome reports success — either run the check and record the result, or explain why this check cannot run (mark as pending_human if blocked on a human)",
 				})
 			}
 
-		case VerificationStatusFailed, VerificationStatusInheritedFailure, VerificationStatusBlocked, VerificationStatusWaived:
+		case verificationStatusFailed, verificationStatusInheritedFailure, verificationStatusBlocked, verificationStatusWaived:
 			// Honest declarations. The LLM reviewer assesses severity. The
 			// gate does not block here except for policy/schema checks above.
 
 		default:
 			// Unknown status value after normalization.
-			result.Findings = append(result.Findings, ReportGateFinding{
+			result.Findings = append(result.Findings, reportGateFinding{
 				CheckName: name,
-				Category:  GateCategorySchema,
-				Kind:      KindUnknownStatus,
+				Category:  gateCategorySchema,
+				Kind:      kindUnknownStatus,
 				Detail:    fmt.Sprintf("status %q is not one of passed, failed, inherited_failure, blocked, waived, not_run, pending_human", string(c.Status)),
 			})
 		}
@@ -249,14 +244,14 @@ func ValidateVerificationReportWithContext(report *VerificationReport, required 
 	return result
 }
 
-func reportChecks(report *VerificationReport) []VerificationCheckResult {
+func reportChecks(report *verificationReport) []verificationCheckResult {
 	if len(report.Results) > 0 {
 		return report.Results
 	}
 	return report.RequiredChecks
 }
 
-func validateEvidenceFiles(result *ReportGateResult, checks []VerificationCheckResult, contract *TestingContract, iterDir string) {
+func validateEvidenceFiles(result *reportGateResult, checks []verificationCheckResult, contract *TestingContract, iterDir string) {
 	items := make(map[string]TestingContractItem, len(contract.Items))
 	for _, item := range contract.Items {
 		items[item.ID] = item
@@ -272,30 +267,30 @@ func validateEvidenceFiles(result *ReportGateResult, checks []VerificationCheckR
 		if !ok {
 			continue
 		}
-		status := NormalizeStatus(c.Status)
+		status := normalizeStatus(c.Status)
 		switch status {
-		case VerificationStatusPassed, VerificationStatusFailed, VerificationStatusInheritedFailure, VerificationStatusPendingHuman:
+		case verificationStatusPassed, verificationStatusFailed, verificationStatusInheritedFailure, verificationStatusPendingHuman:
 		default:
 			continue
 		}
 
 		name := checkDisplayName(c)
-		if status == VerificationStatusPassed {
+		if status == verificationStatusPassed {
 			if digest := strings.ToLower(strings.TrimSpace(c.EvidenceData.Sha256)); digest != "" {
 				digestRows[digest] = append(digestRows[digest], name)
 			}
 		}
 		if strings.TrimSpace(c.EvidenceData.Primary) == "" {
-			result.Findings = append(result.Findings, ReportGateFinding{
+			result.Findings = append(result.Findings, reportGateFinding{
 				CheckName: name,
-				Category:  GateCategorySchema,
-				Kind:      KindEvidenceFile,
+				Category:  gateCategorySchema,
+				Kind:      kindEvidenceFile,
 				Detail:    fmt.Sprintf("status is %s but evidence.primary is empty — file-backed evidence for this row must name a file under %s/", status, root),
 			})
 			continue
 		}
 		primaryOK := validateEvidencePath(result, name, iterDir, root, "primary", c.EvidenceData.Primary)
-		if primaryOK && status == VerificationStatusPassed && strings.TrimSpace(c.EvidenceData.Sha256) != "" {
+		if primaryOK && status == verificationStatusPassed && strings.TrimSpace(c.EvidenceData.Sha256) != "" {
 			verifyEvidenceDigest(result, name, iterDir, root, c.EvidenceData.Primary, c.EvidenceData.Sha256)
 		}
 		for idx, attachment := range c.EvidenceData.Attachments {
@@ -308,9 +303,9 @@ func validateEvidenceFiles(result *ReportGateResult, checks []VerificationCheckR
 			continue
 		}
 		sort.Strings(names)
-		result.Findings = append(result.Findings, ReportGateFinding{
-			Category: GateCategorySchema,
-			Kind:     KindEvidenceDuplicate,
+		result.Findings = append(result.Findings, reportGateFinding{
+			Category: gateCategorySchema,
+			Kind:     kindEvidenceDuplicate,
 			Detail: fmt.Sprintf("these passed evidence rows share one byte-identical file, so they cannot each depict their own contracted surface — capture each distinctly: %s",
 				strings.Join(names, "; ")),
 		})
@@ -318,7 +313,7 @@ func validateEvidenceFiles(result *ReportGateResult, checks []VerificationCheckR
 }
 
 func evidenceFileRootForContractItem(item TestingContractItem) (string, bool) {
-	if item.Owner == TestingContractOwnerHarness {
+	if item.Owner == testingContractOwnerHarness {
 		return "", false
 	}
 	source := strings.TrimSpace(item.Source)
@@ -333,13 +328,13 @@ func evidenceFileRootForContractItem(item TestingContractItem) (string, bool) {
 	}
 }
 
-func validateEvidencePath(result *ReportGateResult, checkName, iterDir, root, field, raw string) bool {
+func validateEvidencePath(result *reportGateResult, checkName, iterDir, root, field, raw string) bool {
 	clean, detail := cleanEvidencePath(raw, root)
 	if detail != "" {
-		result.Findings = append(result.Findings, ReportGateFinding{
+		result.Findings = append(result.Findings, reportGateFinding{
 			CheckName: checkName,
-			Category:  GateCategorySchema,
-			Kind:      KindEvidenceFile,
+			Category:  gateCategorySchema,
+			Kind:      kindEvidenceFile,
 			Detail:    fmt.Sprintf("evidence.%s path %q is invalid: %s", field, raw, detail),
 		})
 		return false
@@ -348,27 +343,27 @@ func validateEvidencePath(result *ReportGateResult, checkName, iterDir, root, fi
 	info, err := os.Stat(fullPath)
 	if err != nil {
 		if os.IsNotExist(err) {
-			result.Findings = append(result.Findings, ReportGateFinding{
+			result.Findings = append(result.Findings, reportGateFinding{
 				CheckName: checkName,
-				Category:  GateCategorySchema,
-				Kind:      KindEvidenceFile,
+				Category:  gateCategorySchema,
+				Kind:      kindEvidenceFile,
 				Detail:    fmt.Sprintf("evidence.%s path %q is missing under iteration directory", field, clean),
 			})
 			return false
 		}
-		result.Findings = append(result.Findings, ReportGateFinding{
+		result.Findings = append(result.Findings, reportGateFinding{
 			CheckName: checkName,
-			Category:  GateCategorySchema,
-			Kind:      KindEvidenceFile,
+			Category:  gateCategorySchema,
+			Kind:      kindEvidenceFile,
 			Detail:    fmt.Sprintf("evidence.%s path %q could not be statted: %v", field, clean, err),
 		})
 		return false
 	}
 	if info.IsDir() {
-		result.Findings = append(result.Findings, ReportGateFinding{
+		result.Findings = append(result.Findings, reportGateFinding{
 			CheckName: checkName,
-			Category:  GateCategorySchema,
-			Kind:      KindEvidenceFile,
+			Category:  gateCategorySchema,
+			Kind:      kindEvidenceFile,
 			Detail:    fmt.Sprintf("evidence.%s path %q is a directory, not a file", field, clean),
 		})
 		return false
@@ -379,23 +374,23 @@ func validateEvidencePath(result *ReportGateResult, checkName, iterDir, root, fi
 // verifyEvidenceDigest re-reads a passed row's canonical evidence file and
 // compares it against the digest recorded at verification time, so a later
 // run cannot silently replace evidence after its pass mark was earned.
-func verifyEvidenceDigest(result *ReportGateResult, checkName, iterDir, root, rel, want string) {
+func verifyEvidenceDigest(result *reportGateResult, checkName, iterDir, root, rel, want string) {
 	clean, detail := cleanEvidencePath(rel, root)
 	if detail != "" {
 		return // path findings already reported by validateEvidencePath
 	}
 	data, err := os.ReadFile(filepath.Join(iterDir, filepath.FromSlash(clean)))
 	if err != nil {
-		result.Findings = append(result.Findings, ReportGateFinding{
-			CheckName: checkName, Category: GateCategorySchema, Kind: KindEvidenceIntegrity,
+		result.Findings = append(result.Findings, reportGateFinding{
+			CheckName: checkName, Category: gateCategorySchema, Kind: kindEvidenceIntegrity,
 			Detail: fmt.Sprintf("evidence file %q could not be re-read for digest verification: %v", clean, err),
 		})
 		return
 	}
 	sum := sha256.Sum256(data)
 	if !strings.EqualFold(hex.EncodeToString(sum[:]), strings.TrimSpace(want)) {
-		result.Findings = append(result.Findings, ReportGateFinding{
-			CheckName: checkName, Category: GateCategorySchema, Kind: KindEvidenceIntegrity,
+		result.Findings = append(result.Findings, reportGateFinding{
+			CheckName: checkName, Category: gateCategorySchema, Kind: kindEvidenceIntegrity,
 			Detail: fmt.Sprintf("evidence file %q changed after the harness verified it — its recorded digest no longer matches, so the passed status does not describe this file; re-run verification to re-earn the pass", clean),
 		})
 	}
@@ -438,7 +433,7 @@ func isWindowsAbsolutePath(p string) bool {
 	return false
 }
 
-func readBoundTestingContract(report *VerificationReport) (*TestingContract, error) {
+func readBoundTestingContract(report *verificationReport) (*TestingContract, error) {
 	path := strings.TrimSpace(report.ContractPath)
 	if path == "" {
 		return nil, nil
@@ -450,8 +445,8 @@ func readBoundTestingContract(report *VerificationReport) (*TestingContract, err
 	return contract, nil
 }
 
-func validateLegacyRequiredChecks(result *ReportGateResult, checks []VerificationCheckResult, required []RequiredVerificationItem) {
-	byRequirement := make(map[string]*VerificationCheckResult, len(checks))
+func validateLegacyRequiredChecks(result *reportGateResult, checks []verificationCheckResult, required []requiredVerificationItem) {
+	byRequirement := make(map[string]*verificationCheckResult, len(checks))
 	for i := range checks {
 		c := &checks[i]
 		byRequirement[strings.TrimSpace(c.Requirement)] = c
@@ -468,25 +463,25 @@ func validateLegacyRequiredChecks(result *ReportGateResult, checks []Verificatio
 		if name == "" {
 			name = key
 		}
-		result.Findings = append(result.Findings, ReportGateFinding{
+		result.Findings = append(result.Findings, reportGateFinding{
 			CheckName: name,
-			Category:  GateCategorySchema,
-			Kind:      KindMissingRequired,
+			Category:  gateCategorySchema,
+			Kind:      kindMissingRequired,
 			Detail:    fmt.Sprintf("required verification item is missing from the report (requirement: %q)", key),
 		})
 	}
 }
 
-func validateContractBackedChecks(result *ReportGateResult, report *VerificationReport, checks []VerificationCheckResult, contract *TestingContract, declinedWaivers map[string]bool) {
+func validateContractBackedChecks(result *reportGateResult, report *verificationReport, checks []verificationCheckResult, contract *TestingContract, declinedWaivers map[string]bool) {
 	if report.ContractRevision != contract.Revision {
-		result.Findings = append(result.Findings, ReportGateFinding{
-			Category: GateCategorySchema,
-			Kind:     KindStaleRevision,
+		result.Findings = append(result.Findings, reportGateFinding{
+			Category: gateCategorySchema,
+			Kind:     kindStaleRevision,
 			Detail:   fmt.Sprintf("verification report references contract revision %d, but the latest testing contract is revision %d", report.ContractRevision, contract.Revision),
 		})
 	}
 
-	byID := make(map[string]*VerificationCheckResult, len(checks))
+	byID := make(map[string]*verificationCheckResult, len(checks))
 	for i := range checks {
 		c := &checks[i]
 		if itemID := strings.TrimSpace(c.ItemID); itemID != "" {
@@ -500,10 +495,10 @@ func validateContractBackedChecks(result *ReportGateResult, report *Verification
 		if _, ok := byID[item.ID]; ok {
 			continue
 		}
-		result.Findings = append(result.Findings, ReportGateFinding{
+		result.Findings = append(result.Findings, reportGateFinding{
 			CheckName: item.Name,
-			Category:  GateCategorySchema,
-			Kind:      KindMissingRequired,
+			Category:  gateCategorySchema,
+			Kind:      kindMissingRequired,
 			Detail:    fmt.Sprintf("required contract item is missing from the report (item_id: %q)", item.ID),
 		})
 	}
@@ -514,80 +509,80 @@ func validateContractBackedChecks(result *ReportGateResult, report *Verification
 	for i := range checks {
 		itemID := strings.TrimSpace(checks[i].ItemID)
 		if itemID == "" {
-			result.Findings = append(result.Findings, ReportGateFinding{
+			result.Findings = append(result.Findings, reportGateFinding{
 				CheckName: checkDisplayName(&checks[i]),
-				Category:  GateCategorySchema,
-				Kind:      KindMissingRequired,
+				Category:  gateCategorySchema,
+				Kind:      kindMissingRequired,
 				Detail:    "contract-backed verification result is missing item_id",
 			})
 			continue
 		}
 		if _, ok := validIDs[itemID]; ok {
 			item := validIDs[itemID]
-			if checks[i].Mode == "" || checks[i].Mode == VerificationModeUnknown {
+			if checks[i].Mode == "" || checks[i].Mode == verificationModeUnknown {
 				checks[i].Mode = verificationModeForContractItem(item)
 			}
-			if NormalizeStatus(checks[i].Status) == VerificationStatusBlocked {
+			if normalizeStatus(checks[i].Status) == verificationStatusBlocked {
 				if strings.TrimSpace(checks[i].BlockedReason) == "" {
-					result.Findings = append(result.Findings, ReportGateFinding{
+					result.Findings = append(result.Findings, reportGateFinding{
 						CheckName: checkDisplayName(&checks[i]),
-						Category:  GateCategorySchema,
-						Kind:      KindBlockedReason,
+						Category:  gateCategorySchema,
+						Kind:      kindBlockedReason,
 						Detail:    "status is blocked but blocked_reason is empty",
 					})
 				}
 				if !item.Policy.AllowBlocked {
-					result.Findings = append(result.Findings, ReportGateFinding{
+					result.Findings = append(result.Findings, reportGateFinding{
 						CheckName: checkDisplayName(&checks[i]),
-						Category:  GateCategorySchema,
-						Kind:      KindPolicyViolation,
+						Category:  gateCategorySchema,
+						Kind:      kindPolicyViolation,
 						Detail:    "status is blocked but the bound contract item does not allow blocked results",
 					})
 				}
 			}
-			if NormalizeStatus(checks[i].Status) == VerificationStatusWaived && !IsTestingContractItemWaived(item) {
+			if normalizeStatus(checks[i].Status) == verificationStatusWaived && !IsTestingContractItemWaived(item) {
 				detail := "status is waived but the bound contract has no user-authorized waiver for this item"
 				if declinedWaivers[itemID] {
 					detail = "status is waived but the operator declined to waive this item at the verification gate; stop recording it as waived " +
 						"(verification-report.yaml is harness-owned) and provide the required evidence instead"
 				}
-				result.Findings = append(result.Findings, ReportGateFinding{
+				result.Findings = append(result.Findings, reportGateFinding{
 					CheckName: checkDisplayName(&checks[i]),
-					Category:  GateCategorySchema,
-					Kind:      KindPolicyViolation,
+					Category:  gateCategorySchema,
+					Kind:      kindPolicyViolation,
 					Detail:    detail,
 				})
 			}
 			if substituteID := strings.TrimSpace(checks[i].SubstituteItemID); substituteID != "" {
 				if !item.Policy.AllowSubstitution {
-					result.Findings = append(result.Findings, ReportGateFinding{
+					result.Findings = append(result.Findings, reportGateFinding{
 						CheckName: checkDisplayName(&checks[i]),
-						Category:  GateCategorySchema,
-						Kind:      KindPolicyViolation,
+						Category:  gateCategorySchema,
+						Kind:      kindPolicyViolation,
 						Detail:    "substitute_item_id is set but the bound contract item does not allow substitution",
 					})
 				}
 				if _, ok := byID[substituteID]; !ok {
-					result.Findings = append(result.Findings, ReportGateFinding{
+					result.Findings = append(result.Findings, reportGateFinding{
 						CheckName: checkDisplayName(&checks[i]),
-						Category:  GateCategorySchema,
-						Kind:      KindSubstituteItem,
+						Category:  gateCategorySchema,
+						Kind:      kindSubstituteItem,
 						Detail:    fmt.Sprintf("substitute_item_id %q does not appear as another result row in the report", substituteID),
 					})
 				}
 			}
 			continue
 		}
-		result.Findings = append(result.Findings, ReportGateFinding{
+		result.Findings = append(result.Findings, reportGateFinding{
 			CheckName: checkDisplayName(&checks[i]),
-			Category:  GateCategorySchema,
-			Kind:      KindUnknownItemID,
+			Category:  gateCategorySchema,
+			Kind:      kindUnknownItemID,
 			Detail:    fmt.Sprintf("item_id %q does not exist in the bound testing contract", itemID),
 		})
 	}
 }
 
-// ValidateDeferralLedger performs the cross-phase deferral checks against
+// validateDeferralLedger performs the cross-phase deferral checks against
 // the parsed `## Deferrals` section of progress.md (which is now where
 // agents declare new and closed deferrals; verification-report.yaml is
 // verification-only). The checks:
@@ -610,15 +605,15 @@ func validateContractBackedChecks(result *ReportGateResult, report *Verification
 // feature.DueForPhaseScopedTo so out-of-scope deferrals do not block this
 // repo's report. Empty repoName is permissive (every entry is enforced) —
 // preserves callers that pre-date per-repo gate threading.
-func ValidateDeferralLedger(deferrals []feature.IncomingDeferral, closedDeferrals []string, ledger []feature.Deferral, currentPhase int, repoName string) ReportGateResult {
-	var result ReportGateResult
+func validateDeferralLedger(deferrals []feature.IncomingDeferral, closedDeferrals []string, ledger []feature.Deferral, currentPhase int, repoName string) reportGateResult {
+	var result reportGateResult
 
 	// Every emitted entry must carry a reason.
 	for _, d := range deferrals {
 		if strings.TrimSpace(d.Reason) == "" {
-			result.Findings = append(result.Findings, ReportGateFinding{
-				Category: GateCategoryDeferral,
-				Kind:     KindDeferralMissingReason,
+			result.Findings = append(result.Findings, reportGateFinding{
+				Category: gateCategoryDeferral,
+				Kind:     kindDeferralMissingReason,
 				Detail: fmt.Sprintf(
 					"deferrals entry with description %q and due_by_phase=%d has an empty `reason` — every deferral must cite why the work is being punted. The reason is read by the target phase's planner and by the reviewer during audit of chronic re-deferrals.",
 					truncate(d.Description, 80), d.DueByPhase,
@@ -672,9 +667,9 @@ func ValidateDeferralLedger(deferrals []feature.IncomingDeferral, closedDeferral
 			if _, ok := redeferredSet[d.ID]; ok {
 				continue
 			}
-			result.Findings = append(result.Findings, ReportGateFinding{
-				Category: GateCategoryDeferral,
-				Kind:     KindDeferralUnclosed,
+			result.Findings = append(result.Findings, reportGateFinding{
+				Category: gateCategoryDeferral,
+				Kind:     kindDeferralUnclosed,
 				Detail: fmt.Sprintf(
 					"deferral %s (%q; created in phase %d) is due by this phase (%d) and is still open. Either close it — do the work, verify, and cite `%s` in `closed_deferrals:` — or re-defer it with an updated `deferrals:` entry (same description, new `due_by_phase`, cited `reason`). Silent omission lets the Tailwind failure mode recur.",
 					d.ID, truncate(d.Description, 80), d.CreatedInPhase, currentPhase, d.ID,
@@ -687,11 +682,12 @@ func ValidateDeferralLedger(deferrals []feature.IncomingDeferral, closedDeferral
 	return result
 }
 
-// MergeGateResults concatenates findings from multiple gate runs and
-// recomputes Rejected. Used by callers that run ValidateVerificationReport
-// and ValidateDeferralLedger in sequence and want a single combined view.
-func MergeGateResults(results ...ReportGateResult) ReportGateResult {
-	var merged ReportGateResult
+// mergeGateResults concatenates findings from multiple gate runs and
+// recomputes Rejected. Used by callers that run
+// ValidateVerificationReportWithContext and ValidateDeferralLedger in sequence
+// and want a single combined view.
+func mergeGateResults(results ...reportGateResult) reportGateResult {
+	var merged reportGateResult
 	for _, r := range results {
 		merged.Findings = append(merged.Findings, r.Findings...)
 		// KnownCaveats: first non-nil wins. Downstream surfacing treats
@@ -712,21 +708,7 @@ func truncate(s string, n int) string {
 	return s[:n-1] + "…"
 }
 
-func quotedUnique(ss []string) []string {
-	seen := map[string]struct{}{}
-	var out []string
-	for _, s := range ss {
-		k := strings.ToLower(s)
-		if _, ok := seen[k]; ok {
-			continue
-		}
-		seen[k] = struct{}{}
-		out = append(out, fmt.Sprintf("%q", s))
-	}
-	return out
-}
-
-// FormatGateFeedback builds the markdown body written to review-feedback.md
+// formatGateFeedback builds the markdown body written to review-feedback.md
 // when the gate rejects. Output conforms to the file-based review handoff
 // schema (## Findings / ## Suggestions / ## Verdict) so ParseReviewFeedback
 // can re-parse it cleanly downstream.
@@ -737,7 +719,7 @@ func quotedUnique(ss []string) []string {
 // — rather than N verbose repetitions of the same detail. Hedge-phrase and
 // unknown-status findings stay per-check because each carries a distinct
 // explanation.
-func FormatGateFeedback(result ReportGateResult) string {
+func formatGateFeedback(result reportGateResult) string {
 	var b strings.Builder
 	b.WriteString("Your verification report did not cleanly support the SUCCESS signal. ")
 	b.WriteString("A deterministic pre-review gate rejected it before the LLM reviewer was invoked, ")
@@ -753,7 +735,7 @@ func FormatGateFeedback(result ReportGateResult) string {
 		b.WriteString("\n")
 	}
 
-	hedge := findingsOfCategory(result.Findings, GateCategoryHedge)
+	hedge := findingsOfCategory(result.Findings, gateCategoryHedge)
 	if len(hedge) > 0 {
 		b.WriteString("### Pass claims contradicted by their own evidence\n\n")
 		for _, f := range hedge {
@@ -777,11 +759,11 @@ func FormatGateFeedback(result ReportGateResult) string {
 		b.WriteString(deferralBlock)
 	}
 
-	return FormatStructuredReviewFeedback(
+	return formatStructuredReviewFeedback(
 		"Report Integrity Gate — CHANGES_REQUESTED",
 		strings.TrimRight(b.String(), "\n"),
 		"",
-		ReviewChangesRequested,
+		reviewChangesRequested,
 	)
 }
 
@@ -795,12 +777,12 @@ func FormatGateFeedback(result ReportGateResult) string {
 // no branch for them, producing empty review-feedback.md files containing
 // only the header + status line. The agent then had no actionable content
 // and the iteration loop stalled.
-func formatDeferralFindings(findings []ReportGateFinding) string {
-	deferrals := findingsOfCategory(findings, GateCategoryDeferral)
+func formatDeferralFindings(findings []reportGateFinding) string {
+	deferrals := findingsOfCategory(findings, gateCategoryDeferral)
 	if len(deferrals) == 0 {
 		return ""
 	}
-	byKind := map[ReportGateKind][]ReportGateFinding{}
+	byKind := map[reportGateKind][]reportGateFinding{}
 	for _, f := range deferrals {
 		byKind[f.Kind] = append(byKind[f.Kind], f)
 	}
@@ -808,7 +790,7 @@ func formatDeferralFindings(findings []ReportGateFinding) string {
 	var b strings.Builder
 	b.WriteString("### Cross-phase deferrals (ledger)\n\n")
 
-	if fs := byKind[KindDeferralUnclosed]; len(fs) > 0 {
+	if fs := byKind[kindDeferralUnclosed]; len(fs) > 0 {
 		fmt.Fprintf(&b, "**%d ledger entr%s due this phase is still open.** Either close it (do the work and cite the ID in `closed_deferrals:`) or re-defer it (emit an entry in `deferrals:` citing the ID as `id:`, with a new `due_by_phase` and a fresh `reason`):\n\n",
 			len(fs), pluralY(len(fs)))
 		for _, f := range fs {
@@ -816,7 +798,7 @@ func formatDeferralFindings(findings []ReportGateFinding) string {
 		}
 		b.WriteString("\n")
 	}
-	if fs := byKind[KindDeferralMissingReason]; len(fs) > 0 {
+	if fs := byKind[kindDeferralMissingReason]; len(fs) > 0 {
 		fmt.Fprintf(&b, "**%d deferral%s missing a `reason`.** Every entry must cite why work is being punted (read by the target phase's planner and by chronic-slippage audits):\n\n",
 			len(fs), plural(len(fs)))
 		for _, f := range fs {
@@ -825,9 +807,9 @@ func formatDeferralFindings(findings []ReportGateFinding) string {
 		b.WriteString("\n")
 	}
 	// Forward-compat for any future deferral kinds added to the enum.
-	handled := map[ReportGateKind]bool{
-		KindDeferralUnclosed:      true,
-		KindDeferralMissingReason: true,
+	handled := map[reportGateKind]bool{
+		kindDeferralUnclosed:      true,
+		kindDeferralMissingReason: true,
 	}
 	for kind, fs := range byKind {
 		if handled[kind] {
@@ -854,32 +836,32 @@ func pluralY(n int) string {
 // many occurrences collapse to a single actionable bullet; kinds with
 // distinct per-check detail (unknown status values) render one bullet per
 // finding.
-func buildSchemaBullets(findings []ReportGateFinding) []string {
-	schema := findingsOfCategory(findings, GateCategorySchema)
+func buildSchemaBullets(findings []reportGateFinding) []string {
+	schema := findingsOfCategory(findings, gateCategorySchema)
 	if len(schema) == 0 {
 		return nil
 	}
-	byKind := map[ReportGateKind][]ReportGateFinding{}
+	byKind := map[reportGateKind][]reportGateFinding{}
 	for _, f := range schema {
 		byKind[f.Kind] = append(byKind[f.Kind], f)
 	}
 	var out []string
 
-	if fs := byKind[KindNotRunAtCompletion]; len(fs) > 0 {
+	if fs := byKind[kindNotRunAtCompletion]; len(fs) > 0 {
 		names := collectCheckNames(fs)
 		out = append(out, fmt.Sprintf(
 			"- **%d verification check%s left at `status: not_run` when completion was requested.** Either run the checks and record results, or emit `## Iteration State: RETRY` in progress.md (with the unfinished work listed under `### Remaining from the plan`) instead of `SUCCESS`. Affected: %s",
 			len(fs), plural(len(fs)), joinCheckNames(names),
 		))
 	}
-	if fs := byKind[KindEmptyEvidence]; len(fs) > 0 {
+	if fs := byKind[kindEmptyEvidence]; len(fs) > 0 {
 		names := collectCheckNames(fs)
 		out = append(out, fmt.Sprintf(
 			"- **%d check%s marked `passed` with empty `evidence`.** Every passed check must include what you ran and the result. Affected: %s",
 			len(fs), plural(len(fs)), joinCheckNames(names),
 		))
 	}
-	if fs := byKind[KindMissingRequired]; len(fs) > 0 {
+	if fs := byKind[kindMissingRequired]; len(fs) > 0 {
 		names := collectCheckNames(fs)
 		out = append(out, fmt.Sprintf(
 			"- **%d required verification item%s missing from the report.** Add entries and record their status. Affected: %s",
@@ -888,13 +870,13 @@ func buildSchemaBullets(findings []ReportGateFinding) []string {
 	}
 	// Unknown-status findings stay per-check: each carries a distinct
 	// bad status value that the agent needs to fix specifically.
-	for _, f := range byKind[KindUnknownStatus] {
+	for _, f := range byKind[kindUnknownStatus] {
 		out = append(out, renderFindingBullet(f))
 	}
 	// Any other kinds under schema (forward-compat) stay per-check.
 	for kind, fs := range byKind {
 		switch kind {
-		case KindNotRunAtCompletion, KindEmptyEvidence, KindMissingRequired, KindUnknownStatus:
+		case kindNotRunAtCompletion, kindEmptyEvidence, kindMissingRequired, kindUnknownStatus:
 			continue
 		}
 		for _, f := range fs {
@@ -904,8 +886,8 @@ func buildSchemaBullets(findings []ReportGateFinding) []string {
 	return out
 }
 
-func findingsOfCategory(findings []ReportGateFinding, cat ReportGateCategory) []ReportGateFinding {
-	var out []ReportGateFinding
+func findingsOfCategory(findings []reportGateFinding, cat reportGateCategory) []reportGateFinding {
+	var out []reportGateFinding
 	for _, f := range findings {
 		if f.Category == cat {
 			out = append(out, f)
@@ -914,7 +896,7 @@ func findingsOfCategory(findings []ReportGateFinding, cat ReportGateCategory) []
 	return out
 }
 
-func collectCheckNames(fs []ReportGateFinding) []string {
+func collectCheckNames(fs []reportGateFinding) []string {
 	seen := make(map[string]bool, len(fs))
 	var names []string
 	for _, f := range fs {
@@ -966,19 +948,19 @@ func plural(n int) string {
 	return "s"
 }
 
-func renderFindingBullet(f ReportGateFinding) string {
+func renderFindingBullet(f reportGateFinding) string {
 	if f.CheckName != "" {
 		return fmt.Sprintf("- **%s**: %s", cleanCheckName(f.CheckName), f.Detail)
 	}
 	return "- " + f.Detail
 }
 
-// KnownCaveatsReviewAddendum returns a prompt-level addendum to prepend to
+// knownCaveatsReviewAddendum returns a prompt-level addendum to prepend to
 // the LLM reviewer's prompt when the gate did NOT reject but the report
 // still declares known_caveats. The addendum tells the reviewer to
 // cross-check each caveat against the phase plan rather than silently
 // accept the agent's deferrals.
-func KnownCaveatsReviewAddendum(result ReportGateResult) string {
+func knownCaveatsReviewAddendum(result reportGateResult) string {
 	if len(result.KnownCaveats) == 0 {
 		return ""
 	}
@@ -995,7 +977,7 @@ func KnownCaveatsReviewAddendum(result ReportGateResult) string {
 	return b.String()
 }
 
-func checkDisplayName(c *VerificationCheckResult) string {
+func checkDisplayName(c *verificationCheckResult) string {
 	if strings.TrimSpace(c.Name) != "" {
 		return c.Name
 	}
@@ -1005,19 +987,19 @@ func checkDisplayName(c *VerificationCheckResult) string {
 	return c.Requirement
 }
 
-func verificationEvidenceText(c *VerificationCheckResult) string {
+func verificationEvidenceText(c *verificationCheckResult) string {
 	if text := strings.TrimSpace(c.EvidenceData.Summary); text != "" {
 		return text
 	}
 	return strings.TrimSpace(c.Evidence)
 }
 
-func artifactEvidenceHasPrimary(c *VerificationCheckResult) bool {
+func artifactEvidenceHasPrimary(c *verificationCheckResult) bool {
 	return isArtifactEvidenceMode(c.Mode) && strings.TrimSpace(c.EvidenceData.Primary) != ""
 }
 
-func isArtifactEvidenceMode(mode VerificationMode) bool {
-	return mode == VerificationModeVisual || mode == VerificationModeBehavioral
+func isArtifactEvidenceMode(mode verificationMode) bool {
+	return mode == verificationModeVisual || mode == verificationModeBehavioral
 }
 
 func findHedgePhrases(evidence string) []string {
@@ -1033,7 +1015,7 @@ func findHedgePhrases(evidence string) []string {
 	return hits
 }
 
-func writeFindingBullet(b *strings.Builder, f ReportGateFinding) {
+func writeFindingBullet(b *strings.Builder, f reportGateFinding) {
 	if f.CheckName != "" {
 		fmt.Fprintf(b, "- **%s**: %s\n", cleanCheckName(f.CheckName), f.Detail)
 	} else {

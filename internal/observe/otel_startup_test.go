@@ -23,6 +23,8 @@ import (
 	"testing"
 	"time"
 
+	"go.opentelemetry.io/otel/sdk/resource"
+	semconv "go.opentelemetry.io/otel/semconv/v1.26.0"
 	collectortracepb "go.opentelemetry.io/proto/otlp/collector/trace/v1"
 	"google.golang.org/grpc"
 )
@@ -165,7 +167,7 @@ func TestCollectorProber(t *testing.T) {
 func TestNewOtelBridgeStartupReport(t *testing.T) {
 	t.Run("disabled says so", func(t *testing.T) {
 		lines := captureStartup(t)
-		_ = newOtelBridge(false, "", false, "agentico")
+		_ = newOtelBridgeWithResource(false, "", false, "agentico", nil)
 		requireLine(t, *lines, "trace export disabled")
 	})
 
@@ -181,7 +183,8 @@ func TestNewOtelBridgeStartupReport(t *testing.T) {
 		go func() { _ = srv.Serve(lis) }()
 		defer srv.Stop()
 
-		b := newOtelBridge(true, lis.Addr().String(), true, "svc-under-test")
+		b := newOtelBridgeWithResource(true, lis.Addr().String(), true, "svc-under-test",
+			resource.NewSchemaless(semconv.ServiceNameKey.String("svc-under-test")))
 		defer b.Shutdown()
 		requireLine(t, *lines, "trace export enabled: endpoint="+lis.Addr().String()+" insecure=true service=svc-under-test")
 		for _, l := range *lines {

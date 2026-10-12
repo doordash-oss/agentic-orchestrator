@@ -29,28 +29,27 @@ import (
 	"github.com/doordash-oss/agentic-orchestrator/internal/feature"
 )
 
-// FinalFixPromptOpts contains the parameters for building the fix agent prompt.
-type FinalFixPromptOpts struct {
-	Feedback           string
-	FeedbackPath       string
-	ExitCriteria       string
-	AcceptanceClause   string
-	Iteration          int
-	Publishable        bool
-	DesignArtifactPath string   // retained for caller compatibility; no longer re-injected
-	Images             []string // user-attached visual references, re-injected per iteration
+// finalFixPromptOpts contains the parameters for building the fix agent prompt.
+type finalFixPromptOpts struct {
+	Feedback         string
+	FeedbackPath     string
+	ExitCriteria     string
+	AcceptanceClause string
+	Iteration        int
+	Publishable      bool
+	Images           []string // user-attached visual references, re-injected per iteration
 	// RefactorPassForkPoint resolves the spec's "fork point" references for a
 	// refactor child ("repo @ sha"). Empty for top-level features.
 	RefactorPassForkPoint string
 }
 
-// BuildFinalFixPrompt constructs the prompt for the fix agent session.
+// buildFinalFixPrompt constructs the prompt for the fix agent session.
 // The fix agent addresses specific review feedback without adding new features.
 //
 // The prose lives in internal/agent/prompts/templates/final_fix.user.tmpl
 // (with the manual-verification-outcomes partial branched on a flag).
-func BuildFinalFixPrompt(opts FinalFixPromptOpts) string {
-	return prompts.FinalFixUserPrompt(finalFixUserInput{
+func buildFinalFixPrompt(opts finalFixPromptOpts) string {
+	return prompts.MustRender(prompts.TemplateFinalFixUser, finalFixUserInput{
 		VisualReferences: prompts.VisualReferencesInput{
 			Images: opts.Images,
 			Label:  "applying this fix",
@@ -140,7 +139,7 @@ func priorImplementationEvidenceContextForRun(runDir string) priorImplementation
 }
 
 func appendEvidenceArtifactPaths(out []string, reportPath string) []string {
-	report, err := ReadVerificationReport(reportPath)
+	report, err := readVerificationReport(reportPath)
 	if err != nil {
 		return out
 	}
@@ -173,11 +172,11 @@ func appendEvidenceArtifactPaths(out []string, reportPath string) []string {
 	return out
 }
 
-func allVerificationChecks(report *VerificationReport) []VerificationCheckResult {
+func allVerificationChecks(report *verificationReport) []verificationCheckResult {
 	if report == nil {
 		return nil
 	}
-	checks := make([]VerificationCheckResult, 0, len(report.Results)+len(report.RequiredChecks)+len(report.AdditionalChecks))
+	checks := make([]verificationCheckResult, 0, len(report.Results)+len(report.RequiredChecks)+len(report.AdditionalChecks))
 	checks = append(checks, report.Results...)
 	checks = append(checks, report.RequiredChecks...)
 	checks = append(checks, report.AdditionalChecks...)
@@ -189,7 +188,7 @@ func latestCompletedImplementationReportPath(implementDir string) string {
 	if err != nil {
 		return ""
 	}
-	am := NewArtifactManager(implementDir)
+	am := newArtifactManager(implementDir)
 	latest := 0
 	best := ""
 	for _, entry := range entries {
@@ -201,7 +200,7 @@ func latestCompletedImplementationReportPath(implementDir string) string {
 			continue
 		}
 		iterDir := filepath.Join(implementDir, entry.Name())
-		meta, err := am.ReadMeta(iterDir)
+		meta, err := am.readMeta(iterDir)
 		if err != nil || !completedImplementationMeta(meta) {
 			continue
 		}
@@ -215,7 +214,7 @@ func latestCompletedImplementationReportPath(implementDir string) string {
 	return best
 }
 
-func completedImplementationMeta(meta IterationMeta) bool {
+func completedImplementationMeta(meta iterationMeta) bool {
 	if strings.TrimSpace(meta.AgentStatus) != agentStatusSuccess {
 		return false
 	}

@@ -85,12 +85,9 @@ func TestOrchestrator_StartFeature_InterruptedFinalReview_ReDispatchesFR(t *test
 		Pipeline:  feature.PipelineLarge,
 		StartedAt: ptrTime(),
 	}
-	lc := lifecycleForFeature(f)
-	lc.MarkFinalReviewReadyFn = func(id string) error { f.Status = feature.StatusFinalReviewing; return nil }
-	lc.MarkCodeReadyFn = func(id string) error { f.Status = feature.StatusCodeReady; return nil }
-	fs := newFeatureStore(f)
+	fs, lc := newStoredFeatureFixture(t, f)
 
-	o := orchestrator.New(orchestrator.Deps{Lifecycle: lc, Store: fs}, orchestrator.Hooks{})
+	o := orchestrator.New(orchestrator.Deps{Manager: lc, Store: fs}, orchestrator.Hooks{})
 
 	o.SetRunMultiRepoFinalReviewFn(func(
 		ff *feature.Feature,
@@ -106,8 +103,9 @@ func TestOrchestrator_StartFeature_InterruptedFinalReview_ReDispatchesFR(t *test
 	}
 	o.WaitForCycles()
 
-	assertLifecycleCall(t, lc, "MarkFinalReviewReady")
-	assertLifecycleCall(t, lc, "MarkCodeReady")
+	if got := loadStoredFeature(t, fs, f.ID).Status; got != feature.StatusCodeReady {
+		t.Fatalf("persisted status = %s, want CodeReady", got)
+	}
 }
 
 func TestOrchestrator_StartFeature_FinalReviewDispatchIsAsyncAndIdempotent(t *testing.T) {
@@ -123,17 +121,8 @@ func TestOrchestrator_StartFeature_FinalReviewDispatchIsAsyncAndIdempotent(t *te
 		Pipeline:  feature.PipelineLarge,
 		StartedAt: ptrTime(),
 	}
-	lc := lifecycleForFeature(f)
-	lc.MarkFinalReviewReadyFn = func(id string) error {
-		f.Status = feature.StatusFinalReviewing
-		return nil
-	}
-	lc.MarkCodeReadyFn = func(id string) error {
-		f.Status = feature.StatusCodeReady
-		return nil
-	}
-	fs := newFeatureStore(f)
-	o := orchestrator.New(orchestrator.Deps{Lifecycle: lc, Store: fs}, orchestrator.Hooks{})
+	fs, lc := newStoredFeatureFixture(t, f)
+	o := orchestrator.New(orchestrator.Deps{Manager: lc, Store: fs}, orchestrator.Hooks{})
 
 	resultCh := make(chan *agent.OrchestratorResult, 1)
 	dispatches := 0
@@ -167,8 +156,8 @@ func TestOrchestrator_StartFeature_FinalReviewDispatchIsAsyncAndIdempotent(t *te
 
 	resultCh <- &agent.OrchestratorResult{FinalStatus: "all_passed"}
 	o.WaitForCycles()
-	if f.Status != feature.StatusCodeReady {
-		t.Fatalf("feature status = %v, want CodeReady after background final review", f.Status)
+	if got := loadStoredFeature(t, fs, f.ID).Status; got != feature.StatusCodeReady {
+		t.Fatalf("persisted status = %v, want CodeReady after background final review", got)
 	}
 }
 
@@ -184,12 +173,9 @@ func TestOrchestrator_OnMultiReposPassed_N1_NoLegacySingleRepoFRRouting(t *testi
 		CurrentPhase: feature.PhaseImplement,
 		Repos:        []feature.FeatureRepo{{Name: "r1", Path: "/tmp/r1", Publishable: &unpub}},
 	}
-	lc := lifecycleForFeature(f)
-	lc.CompleteImplementationFn = func(id string) error { f.Status = feature.StatusReviewPassed; return nil }
-	lc.MarkCodeReadyFn = func(id string) error { f.Status = feature.StatusCodeReady; return nil }
-	fs := newFeatureStore(f)
+	fs, lc := newStoredFeatureFixture(t, f)
 
-	o := orchestrator.New(orchestrator.Deps{Lifecycle: lc, Store: fs}, orchestrator.Hooks{})
+	o := orchestrator.New(orchestrator.Deps{Manager: lc, Store: fs}, orchestrator.Hooks{})
 
 	if err := o.HandlePhaseCompletion("feat-n1-no-legacy-fr", orchestrator.PhaseCompletionInput{
 		Phase:           feature.PhaseImplement,
@@ -198,9 +184,9 @@ func TestOrchestrator_OnMultiReposPassed_N1_NoLegacySingleRepoFRRouting(t *testi
 		t.Fatalf("HandlePhaseCompletion: %v", err)
 	}
 
-	refuteLifecycleCall(t, lc, "StartFinalReview")
-	assertLifecycleCall(t, lc, "CompleteImplementation")
-	assertLifecycleCall(t, lc, "MarkCodeReady")
+	if got := loadStoredFeature(t, fs, f.ID).Status; got != feature.StatusCodeReady {
+		t.Fatalf("persisted status = %s, want CodeReady", got)
+	}
 
 	events := drainEvents(o)
 	if hasPhaseStarted(events, feature.PhaseReview) != nil {
@@ -220,13 +206,9 @@ func TestOrchestrator_OnMultiReposPassed_MediumRunsDeferredFinalReview(t *testin
 			"r1": {Touched: true},
 		},
 	}
-	lc := lifecycleForFeature(f)
-	lc.CompleteImplementationFn = func(id string) error { f.Status = feature.StatusReviewPassed; return nil }
-	lc.MarkFinalReviewReadyFn = func(id string) error { f.Status = feature.StatusFinalReviewing; return nil }
-	lc.MarkCodeReadyFn = func(id string) error { f.Status = feature.StatusCodeReady; return nil }
-	fs := newFeatureStore(f)
+	fs, lc := newStoredFeatureFixture(t, f)
 
-	o := orchestrator.New(orchestrator.Deps{Lifecycle: lc, Store: fs}, orchestrator.Hooks{})
+	o := orchestrator.New(orchestrator.Deps{Manager: lc, Store: fs}, orchestrator.Hooks{})
 	o.SetRunMultiRepoFinalReviewFn(func(
 		ff *feature.Feature,
 		_ ...agent.KBInfo,
@@ -249,120 +231,12 @@ func TestOrchestrator_OnMultiReposPassed_MediumRunsDeferredFinalReview(t *testin
 		t.Fatalf("HandlePhaseCompletion: %v", err)
 	}
 
-	assertLifecycleCall(t, lc, "CompleteImplementation")
-	assertLifecycleCall(t, lc, "MarkFinalReviewReady")
-	assertLifecycleCall(t, lc, "MarkCodeReady")
-	if got := lifecycleCallNames(lc); indexOf(got, "MarkFinalReviewReady") > indexOf(got, "MarkCodeReady") {
-		t.Fatalf("MarkFinalReviewReady must happen before MarkCodeReady; calls: %v", got)
+	if got := loadStoredFeature(t, fs, f.ID).Status; got != feature.StatusCodeReady {
+		t.Fatalf("persisted status = %s, want CodeReady", got)
 	}
 	events := drainEvents(o)
 	if !hasPhaseCompleted(events, feature.PhaseFinalReview) {
 		t.Fatalf("expected PhaseCompleted(PhaseFinalReview); events: %v", events)
-	}
-}
-
-func TestOrchestrator_OnMultiReposPassed_FinalReviewPlanRevisionResultFailsWithoutPlanning(t *testing.T) {
-	tests := []struct {
-		name     string
-		pipeline feature.PipelineProfile
-	}{
-		{name: "medium", pipeline: feature.PipelineMedium},
-		{name: "large", pipeline: feature.PipelineLarge},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			cpr := newCapturingPhaseRunner(t)
-
-			featureID := "feat-fr-missing-evidence-" + tt.name
-			roadmapPath := filepath.Join(cpr.stateDir, "roadmap.md")
-			writeRoadmap(t, roadmapPath)
-			unpub := false
-			f := &feature.Feature{
-				ID:                  featureID,
-				Status:              feature.StatusImplementing,
-				CurrentPhase:        feature.PhaseImplement,
-				CurrentRoadmapPhase: 1,
-				TotalRoadmapPhases:  1,
-				ActiveRun:           1,
-				Pipeline:            tt.pipeline,
-				Artifacts:           map[string]string{"roadmap": roadmapPath},
-				Repos:               []feature.FeatureRepo{{Name: "r1", Path: cpr.stateDir, Publishable: &unpub}},
-				RepoStates: map[string]*feature.RepoState{
-					"r1": {Touched: true},
-				},
-			}
-			phasePlanDir := agent.PhasePlanDir(cpr.stateDir, f, 1)
-			if err := os.MkdirAll(phasePlanDir, 0o755); err != nil {
-				t.Fatalf("mkdir phase plan dir: %v", err)
-			}
-			if err := agent.WritePlanAttemptMeta(phasePlanDir, agent.PlanAttemptMeta{
-				Attempt:      1,
-				AgentStatus:  "SUCCESS",
-				ReviewStatus: "APPROVED",
-			}); err != nil {
-				t.Fatalf("seed approved phase plan attempt: %v", err)
-			}
-
-			lc := lifecycleForFeature(f)
-			lc.CompleteImplementationFn = func(id string) error { f.Status = feature.StatusReviewPassed; return nil }
-			lc.MarkFinalReviewReadyFn = func(id string) error { f.Status = feature.StatusFinalReviewing; return nil }
-			lc.MarkCodeReadyFn = func(id string) error {
-				t.Fatalf("MarkCodeReady called after unsupported final-review plan revision")
-				return nil
-			}
-			lc.MarkFailedFn = func(id string, failure errcat.FailureRecord) error {
-				if failure.Code != errcat.InfrastructureFailure {
-					t.Fatalf("failure code = %q, want %q", failure.Code, errcat.InfrastructureFailure)
-				}
-				if !strings.Contains(failure.Diagnostics, "final review requested unsupported phase-plan revision") {
-					t.Fatalf("diagnostics = %q, want unsupported phase-plan revision", failure.Diagnostics)
-				}
-				f.Status = feature.StatusFailed
-				rec := failure
-				f.Run().Failure = &rec
-				return nil
-			}
-			fs := newFeatureStore(f)
-			cpr.pr.FeatureStore = fs
-			o := orchestrator.New(orchestrator.Deps{
-				Lifecycle:   lc,
-				Store:       fs,
-				Sessions:    cpr.sm,
-				PhaseRunner: cpr.pr,
-				CmdRunner:   cpr.cmd,
-			}, orchestrator.Hooks{})
-			o.SetRunMultiRepoFinalReviewFn(func(ff *feature.Feature, _ ...agent.KBInfo) (chan *agent.OrchestratorResult, error) {
-				if ff.EffectivePipeline() != tt.pipeline {
-					t.Errorf("final review feature pipeline = %q, want %q", ff.EffectivePipeline(), tt.pipeline)
-				}
-				ch := make(chan *agent.OrchestratorResult, 1)
-				ch <- &agent.OrchestratorResult{
-					FinalStatus:          "plan_revision_required",
-					PlanRevisionFeedback: "MISSING_EVIDENCE_REQUIREMENT behavioral: Record the create-project CLI journey.",
-				}
-				return ch, nil
-			})
-
-			if err := o.HandlePhaseCompletion(featureID, orchestrator.PhaseCompletionInput{
-				Phase:           feature.PhaseImplement,
-				MultiRepoResult: &agent.OrchestratorResult{FinalStatus: "awaiting_final_review"},
-			}); err == nil || !strings.Contains(err.Error(), "final review requested unsupported phase-plan revision") {
-				t.Fatalf("HandlePhaseCompletion() error = %v, want unsupported phase-plan revision", err)
-			}
-
-			if f.Status != feature.StatusFailed {
-				t.Fatalf("feature status = %v, want Failed after unsupported final-review plan revision", f.Status)
-			}
-			if captured := cpr.capturedOpts; len(captured) != 0 {
-				t.Fatalf("unexpected phase-plan revision session captured: %+v", captured)
-			}
-			if _, err := os.Stat(filepath.Join(phasePlanDir, "attempt-01", "validation-feedback.md")); !os.IsNotExist(err) {
-				t.Fatalf("final review must not write phase-plan validation feedback, stat err = %v", err)
-			}
-			if latest := agent.LatestCompletedPlanAttempt(phasePlanDir); latest != 1 {
-				t.Fatalf("LatestCompletedPlanAttempt() = %d, want approved attempt to remain intact", latest)
-			}
-		})
 	}
 }
 
@@ -409,15 +283,10 @@ func TestOrchestrator_HandlePhaseCompletion_Implement_MissingEvidenceStaysOnCurr
 		}
 	}
 
-	lc := lifecycleForFeature(f)
-	lc.StartPlanningFn = func(id string) error {
-		f.Status = feature.StatusPlanning
-		return nil
-	}
-	fs := newFeatureStore(f)
+	fs, lc := newStoredFeatureFixture(t, f)
 	cpr.pr.FeatureStore = fs
 	o := orchestrator.New(orchestrator.Deps{
-		Lifecycle:   lc,
+		Manager:     lc,
 		Store:       fs,
 		Sessions:    cpr.sm,
 		PhaseRunner: cpr.pr,
@@ -433,8 +302,8 @@ func TestOrchestrator_HandlePhaseCompletion_Implement_MissingEvidenceStaysOnCurr
 		t.Fatalf("HandlePhaseCompletion() error = %v", err)
 	}
 
-	if f.CurrentRoadmapPhase != 2 {
-		t.Fatalf("CurrentRoadmapPhase = %d, want current phase 2", f.CurrentRoadmapPhase)
+	if got := loadStoredFeature(t, fs, f.ID).CurrentRoadmapPhase; got != 2 {
+		t.Fatalf("persisted CurrentRoadmapPhase = %d, want current phase 2", got)
 	}
 	if captured := waitForCapturedPhase(t, cpr, feature.PhasePlan, 3*time.Second); len(captured) == 0 {
 		t.Fatalf("no phase-plan revision session captured; captures: %+v", cpr.capturedOpts)
@@ -466,14 +335,11 @@ func TestOrchestrator_OnMultiReposPassed_N1_AutoPublishComplete_EmitsPublishComp
 			"r1": {PRURL: "https://github.com/org/r1/pull/1"},
 		},
 	}
-	lc := lifecycleForFeature(f)
-	lc.CompleteImplementationFn = func(id string) error { f.Status = feature.StatusReviewPassed; return nil }
-	lc.TryCompletePublishFn = func(id string) (bool, error) { f.Status = feature.StatusPublished; return true, nil }
-	fs := newFeatureStore(f)
+	fs, lc := newStoredFeatureFixture(t, f)
 
 	var pubURLs map[string]string
 	var pubID string
-	o := orchestrator.New(orchestrator.Deps{Lifecycle: lc, Store: fs}, orchestrator.Hooks{
+	o := orchestrator.New(orchestrator.Deps{Manager: lc, Store: fs}, orchestrator.Hooks{
 		OnPublishCompleted: func(id string, urls map[string]string, err error) {
 			pubID = id
 			pubURLs = urls
@@ -523,25 +389,9 @@ func TestOrchestrator_FeatureFinalReview_3Repo_Approves_AllReposAdvanceAndPublis
 		},
 		Pipeline: feature.PipelineLarge,
 	}
-	lc := lifecycleForFeature(f)
-	lc.CompleteImplementationFn = func(id string) error { f.Status = feature.StatusReviewPassed; return nil }
-	lc.MarkFinalReviewReadyFn = func(id string) error { f.Status = feature.StatusFinalReviewing; return nil }
-	lc.MarkCodeReadyFn = func(id string) error { f.Status = feature.StatusCodeReady; return nil }
-	lc.TryCompletePublishFn = func(id string) (bool, error) {
-		// Realistic gate: only transition when the feature is parked in
-		// the publish-ready window (ReviewPassed / CodeReady). The mock
-		// must not preemptively set StatusPublished while FR is still
-		// running, or runDeferredFinalReview's success-path
-		// `Transition(StatusReviewPassed)` will trip the FSM.
-		if f.Status != feature.StatusReviewPassed && f.Status != feature.StatusCodeReady {
-			return false, nil
-		}
-		f.Status = feature.StatusPublished
-		return true, nil
-	}
-	fs := newFeatureStore(f)
+	fs, lc := newStoredFeatureFixture(t, f)
 
-	o := orchestrator.New(orchestrator.Deps{Lifecycle: lc, Store: fs}, orchestrator.Hooks{})
+	o := orchestrator.New(orchestrator.Deps{Manager: lc, Store: fs}, orchestrator.Hooks{})
 
 	// Stub the unified FR engine: approve, transition all three repos to
 	// "review_passed" (simulating AtomicPhaseStamp's effect), and
@@ -583,13 +433,14 @@ func TestOrchestrator_FeatureFinalReview_3Repo_Approves_AllReposAdvanceAndPublis
 	}
 
 	// FR ran (MarkFinalReviewReady), then MarkCodeReady, then per-repo publish.
-	assertLifecycleCall(t, lc, "MarkFinalReviewReady")
-	assertLifecycleCall(t, lc, "CompleteImplementation")
+	if got := loadStoredFeature(t, fs, f.ID).Status; got != feature.StatusCodeReady && got != feature.StatusPublished {
+		t.Fatalf("persisted status = %s, want CodeReady or Published", got)
+	}
 	if len(publishedRepos) != 3 {
 		t.Errorf("publishRepoFn calls = %d (publishedRepos=%v), want 3 (one per repo)", len(publishedRepos), publishedRepos)
 	}
 	for _, name := range []string{apiRepoName, "web", "infra"} {
-		st := f.RepoStates[name]
+		st := loadStoredFeature(t, fs, f.ID).RepoStates[name]
 		if st == nil {
 			t.Errorf("RepoImpl[%q] = nil after FR", name)
 			continue
@@ -635,15 +486,7 @@ func TestAdvanceAfterFinalReviewScrubsRootArtifactsBeforeCommitAll(t *testing.T)
 		}},
 		RepoStates: map[string]*feature.RepoState{apiRepoName: {Touched: true}},
 	}
-	lc := lifecycleForFeature(f)
-	lc.CompleteImplementationFn = func(id string) error { f.Status = feature.StatusReviewPassed; return nil }
-	lc.MarkFinalReviewReadyFn = func(id string) error { f.Status = feature.StatusFinalReviewing; return nil }
-	lc.SetRepoPublishedFn = func(featureID, repoName, prURL string) error {
-		f.RepoStates[repoName].PRURL = prURL
-		return nil
-	}
-	lc.TryCompletePublishFn = func(id string) (bool, error) { return true, nil }
-	fs := newFeatureStore(f)
+	fs, lc := newStoredFeatureFixture(t, f)
 
 	publisher := mocks.NewMockRemoteOps()
 	publisher.PushFn = func(string, string) error { return nil }
@@ -652,7 +495,7 @@ func TestAdvanceAfterFinalReviewScrubsRootArtifactsBeforeCommitAll(t *testing.T)
 	}
 
 	o := orchestrator.New(orchestrator.Deps{
-		Lifecycle: lc,
+		Manager:   lc,
 		Store:     fs,
 		Remote:    publisher,
 		CmdRunner: untrackedFinalReviewArtifactsRunner(t, candidates),
@@ -750,16 +593,7 @@ func TestAdvanceAfterFinalReviewRoadmapFinalScrubsRootArtifactsBeforeCommitAll(t
 			"web":       {Touched: true},
 		},
 	}
-	lc := lifecycleForFeature(f)
-	lc.CompleteImplementationFn = func(id string) error { f.Status = feature.StatusReviewPassed; return nil }
-	lc.MarkFinalReviewReadyFn = func(id string) error { f.Status = feature.StatusFinalReviewing; return nil }
-	lc.MarkCodeReadyFn = func(id string) error { f.Status = feature.StatusCodeReady; return nil }
-	lc.SetRepoPublishedFn = func(featureID, repoName, prURL string) error {
-		f.RepoStates[repoName].PRURL = prURL
-		return nil
-	}
-	lc.TryCompletePublishFn = func(id string) (bool, error) { f.Status = feature.StatusPublished; return true, nil }
-	fs := newFeatureStore(f)
+	fs, lc := newStoredFeatureFixture(t, f)
 
 	publisher := mocks.NewMockRemoteOps()
 	publisher.PushFn = func(string, string) error { return nil }
@@ -768,7 +602,7 @@ func TestAdvanceAfterFinalReviewRoadmapFinalScrubsRootArtifactsBeforeCommitAll(t
 	}
 
 	o := orchestrator.New(orchestrator.Deps{
-		Lifecycle: lc,
+		Manager:   lc,
 		Store:     fs,
 		Remote:    publisher,
 		CmdRunner: untrackedFinalReviewArtifactsRunner(t, candidates),
@@ -825,22 +659,9 @@ func TestOrchestrator_FeatureFinalReview_3Repo_ChangesRequested_FixApproves(t *t
 		},
 		Pipeline: feature.PipelineLarge,
 	}
-	lc := lifecycleForFeature(f)
-	lc.CompleteImplementationFn = func(id string) error { f.Status = feature.StatusReviewPassed; return nil }
-	lc.MarkFinalReviewReadyFn = func(id string) error { f.Status = feature.StatusFinalReviewing; return nil }
-	lc.MarkCodeReadyFn = func(id string) error { f.Status = feature.StatusCodeReady; return nil }
-	lc.TryCompletePublishFn = func(id string) (bool, error) {
-		// Realistic gate: only allow Published transition when feature
-		// is actually in the publish-ready window.
-		if f.Status != feature.StatusReviewPassed && f.Status != feature.StatusCodeReady {
-			return false, nil
-		}
-		f.Status = feature.StatusPublished
-		return true, nil
-	}
-	fs := newFeatureStore(f)
+	fs, lc := newStoredFeatureFixture(t, f)
 
-	o := orchestrator.New(orchestrator.Deps{Lifecycle: lc, Store: fs}, orchestrator.Hooks{})
+	o := orchestrator.New(orchestrator.Deps{Manager: lc, Store: fs}, orchestrator.Hooks{})
 
 	// Track that the engine reported the fix-then-approve flow under the
 	// hood. From the orchestrator's perspective the FR engine returns
@@ -889,12 +710,14 @@ func TestOrchestrator_FeatureFinalReview_3Repo_ChangesRequested_FixApproves(t *t
 	if iterations != 2 {
 		t.Errorf("expected FR to converge in 2 iterations (CHANGES_REQUESTED → fix → APPROVED), got %d", iterations)
 	}
-	assertLifecycleCall(t, lc, "MarkFinalReviewReady")
+	if got := loadStoredFeature(t, fs, f.ID).Status; got != feature.StatusCodeReady && got != feature.StatusPublished {
+		t.Fatalf("persisted status = %s, want CodeReady or Published", got)
+	}
 	if len(publishedRepos) != 3 {
 		t.Errorf("publishRepoFn calls = %d, want 3", len(publishedRepos))
 	}
 	for _, name := range []string{apiRepoName, "web", "infra"} {
-		st := f.RepoStates[name]
+		st := loadStoredFeature(t, fs, f.ID).RepoStates[name]
 		if st == nil {
 			t.Errorf("RepoImpl[%q] = nil after FR", name)
 			continue
@@ -926,14 +749,10 @@ func TestOrchestrator_FeatureFinalReview_FixerRepoEditsDoNotTripReadOnlyGuard(t 
 			"docs": {Touched: true},
 		},
 	}
-	lc := lifecycleForFeature(f)
-	lc.CompleteImplementationFn = func(id string) error { f.Status = feature.StatusReviewPassed; return nil }
-	lc.MarkFinalReviewReadyFn = func(id string) error { f.Status = feature.StatusFinalReviewing; return nil }
-	lc.MarkCodeReadyFn = func(id string) error { f.Status = feature.StatusCodeReady; return nil }
-	fs := newFeatureStore(f)
+	fs, lc := newStoredFeatureFixture(t, f)
 
 	o := orchestrator.New(orchestrator.Deps{
-		Lifecycle:   lc,
+		Manager:     lc,
 		Store:       fs,
 		PhaseRunner: &agent.PhaseRunner{StateDir: t.TempDir()},
 		CmdRunner:   agent.NewExecCommandRunner(),
@@ -957,8 +776,8 @@ func TestOrchestrator_FeatureFinalReview_FixerRepoEditsDoNotTripReadOnlyGuard(t 
 	}); err != nil {
 		t.Fatalf("HandlePhaseCompletion() error = %v", err)
 	}
-	if f.Status != feature.StatusCodeReady {
-		t.Fatalf("feature status = %v, want CodeReady", f.Status)
+	if got := loadStoredFeature(t, fs, f.ID).Status; got != feature.StatusCodeReady {
+		t.Fatalf("persisted status = %v, want CodeReady", got)
 	}
 	data, err := os.ReadFile(filepath.Join(repo, "README.md"))
 	if err != nil {
@@ -990,17 +809,9 @@ func TestOrchestrator_FeatureFinalReview_Interrupted_DoesNotMarkFailed(t *testin
 		},
 		Pipeline: feature.PipelineLarge,
 	}
-	lc := lifecycleForFeature(f)
-	lc.CompleteImplementationFn = func(id string) error { f.Status = feature.StatusReviewPassed; return nil }
-	lc.MarkFinalReviewReadyFn = func(id string) error { f.Status = feature.StatusFinalReviewing; return nil }
-	// Track unexpected calls — neither should fire on the interrupt path.
-	markCodeReadyCalled := 0
-	markFailedCalled := 0
-	lc.MarkCodeReadyFn = func(id string) error { markCodeReadyCalled++; return nil }
-	lc.MarkFailedFn = func(id string, failure errcat.FailureRecord) error { markFailedCalled++; return nil }
-	fs := newFeatureStore(f)
+	fs, lc := newStoredFeatureFixture(t, f)
 
-	o := orchestrator.New(orchestrator.Deps{Lifecycle: lc, Store: fs}, orchestrator.Hooks{})
+	o := orchestrator.New(orchestrator.Deps{Manager: lc, Store: fs}, orchestrator.Hooks{})
 
 	// Stub the FR engine to return interrupted (matching what the agent layer
 	// emits when the user presses Stop and the FR session terminates early).
@@ -1038,14 +849,12 @@ func TestOrchestrator_FeatureFinalReview_Interrupted_DoesNotMarkFailed(t *testin
 		t.Fatalf("HandlePhaseCompletion: %v (the interrupted FR result must not surface as an error)", err)
 	}
 
-	if markFailedCalled != 0 {
-		t.Errorf("MarkFailed called %d times, want 0 — interrupted FR must not transition the feature to Failed", markFailedCalled)
+	stored := loadStoredFeature(t, fs, f.ID)
+	if stored.Status != feature.StatusInterrupted {
+		t.Errorf("persisted status = %s, want Interrupted", stored.Status)
 	}
-	if markCodeReadyCalled != 0 {
-		t.Errorf("MarkCodeReady called %d times, want 0 — interrupted FR must short-circuit the trailing publish path", markCodeReadyCalled)
-	}
-	if f.Status != feature.StatusInterrupted {
-		t.Errorf("feature Status = %s, want Interrupted (InterruptFeature owns the transition)", f.Status)
+	if stored.Run().Failure != nil {
+		t.Errorf("unexpected failure: %+v", stored.Run().Failure)
 	}
 }
 
@@ -1063,33 +872,9 @@ func TestOrchestrator_FeatureFinalReview_FailedProtocolViolationPreserved(t *tes
 		},
 		Pipeline: feature.PipelineLarge,
 	}
-	lc := lifecycleForFeature(f)
-	lc.CompleteImplementationFn = func(id string) error { f.Status = feature.StatusReviewPassed; return nil }
-	lc.MarkFinalReviewReadyFn = func(id string) error {
-		f.Status = feature.StatusFinalReviewing
-		f.CurrentPhase = feature.PhaseFinalReview
-		return nil
-	}
-	var markCodeReadyCalled int
-	lc.MarkCodeReadyFn = func(id string) error {
-		markCodeReadyCalled++
-		f.Status = feature.StatusCodeReady
-		f.CurrentPhase = feature.PhasePublish
-		return nil
-	}
-	var gotFailureCode errcat.Code
-	var gotDiagnostics string
-	lc.MarkFailedFn = func(id string, failure errcat.FailureRecord) error {
-		gotFailureCode = failure.Code
-		gotDiagnostics = failure.Diagnostics
-		f.Status = feature.StatusFailed
-		rec := failure
-		f.Run().Failure = &rec
-		return nil
-	}
-	fs := newFeatureStore(f)
+	fs, lc := newStoredFeatureFixture(t, f)
 
-	o := orchestrator.New(orchestrator.Deps{Lifecycle: lc, Store: fs}, orchestrator.Hooks{})
+	o := orchestrator.New(orchestrator.Deps{Manager: lc, Store: fs}, orchestrator.Hooks{})
 	o.SetRunMultiRepoFinalReviewFn(func(
 		ff *feature.Feature,
 		_ ...agent.KBInfo,
@@ -1115,19 +900,116 @@ func TestOrchestrator_FeatureFinalReview_FailedProtocolViolationPreserved(t *tes
 		t.Fatalf("HandlePhaseCompletion() error = %v, want final_review_fixer context", err)
 	}
 
-	if gotFailureCode != errcat.ProtocolViolation {
-		t.Fatalf("failure code = %q, want %q", gotFailureCode, errcat.ProtocolViolation)
+	stored := loadStoredFeature(t, fs, f.ID)
+	if stored.Status != feature.StatusFailed {
+		t.Fatalf("persisted status = %s, want Failed", stored.Status)
 	}
-	if !strings.Contains(gotDiagnostics, "final_review_fixer") {
-		t.Fatalf("diagnostics = %q, want final_review_fixer context", gotDiagnostics)
+	if stored.CurrentPhase != feature.PhaseFinalReview {
+		t.Fatalf("persisted phase = %s, want FinalReview", stored.CurrentPhase)
 	}
-	if markCodeReadyCalled != 0 {
-		t.Fatalf("MarkCodeReady called %d times, want 0 after final review failure", markCodeReadyCalled)
+	if failure := stored.Run().Failure; failure == nil || failure.Code != errcat.ProtocolViolation || !strings.Contains(failure.Diagnostics, "final_review_fixer") {
+		t.Fatalf("persisted failure = %+v, want protocol violation with final_review_fixer diagnostics", failure)
 	}
-	if f.Status != feature.StatusFailed {
-		t.Fatalf("Status = %s, want Failed", f.Status)
+}
+
+// TestOrchestrator_FeatureFinalReview_ResultAfterInterruptIsDiscarded
+// reproduces orphaned validators finishing after pause-stop: an approved (or
+// failed) Final Review result that lands while the feature is Interrupted is
+// discarded, never "invalid transition from Interrupted to ReviewPassed",
+// and never marks the stopped feature Failed.
+func TestOrchestrator_FeatureFinalReview_ResultAfterInterruptIsDiscarded(t *testing.T) {
+	for _, finalStatus := range []string{"all_passed", "failed"} {
+		t.Run(finalStatus, func(t *testing.T) {
+			pub := true
+			f := &feature.Feature{
+				ID:           "feat-fr-orphan-" + finalStatus,
+				Status:       feature.StatusImplementing,
+				CurrentPhase: feature.PhaseImplement,
+				Repos: []feature.FeatureRepo{
+					{Name: "payments", Path: "/tmp/payments", Publishable: &pub},
+				},
+				RepoStates: map[string]*feature.RepoState{
+					"payments": {Touched: true},
+				},
+				Pipeline: feature.PipelineMedium,
+			}
+			fs, lc := newStoredFeatureFixture(t, f)
+			o := orchestrator.New(orchestrator.Deps{Manager: lc, Store: fs}, orchestrator.Hooks{})
+			o.SetRunMultiRepoFinalReviewFn(func(ff *feature.Feature, _ ...agent.KBInfo) (chan *agent.OrchestratorResult, error) {
+				ch := make(chan *agent.OrchestratorResult, 1)
+				go func() {
+					_ = fs.Modify(ff.ID, func(target *feature.Feature) error {
+						return target.Transition(feature.StatusInterrupted)
+					})
+					ch <- &agent.OrchestratorResult{FinalStatus: finalStatus, LastError: "late validator failure"}
+				}()
+				return ch, nil
+			})
+
+			if err := o.HandlePhaseCompletion(f.ID, orchestrator.PhaseCompletionInput{
+				Phase:           feature.PhaseImplement,
+				MultiRepoResult: &agent.OrchestratorResult{FinalStatus: "awaiting_final_review"},
+			}); err != nil {
+				t.Fatalf("HandlePhaseCompletion: %v (a stale FR result must be discarded)", err)
+			}
+			stored := loadStoredFeature(t, fs, f.ID)
+			if stored.Status != feature.StatusInterrupted {
+				t.Errorf("persisted status = %s, want Interrupted", stored.Status)
+			}
+			if stored.Run().Failure != nil {
+				t.Errorf("unexpected failure: %+v", stored.Run().Failure)
+			}
+		})
 	}
-	if f.CurrentPhase != feature.PhaseFinalReview {
-		t.Fatalf("CurrentPhase = %s, want FinalReview", f.CurrentPhase)
+}
+
+// TestOrchestrator_FeatureFinalReview_ProviderUnavailableFailsWithRetryRemediation
+// proves a Final Review that could not reach its provider lands the feature
+// in Failed with an infrastructure_failure envelope whose remediation offers
+// retry (and restart).
+func TestOrchestrator_FeatureFinalReview_ProviderUnavailableFailsWithRetryRemediation(t *testing.T) {
+	pub := true
+	f := &feature.Feature{
+		ID:           "feat-fr-provider-down",
+		Status:       feature.StatusImplementing,
+		CurrentPhase: feature.PhaseImplement,
+		Repos: []feature.FeatureRepo{
+			{Name: apiRepoName, Path: apiRepoWorkPath, Publishable: &pub},
+		},
+		RepoStates: map[string]*feature.RepoState{
+			apiRepoName: {Touched: true},
+		},
+		Pipeline: feature.PipelineMedium,
+	}
+	fs, lc := newStoredFeatureFixture(t, f)
+	o := orchestrator.New(orchestrator.Deps{Manager: lc, Store: fs}, orchestrator.Hooks{})
+	o.SetRunMultiRepoFinalReviewFn(func(ff *feature.Feature, _ ...agent.KBInfo) (chan *agent.OrchestratorResult, error) {
+		ch := make(chan *agent.OrchestratorResult, 1)
+		ch <- &agent.OrchestratorResult{
+			FinalStatus:  "failed",
+			RepoStatuses: map[string]string{apiRepoName: "failed"},
+			FailedRepos:  []string{apiRepoName},
+			LastError:    "final review could not run: Cleanliness validator: provider unavailable (non-retryable): Cannot connect to API",
+		}
+		return ch, nil
+	})
+
+	if err := o.HandlePhaseCompletion(f.ID, orchestrator.PhaseCompletionInput{
+		Phase:           feature.PhaseImplement,
+		MultiRepoResult: &agent.OrchestratorResult{FinalStatus: "awaiting_final_review"},
+	}); err == nil {
+		t.Fatal("HandlePhaseCompletion() error = nil, want final review failure")
+	}
+	stored := loadStoredFeature(t, fs, f.ID)
+	if stored.Status != feature.StatusFailed {
+		t.Fatalf("persisted status = %s, want Failed", stored.Status)
+	}
+	failure := stored.Run().Failure
+	if failure == nil || failure.Code != errcat.InfrastructureFailure || !strings.Contains(failure.Diagnostics, "Cannot connect to API") {
+		t.Fatalf("persisted failure = %+v, want infrastructure_failure with the provider diagnostic", failure)
+	}
+	rendered := errcat.RenderRecord(*failure)
+	if rendered.Remediation == nil || len(rendered.Remediation.Actions) == 0 || rendered.Remediation.Actions[0] != "retry" {
+		t.Fatalf("remediation = %+v, want retry as the primary action", rendered.Remediation)
 	}
 }

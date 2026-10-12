@@ -17,8 +17,8 @@ package orchestrator
 import (
 	"time"
 
+	"github.com/doordash-oss/agentic-orchestrator/internal/feature"
 	"github.com/doordash-oss/agentic-orchestrator/internal/observe"
-	"github.com/doordash-oss/agentic-orchestrator/internal/ports"
 )
 
 // attachDropObserver adapts *observe.Observer to session.AttachDropReporter.
@@ -31,16 +31,13 @@ import (
 // existing log.Printf at the drop site and does not write an event.
 type attachDropObserver struct {
 	obs *observe.Observer
-	fs  ports.FeatureStore // used to resolve ActiveRun at emit time
+	fs  *feature.Store // used to resolve ActiveRun at emit time
 }
 
-// newAttachDropObserver returns nil when either collaborator is nil so
-// Manager.SetAttachDropReporter leaves the session untouched — preserving
-// the "reporter is optional" contract. A nil feature store is treated the
-// same as a nil observer because we cannot stamp the run number without it
-// and surfacing the drop with RunNumber:0 would be misleading.
-func newAttachDropObserver(obs *observe.Observer, fs ports.FeatureStore) *attachDropObserver {
-	if obs == nil || fs == nil {
+// newAttachDropObserver returns nil when observability is disabled so
+// Manager.SetAttachDropReporter leaves the session untouched.
+func newAttachDropObserver(obs *observe.Observer, fs *feature.Store) *attachDropObserver {
+	if obs == nil {
 		return nil
 	}
 	return &attachDropObserver{obs: obs, fs: fs}
@@ -59,10 +56,8 @@ func (a *attachDropObserver) ReportAttachDrop(sessionID, featureID, phase, msgTy
 		return
 	}
 	activeRun := 0
-	if a.fs != nil {
-		if f, err := a.fs.Load(featureID); err == nil && f != nil {
-			activeRun = f.ActiveRun
-		}
+	if f, err := a.fs.Load(featureID); err == nil && f != nil {
+		activeRun = f.ActiveRun
 	}
 	_ = a.obs.Emit(observe.Event{
 		Timestamp: time.Now(),

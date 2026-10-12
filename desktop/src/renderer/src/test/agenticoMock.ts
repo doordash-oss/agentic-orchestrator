@@ -63,6 +63,7 @@ import type {
   WindowPurpose,
 } from '../../../shared/ipc';
 import { defaultSettings, SupervisorMessageRequestSchema } from '../../../shared/ipc';
+import { defined } from '../../../shared/defined';
 
 /**
  * A rejection shaped the way the preload rethrows envelope errors: the
@@ -79,7 +80,10 @@ export function ipcError(
     class: options.class ?? 'blocking',
     title: options.title ?? 'Request failed',
     summary,
-    ...(options.remediation === undefined ? {} : { remediation: { hint: options.remediation } }),
+    ...defined(
+      'remediation',
+      options.remediation === undefined ? undefined : { hint: options.remediation },
+    ),
   };
   return Object.assign(new Error(CANONICAL_ERROR_MESSAGE_PREFIX + JSON.stringify(canonical)), {
     code: canonical.code,
@@ -697,7 +701,8 @@ export function supervisorCompactedMarkerRecord(
     {
       marker: 'compacted',
       text: 'Conversation compacted',
-      ...(summary === undefined ? {} : { summary, truncated: false }),
+      ...defined('summary', summary),
+      ...defined('truncated', summary === undefined ? undefined : false),
     },
     overrides,
   );
@@ -858,7 +863,7 @@ export function installAgenticoMock(
     createFeature: vi.fn(() => Promise.resolve({ featureId: feature.id })),
     dispatchFeatureSetup: vi.fn(() => Promise.resolve({ result: 'setup_started' })),
     dispatchFeatureAction: vi.fn(({ featureId, action }: FeatureActionRequest) =>
-      Promise.resolve({ featureId, action, result: 'started', sessionIds: [] }),
+      Promise.resolve({ featureId, action, result: 'started' }),
     ),
     getAttention: vi.fn(() => Promise.resolve(overrides.attention ?? { items: [] })),
     answerPermission: vi.fn(() => Promise.resolve({ result: 'submitted' })),

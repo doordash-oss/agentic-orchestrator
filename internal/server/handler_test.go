@@ -122,7 +122,8 @@ func TestFeatureListDTOShapeAndNoAuthentication(t *testing.T) {
 		},
 	}
 	handler := NewHandler(HandlerOptions{
-		Runtime: RuntimeIdentity{RuntimeDir: runtimeDirLiteral, StateDir: testRuntimeStateDir, Config: testRuntimeConfigPath},
+		Runtime:      RuntimeIdentity{RuntimeDir: runtimeDirLiteral, StateDir: testRuntimeStateDir, Config: testRuntimeConfigPath},
+		FeatureStore: feature.NewStore(t.TempDir()),
 		Features: featureListerFunc(func() ([]*feature.Feature, error) {
 			return []*feature.Feature{f}, nil
 		}),
@@ -234,6 +235,23 @@ func (s *relationshipCountingStore) AllRelationshipChildren() (map[string]*featu
 	return s.classify(), nil
 }
 
+func (s *relationshipCountingStore) LoadAddressedReviewFeedbackIDs(string, string) (map[int]bool, error) {
+	return nil, nil
+}
+func (s *relationshipCountingStore) LoadReviewFeedbackDraft(string) (*feature.ReviewFeedbackDraft, error) {
+	return nil, nil
+}
+func (s *relationshipCountingStore) SaveReviewFeedbackDraft(string, *feature.ReviewFeedbackDraft, int64) error {
+	return nil
+}
+func (s *relationshipCountingStore) ActiveReviewFeedbackLaunchReceipt(string) (*feature.Feature, *feature.ReviewFeedbackLaunchReceipt, error) {
+	return nil, nil, nil
+}
+func (s *relationshipCountingStore) DeleteReviewFeedbackDraftIfRevision(string, int64) error {
+	return nil
+}
+func (s *relationshipCountingStore) BaseDirectory() string { return "" }
+
 func TestFeatureListResolvesRelationshipsInOneScan(t *testing.T) {
 	t.Parallel()
 
@@ -286,7 +304,8 @@ func TestSnapshotResponsesExposeAsOfSequence(t *testing.T) {
 	t.Parallel()
 
 	handler := newAPIHandler(HandlerOptions{
-		Runtime: RuntimeIdentity{RuntimeDir: runtimeDirLiteral, StateDir: testRuntimeStateDir, Config: testRuntimeConfigPath},
+		Runtime:      RuntimeIdentity{RuntimeDir: runtimeDirLiteral, StateDir: testRuntimeStateDir, Config: testRuntimeConfigPath},
+		FeatureStore: feature.NewStore(t.TempDir()),
 		Features: featureListerFunc(func() ([]*feature.Feature, error) {
 			return nil, nil
 		}),
@@ -295,7 +314,7 @@ func TestSnapshotResponsesExposeAsOfSequence(t *testing.T) {
 	handler.broker.publish(SSEEvent{Kind: testEventKindFeatureState, Resource: Resource{Type: entityFeature, ID: fixtureFeatureID}})
 
 	w := httptest.NewRecorder()
-	handler.routes().ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/api/v1/features", nil))
+	handler.ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/api/v1/features", nil))
 
 	resp := w.Result()
 	defer resp.Body.Close()
@@ -340,17 +359,17 @@ func TestPermissionAnswerRejectsLegacyAndMissingRememberScope(t *testing.T) {
 		},
 		{
 			name:            "allow remember without scope",
-			body:            map[string]string{requestIDKey: fixturePermissionRequestID, decisionKey: decisionAllowRemember, rememberPatternKey: testRememberPattern},
+			body:            map[string]string{requestIDKey: fixturePermissionRequestID, decisionKey: string(AllowRemember), rememberPatternKey: testRememberPattern},
 			wantDiagnostics: "remember_scope is required for allow_remember",
 		},
 		{
 			name:            "unknown auto approve scope",
-			body:            map[string]string{requestIDKey: fixturePermissionRequestID, decisionKey: decisionAllowOnce, "auto_approve_scope": "repo"},
+			body:            map[string]string{requestIDKey: fixturePermissionRequestID, decisionKey: string(AllowOnce), "auto_approve_scope": "repo"},
 			wantDiagnostics: "auto_approve_scope must be feature or workspace",
 		},
 		{
 			name:            "auto approve scope with deny",
-			body:            map[string]string{requestIDKey: fixturePermissionRequestID, decisionKey: decisionDeny, "auto_approve_scope": AutoApproveScopeFeature},
+			body:            map[string]string{requestIDKey: fixturePermissionRequestID, decisionKey: string(Deny), "auto_approve_scope": string(PermissionAnswerRequestAutoApproveScopeFeature)},
 			wantDiagnostics: "auto_approve_scope cannot be combined with deny or retry_auto_review",
 		},
 	}
@@ -397,25 +416,25 @@ func TestPermissionAnswerAcceptsExplicitDecisions(t *testing.T) {
 	}{
 		{
 			name:         "allow once",
-			body:         map[string]string{requestIDKey: fixturePermissionRequestID, decisionKey: decisionAllowOnce},
-			wantDecision: decisionAllowOnce,
+			body:         map[string]string{requestIDKey: fixturePermissionRequestID, decisionKey: string(AllowOnce)},
+			wantDecision: string(AllowOnce),
 		},
 		{
-			name:         decisionDeny,
-			body:         map[string]string{requestIDKey: fixturePermissionRequestID, decisionKey: decisionDeny},
-			wantDecision: decisionDeny,
+			name:         string(Deny),
+			body:         map[string]string{requestIDKey: fixturePermissionRequestID, decisionKey: string(Deny)},
+			wantDecision: string(Deny),
 		},
 		{
 			name:                "allow remember with scope",
-			body:                map[string]string{requestIDKey: fixturePermissionRequestID, decisionKey: decisionAllowRemember, rememberPatternKey: testRememberPattern, "remember_scope": repoNameSelf},
-			wantDecision:        decisionAllowRemember,
+			body:                map[string]string{requestIDKey: fixturePermissionRequestID, decisionKey: string(AllowRemember), rememberPatternKey: testRememberPattern, "remember_scope": repoNameSelf},
+			wantDecision:        string(AllowRemember),
 			wantRememberPattern: testRememberPattern,
 			wantRememberScope:   stringPtr(repoNameSelf),
 		},
 		{
 			name:                "allow remember with empty global scope",
-			body:                map[string]string{requestIDKey: fixturePermissionRequestID, decisionKey: decisionAllowRemember, rememberPatternKey: testRememberPattern, "remember_scope": ""},
-			wantDecision:        decisionAllowRemember,
+			body:                map[string]string{requestIDKey: fixturePermissionRequestID, decisionKey: string(AllowRemember), rememberPatternKey: testRememberPattern, "remember_scope": ""},
+			wantDecision:        string(AllowRemember),
 			wantRememberPattern: testRememberPattern,
 			wantRememberScope:   stringPtr(""),
 		},
@@ -550,7 +569,7 @@ func TestRefactorActionReturnsCreated(t *testing.T) {
 	t.Parallel()
 
 	target := &refactorMutationTarget{
-		resp: RefactorFeatureResponse{FeatureID: "child-1", ParentID: "feat-1", Result: "created"},
+		resp: ChildLaunchResponse{FeatureID: "child-1", ParentID: "feat-1", Result: "created"},
 	}
 	handler := NewHandler(HandlerOptions{
 		Mutations:             target,
@@ -582,7 +601,7 @@ func TestRefactorActionReturnsCreated(t *testing.T) {
 		raw, _ := io.ReadAll(resp.Body)
 		t.Fatalf("status = %d; want 201; body = %s", resp.StatusCode, raw)
 	}
-	var out RefactorFeatureResponse
+	var out ChildLaunchResponse
 	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
 		t.Fatalf("decode response: %v", err)
 	}
@@ -965,7 +984,7 @@ func TestRefactorActionDirtyErrorCarriesRepositoryContext(t *testing.T) {
 func TestStartResumeActionChildExecutionBlocked(t *testing.T) {
 	t.Parallel()
 
-	for _, action := range []string{actionStart, actionResume} {
+	for _, action := range []string{string(FeatureActionStart), string(FeatureActionResume)} {
 		for _, setupState := range []string{"queued", "setup-complete"} {
 			t.Run(action+"/"+setupState, func(t *testing.T) {
 				t.Parallel()
@@ -1005,8 +1024,8 @@ type startBlockedMutationTarget struct {
 	err error
 }
 
-func (t *startBlockedMutationTarget) StartFeature(string) (FeatureStartResponse, error) {
-	return FeatureStartResponse{}, t.err
+func (t *startBlockedMutationTarget) RunFeatureLifecycle(string, FeatureAction, GuardedFeatureActionRequest) (FeatureActionResponse, error) {
+	return FeatureActionResponse{}, t.err
 }
 
 type deleteBlockedMutationTarget struct {
@@ -1021,7 +1040,7 @@ func (t *deleteBlockedMutationTarget) DeleteFeature(string, GuardedFeatureAction
 type refactorMutationTarget struct {
 	MutationTarget
 	received []RefactorFeatureRequest
-	resp     RefactorFeatureResponse
+	resp     ChildLaunchResponse
 	err      error
 }
 
@@ -1037,7 +1056,7 @@ func (t *reviewFeedbackMutationTarget) ReviewFeedbackFeature(_ string, req Revie
 	return t.resp, t.err
 }
 
-func (t *refactorMutationTarget) RefactorFeature(featureID string, req RefactorFeatureRequest) (RefactorFeatureResponse, error) {
+func (t *refactorMutationTarget) RefactorFeature(featureID string, req RefactorFeatureRequest) (ChildLaunchResponse, error) {
 	t.received = append(t.received, req)
 	return t.resp, t.err
 }
@@ -1062,7 +1081,8 @@ func (t permissionAnswerMutationTarget) AnswerPermission(req PermissionAnswerReq
 func TestFeatureListEmptyRuntimeAndPartialWarnings(t *testing.T) {
 	t.Parallel()
 	handler := NewHandler(HandlerOptions{
-		Runtime: RuntimeIdentity{RuntimeDir: runtimeDirLiteral, StateDir: testRuntimeStateDir, Config: testRuntimeConfigPath},
+		Runtime:      RuntimeIdentity{RuntimeDir: runtimeDirLiteral, StateDir: testRuntimeStateDir, Config: testRuntimeConfigPath},
+		FeatureStore: feature.NewStore(t.TempDir()),
 		Features: featureListerFunc(func() ([]*feature.Feature, error) {
 			return nil, nil
 		}),
@@ -1086,7 +1106,8 @@ func TestFeatureListEmptyRuntimeAndPartialWarnings(t *testing.T) {
 		{ID: "bad-001", Err: errors.New("parsing feature file: duplicate key")},
 	}}
 	handler = NewHandler(HandlerOptions{
-		Runtime: RuntimeIdentity{RuntimeDir: runtimeDirLiteral, StateDir: testRuntimeStateDir, Config: testRuntimeConfigPath},
+		Runtime:      RuntimeIdentity{RuntimeDir: runtimeDirLiteral, StateDir: testRuntimeStateDir, Config: testRuntimeConfigPath},
+		FeatureStore: feature.NewStore(t.TempDir()),
 		Features: featureListerFunc(func() ([]*feature.Feature, error) {
 			return []*feature.Feature{{ID: "good-001", Name: "Good", Slug: "good", Status: feature.StatusCreated, ActiveRun: 1, RunCount: 1}}, partial
 		}),
@@ -1108,7 +1129,7 @@ func TestFeatureListEmptyRuntimeAndPartialWarnings(t *testing.T) {
 		t.Fatalf("partial warnings = %+v; want one feature_load_failed warning", body.Warnings)
 	}
 	warning := body.Warnings[0]
-	if warning.Class != ErrorClass(errcat.ClassWarning) {
+	if warning.Class != ErrorClassWarning {
 		t.Fatalf("load warning class = %q; want warning", warning.Class)
 	}
 	if !strings.Contains(warning.Summary, "bad-001") {
@@ -1151,6 +1172,7 @@ func TestFeatureListDoesNotMutateStorageSchemas(t *testing.T) {
 	handler := NewHandler(HandlerOptions{
 		Runtime:               RuntimeIdentity{RuntimeDir: filepath.Dir(dir), StateDir: dir, Config: filepath.Join(filepath.Dir(dir), "config.yaml")},
 		Features:              store,
+		FeatureStore:          store,
 		DisableHostValidation: true,
 	})
 	w := httptest.NewRecorder()

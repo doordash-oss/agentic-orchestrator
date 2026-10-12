@@ -26,17 +26,17 @@ import (
 	"github.com/doordash-oss/agentic-orchestrator/internal/llm"
 )
 
-// BackgroundActivity is one meaningful provider-confirmed task update.
-type BackgroundActivity struct {
+// backgroundActivity is one meaningful provider-confirmed task update.
+type backgroundActivity struct {
 	At     string
 	Detail string
 }
 
-// BackgroundTask is confirmed provider work whose lifetime is independent of
+// backgroundTask is confirmed provider work whose lifetime is independent of
 // a conversation turn. The transcript is its durable source of truth.
-type BackgroundTask struct {
+type backgroundTask struct {
 	updatedSeq int64
-	Activity   []BackgroundActivity
+	Activity   []backgroundActivity
 	ID         string
 	ProviderID string
 	Generation int64
@@ -56,7 +56,7 @@ func backgroundActive(state string) bool { return state == "running" || state ==
 // Provider IDs are scoped to a process generation. Nothing in assistant prose
 // can arm a task, finish it, or restore it after a process restart.
 type backgroundIndex struct {
-	tasks      map[string]BackgroundTask
+	tasks      map[string]backgroundTask
 	pending    map[string]llm.ContentBlock
 	generation int64
 	revision   uint64
@@ -75,7 +75,7 @@ func backgroundKey(gen int64, kind, id string) string {
 	return fmt.Sprintf("%d:%s:%s", gen, namespace, id)
 }
 
-func (d *backgroundIndex) put(rec Record, kind, id, title, state, detail string) BackgroundTask {
+func (d *backgroundIndex) put(rec Record, kind, id, title, state, detail string) backgroundTask {
 	key := backgroundKey(rec.Generation, kind, id)
 	task, exists := d.tasks[key]
 	// Late progress or a delayed start acknowledgement must not resurrect a
@@ -85,7 +85,7 @@ func (d *backgroundIndex) put(rec Record, kind, id, title, state, detail string)
 		return task
 	}
 	if !exists {
-		task = BackgroundTask{ID: key, ProviderID: id, Generation: rec.Generation, Kind: kind, StartedAt: rec.CreatedAt.Format(time.RFC3339Nano)}
+		task = backgroundTask{ID: key, ProviderID: id, Generation: rec.Generation, Kind: kind, StartedAt: rec.CreatedAt.Format(time.RFC3339Nano)}
 	}
 	if title != "" {
 		task.Title = backgroundText(title, 160)
@@ -102,13 +102,13 @@ func (d *backgroundIndex) put(rec Record, kind, id, title, state, detail string)
 	task.UpdatedAt = rec.CreatedAt.Format(time.RFC3339Nano)
 	task.updatedSeq = rec.Seq
 	if task.Detail != "" && (len(task.Activity) == 0 || task.Activity[len(task.Activity)-1].Detail != task.Detail) {
-		task.Activity = append(append([]BackgroundActivity(nil), task.Activity...), BackgroundActivity{At: task.UpdatedAt, Detail: task.Detail})
+		task.Activity = append(append([]backgroundActivity(nil), task.Activity...), backgroundActivity{At: task.UpdatedAt, Detail: task.Detail})
 		if len(task.Activity) > 8 {
 			task.Activity = task.Activity[len(task.Activity)-8:]
 		}
 	}
 	if d.tasks == nil {
-		d.tasks = make(map[string]BackgroundTask)
+		d.tasks = make(map[string]backgroundTask)
 	}
 	d.tasks[key] = task
 	d.revision++
@@ -312,10 +312,10 @@ func (s *transcriptStore) backgroundRevision() uint64 {
 	return s.background.revision
 }
 
-func (s *transcriptStore) backgroundTasks(generation int64, live bool, now time.Time) []BackgroundTask {
+func (s *transcriptStore) backgroundTasks(generation int64, live bool, now time.Time) []backgroundTask {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	tasks := make([]BackgroundTask, 0, len(s.background.tasks))
+	tasks := make([]backgroundTask, 0, len(s.background.tasks))
 	for _, task := range s.background.tasks {
 		if backgroundActive(task.State) && (task.Generation != generation || !live) {
 			task.State = "interrupted"
@@ -325,7 +325,7 @@ func (s *transcriptStore) backgroundTasks(generation int64, live bool, now time.
 			task.State = "interrupted"
 			task.Detail = "Schedule reached its expiry; needs confirmation"
 		}
-		task.Activity = append([]BackgroundActivity(nil), task.Activity...)
+		task.Activity = append([]backgroundActivity(nil), task.Activity...)
 		tasks = append(tasks, task)
 	}
 	sort.Slice(tasks, func(i, j int) bool {

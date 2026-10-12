@@ -31,7 +31,7 @@ import (
 // Fixed production feed configuration. The server's release feed is immune to
 // legacy CLI endpoint overrides: GITHUB_API_URL never applies here.
 const (
-	ProductionFeedBaseURL = "https://api.github.com"
+	productionFeedBaseURL = "https://api.github.com"
 	ProductionFeedSlug    = "doordash-oss/agentic-orchestrator"
 
 	feedMaxPages        = 10
@@ -51,18 +51,18 @@ var allowedFeedHosts = map[string]bool{
 	"release-assets.githubusercontent.com":  true,
 }
 
-// FeedError is one failed metadata check. Retry marks errors raised by a
+// feedError is one failed metadata check. Retry marks errors raised by a
 // server-imposed deadline (403/429 with applicable reset hints); NotBefore is
 // the earliest instant a retry may be attempted and is a floor local backoff
 // and jitter can never shorten.
-type FeedError struct {
+type feedError struct {
 	Reason     string
 	StatusCode int
 	Retry      bool
 	NotBefore  time.Time
 }
 
-func (e *FeedError) Error() string {
+func (e *feedError) Error() string {
 	if e.Retry && !e.NotBefore.IsZero() {
 		return fmt.Sprintf("%s (retry after %s)", e.Reason, e.NotBefore.UTC().Format(time.RFC3339))
 	}
@@ -127,7 +127,7 @@ func NewProductionFeedClient(moduleSlug string, token func() string) *FeedClient
 	if token == nil {
 		token = func() string { return "" }
 	}
-	return newFeedClient(ProductionFeedBaseURL, slug, token)
+	return newFeedClient(productionFeedBaseURL, slug, token)
 }
 
 // NewFixtureFeedClient returns a feed client bound to one explicit loopback
@@ -213,7 +213,7 @@ func (c *FeedClient) releaseByVersion(ctx context.Context, version string) (*fee
 		return nil, "", err
 	}
 	if match == nil {
-		return nil, "", &FeedError{Reason: fmt.Sprintf("pinned target version %s is not available on the release feed", version)}
+		return nil, "", &feedError{Reason: fmt.Sprintf("pinned target version %s is not available on the release feed", version)}
 	}
 	return match, strings.TrimSpace(deref(match.TagName)), nil
 }
@@ -257,7 +257,7 @@ func (c *FeedClient) latestStableRelease(ctx context.Context) (*feedRelease, [3]
 		return nil, [3]int{}, err
 	}
 	if !haveBest {
-		return nil, [3]int{}, &FeedError{Reason: "no selectable stable release"}
+		return nil, [3]int{}, &feedError{Reason: "no selectable stable release"}
 	}
 	if err := checkAssetIdentities(deref(bestRelease.TagName), bestRelease.Assets); err != nil {
 		return nil, [3]int{}, err
@@ -285,7 +285,7 @@ func (c *FeedClient) walkStableReleases(ctx context.Context, visit func(rel *fee
 		}
 		var releases []feedRelease
 		if err := json.Unmarshal(body, &releases); err != nil {
-			return &FeedError{Reason: fmt.Sprintf("malformed release metadata: %v", err)}
+			return &feedError{Reason: fmt.Sprintf("malformed release metadata: %v", err)}
 		}
 		for i := range releases {
 			rel := &releases[i]
@@ -293,10 +293,10 @@ func (c *FeedClient) walkStableReleases(ctx context.Context, visit func(rel *fee
 				continue
 			}
 			if rel.TagName == nil {
-				return &FeedError{Reason: "malformed release metadata: release without tag_name"}
+				return &feedError{Reason: "malformed release metadata: release without tag_name"}
 			}
 			tag := strings.TrimSpace(*rel.TagName)
-			parts, ok := ParseReleaseVersion(tag)
+			parts, ok := parseReleaseVersion(tag)
 			if !ok {
 				// Not a clean three-component stable version: not
 				// selectable, but not malformed — drafts, prereleases, and
@@ -305,7 +305,7 @@ func (c *FeedClient) walkStableReleases(ctx context.Context, visit func(rel *fee
 			}
 			normalized := fmt.Sprintf("%d.%d.%d", parts[0], parts[1], parts[2])
 			if _, dup := seen[normalized]; dup {
-				return &FeedError{
+				return &feedError{
 					Reason: fmt.Sprintf("ambiguous duplicate stable release for version %s", normalized),
 				}
 			}
@@ -318,7 +318,7 @@ func (c *FeedClient) walkStableReleases(ctx context.Context, visit func(rel *fee
 			break
 		}
 		if page == feedMaxPages {
-			return &FeedError{
+			return &feedError{
 				Reason: fmt.Sprintf("incomplete selection: more than %d pages of releases", feedMaxPages),
 			}
 		}
@@ -342,13 +342,13 @@ func checkAssetIdentities(tag string, assets []feedAsset) error {
 	names := make(map[string]bool, len(assets))
 	for _, asset := range assets {
 		if ids[asset.ID] {
-			return &FeedError{Reason: fmt.Sprintf("ambiguous duplicate asset identity on release %s", tag)}
+			return &feedError{Reason: fmt.Sprintf("ambiguous duplicate asset identity on release %s", tag)}
 		}
 		ids[asset.ID] = true
 		name := strings.ToLower(strings.TrimSpace(asset.Name))
 		if name != "" {
 			if names[name] {
-				return &FeedError{Reason: fmt.Sprintf("ambiguous duplicate asset name on release %s", tag)}
+				return &feedError{Reason: fmt.Sprintf("ambiguous duplicate asset name on release %s", tag)}
 			}
 			names[name] = true
 		}
@@ -416,7 +416,7 @@ func (c *FeedClient) doValidated(ctx context.Context, rawURL string, client *htt
 	dest := rawURL
 	for hop := 0; ; hop++ {
 		if hop > feedMaxRedirects {
-			return nil, nil, &FeedError{Reason: fmt.Sprintf("too many %s redirects", spec.hopNoun)}
+			return nil, nil, &feedError{Reason: fmt.Sprintf("too many %s redirects", spec.hopNoun)}
 		}
 		if err := c.validateDestination(dest); err != nil {
 			return nil, nil, err
@@ -425,7 +425,7 @@ func (c *FeedClient) doValidated(ctx context.Context, rawURL string, client *htt
 		req, err := http.NewRequestWithContext(reqCtx, http.MethodGet, dest, nil)
 		if err != nil {
 			reqCancel()
-			return nil, nil, &FeedError{Reason: fmt.Sprintf("building %s request: %v", spec.buildNoun, err)}
+			return nil, nil, &feedError{Reason: fmt.Sprintf("building %s request: %v", spec.buildNoun, err)}
 		}
 		if spec.accept != "" {
 			req.Header.Set("Accept", spec.accept)
@@ -434,14 +434,14 @@ func (c *FeedClient) doValidated(ctx context.Context, rawURL string, client *htt
 		resp, err := client.Do(req)
 		if err != nil {
 			reqCancel()
-			return nil, nil, &FeedError{Reason: fmt.Sprintf("requesting release %s: %v", spec.fetchNoun, err)}
+			return nil, nil, &feedError{Reason: fmt.Sprintf("requesting release %s: %v", spec.fetchNoun, err)}
 		}
 		if resp.StatusCode >= 300 && resp.StatusCode < 400 {
 			location := resp.Header.Get("Location")
 			_ = resp.Body.Close()
 			reqCancel()
 			if location == "" {
-				return nil, nil, &FeedError{Reason: fmt.Sprintf("%s redirect without location (status %d)", spec.redirectNoun, resp.StatusCode)}
+				return nil, nil, &feedError{Reason: fmt.Sprintf("%s redirect without location (status %d)", spec.redirectNoun, resp.StatusCode)}
 			}
 			resolved, err := resolveFeedURL(dest, location)
 			if err != nil {
@@ -490,7 +490,7 @@ func (c *FeedClient) fetchBounded(ctx context.Context, rawURL string, limit int6
 		return nil, c.retryError(resp)
 	}
 	if resp.StatusCode != http.StatusOK {
-		return nil, &FeedError{
+		return nil, &feedError{
 			Reason:     fmt.Sprintf("release asset request returned status %s", resp.Status),
 			StatusCode: resp.StatusCode,
 		}
@@ -500,10 +500,10 @@ func (c *FeedClient) fetchBounded(ctx context.Context, rawURL string, limit int6
 	limited := io.LimitReader(resp.Body, limit+1)
 	body, err := io.ReadAll(limited)
 	if err != nil {
-		return nil, &FeedError{Reason: fmt.Sprintf("reading release asset: %v", err)}
+		return nil, &feedError{Reason: fmt.Sprintf("reading release asset: %v", err)}
 	}
 	if int64(len(body)) > limit {
-		return nil, &FeedError{
+		return nil, &feedError{
 			Reason:     fmt.Sprintf("release asset exceeds the %d-byte limit", limit),
 			StatusCode: resp.StatusCode,
 		}
@@ -540,17 +540,17 @@ func (c *FeedClient) validateDestination(raw string) error {
 func (c *FeedClient) validateFixtureDestination(raw string) error {
 	u, err := url.Parse(raw)
 	if err != nil {
-		return &FeedError{Reason: fmt.Sprintf("invalid fixture destination: %v", err)}
+		return &feedError{Reason: fmt.Sprintf("invalid fixture destination: %v", err)}
 	}
 	if u.User != nil {
-		return &FeedError{Reason: "fixture destination must not carry userinfo"}
+		return &feedError{Reason: "fixture destination must not carry userinfo"}
 	}
 	base, err := url.Parse(c.baseURL)
 	if err != nil {
-		return &FeedError{Reason: fmt.Sprintf("invalid fixture origin: %v", err)}
+		return &feedError{Reason: fmt.Sprintf("invalid fixture origin: %v", err)}
 	}
 	if u.Scheme != base.Scheme || u.Host != base.Host {
-		return &FeedError{
+		return &feedError{
 			Reason: fmt.Sprintf("fixture destination %q is outside the fixture origin %q", u.Host, base.Host),
 		}
 	}
@@ -564,7 +564,7 @@ func (c *FeedClient) readResponse(resp *http.Response) (body []byte, next string
 		return nil, "", c.retryError(resp)
 	}
 	if resp.StatusCode != http.StatusOK {
-		return nil, "", &FeedError{
+		return nil, "", &feedError{
 			Reason:     fmt.Sprintf("feed returned status %s", resp.Status),
 			StatusCode: resp.StatusCode,
 		}
@@ -575,10 +575,10 @@ func (c *FeedClient) readResponse(resp *http.Response) (body []byte, next string
 	limited := io.LimitReader(resp.Body, feedMaxMetadataSize+1)
 	body, err = io.ReadAll(limited)
 	if err != nil {
-		return nil, "", &FeedError{Reason: fmt.Sprintf("reading release metadata: %v", err)}
+		return nil, "", &feedError{Reason: fmt.Sprintf("reading release metadata: %v", err)}
 	}
 	if len(body) > feedMaxMetadataSize {
-		return nil, "", &FeedError{
+		return nil, "", &feedError{
 			Reason:     "release metadata exceeds the one-MiB limit",
 			StatusCode: resp.StatusCode,
 		}
@@ -586,7 +586,7 @@ func (c *FeedClient) readResponse(resp *http.Response) (body []byte, next string
 	return body, parseNextLink(resp.Header.Get("Link")), nil
 }
 
-// retryError converts a 403/429 response into a retryable FeedError carrying
+// retryError converts a 403/429 response into a retryable feedError carrying
 // the applicable server-imposed deadline: the earliest of the primary
 // X-RateLimit-Reset and Retry-After hints (seconds or HTTP-date), floored at
 // now.
@@ -610,7 +610,7 @@ func (c *FeedClient) retryError(resp *http.Response) error {
 			reason = fmt.Sprintf("feed requested retry after %s", floor.UTC().Format(time.RFC3339))
 		}
 	}
-	return &FeedError{
+	return &feedError{
 		Reason:     reason,
 		StatusCode: resp.StatusCode,
 		Retry:      true,
@@ -635,19 +635,19 @@ func parseRetryAfter(v string, now time.Time) (time.Time, bool) {
 func validateFeedURL(raw string) error {
 	u, err := url.Parse(raw)
 	if err != nil {
-		return &FeedError{Reason: fmt.Sprintf("invalid feed destination: %v", err)}
+		return &feedError{Reason: fmt.Sprintf("invalid feed destination: %v", err)}
 	}
 	if u.Scheme != "https" {
-		return &FeedError{Reason: fmt.Sprintf("feed destination %q must use https", u.Host)}
+		return &feedError{Reason: fmt.Sprintf("feed destination %q must use https", u.Host)}
 	}
 	if !allowedFeedHosts[u.Hostname()] {
-		return &FeedError{Reason: fmt.Sprintf("feed destination %q is not allowed", u.Hostname())}
+		return &feedError{Reason: fmt.Sprintf("feed destination %q is not allowed", u.Hostname())}
 	}
 	if u.User != nil {
-		return &FeedError{Reason: "feed destination must not carry userinfo"}
+		return &feedError{Reason: "feed destination must not carry userinfo"}
 	}
 	if p := u.Port(); p != "" && p != "443" {
-		return &FeedError{Reason: fmt.Sprintf("feed destination %q must use the default https port", u.Host)}
+		return &feedError{Reason: fmt.Sprintf("feed destination %q must use the default https port", u.Host)}
 	}
 	return nil
 }
@@ -657,11 +657,11 @@ func validateFeedURL(raw string) error {
 func resolveFeedURL(current, location string) (string, error) {
 	base, err := url.Parse(current)
 	if err != nil {
-		return "", &FeedError{Reason: fmt.Sprintf("invalid feed destination: %v", err)}
+		return "", &feedError{Reason: fmt.Sprintf("invalid feed destination: %v", err)}
 	}
 	ref, err := url.Parse(location)
 	if err != nil {
-		return "", &FeedError{Reason: fmt.Sprintf("invalid feed redirect: %v", err)}
+		return "", &feedError{Reason: fmt.Sprintf("invalid feed redirect: %v", err)}
 	}
 	resolved := base.ResolveReference(ref)
 	return resolved.String(), nil
@@ -701,7 +701,7 @@ func parseNextLink(header string) string {
 // IsFeedRetryError reports whether err is a server-imposed retry deadline
 // and, when it is, the earliest instant a retry may be attempted.
 func IsFeedRetryError(err error) (notBefore time.Time, ok bool) {
-	var feedErr *FeedError
+	var feedErr *feedError
 	if errors.As(err, &feedErr) && feedErr.Retry {
 		return feedErr.NotBefore, true
 	}

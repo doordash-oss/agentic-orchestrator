@@ -26,7 +26,7 @@ limitations under the License.
  */
 import { CanonicalErrorException, requiresLocalServerError } from '../shared/errors';
 
-export type ConnectionLocality = 'local' | 'remote' | null;
+type ConnectionLocality = 'local' | 'remote' | null;
 
 /** Reads the gateway-owned locality of the active connection at call time. */
 export type LocalitySource = () => ConnectionLocality;

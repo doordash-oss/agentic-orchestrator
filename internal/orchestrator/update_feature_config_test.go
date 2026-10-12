@@ -47,9 +47,8 @@ func TestUpdateFeatureConfig_ClosedChildRejectsWithoutMutation(t *testing.T) {
 			ClosedAt:     &closedAt,
 		},
 	}
-	lc := lifecycleForFeature(f)
-	fs := newFeatureStore(f)
-	o := orchestrator.New(orchestrator.Deps{Lifecycle: lc, Store: fs}, orchestrator.Hooks{})
+	fs, lc := newStoredFeatureFixture(t, f)
+	o := orchestrator.New(orchestrator.Deps{Manager: lc, Store: fs}, orchestrator.Hooks{})
 
 	_, err := o.UpdateFeatureConfig(f.ID, orchestrator.UpdateFeatureConfigInput{
 		Models:      config.ModelConfig{Research: "new-research"},
@@ -59,6 +58,7 @@ func TestUpdateFeatureConfig_ClosedChildRejectsWithoutMutation(t *testing.T) {
 	if !errors.Is(err, feature.ErrChildRelationshipClosed) {
 		t.Fatalf("UpdateFeatureConfig() error = %v, want ErrChildRelationshipClosed", err)
 	}
+	f = loadStoredFeature(t, fs, f.ID)
 	if f.Models.Research != "old-research" || f.Inquireness != feature.InquirenessMedium || f.Checkpoints != (feature.Checkpoints{RoadmapReview: true}) {
 		t.Fatalf("closed child config mutated: models=%+v inquireness=%q checkpoints=%+v", f.Models, f.Inquireness, f.Checkpoints)
 	}
@@ -96,8 +96,7 @@ func TestUpdateFeatureConfig_QuiescentWritesAllAxes(t *testing.T) {
 				Inquireness: feature.InquirenessMedium,
 				Checkpoints: feature.Checkpoints{RoadmapReview: true, PhasePlanReview: true},
 			}
-			lc := lifecycleForFeature(f)
-			fs := newFeatureStore(f)
+			fs, lc := newStoredFeatureFixture(t, f)
 
 			var gotBefore, gotAfter feature.ConfigSnapshot
 			var hookCount int
@@ -108,7 +107,7 @@ func TestUpdateFeatureConfig_QuiescentWritesAllAxes(t *testing.T) {
 					gotAfter = after
 				},
 			}
-			o := orchestrator.New(orchestrator.Deps{Lifecycle: lc, Store: fs}, hooks)
+			o := orchestrator.New(orchestrator.Deps{Manager: lc, Store: fs}, hooks)
 
 			enabled := feature.AutomaticReviewEnabled
 			newInput := orchestrator.UpdateFeatureConfigInput{
@@ -120,6 +119,7 @@ func TestUpdateFeatureConfig_QuiescentWritesAllAxes(t *testing.T) {
 			if _, err := o.UpdateFeatureConfig("feat-1", newInput); err != nil {
 				t.Fatalf("UpdateFeatureConfig: %v", err)
 			}
+			f = loadStoredFeature(t, fs, f.ID)
 
 			if f.Models.Research != "new-research" || f.Models.Planning != "new-planning" {
 				t.Errorf("Models not updated: %+v", f.Models)
@@ -219,8 +219,7 @@ func TestUpdateFeatureConfig_NonQuiescentWritesAllThreeAxes(t *testing.T) {
 			}
 			tc.setup(f)
 
-			lc := lifecycleForFeature(f)
-			fs := newFeatureStore(f)
+			fs, lc := newStoredFeatureFixture(t, f)
 
 			var hookCount int
 			hooks := orchestrator.Hooks{
@@ -228,7 +227,7 @@ func TestUpdateFeatureConfig_NonQuiescentWritesAllThreeAxes(t *testing.T) {
 					hookCount++
 				},
 			}
-			o := orchestrator.New(orchestrator.Deps{Lifecycle: lc, Store: fs}, hooks)
+			o := orchestrator.New(orchestrator.Deps{Manager: lc, Store: fs}, hooks)
 
 			_, err := o.UpdateFeatureConfig("feat-1", orchestrator.UpdateFeatureConfigInput{
 				Models:      config.ModelConfig{Research: "new-research"},
@@ -238,6 +237,7 @@ func TestUpdateFeatureConfig_NonQuiescentWritesAllThreeAxes(t *testing.T) {
 			if err != nil {
 				t.Fatalf("UpdateFeatureConfig: %v", err)
 			}
+			f = loadStoredFeature(t, fs, f.ID)
 
 			if f.Models.Research != "new-research" {
 				t.Errorf("Models.Research = %q, want new-research", f.Models.Research)
@@ -275,10 +275,9 @@ func TestUpdateFeatureConfig_NilHookIsSafe(t *testing.T) {
 		Status:      feature.StatusFailed,
 		Inquireness: feature.InquirenessNone,
 	}
-	lc := lifecycleForFeature(f)
-	fs := newFeatureStore(f)
+	fs, lc := newStoredFeatureFixture(t, f)
 
-	o := orchestrator.New(orchestrator.Deps{Lifecycle: lc, Store: fs}, orchestrator.Hooks{})
+	o := orchestrator.New(orchestrator.Deps{Manager: lc, Store: fs}, orchestrator.Hooks{})
 
 	_, err := o.UpdateFeatureConfig("feat-1", orchestrator.UpdateFeatureConfigInput{
 		Inquireness: feature.InquirenessHigh,
@@ -286,6 +285,7 @@ func TestUpdateFeatureConfig_NilHookIsSafe(t *testing.T) {
 	if err != nil {
 		t.Fatalf("UpdateFeatureConfig with nil hook: %v", err)
 	}
+	f = loadStoredFeature(t, fs, f.ID)
 	if f.Inquireness != feature.InquirenessHigh {
 		t.Errorf("Inquireness not updated: %q", f.Inquireness)
 	}
@@ -298,9 +298,8 @@ func TestUpdateFeatureConfig_NormalizesCheckpointsForPipeline(t *testing.T) {
 		Pipeline:    feature.PipelineMedium,
 		Checkpoints: feature.Checkpoints{ManualPublish: true},
 	}
-	lc := lifecycleForFeature(f)
-	fs := newFeatureStore(f)
-	o := orchestrator.New(orchestrator.Deps{Lifecycle: lc, Store: fs}, orchestrator.Hooks{})
+	fs, lc := newStoredFeatureFixture(t, f)
+	o := orchestrator.New(orchestrator.Deps{Manager: lc, Store: fs}, orchestrator.Hooks{})
 
 	input := orchestrator.UpdateFeatureConfigInput{
 		Checkpoints: feature.Checkpoints{
@@ -314,6 +313,7 @@ func TestUpdateFeatureConfig_NormalizesCheckpointsForPipeline(t *testing.T) {
 	if _, err := o.UpdateFeatureConfig("feat-1", input); err != nil {
 		t.Fatalf("UpdateFeatureConfig: %v", err)
 	}
+	f = loadStoredFeature(t, fs, f.ID)
 	if got := f.Checkpoints; got != (feature.Checkpoints{RoadmapReview: true, PhasePlanReview: true, ManualPublish: true}) {
 		t.Fatalf("normalized checkpoints = %+v, want RoadmapReview+PhasePlanReview+ManualPublish", got)
 	}
@@ -327,8 +327,7 @@ func TestUpdateFeatureConfig_NextAskUserAutoPickUsesEditedInquireness(t *testing
 		Pipeline:     feature.PipelineLarge,
 		Inquireness:  feature.InquirenessHigh,
 	}
-	fs := newFeatureStore(f)
-	lc := lifecycleForFeature(f)
+	fs, lc := newStoredFeatureFixture(t, f)
 
 	var captured *session.SessionOpts
 	sm := mocks.NewMockSessionManager()
@@ -349,7 +348,7 @@ func TestUpdateFeatureConfig_NextAskUserAutoPickUsesEditedInquireness(t *testing
 	}
 
 	o := orchestrator.New(orchestrator.Deps{
-		Lifecycle:   lc,
+		Manager:     lc,
 		Store:       fs,
 		Sessions:    sm,
 		PhaseRunner: pr,
@@ -374,7 +373,7 @@ func TestUpdateFeatureConfig_NextAskUserAutoPickUsesEditedInquireness(t *testing
 	if got != feature.InquirenessNone {
 		t.Fatalf("LoadInquireness() = %q, want edited value %q", got, feature.InquirenessNone)
 	}
-	if len(fs.LoadCalls) == 0 {
-		t.Fatal("LoadInquireness should read through the feature store at decision time")
+	if stored := loadStoredFeature(t, fs, f.ID); stored.Inquireness != feature.InquirenessNone {
+		t.Fatalf("stored Inquireness = %q, want none", stored.Inquireness)
 	}
 }

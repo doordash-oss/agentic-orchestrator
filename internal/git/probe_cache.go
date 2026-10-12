@@ -19,25 +19,25 @@ import (
 	"time"
 )
 
-// ProbeCacheTTL is how long a probe result is served before a background
+// probeCacheTTL is how long a probe result is served before a background
 // refresh is scheduled. Read paths poll far more often than a worktree
 // changes, so anything shorter buys accuracy nobody can perceive at the cost
 // of a subprocess per request.
-const ProbeCacheTTL = 5 * time.Second
+const probeCacheTTL = 5 * time.Second
 
-// ProbeCacheMaxEntries bounds how many worktrees a cache tracks. Keys are
+// probeCacheMaxEntries bounds how many worktrees a cache tracks. Keys are
 // worktree paths, and children come and go, so an unbounded map would grow
 // for the lifetime of the process.
-const ProbeCacheMaxEntries = 512
+const probeCacheMaxEntries = 512
 
-// ProbeCache serves the result of an expensive git probe from memory. A fresh
+// probeCache serves the result of an expensive git probe from memory. A fresh
 // key is served from the map; a stale key is served from the map too and a
 // single background refresh is scheduled, so no caller after the first ever
 // waits on git. Concurrent callers for the same key collapse onto that one
 // probe, so a burst of reads costs one git invocation rather than one per read.
 // Only a cold key — nothing cached at all — waits, joining the same shared
-// probe (itself bounded by ProbeTimeout) rather than inventing an answer.
-type ProbeCache[V any] struct {
+// probe (itself bounded by probeTimeout) rather than inventing an answer.
+type probeCache[V any] struct {
 	ttl   time.Duration
 	max   int
 	probe func(key string) V
@@ -60,16 +60,16 @@ type probeCacheEntry[V any] struct {
 	done chan struct{}
 }
 
-// NewProbeCache builds a cache over probe. A ttl or max of zero or less
-// applies ProbeCacheTTL / ProbeCacheMaxEntries.
-func NewProbeCache[V any](ttl time.Duration, max int, probe func(key string) V) *ProbeCache[V] {
+// newProbeCache builds a cache over probe. A ttl or max of zero or less
+// applies probeCacheTTL / probeCacheMaxEntries.
+func newProbeCache[V any](ttl time.Duration, max int, probe func(key string) V) *probeCache[V] {
 	if ttl <= 0 {
-		ttl = ProbeCacheTTL
+		ttl = probeCacheTTL
 	}
 	if max <= 0 {
-		max = ProbeCacheMaxEntries
+		max = probeCacheMaxEntries
 	}
-	return &ProbeCache[V]{
+	return &probeCache[V]{
 		ttl:     ttl,
 		max:     max,
 		probe:   probe,
@@ -80,7 +80,7 @@ func NewProbeCache[V any](ttl time.Duration, max int, probe func(key string) V) 
 
 // Get returns the value for key, serving a stale value immediately while a
 // refresh runs in the background. Only the first call for a key waits.
-func (c *ProbeCache[V]) Get(key string) V {
+func (c *probeCache[V]) Get(key string) V {
 	c.mu.Lock()
 	now := c.clock()
 	entry := c.entries[key]
@@ -109,7 +109,7 @@ func (c *ProbeCache[V]) Get(key string) V {
 	return value
 }
 
-func (c *ProbeCache[V]) refresh(key string, entry *probeCacheEntry[V]) {
+func (c *probeCache[V]) refresh(key string, entry *probeCacheEntry[V]) {
 	value := c.probe(key)
 	c.mu.Lock()
 	entry.value = value
@@ -127,7 +127,7 @@ func (c *ProbeCache[V]) refresh(key string, entry *probeCacheEntry[V]) {
 // evictLocked drops the least recently accessed entry once the cache is full.
 // An in-flight refresh for an evicted key simply lands on an orphaned entry
 // and is recomputed on the next Get.
-func (c *ProbeCache[V]) evictLocked() {
+func (c *probeCache[V]) evictLocked() {
 	if len(c.entries) < c.max {
 		return
 	}

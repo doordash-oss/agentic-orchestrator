@@ -147,7 +147,7 @@ func TestChildFeatureExcludedFromTopLevelListButDetailWorks(t *testing.T) {
 	for _, raw := range actions {
 		ids[raw.(map[string]any)["id"].(string)] = true
 	}
-	want := map[string]bool{actionStart: true, actionPauseStop: true, actionResume: true, actionRestart: true, actionSetup: true, actionRetry: true, actionDiscard: true}
+	want := map[string]bool{string(FeatureActionStart): true, string(FeatureActionPauseStop): true, string(FeatureActionResume): true, string(FeatureActionRestart): true, string(FeatureActionSetup): true, string(FeatureActionRetry): true, string(FeatureActionDiscard): true}
 	if len(actions) != len(want) {
 		t.Fatalf("child detail actions = %v, want %v", ids, want)
 	}
@@ -494,12 +494,12 @@ func TestParentDeleteRemainsEnabledDuringActiveRelationship(t *testing.T) {
 
 	parent := &feature.Feature{ID: "parent-1", Status: feature.StatusImplementing}
 	actions := actionCatalogDTOsWithChildGuard(parent, true)
-	deleteAction := actionDTOByID(t, actions, actionDelete)
+	deleteAction := actionDTOByID(t, actions, string(FeatureActionDelete))
 	if !deleteAction.Enabled {
 		t.Fatalf("parent delete disabled = %+v, want cascade delete enabled", deleteAction.DisabledReasons)
 	}
 	for _, action := range actions {
-		if action.ID == actionDelete {
+		if action.ID == string(FeatureActionDelete) {
 			continue
 		}
 		if action.Enabled {
@@ -526,7 +526,7 @@ func TestParentRefactorActionReportsDirtyParent(t *testing.T) {
 	body := getJSONMap(t, handler, "/api/v1/features/"+parent.ID)[entityFeature].(map[string]any)
 	for _, raw := range body["actions"].([]any) {
 		action := raw.(map[string]any)
-		if action["id"] != actionRefactor {
+		if action["id"] != string(FeatureActionRefactor) {
 			continue
 		}
 		if action["enabled"] != false {
@@ -566,7 +566,7 @@ func TestParentRefactorDirtyReasonCarriesDiagnostics(t *testing.T) {
 	body := getJSONMap(t, handler, "/api/v1/features/"+parent.ID)[entityFeature].(map[string]any)
 	for _, raw := range body["actions"].([]any) {
 		action := raw.(map[string]any)
-		if action["id"] != actionRefactor {
+		if action["id"] != string(FeatureActionRefactor) {
 			continue
 		}
 		reasons := action["disabled_reasons"].([]any)
@@ -610,7 +610,7 @@ func TestParentRefactorDirtyReasonWithoutCleanlinessOmitsTarget(t *testing.T) {
 	body := getJSONMap(t, handler, "/api/v1/features/"+parent.ID)[entityFeature].(map[string]any)
 	for _, raw := range body["actions"].([]any) {
 		action := raw.(map[string]any)
-		if action["id"] != actionRefactor {
+		if action["id"] != string(FeatureActionRefactor) {
 			continue
 		}
 		reasons := action["disabled_reasons"].([]any)
@@ -660,7 +660,7 @@ func TestReviewFeedbackActionCatalogEligibility(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			action := actionDTOByID(t, actionCatalogDTOsWithChildGuard(tt.feature, tt.hasActiveChild), actionReviewFeedback)
+			action := actionDTOByID(t, actionCatalogDTOsWithChildGuard(tt.feature, tt.hasActiveChild), string(FeatureActionReviewFeedback))
 			if action.Enabled != tt.wantEnabled {
 				t.Fatalf("review-feedback enabled = %v; want %v", action.Enabled, tt.wantEnabled)
 			}
@@ -695,7 +695,7 @@ func TestParentReviewFeedbackDirtyReasonCarriesDiagnostics(t *testing.T) {
 	body := getJSONMap(t, handler, "/api/v1/features/"+parent.ID)[entityFeature].(map[string]any)
 	for _, raw := range body["actions"].([]any) {
 		action := raw.(map[string]any)
-		if action["id"] != actionReviewFeedback {
+		if action["id"] != string(FeatureActionReviewFeedback) {
 			continue
 		}
 		if action["enabled"] != false {

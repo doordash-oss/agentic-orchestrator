@@ -22,7 +22,7 @@ import "errors"
 // with remediation instead of falling back to a replacing rename. The
 // server runtime targets macOS and Linux.
 func renameNoReplace(dirfd int, oldName, newName string) error {
-	return ErrNoReplaceUnsupported
+	return errNoReplaceUnsupported
 }
 
 var _ = errors.Is

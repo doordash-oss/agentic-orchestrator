@@ -24,7 +24,7 @@ limitations under the License.
  */
 
 /** The shared limitation stem every local-only explanation builds on. */
-export const REQUIRES_LOCAL_SERVER = 'requires a local server';
+const REQUIRES_LOCAL_SERVER = 'requires a local server';
 
 /** The @-mention repository file search. */
 export const FILE_SEARCH_REQUIRES_LOCAL_SERVER = `Repository file search ${REQUIRES_LOCAL_SERVER}; file search and upload support are coming in a later release.`;

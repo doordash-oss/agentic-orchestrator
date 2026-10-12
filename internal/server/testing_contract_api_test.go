@@ -29,6 +29,7 @@ func TestTestingContractEndpoint(t *testing.T) {
 	handler := NewHandler(HandlerOptions{
 		Runtime:               RuntimeIdentity{StateDir: store.BaseDir},
 		Features:              store,
+		FeatureStore:          store,
 		DisableHostValidation: true,
 	})
 	get := func(t *testing.T) (*http.Response, map[string]any) {
@@ -112,6 +113,7 @@ func TestTestingContractEndpointRevisionChangesAcrossPhases(t *testing.T) {
 	handler := NewHandler(HandlerOptions{
 		Runtime:               RuntimeIdentity{StateDir: store.BaseDir},
 		Features:              store,
+		FeatureStore:          store,
 		DisableHostValidation: true,
 	})
 	plan := "### Automated Verification\n- [ ] Build: `go build ./...`\n"

@@ -51,10 +51,10 @@ const maxSupervisorMessageRunes = 100000
 
 var supervisorClientMessageID = regexp.MustCompile(`^[A-Za-z0-9._-]{1,128}$`)
 
-// SupervisorService is the supervisor conversation surface the REST and
+// supervisorService is the supervisor conversation surface the REST and
 // SSE routes drive. *supervisor.Coordinator implements it; tests inject
 // recording doubles.
-type SupervisorService interface {
+type supervisorService interface {
 	State() supervisor.State
 	// Lifecycle reports the current lifecycle alone, cheaply, for the
 	// work-admission detector.
@@ -600,11 +600,6 @@ func safeDeltaText(s string) string {
 // receives stream.reset and must re-snapshot; the stream then continues
 // live from the head, so the client never has to reconnect.
 func (h *apiHandler) handleSupervisorEvents(w http.ResponseWriter, r *http.Request) {
-	flusher, ok := w.(http.Flusher)
-	if !ok {
-		writeAPIError(w, http.StatusInternalServerError, errcat.InternalError, errcat.WithDiagnostics("streaming unavailable"))
-		return
-	}
 	after, hasAfter, valid := supervisorEventCursor(r)
 	sub, err := h.supervisor.Subscribe(after, hasAfter, r.URL.Query().Get("epoch"))
 	if err != nil {
@@ -612,9 +607,10 @@ func (h *apiHandler) handleSupervisorEvents(w http.ResponseWriter, r *http.Reque
 		return
 	}
 	defer func() { h.supervisor.Unsubscribe(sub) }()
-	w.Header().Set("Content-Type", "text/event-stream")
-	w.Header().Set("Cache-Control", "no-cache")
-	w.Header().Set("Connection", "keep-alive")
+	flusher, ok := beginSSE(w)
+	if !ok {
+		return
+	}
 
 	st := sub.State
 	envelope := func(kind SupervisorStreamEventKind, generation int64) SupervisorStreamEvent {
@@ -622,7 +618,8 @@ func (h *apiHandler) handleSupervisorEvents(w http.ResponseWriter, r *http.Reque
 	}
 	head := st.HeadSeq
 	write := func(ev SupervisorStreamEvent) bool {
-		if err := writeSupervisorSSE(w, ev); err != nil {
+		id := strconv.FormatInt(ev.Seq, 10)
+		if err := writeSSEFrame(w, string(ev.Kind), id, ev.Kind == SupervisorEventRecord, ev); err != nil {
 			return false
 		}
 		flusher.Flush()
@@ -731,10 +728,7 @@ func supervisorRecordEvent(ev SupervisorStreamEvent, rec supervisor.Record, work
 // Last-Event-ID. A malformed cursor is reported invalid so the stream
 // resets rather than silently replaying from the start.
 func supervisorEventCursor(r *http.Request) (after int64, hasAfter, valid bool) {
-	raw := r.URL.Query().Get("after")
-	if raw == "" {
-		raw = r.Header.Get("Last-Event-ID")
-	}
+	raw := streamCursor(r, "after")
 	if raw == "" {
 		return 0, false, true
 	}
@@ -743,22 +737,6 @@ func supervisorEventCursor(r *http.Request) (after int64, hasAfter, valid bool) 
 		return 0, false, false
 	}
 	return n, true, true
-}
-
-// writeSupervisorSSE writes one event; only record events carry an SSE id,
-// so Last-Event-ID always names a committed record seq.
-func writeSupervisorSSE(w http.ResponseWriter, ev SupervisorStreamEvent) error {
-	payload, err := json.Marshal(ev)
-	if err != nil {
-		return err
-	}
-	setStreamWriteDeadline(w)
-	if ev.Kind == SupervisorEventRecord {
-		_, err = fmt.Fprintf(w, "id: %d\nevent: %s\ndata: %s\n\n", ev.Seq, ev.Kind, payload)
-	} else {
-		_, err = fmt.Fprintf(w, "event: %s\ndata: %s\n\n", ev.Kind, payload)
-	}
-	return err
 }
 
 // detectSupervisorActivity reports the supervisor as active work while it

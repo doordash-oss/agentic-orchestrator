@@ -214,12 +214,12 @@ func TestReconcileTestingContractPreservesWaiverAndBaseCommit(t *testing.T) {
 	existing.BaseCommits = map[string]string{"repo": "abc123"}
 	for i := range existing.Items {
 		if existing.Items[i].Source == testingContractPlanSource {
-			existing.Items[i].Disposition = TestingContractItemDisposition{Status: TestingContractDispositionWaived, Reason: "approved", ChangedBy: "user"}
+			existing.Items[i].Disposition = testingContractItemDisposition{Status: testingContractDispositionWaived, Reason: "approved", ChangedBy: "user"}
 			existing.Changes = []TestingContractChange{{ItemID: existing.Items[i].ID, Action: TestingContractChangeWaive, ChangeReason: "approved", ChangedBy: "user"}}
 		}
 	}
 
-	merged := ReconcileTestingContract(&existing, fresh)
+	merged := reconcileTestingContract(&existing, fresh)
 	if merged.Revision != 2 || merged.BaseCommits["repo"] != "abc123" {
 		t.Fatalf("ReconcileTestingContract() metadata = revision %d bases %v", merged.Revision, merged.BaseCommits)
 	}
@@ -234,12 +234,12 @@ func TestReconcileTestingContractInvalidatesWaiverWhenRequirementChanges(t *test
 	oldContract := CompileTestingContract("### Automated Verification\n- [ ] Protected [agentico capability: Okta; probe: okta status]: `make test`\n", "/tmp/phase/plan.md", "collapsed")
 	for i := range oldContract.Items {
 		if oldContract.Items[i].Source == testingContractPlanSource {
-			oldContract.Items[i].Disposition = TestingContractItemDisposition{Status: TestingContractDispositionWaived, Reason: "old exception", ChangedBy: "user"}
+			oldContract.Items[i].Disposition = testingContractItemDisposition{Status: testingContractDispositionWaived, Reason: "old exception", ChangedBy: "user"}
 			oldContract.Changes = []TestingContractChange{{ItemID: oldContract.Items[i].ID, Action: TestingContractChangeWaive, ChangeReason: "old exception", ChangedBy: "user"}}
 		}
 	}
 	fresh := CompileTestingContract("### Automated Verification\n- [ ] Protected [agentico capability: VPN; probe: vpn status]: `make test`\n", "/tmp/phase/plan.md", "collapsed")
-	merged := ReconcileTestingContract(&oldContract, fresh)
+	merged := reconcileTestingContract(&oldContract, fresh)
 	for _, item := range merged.Items {
 		if item.Source == testingContractPlanSource && IsTestingContractItemWaived(item) {
 			t.Fatalf("changed requirement retained stale waiver: %+v", item)
@@ -309,7 +309,7 @@ func TestCompileTestingContractAgentEvidenceHasReadableUniquePaths(t *testing.T)
 
 	evidencePaths := map[string]bool{}
 	for _, item := range contract.Items {
-		if item.Owner != TestingContractOwnerAgent {
+		if item.Owner != testingContractOwnerAgent {
 			continue
 		}
 		if strings.TrimSpace(item.ExpectedEvidence.Path) == "" {
@@ -394,11 +394,11 @@ func TestCompileTestingContract_EvidenceItems(t *testing.T) {
 
 func TestBuildContractVerificationReportStub_ManualMode(t *testing.T) {
 	contract := CompileTestingContract("### Manual Verification\n- [ ] Exercise the primary workflow.\n", "/tmp/phase-01/plan.md", "collapsed")
-	report := BuildContractVerificationReportStub(&contract, "/tmp/phase-01/testing-contract.yaml")
+	report := buildContractVerificationReportStub(&contract, "/tmp/phase-01/testing-contract.yaml")
 
-	var manual *VerificationCheckResult
+	var manual *verificationCheckResult
 	for i := range report.Results {
-		if report.Results[i].Mode == VerificationModeManual {
+		if report.Results[i].Mode == verificationModeManual {
 			manual = &report.Results[i]
 			break
 		}
@@ -406,7 +406,7 @@ func TestBuildContractVerificationReportStub_ManualMode(t *testing.T) {
 	if manual == nil {
 		t.Fatalf("missing manual verification report row: %+v", report.Results)
 	}
-	if manual.Status != VerificationStatusNotRun {
+	if manual.Status != verificationStatusNotRun {
 		t.Fatalf("manual status = %q", manual.Status)
 	}
 }
@@ -547,7 +547,7 @@ func TestCompileTestingContractMultiRepoBehavioralCommandIsHarnessOwned(t *testi
 	if item == nil {
 		t.Fatal("no behavioral item compiled")
 	}
-	if item.Owner != TestingContractOwnerHarness {
+	if item.Owner != testingContractOwnerHarness {
 		t.Fatalf("owner = %q, want harness", item.Owner)
 	}
 	if item.Run == nil || item.Run.Shell != "npx playwright test e2e/journey.spec.ts" {
@@ -568,7 +568,7 @@ func TestCompileTestingContractMultiRepoBehavioralWithoutCommandStaysAgentOwned(
 		if item.Source != testingContractBehavioralSource {
 			continue
 		}
-		if item.Owner != TestingContractOwnerAgent || item.Run != nil {
+		if item.Owner != testingContractOwnerAgent || item.Run != nil {
 			t.Fatalf("item = %+v, want agent-owned with no run", item)
 		}
 		if item.ExpectedEvidence.Path == "" {

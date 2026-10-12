@@ -18,6 +18,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log"
 	"os"
 	"path/filepath"
 	"sort"
@@ -104,7 +105,7 @@ func singleShotFailureCode(input PhaseCompletionInput) errcat.Code {
 // failure state.
 func (o *Orchestrator) markFailedWithEvent(featureID string, failure errcat.FailureRecord) error {
 	rendered := errcat.RenderRecord(failure)
-	if err := o.deps.Lifecycle.MarkFailed(featureID, failure); err != nil {
+	if err := o.deps.Manager.MarkFailed(featureID, failure); err != nil {
 		return fmt.Errorf("mark failed: %w", err)
 	}
 	o.emitEventBlocking(ports.Event{
@@ -119,7 +120,7 @@ func (o *Orchestrator) markFailedWithEvent(featureID string, failure errcat.Fail
 	if o.hooks.OnFeatureSummaryNeeded != nil {
 		// Best-effort reload for the summary payload. A nil feature triggers
 		// the hook's feature-manager fallback (see BuildHooks).
-		if f, err := o.deps.Lifecycle.Get(featureID); err == nil {
+		if f, err := o.deps.Store.Load(featureID); err == nil {
 			o.hooks.OnFeatureSummaryNeeded(featureID, f)
 		} else {
 			o.hooks.OnFeatureSummaryNeeded(featureID, nil)
@@ -164,12 +165,12 @@ func (o *Orchestrator) onKBCompleted(featureID string, input PhaseCompletionInpu
 		// in-flight narration, not a real crash. Short-circuit here and let
 		// interruptFeature own the terminal transition. Still wake KB
 		// waiters since session cleanup released this feature's kb.lock.
-		if f, _ := o.deps.Lifecycle.Get(featureID); isTerminalForCompletion(f) {
+		if f, _ := o.deps.Store.Load(featureID); isTerminalForCompletion(f) {
 			o.wakeKBWaiters(featureID)
 			return nil
 		}
 		if repoName != "" {
-			_ = o.deps.Lifecycle.MarkRepoKBFailed(featureID, repoName, errMsg)
+			_ = o.deps.Manager.MarkRepoKBFailed(featureID, repoName, errMsg)
 		}
 		// Stop any sibling sessions still running for this feature so the
 		// whole KB phase aborts cleanly.
@@ -188,7 +189,7 @@ func (o *Orchestrator) onKBCompleted(featureID string, input PhaseCompletionInpu
 		return err
 	}
 
-	f, err := o.deps.Lifecycle.Get(featureID)
+	f, err := o.deps.Store.Load(featureID)
 	if err != nil {
 		return fmt.Errorf("load feature: %w", err)
 	}
@@ -204,7 +205,7 @@ func (o *Orchestrator) onKBCompleted(featureID string, input PhaseCompletionInpu
 	if len(violations) > 0 {
 		errMsg := formatSingleShotProtocolViolationError(agent.RoleKnowledgeBaseBuilder, kbDir, violations)
 		if repoName != "" {
-			_ = o.deps.Lifecycle.MarkRepoKBFailed(featureID, repoName, errMsg)
+			_ = o.deps.Manager.MarkRepoKBFailed(featureID, repoName, errMsg)
 		}
 		if o.deps.Sessions != nil {
 			for _, s := range o.deps.Sessions.FeatureSessions(featureID) {
@@ -236,7 +237,7 @@ func (o *Orchestrator) onKBCompleted(featureID string, input PhaseCompletionInpu
 				}
 			}
 		}
-		if err := o.deps.Lifecycle.MarkRepoKBCompleted(featureID, repoName); err != nil {
+		if err := o.deps.Manager.MarkRepoKBCompleted(featureID, repoName); err != nil {
 			return fmt.Errorf("mark repo KB completed: %w", err)
 		}
 		// This repo's kb.lock was released by session cleanup before
@@ -245,7 +246,7 @@ func (o *Orchestrator) onKBCompleted(featureID string, input PhaseCompletionInpu
 		o.wakeKBWaiters(featureID)
 	}
 
-	allDone, err := o.deps.Lifecycle.AllKBsCompleted(featureID)
+	allDone, err := o.deps.Manager.AllKBsCompleted(featureID)
 	if err != nil {
 		return fmt.Errorf("check all KBs completed: %w", err)
 	}
@@ -259,7 +260,7 @@ func (o *Orchestrator) onKBCompleted(featureID string, input PhaseCompletionInpu
 	}); err != nil {
 		return fmt.Errorf("clear ForceKBRebuild: %w", err)
 	}
-	if err := o.deps.Lifecycle.CompleteKnowledgeBase(featureID); err != nil {
+	if err := o.deps.Manager.Transition(featureID, feature.StatusCreated); err != nil {
 		return fmt.Errorf("complete knowledge base: %w", err)
 	}
 	o.emitPhaseCompleted(featureID, feature.PhaseKnowledgeBase, nil)
@@ -350,7 +351,7 @@ func (o *Orchestrator) onArtifactPhaseCompletedWithKey(
 	completeFn func(string) error,
 ) error {
 	if !input.Success {
-		if f, _ := o.deps.Lifecycle.Get(featureID); isTerminalForCompletion(f) {
+		if f, _ := o.deps.Store.Load(featureID); isTerminalForCompletion(f) {
 			return nil
 		}
 		// LastError keeps the "<Phase> phase failed: <detail>" format so
@@ -365,7 +366,7 @@ func (o *Orchestrator) onArtifactPhaseCompletedWithKey(
 		return o.markFailedWithEvent(featureID, failureRecord(singleShotFailureCode(input), input.Phase, errMsg))
 	}
 
-	f, err := o.deps.Lifecycle.Get(featureID)
+	f, err := o.deps.Store.Load(featureID)
 	if err != nil {
 		return fmt.Errorf("load feature: %w", err)
 	}
@@ -476,7 +477,7 @@ func (o *Orchestrator) validateArtifactPhaseCompletionContract(
 
 // onPlanLoopDone handles the result of a plan loop, including per-phase loops.
 func (o *Orchestrator) onPlanLoopDone(featureID string, result *agent.PlanLoopResult) error {
-	f, err := o.deps.Lifecycle.Get(featureID)
+	f, err := o.deps.Store.Load(featureID)
 	if err != nil {
 		return fmt.Errorf("load feature: %w", err)
 	}
@@ -556,13 +557,13 @@ func (o *Orchestrator) onPlanApproved(featureID string, f *feature.Feature) erro
 		}
 
 		// Re-load feature after Modify so subsequent logic sees fresh state.
-		ff, getErr := o.deps.Lifecycle.Get(featureID)
+		ff, getErr := o.deps.Store.Load(featureID)
 		if getErr != nil {
 			return fmt.Errorf("reload feature: %w", getErr)
 		}
 		if ff.Checkpoints.RoadmapReview {
 			// Route through review gate.
-			if err := o.deps.Lifecycle.NeedsPlanReview(featureID); err != nil {
+			if err := o.deps.Manager.NeedsPlanReview(featureID); err != nil {
 				return fmt.Errorf("mark needs plan review: %w", err)
 			}
 			o.emitPhaseCompleted(featureID, feature.PhasePlan, nil)
@@ -578,7 +579,7 @@ func (o *Orchestrator) onPlanApproved(featureID string, f *feature.Feature) erro
 			return nil
 		}
 		// Auto-advance into first phase-plan.
-		if err := o.deps.Lifecycle.AdvanceRoadmapPhase(featureID); err != nil {
+		if err := o.deps.Manager.AdvanceRoadmapPhase(featureID); err != nil {
 			return fmt.Errorf("advance roadmap phase: %w", err)
 		}
 		o.emitPhaseCompleted(featureID, feature.PhasePlan, nil)
@@ -602,7 +603,7 @@ func (o *Orchestrator) onPlanApproved(featureID string, f *feature.Feature) erro
 	// is enabled, we surface it as a review gate; otherwise we run
 	// StartRoadmapPhaseImplementation and start implementation.
 	if f.Checkpoints.PhasePlanReview {
-		if err := o.deps.Lifecycle.NeedsPlanReview(featureID); err != nil {
+		if err := o.deps.Manager.NeedsPlanReview(featureID); err != nil {
 			return fmt.Errorf("mark needs plan review: %w", err)
 		}
 		o.emitPhaseCompleted(featureID, feature.PhasePlan, nil)
@@ -618,7 +619,7 @@ func (o *Orchestrator) onPlanApproved(featureID string, f *feature.Feature) erro
 		return nil
 	}
 
-	if err := o.deps.Lifecycle.StartRoadmapPhaseImplementation(featureID); err != nil {
+	if err := o.deps.Manager.Transition(featureID, feature.StatusImplementReady); err != nil {
 		return fmt.Errorf("start roadmap phase implementation: %w", err)
 	}
 	// The per-phase execution-order.yaml is read fresh from disk by
@@ -646,7 +647,7 @@ func (o *Orchestrator) onPlanApproved(featureID string, f *feature.Feature) erro
 // feature here would discard a working plan over an exception path the
 // user can resolve in a few seconds.
 func (o *Orchestrator) onPlanNeedsReview(featureID string) error {
-	if err := o.deps.Lifecycle.NeedsPlanReview(featureID); err != nil {
+	if err := o.deps.Manager.NeedsPlanReview(featureID); err != nil {
 		return fmt.Errorf("mark needs plan review: %w", err)
 	}
 	o.emitPhaseCompleted(featureID, feature.PhasePlan, nil)
@@ -686,7 +687,7 @@ func (o *Orchestrator) onImplementCompleted(featureID string, input PhaseComplet
 
 // onMultiRepoImplementDone handles an agent.OrchestratorResult completion.
 func (o *Orchestrator) onMultiRepoImplementDone(featureID string, result *agent.OrchestratorResult) error {
-	f, err := o.deps.Lifecycle.Get(featureID)
+	f, err := o.deps.Store.Load(featureID)
 	if err != nil {
 		return fmt.Errorf("load feature: %w", err)
 	}
@@ -782,7 +783,7 @@ func (o *Orchestrator) onMultiRepoImplementDone(featureID string, result *agent.
 func (o *Orchestrator) routePlanRevision(featureID string, f *feature.Feature, feedback string) error {
 	if f == nil {
 		var err error
-		f, err = o.deps.Lifecycle.Get(featureID)
+		f, err = o.deps.Store.Load(featureID)
 		if err != nil {
 			return fmt.Errorf("load feature for plan revision: %w", err)
 		}
@@ -882,6 +883,7 @@ func (o *Orchestrator) moveFeatureToPlanningForPlanRevision(featureID string, ro
 		ff.PlanIteration = 0
 		ff.ValidatingPlan = false
 		ff.ValidatorStatuses = nil
+		ff.ValidatorErrors = nil
 		if ff.MaxPlanIterations < minPlanAttempts {
 			ff.MaxPlanIterations = minPlanAttempts
 		}
@@ -914,7 +916,7 @@ func (o *Orchestrator) onMultiReposPassed(featureID string, f *feature.Feature) 
 		o.setFinalizingPhaseStatus(featureID, true)
 		defer o.setFinalizingPhaseStatus(featureID, false)
 	}
-	if err := o.deps.Lifecycle.CompleteImplementation(featureID); err != nil {
+	if err := o.deps.Manager.Transition(featureID, feature.StatusReviewPassed); err != nil {
 		return fmt.Errorf("complete implementation: %w", err)
 	}
 	o.emitPhaseCompleted(featureID, feature.PhaseImplement, nil)
@@ -926,7 +928,7 @@ func (o *Orchestrator) onMultiReposPassed(featureID string, f *feature.Feature) 
 		if err := o.recordRoadmapPhaseCommitAnchors(featureID, f.CurrentRoadmapPhase, anchors); err != nil {
 			return err
 		}
-		if err := o.deps.Lifecycle.AdvanceRoadmapPhase(featureID); err != nil {
+		if err := o.deps.Manager.AdvanceRoadmapPhase(featureID); err != nil {
 			return fmt.Errorf("advance roadmap phase: %w", err)
 		}
 		startedPhase, started, err := o.startPhase(featureID, feature.PhasePlan)
@@ -973,7 +975,7 @@ func (o *Orchestrator) onMultiReposPassed(featureID string, f *feature.Feature) 
 // restart-from-interrupted-FR path (startFinalReview) can re-enter the same
 // post-FR advancement after re-running the FR pass.
 func (o *Orchestrator) advanceAfterFinalReview(featureID string) error {
-	f, err := o.deps.Lifecycle.Get(featureID)
+	f, err := o.deps.Store.Load(featureID)
 	if err != nil {
 		return fmt.Errorf("reload after final review: %w", err)
 	}
@@ -993,7 +995,7 @@ func (o *Orchestrator) advanceAfterFinalReview(featureID string) error {
 	}
 
 	if !f.IsPublishable() || !f.Checkpoints.AutoPublish() {
-		if err := o.deps.Lifecycle.MarkCodeReady(featureID); err != nil {
+		if err := o.deps.Manager.MarkCodeReady(featureID); err != nil {
 			return fmt.Errorf("mark code ready: %w", err)
 		}
 		return nil
@@ -1037,13 +1039,13 @@ func (o *Orchestrator) advanceAfterFinalReview(featureID string) error {
 			return err
 		}
 		if !published {
-			if err := o.deps.Lifecycle.MarkCodeReady(featureID); err != nil {
+			if err := o.deps.Manager.MarkCodeReady(featureID); err != nil {
 				return fmt.Errorf("mark code ready: %w", err)
 			}
 			return nil
 		}
 		prURLs := make(map[string]string)
-		if freshF, freshErr := o.deps.Lifecycle.Get(featureID); freshErr == nil && freshF != nil {
+		if freshF, freshErr := o.deps.Store.Load(featureID); freshErr == nil && freshF != nil {
 			for _, r := range freshF.Repos {
 				if st := freshF.RepoStates[r.Name]; st != nil && st.PRURL != "" {
 					prURLs[r.Name] = st.PRURL
@@ -1065,7 +1067,7 @@ func (o *Orchestrator) advanceAfterFinalReview(featureID string) error {
 	// events + hooks fire. Every publish failure is owned by the failing
 	// repository's stored record — never terminal, no run-level failure —
 	// so the dispatch error is wrapped for the completion surface to skip.
-	if err := o.deps.Lifecycle.MarkCodeReady(featureID); err != nil {
+	if err := o.deps.Manager.MarkCodeReady(featureID); err != nil {
 		return fmt.Errorf("mark code ready: %w", err)
 	}
 	for _, name := range f.TouchedRepos() {
@@ -1090,7 +1092,7 @@ func (o *Orchestrator) advanceAfterFinalReview(featureID string) error {
 				FeatureID: featureID,
 				Error:     err,
 			}
-			if freshF, getErr := o.deps.Lifecycle.Get(featureID); getErr == nil {
+			if freshF, getErr := o.deps.Store.Load(featureID); getErr == nil {
 				if rendered, ok := firstFailedRepoError(freshF); ok {
 					publishCompleted.CanonicalError = &rendered
 				}
@@ -1220,9 +1222,6 @@ func roadmapPhaseCommitRepos(f *feature.Feature) []feature.FeatureRepo {
 // implementation loops). Clearing only touches the finalizing token so a
 // status written by a later phase step is never clobbered.
 func (o *Orchestrator) setFinalizingPhaseStatus(featureID string, finalizing bool) {
-	if o.deps.Store == nil {
-		return
-	}
 	_ = o.deps.Store.Modify(featureID, func(f *feature.Feature) error {
 		switch {
 		case finalizing:
@@ -1235,10 +1234,10 @@ func (o *Orchestrator) setFinalizingPhaseStatus(featureID string, finalizing boo
 }
 
 func (o *Orchestrator) recordRoadmapPhaseCommitAnchors(featureID string, phase int, anchors map[string]string) error {
-	if len(anchors) == 0 || o.deps.Lifecycle == nil {
+	if len(anchors) == 0 {
 		return nil
 	}
-	if err := o.deps.Lifecycle.RecordRoadmapPhaseCommitAnchors(featureID, phase, anchors); err != nil {
+	if err := o.deps.Manager.RecordRoadmapPhaseCommitAnchors(featureID, phase, anchors); err != nil {
 		return fmt.Errorf("record roadmap phase commit anchors: %w", err)
 	}
 	return nil
@@ -1278,10 +1277,10 @@ func (o *Orchestrator) runDeferredFinalReview(featureID string) error {
 }
 
 func (o *Orchestrator) startDeferredFinalReview(featureID string) (chan *agent.OrchestratorResult, error) {
-	if err := o.deps.Lifecycle.MarkFinalReviewReady(featureID); err != nil {
+	if err := o.deps.Manager.MarkFinalReviewReady(featureID); err != nil {
 		return nil, fmt.Errorf("mark final review ready: %w", err)
 	}
-	f, err := o.deps.Lifecycle.Get(featureID)
+	f, err := o.deps.Store.Load(featureID)
 	if err != nil {
 		return nil, fmt.Errorf("load feature for final review: %w", err)
 	}
@@ -1307,6 +1306,18 @@ func (o *Orchestrator) startDeferredFinalReview(featureID string) (chan *agent.O
 }
 
 func (o *Orchestrator) finishDeferredFinalReviewResult(featureID string, res *agent.OrchestratorResult, ok bool) error {
+	// A round that finishes after the feature left Final Review (pause-stop,
+	// a concurrent failure) is stale: discard it instead of transitioning a
+	// feature that is no longer FinalReviewing, which would fail it.
+	if f, loadErr := o.deps.Store.Load(featureID); loadErr == nil && f.Status != feature.StatusFinalReviewing {
+		finalStatus := "<none>"
+		if ok && res != nil {
+			finalStatus = res.FinalStatus
+		}
+		log.Printf("final review: discarding %s result for feature %s: status is %s, not %s",
+			finalStatus, featureID, f.Status, feature.StatusFinalReviewing)
+		return fmt.Errorf("discard final review result in status %s: %w", f.Status, errFinalReviewInterrupted)
+	}
 	if !ok || res == nil {
 		errMsg := "final review returned no result"
 		o.emitPhaseCompleted(featureID, feature.PhaseFinalReview, errors.New(errMsg))
@@ -1334,10 +1345,6 @@ func (o *Orchestrator) finishDeferredFinalReviewResult(featureID string, res *ag
 		// failure_type=infrastructure.
 		o.emitPhaseCompleted(featureID, feature.PhaseFinalReview, nil)
 		return errFinalReviewInterrupted
-	case finalStatusPlanRevisionRequired:
-		errMsg := "final review requested unsupported phase-plan revision"
-		o.emitPhaseCompleted(featureID, feature.PhaseFinalReview, errors.New(errMsg))
-		return o.markFinalReviewFailedWithEvent(featureID, failureRecord(errcat.InfrastructureFailure, feature.PhaseFinalReview, errMsg))
 	case "failed":
 		errMsg := res.LastError
 		if errMsg == "" {
@@ -1433,7 +1440,7 @@ type CompletionPreflightResult struct {
 // status, PR URL, blockers, and freshness, and returns a source revision
 // that mutations check for staleness. The worktree is never mutated.
 func (o *Orchestrator) CompletionPreflight(featureID string) (CompletionPreflightResult, error) {
-	f, err := o.deps.Lifecycle.Get(featureID)
+	f, err := o.deps.Store.Load(featureID)
 	if err != nil {
 		return CompletionPreflightResult{}, fmt.Errorf("load feature: %w", err)
 	}
@@ -1475,7 +1482,7 @@ func (o *Orchestrator) CompletionPreflight(featureID string) (CompletionPrefligh
 // revision so mutation adapters can reject stale renderer snapshots before any
 // side effect.
 func (o *Orchestrator) CompletionPreflightSourceRevision(featureID string) (string, error) {
-	f, err := o.deps.Lifecycle.Get(featureID)
+	f, err := o.deps.Store.Load(featureID)
 	if err != nil {
 		return "", fmt.Errorf("load feature: %w", err)
 	}
@@ -1567,18 +1574,18 @@ type RepositoryDiffFileResult struct {
 	Fingerprint  string
 }
 
-// MaxDiffFiles is the aggregate limit on changed files returned.
-const MaxDiffFiles = 500
+// maxDiffFiles is the aggregate limit on changed files returned.
+const maxDiffFiles = 500
 
-// MaxDiffContent is the per-request limit on single-file diff content.
-const MaxDiffContent = 64 * 1024
+// maxDiffContent is the per-request limit on single-file diff content.
+const maxDiffContent = 64 * 1024
 
 // RepositoryDiff inspects one repository's working-tree diff. Without a
 // filePath, it lists all changed files with summaries. With a filePath, it
 // returns bounded diff content for that single file. It never exposes raw
 // host paths, credentials, or unbounded content.
 func (o *Orchestrator) RepositoryDiff(featureID, repoName, filePath string) (RepositoryDiffResult, error) {
-	f, err := o.deps.Lifecycle.Get(featureID)
+	f, err := o.deps.Store.Load(featureID)
 	if err != nil {
 		return RepositoryDiffResult{}, fmt.Errorf("load feature: %w", err)
 	}
@@ -1611,7 +1618,7 @@ func (o *Orchestrator) RepositoryDiff(featureID, repoName, filePath string) (Rep
 // feature repository and canonicalizes it for the desktop main process. The
 // renderer never receives this value.
 func (o *Orchestrator) RepositoryWorktreePath(featureID, repoName string) (string, error) {
-	f, err := o.deps.Lifecycle.Get(featureID)
+	f, err := o.deps.Store.Load(featureID)
 	if err != nil {
 		return "", fmt.Errorf("load feature: %w", err)
 	}
@@ -1647,7 +1654,7 @@ func (o *Orchestrator) repositoryFileListDiff(result RepositoryDiffResult, workD
 		return result, nil
 	}
 	for i, p := range previews {
-		if i >= MaxDiffFiles {
+		if i >= maxDiffFiles {
 			result.Truncated = true
 			break
 		}
@@ -1682,8 +1689,8 @@ func (o *Orchestrator) repositorySingleFileDiff(result RepositoryDiffResult, wor
 		return result, nil
 	}
 	diff := preview.Patch
-	if len(diff) > MaxDiffContent {
-		diff = safeCompletionTruncate(diff, MaxDiffContent)
+	if len(diff) > maxDiffContent {
+		diff = safeCompletionTruncate(diff, maxDiffContent)
 		result.FileTruncated = true
 	}
 	result.FileDiff = diff

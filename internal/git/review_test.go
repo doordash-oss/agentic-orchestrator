@@ -38,13 +38,13 @@ func TestParsePRURL(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			owner, repo, number, err := ParsePRURL(tt.url)
+			owner, repo, number, err := parsePRURL(tt.url)
 			if (err != nil) != tt.wantErr {
-				t.Errorf("ParsePRURL(%q) error = %v, wantErr %v", tt.url, err, tt.wantErr)
+				t.Errorf("parsePRURL(%q) error = %v, wantErr %v", tt.url, err, tt.wantErr)
 				return
 			}
 			if owner != tt.owner || repo != tt.repo || number != tt.number {
-				t.Errorf("ParsePRURL(%q) = (%q, %q, %d), want (%q, %q, %d)",
+				t.Errorf("parsePRURL(%q) = (%q, %q, %d), want (%q, %q, %d)",
 					tt.url, owner, repo, number, tt.owner, tt.repo, tt.number)
 			}
 		})
@@ -182,13 +182,13 @@ func TestPRURLHost(t *testing.T) {
 }
 
 func TestSortReviewCommentsChronologically(t *testing.T) {
-	comments := []ReviewComment{
+	comments := []reviewComment{
 		{ID: 3, CreatedAt: "2026-07-07T12:00:00Z"},
 		{ID: 1, CreatedAt: "2026-07-07T10:00:00Z"},
 		{ID: 2, CreatedAt: "2026-07-07T11:00:00Z"},
 	}
 
-	SortReviewCommentsChronologically(comments)
+	sortReviewCommentsChronologically(comments)
 
 	for i, wantID := range []int{1, 2, 3} {
 		if comments[i].ID != wantID {

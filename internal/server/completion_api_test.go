@@ -32,9 +32,9 @@ type codedPublishConflictTarget struct {
 	err error
 }
 
-func (t *codedPublishConflictTarget) PublishFeature(featureID string, req PublishFeatureRequest) (PublishFeatureResponse, error) {
+func (t *codedPublishConflictTarget) PublishFeature(featureID string, req PublishFeatureRequest) (FeatureActionResponse, error) {
 	t.publishReq = req
-	return PublishFeatureResponse{}, t.err
+	return FeatureActionResponse{}, t.err
 }
 
 func (t *preflightMutationTarget) CompletionPreflight(featureID string) (CompletionPreflightResponse, error) {
@@ -56,9 +56,9 @@ func (t *preflightMutationTarget) RepositoryPath(featureID, repoName string) (Re
 	return RepositoryPathResponse{FeatureID: featureID, Repo: repoName, Path: "/tmp/repo-a"}, nil
 }
 
-func (t *preflightMutationTarget) PublishFeature(featureID string, req PublishFeatureRequest) (PublishFeatureResponse, error) {
+func (t *preflightMutationTarget) PublishFeature(featureID string, req PublishFeatureRequest) (FeatureActionResponse, error) {
 	t.publishReq = req
-	return PublishFeatureResponse{FeatureID: featureID, Result: "published"}, nil
+	return FeatureActionResponse{FeatureID: featureID, Result: "published"}, nil
 }
 
 func (t *preflightMutationTarget) CleanupFeature(featureID string, req CleanupActionRequest) (CleanupFeatureResponse, error) {
@@ -81,12 +81,14 @@ func TestPublishActionReturnsCodedRemoteSafetyConflicts(t *testing.T) {
 			name:   "remote diverged",
 			code:   errcat.PublishRemoteDiverged,
 			detail: "pull-request branch contains remote work that is not in this workspace",
-			options: []errcat.Option{
-				errcat.WithParams(errcat.PublishRepoParams{
-					Repo: "repo-a", Branch: "feature/remote-diverged", RemoteOnlyCommits: 2,
-				}),
-				errcat.WithRepositories(errcat.CodeRepository{Name: "repo-a", Branch: "feature/remote-diverged"}),
-			},
+			options: errcat.RecordOptions(errcat.FailureRecord{
+				Code: errcat.PublishRemoteDiverged,
+				Context: &errcat.RecordContext{
+					Repositories: []errcat.CodeRepository{
+						{Name: "repo-a", Branch: "feature/remote-diverged", RemoteOnlyCommits: 2},
+					},
+				},
+			}),
 			wantSummary: `The pull-request branch for "repo-a" contains 2 remote commits that are not in this workspace.`,
 			wantRepo:    "repo-a",
 			wantBranch:  "feature/remote-diverged",
@@ -95,10 +97,14 @@ func TestPublishActionReturnsCodedRemoteSafetyConflicts(t *testing.T) {
 			name:   "remote changed",
 			code:   errcat.PublishRemoteChanged,
 			detail: "pull-request branch changed while Agentico was publishing",
-			options: []errcat.Option{
-				errcat.WithParams(errcat.PublishRepoParams{Repo: "repo-a", Branch: "feature/remote-changed"}),
-				errcat.WithRepositories(errcat.CodeRepository{Name: "repo-a", Branch: "feature/remote-changed"}),
-			},
+			options: errcat.RecordOptions(errcat.FailureRecord{
+				Code: errcat.PublishRemoteChanged,
+				Context: &errcat.RecordContext{
+					Repositories: []errcat.CodeRepository{
+						{Name: "repo-a", Branch: "feature/remote-changed"},
+					},
+				},
+			}),
 			wantSummary: `The pull-request branch for "repo-a" changed while Agentico was publishing.`,
 			wantRepo:    "repo-a",
 			wantBranch:  "feature/remote-changed",
@@ -121,7 +127,7 @@ func TestPublishActionReturnsCodedRemoteSafetyConflicts(t *testing.T) {
 				DisableHostValidation: true,
 			})
 
-			recorder := postTrustedAuthedJSON(handler, "/api/v1/features/"+fixtureFeatureID+"/actions/"+actionPublish, map[string]any{
+			recorder := postTrustedAuthedJSON(handler, "/api/v1/features/"+fixtureFeatureID+"/actions/"+string(FeatureActionPublish), map[string]any{
 				"repos": []string{"repo-a"},
 			})
 			var body ErrorResponse
@@ -163,7 +169,7 @@ func TestCleanupActionRejectsCycleTarget(t *testing.T) {
 		DisableHostValidation: true,
 	})
 
-	w := postTrustedAuthedJSON(handler, "/api/v1/features/"+fixtureFeatureID+"/actions/"+actionCleanup, map[string]any{
+	w := postTrustedAuthedJSON(handler, "/api/v1/features/"+fixtureFeatureID+"/actions/"+string(FeatureActionCleanup), map[string]any{
 		"target": "cycles",
 	})
 	if w.Code != http.StatusBadRequest {
@@ -323,7 +329,7 @@ func TestRepositoryDiffReportsPartialFailure(t *testing.T) {
 	if resp.Error == nil || resp.Error.Code != string(errcat.RepositoryWorktreeUnavailable) {
 		t.Fatalf("error = %+v; want repository_worktree_unavailable", resp.Error)
 	}
-	if resp.Error.Class != ErrorClass(errcat.ClassWarning) {
+	if resp.Error.Class != ErrorClassWarning {
 		t.Fatalf("error class = %q; want warning", resp.Error.Class)
 	}
 	if resp.Error.Context == nil || len(resp.Error.Context.Repositories) != 1 ||

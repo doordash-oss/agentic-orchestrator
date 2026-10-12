@@ -15,15 +15,15 @@
 package main
 
 import (
+	"os"
 	"testing"
 
-	"github.com/doordash-oss/agentic-orchestrator/internal/github"
 	"github.com/rogpeppe/go-internal/testscript"
 )
 
 func TestMain(m *testing.M) {
 	// Default-deny: tests must never reach the real GitHub API; fixtures stack on top of this default.
-	github.OverrideForTest("http://127.0.0.1:1", "test-dead")
+	_ = os.Setenv("AGENTICO_GITHUB_API_BASE", "http://127.0.0.1:1")
 	testscript.Main(m, map[string]func(){
 		"agentico": run,
 	})

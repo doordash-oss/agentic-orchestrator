@@ -22,95 +22,95 @@ package clone
 
 import "time"
 
-// State is the authoritative lifecycle state of a clone operation. States
+// state is the authoritative lifecycle state of a clone operation. States
 // are persisted; snapshots expose them verbatim. Success is only ever
 // reported from a durable succeeded record — never from stream completion,
 // transport completion or git output.
-type State string
+type state string
 
 const (
-	// StateAccepted means the request was durably recorded (with its
+	// stateAccepted means the request was durably recorded (with its
 	// reservation and staging) before any git process was spawned.
-	StateAccepted State = "accepted"
-	// StateRunning means a git clone process is executing against staging.
-	StateRunning State = "running"
-	// StateFinalizing means the transfer finished and publication is in
+	stateAccepted state = "accepted"
+	// stateRunning means a git clone process is executing against staging.
+	stateRunning state = "running"
+	// stateFinalizing means the transfer finished and publication is in
 	// progress. The record may stay in this state across a crash between
 	// the atomic rename and the success write.
-	StateFinalizing State = "finalizing"
-	// StateCancelling means explicit cancellation was requested; the
+	stateFinalizing state = "finalizing"
+	// stateCancelling means explicit cancellation was requested; the
 	// operation stays in this state until the process tree is confirmed
 	// stopped and cleanup completes.
-	StateCancelling State = "cancelling"
+	stateCancelling state = "cancelling"
 	// StateSucceeded is the terminal success state, set only after the
 	// atomic publication and its durable publication evidence.
-	StateSucceeded State = "succeeded"
-	// StateFailed is a terminal failure with verified completed cleanup.
-	StateFailed State = "failed"
-	// StateCancelled is a terminal explicit cancellation with verified
+	StateSucceeded state = "succeeded"
+	// stateFailed is a terminal failure with verified completed cleanup.
+	stateFailed state = "failed"
+	// stateCancelled is a terminal explicit cancellation with verified
 	// completed cleanup.
-	StateCancelled State = "cancelled"
-	// StateInterrupted is a terminal server interruption (shutdown or
+	stateCancelled state = "cancelled"
+	// stateInterrupted is a terminal server interruption (shutdown or
 	// crash) with verified completed cleanup.
-	StateInterrupted State = "interrupted"
+	stateInterrupted state = "interrupted"
 	// StateCleanupPending means the attempt reached a failure/cancellation/
 	// interruption outcome but cleanup could not yet be proved safe. The
 	// destination reservation is retained until cleanup resolves.
-	StateCleanupPending State = "cleanup_pending"
+	StateCleanupPending state = "cleanup_pending"
 )
 
-// TerminalStates are the states that describe an attempt outcome (including
+// terminalStates are the states that describe an attempt outcome (including
 // the unresolved cleanup_pending outcome holder).
-var TerminalStates = map[State]bool{
+var terminalStates = map[state]bool{
 	StateSucceeded:      true,
-	StateFailed:         true,
-	StateCancelled:      true,
-	StateInterrupted:    true,
+	stateFailed:         true,
+	stateCancelled:      true,
+	stateInterrupted:    true,
 	StateCleanupPending: true,
 }
 
-// UnresolvedStates hold a destination reservation.
-var UnresolvedStates = map[State]bool{
-	StateAccepted:       true,
-	StateRunning:        true,
-	StateFinalizing:     true,
-	StateCancelling:     true,
+// unresolvedStates hold a destination reservation.
+var unresolvedStates = map[state]bool{
+	stateAccepted:       true,
+	stateRunning:        true,
+	stateFinalizing:     true,
+	stateCancelling:     true,
 	StateCleanupPending: true,
 }
 
-// ActiveStates describe work that may still have a live process.
-var ActiveStates = map[State]bool{
-	StateAccepted:   true,
-	StateRunning:    true,
-	StateFinalizing: true,
-	StateCancelling: true,
+// activeStates describe work that may still have a live process.
+var activeStates = map[state]bool{
+	stateAccepted:   true,
+	stateRunning:    true,
+	stateFinalizing: true,
+	stateCancelling: true,
 }
 
-// ResolvedStates are terminal states whose cleanup (if any) completed and
+// resolvedStates are terminal states whose cleanup (if any) completed and
 // whose retention window (from ResolvedAt) applies.
-var ResolvedStates = map[State]bool{
+var resolvedStates = map[state]bool{
 	StateSucceeded:   true,
-	StateFailed:      true,
-	StateCancelled:   true,
-	StateInterrupted: true,
+	stateFailed:      true,
+	stateCancelled:   true,
+	stateInterrupted: true,
 }
 
 // Input bounds. Every submitted string is bounded before it is recorded or
 // acted on.
 const (
-	MaxRemoteURLLength   = 2048
-	MaxDestinationLength = 128
-	MaxIdempotencyLength = 128
-	MaxRootPathLength    = 1024
-	MaxStageLength       = 64
-	MaxProgressLength    = 256
-	MaxDiagnosticsLength = 2000
+	maxRemoteURLLength   = 2048
+	maxDestinationLength = 128
+	maxIdempotencyLength = 128
+	maxRootPathLength    = 1024
+	maxStageLength       = 64
+	maxProgressLength    = 256
+	maxDiagnosticsLength = 2000
 	maxOutputRingBytes   = 32 * 1024
 	progressIntervalMin  = 500 * time.Millisecond
-	DefaultDeadline      = 30 * time.Minute
-	// RetentionWindow is how long resolved terminal records are kept after
+	defaultDeadline      = 30 * time.Minute
+	// retentionWindow is how long resolved terminal records are kept after
 	// resolution. Active and cleanup-pending records are always retained.
-	RetentionWindow = 7 * 24 * time.Hour
+	retentionWindow = 7 * 24 * time.Hour
 	// DefaultListLimit bounds one list page.
 	DefaultListLimit = 50
 	MaxListLimit     = 200
@@ -118,27 +118,27 @@ const (
 
 // Operation kinds. The clone lifecycle machinery (records, reservations,
 // staging, publication, cleanup, recovery) is shared by both kinds; only
-// the worker differs. KindClone is the default so records written before
+// the worker differs. kindClone is the default so records written before
 // kinds existed keep their original meaning.
 const (
-	KindClone  = "clone"
+	kindClone  = "clone"
 	KindCreate = "create"
 )
 
-// OpError is the bounded, redacted failure detail carried on a record. It
+// opError is the bounded, redacted failure detail carried on a record. It
 // never contains raw git output or secret-bearing input.
-type OpError struct {
+type opError struct {
 	Code        string `json:"code"`
 	Diagnostics string `json:"diagnostics,omitempty"`
 }
 
-// PublicationIdentity is the server-resolved repository identity of the
+// publicationIdentity is the server-resolved repository identity of the
 // repository actually published, pinned by the publication marker before the
 // atomic rename. Device and Inode are decimal text so the comparison stays
 // exact in every client language. It is absent when the identity could not
 // be proved (older records, or a destination whose repository no longer
 // matches the marker), and clients must never fall back to key or path.
-type PublicationIdentity struct {
+type publicationIdentity struct {
 	Path      string `json:"path"`
 	CommonDir string `json:"common_dir"`
 	Device    string `json:"device"`
@@ -146,22 +146,22 @@ type PublicationIdentity struct {
 	BirthTime string `json:"birth_time,omitempty"`
 }
 
-// Publication is the durable evidence of a successful atomic publication.
+// publication is the durable evidence of a successful atomic publication.
 // RepoKey is the actual collision-safe catalog key computed from discovery
 // after publication, never the requested folder name. Identity binds the
 // publication to the repository that was actually published.
-type Publication struct {
+type publication struct {
 	RepoKey     string               `json:"repo_key"`
 	Path        string               `json:"path"`
 	HasHead     bool                 `json:"has_head"`
 	PublishedAt time.Time            `json:"published_at"`
-	Identity    *PublicationIdentity `json:"identity,omitempty"`
+	Identity    *publicationIdentity `json:"identity,omitempty"`
 }
 
-// ProcessInfo records the spawned worker identity. PID alone is never
+// processInfo records the spawned worker identity. PID alone is never
 // treated as proof of ownership; StartIdentity (the OS process start
 // identity) is compared before any recovery-time signaling or cleanup.
-type ProcessInfo struct {
+type processInfo struct {
 	Pid           int       `json:"pid"`
 	Pgid          int       `json:"pgid"`
 	StartIdentity string    `json:"start_identity,omitempty"`
@@ -190,20 +190,20 @@ type Record struct {
 	DestinationPath string `json:"destination_path"`
 	StagingPath     string `json:"staging_path"`
 	OwnershipNonce  string `json:"ownership_nonce"`
-	State           State  `json:"state"`
+	State           state  `json:"state"`
 	Stage           string `json:"stage,omitempty"`
 	Progress        string `json:"progress,omitempty"`
 	// PendingOutcome is the failure/cancel/interrupt outcome a
 	// cleanup-pending attempt resolves to once cleanup completes.
-	PendingOutcome    State     `json:"pending_outcome,omitempty"`
+	PendingOutcome    state     `json:"pending_outcome,omitempty"`
 	CancelRequested   bool      `json:"cancel_requested,omitempty"`
 	CancelRequestedAt time.Time `json:"cancel_requested_at,omitempty"`
-	Error             *OpError  `json:"error,omitempty"`
+	Error             *opError  `json:"error,omitempty"`
 	// CleanupIssue is the bounded canonical reason cleanup could not yet
 	// be proved safe while the operation is cleanup_pending.
 	CleanupIssue    string       `json:"cleanup_issue,omitempty"`
-	Process         *ProcessInfo `json:"process,omitempty"`
-	Published       *Publication `json:"published,omitempty"`
+	Process         *processInfo `json:"process,omitempty"`
+	Published       *publication `json:"published,omitempty"`
 	CreatedAt       time.Time    `json:"created_at"`
 	UpdatedAt       time.Time    `json:"updated_at"`
 	TerminalAt      time.Time    `json:"terminal_at,omitempty"`
@@ -223,10 +223,10 @@ func (r *Record) Snapshot() Record {
 // Stage labels are authored status markers; the renderer shows them
 // verbatim. Git text never becomes a stage.
 const (
-	StagePreparing    = "preparing"
-	StageTransferring = "transferring"
-	StagePublishing   = "publishing"
-	StageFinalizing   = "finalizing"
-	StageDone         = "done"
-	StageCancelling   = "cancelling"
+	stagePreparing    = "preparing"
+	stageTransferring = "transferring"
+	stagePublishing   = "publishing"
+	stageFinalizing   = "finalizing"
+	stageDone         = "done"
+	stageCancelling   = "cancelling"
 )

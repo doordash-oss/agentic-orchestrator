@@ -29,17 +29,27 @@ import (
 	"github.com/doordash-oss/agentic-orchestrator/internal/feature"
 	"github.com/doordash-oss/agentic-orchestrator/internal/llm"
 	"github.com/doordash-oss/agentic-orchestrator/internal/ports"
+	"github.com/doordash-oss/agentic-orchestrator/test/testutil/mocks"
+	"gopkg.in/yaml.v3"
 )
 
 // seedHistoryFeature builds a store with one feature whose active run is
-// run-001, then creates the supplied sealed runs via CreateRun. Returns the
+// run-001, then writes the supplied sealed run fixtures. Returns the
 // store and feature for handler construction.
 func seedHistoryFeature(t *testing.T, sealedRuns ...*feature.Run) (*feature.Store, *feature.Feature) {
 	t.Helper()
 	store, f := seedReadFeature(t)
 	for _, run := range sealedRuns {
-		if err := store.CreateRun(f.ID, run); err != nil {
-			t.Fatalf("CreateRun(%d) error = %v", run.RunNumber, err)
+		dir := filepath.Join(store.BaseDir, f.ID, "runs", feature.RunDirName(run.RunNumber))
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			t.Fatalf("create run fixture directory: %v", err)
+		}
+		data, err := yaml.Marshal(run)
+		if err != nil {
+			t.Fatalf("marshal run fixture %d: %v", run.RunNumber, err)
+		}
+		if err := os.WriteFile(filepath.Join(dir, "run.yaml"), data, 0o644); err != nil {
+			t.Fatalf("write run fixture %d: %v", run.RunNumber, err)
 		}
 	}
 	return store, f
@@ -246,14 +256,26 @@ func TestActiveRunDetailIncludesRunningSessionCostWithoutCountingCompletedSessio
 	}
 	sessions := fakeSessionManager{views: []ports.SessionView{
 		&fakeSessionView{
-			id: "sess-running-cost", featureID: f.ID, runNumber: 1,
-			phase: feature.PhaseResearch, kind: ports.KindPhase, status: ports.SessionRunning,
-			usage: &llm.Usage{CostUSD: 0.42},
+			MockSessionView: &mocks.MockSessionView{
+				IDVal:        "sess-running-cost",
+				FeatureIDVal: f.ID,
+				PhaseVal:     feature.PhaseResearch,
+				KindVal:      ports.KindPhase,
+				StatusVal:    ports.SessionRunning,
+			},
+			runNumber: 1,
+			usage:     &llm.Usage{CostUSD: 0.42},
 		},
 		&fakeSessionView{
-			id: "sess-completed-cost", featureID: f.ID, runNumber: 1,
-			phase: feature.PhaseResearch, kind: ports.KindPhase, status: ports.SessionDone,
-			usage: &llm.Usage{CostUSD: 1.5},
+			MockSessionView: &mocks.MockSessionView{
+				IDVal:        "sess-completed-cost",
+				FeatureIDVal: f.ID,
+				PhaseVal:     feature.PhaseResearch,
+				KindVal:      ports.KindPhase,
+				StatusVal:    ports.SessionDone,
+			},
+			runNumber: 1,
+			usage:     &llm.Usage{CostUSD: 1.5},
 		},
 	}}
 	opts := baseReadHandlerOptions(store)
@@ -325,10 +347,50 @@ func TestRunSessionsFilteredByRunNumber(t *testing.T) {
 	store, f := seedHistoryFeature(t, sealedRun(t, 2), sealedRun(t, 3))
 	now := time.Date(2026, 6, 13, 13, 0, 0, 0, time.UTC)
 	sessions := fakeSessionManager{views: []ports.SessionView{
-		&fakeSessionView{id: "sess-run2-a", featureID: f.ID, phase: feature.PhaseImplement, kind: ports.KindPhase, status: ports.SessionDone, startedAt: now.Add(-2 * time.Minute), runNumber: 2},
-		&fakeSessionView{id: "sess-run3-a", featureID: f.ID, phase: feature.PhasePlan, kind: ports.KindPhase, status: ports.SessionDone, startedAt: now.Add(-1 * time.Minute), runNumber: 3},
-		&fakeSessionView{id: "sess-run2-b", featureID: f.ID, phase: feature.PhaseResearch, kind: ports.KindPhase, status: ports.SessionDone, startedAt: now.Add(-3 * time.Minute), runNumber: 2},
-		&fakeSessionView{id: "sess-other", featureID: "other-feature", phase: feature.PhaseImplement, kind: ports.KindPhase, status: ports.SessionDone, startedAt: now, runNumber: 2},
+		&fakeSessionView{
+			MockSessionView: &mocks.MockSessionView{
+				IDVal:        "sess-run2-a",
+				FeatureIDVal: f.ID,
+				PhaseVal:     feature.PhaseImplement,
+				KindVal:      ports.KindPhase,
+				StatusVal:    ports.SessionDone,
+				StartedAtVal: now.Add(-2 * time.Minute),
+			},
+			runNumber: 2,
+		},
+		&fakeSessionView{
+			MockSessionView: &mocks.MockSessionView{
+				IDVal:        "sess-run3-a",
+				FeatureIDVal: f.ID,
+				PhaseVal:     feature.PhasePlan,
+				KindVal:      ports.KindPhase,
+				StatusVal:    ports.SessionDone,
+				StartedAtVal: now.Add(-1 * time.Minute),
+			},
+			runNumber: 3,
+		},
+		&fakeSessionView{
+			MockSessionView: &mocks.MockSessionView{
+				IDVal:        "sess-run2-b",
+				FeatureIDVal: f.ID,
+				PhaseVal:     feature.PhaseResearch,
+				KindVal:      ports.KindPhase,
+				StatusVal:    ports.SessionDone,
+				StartedAtVal: now.Add(-3 * time.Minute),
+			},
+			runNumber: 2,
+		},
+		&fakeSessionView{
+			MockSessionView: &mocks.MockSessionView{
+				IDVal:        "sess-other",
+				FeatureIDVal: "other-feature",
+				PhaseVal:     feature.PhaseImplement,
+				KindVal:      ports.KindPhase,
+				StatusVal:    ports.SessionDone,
+				StartedAtVal: now,
+			},
+			runNumber: 2,
+		},
 	}}
 	opts := baseReadHandlerOptions(store)
 	opts.Sessions = sessions
@@ -435,8 +497,15 @@ func TestReconciledCostCanLowerSessionAndRunEstimates(t *testing.T) {
 			t.Fatal(err)
 		}
 		sess := &pricedSessionView{fakeSessionView: &fakeSessionView{
-			id: "reconciled", featureID: f.ID, runNumber: 1, phase: feature.PhaseResearch, kind: ports.KindPhase, status: ports.SessionRunning,
-			usage: &llm.Usage{CostUSD: amount, CostSource: "provider_estimate"},
+			MockSessionView: &mocks.MockSessionView{
+				IDVal:        "reconciled",
+				FeatureIDVal: f.ID,
+				PhaseVal:     feature.PhaseResearch,
+				KindVal:      ports.KindPhase,
+				StatusVal:    ports.SessionRunning,
+			},
+			runNumber: 1,
+			usage:     &llm.Usage{CostUSD: amount, CostSource: "provider_estimate"},
 		}, result: &llm.ResultMessage{TotalCostUSD: 2}}
 		if got := sessionSummaryDTO(sess).Usage.CostUSD; got != amount {
 			t.Fatalf("session retained old estimate: %v", got)

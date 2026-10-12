@@ -46,7 +46,7 @@ func TestIntegrationAttentionCodesAreNeedsAction(t *testing.T) {
 		t.Fatalf("test list has %d codes; catalog set has %d", len(integrationAttentionCodeList), len(integrationAttentionCodes))
 	}
 	for _, code := range integrationAttentionCodeList {
-		if !IsIntegrationAttention(code) {
+		if !isIntegrationAttention(code) {
 			t.Errorf("%s: not recognized as an integration attention code", code)
 		}
 		entry, ok := Lookup(code)
@@ -59,7 +59,7 @@ func TestIntegrationAttentionCodesAreNeedsAction(t *testing.T) {
 		if entry.Remediation == "" {
 			t.Errorf("%s: needs a manual-step remediation hint", code)
 		}
-		if len(entry.Blocks) != 1 || entry.Blocks[0] != BlockRepositories {
+		if len(entry.Blocks) != 1 || entry.Blocks[0] != blockRepositories {
 			t.Errorf("%s: blocks = %#v; want exactly the repositories block", code, entry.Blocks)
 		}
 		if len(entry.Actions) != 1 || entry.Actions[0] != "retry" {
@@ -164,7 +164,7 @@ func TestIntegrationAttentionDropsUndeclaredBlocks(t *testing.T) {
 		IntegrationMergeConflict,
 		WithRepositories(CodeRepository{Name: "repo-a", ConflictFiles: []string{"a.go"}}),
 		WithPhase(CodePhase{Name: "implement"}),
-		WithCommand(CodeCommand{ExitCode: 1}),
+		withCommand(CodeCommand{ExitCode: 1}),
 	)
 	if rendered.Context == nil {
 		t.Fatal("repositories block not carried")
@@ -217,7 +217,7 @@ func TestRenderRecordIntegrationAttention(t *testing.T) {
 	if strings.Contains(static.Summary, "raw detail") {
 		t.Fatalf("no-context summary leaks diagnostics: %q", static.Summary)
 	}
-	if !IsIntegrationAttention(IntegrationParentDirty) || IsIntegrationAttention(IterationBudgetExhausted) {
-		t.Fatal("IsIntegrationAttention misclassifies codes")
+	if !isIntegrationAttention(IntegrationParentDirty) || isIntegrationAttention(IterationBudgetExhausted) {
+		t.Fatal("isIntegrationAttention misclassifies codes")
 	}
 }

@@ -18,13 +18,11 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
-	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
-	"sync/atomic"
 	"testing"
 	"time"
 
@@ -68,13 +66,6 @@ func (fx *initializeFixture) reconcileSource(body map[string]any) (*httptest.Res
 		}
 	}
 	return w, resp
-}
-
-// sourceUpdateRefRunnerFunc adapts a function to the CAS runner interface.
-type sourceUpdateRefRunnerFunc func(ctx context.Context, repoPath, stdin string, args []string, diagnosticLimit int) git.BranchProbeCommandResult
-
-func (f sourceUpdateRefRunnerFunc) Run(ctx context.Context, repoPath, stdin string, args []string, diagnosticLimit int) git.BranchProbeCommandResult {
-	return f(ctx, repoPath, stdin, args, diagnosticLimit)
 }
 
 // reconcileResult carries one asynchronous settlement call's recorder and
@@ -321,12 +312,15 @@ func TestWorkspaceRepositoryReconcileSourceUpdateResponseLossBeforeCASLeavesOrig
 	fx := newInitializeFixture(t)
 	repo, bare := updateSourceFixture(t, fx, "lost-before")
 	body := fx.updateSourceBody(repo, bare)
-	// The transport dies before the compare-and-swap: the attempt reports
-	// unavailable and proves nothing either way.
-	fx.api.updateSourceOptions = git.SourceUpdateOptions{UpdateRefRunner: sourceUpdateRefRunnerFunc(
-		func(_ context.Context, _ string, _ string, _ []string, _ int) git.BranchProbeCommandResult {
-			return git.BranchProbeCommandResult{ExitCode: -1, Err: context.Canceled, Diagnostics: "connection lost before the ref update"}
-		})}
+	// The ref CAS cannot take the mutation lock: a planted ref lock is
+	// respected (never deleted) and the bounded retry loop runs out the short
+	// attempt deadline, so the attempt reports unavailable and proves nothing
+	// either way.
+	fx.api.updateSourceDeadline = 400 * time.Millisecond
+	refLock := filepath.Join(repo, ".git", "refs", "heads", "main.lock")
+	if err := os.WriteFile(refLock, nil, 0o644); err != nil {
+		t.Fatalf("plant ref lock: %v", err)
+	}
 
 	w, _ := fx.updateSource(body)
 	if w.Code != http.StatusServiceUnavailable {
@@ -339,44 +333,6 @@ func TestWorkspaceRepositoryReconcileSourceUpdateResponseLossBeforeCASLeavesOrig
 	w, resp := fx.reconcileSource(reconcileSourceBodyFromUpdate(body))
 	if w.Code != http.StatusOK || resp.Outcome != OriginalTipRemains {
 		t.Fatalf("reconcile = status %d outcome %q; want 200 original_tip_remains", w.Code, resp.Outcome)
-	}
-}
-
-func TestWorkspaceRepositoryReconcileSourceUpdateResponseLossAfterCASProvesTarget(t *testing.T) {
-	fx := newInitializeFixture(t)
-	repo, bare := updateSourceFixture(t, fx, "lost-after")
-	body := fx.updateSourceBody(repo, bare)
-	// The compare-and-swap lands, then the post-mutation verification is
-	// lost: the attempt reports unavailable and proves nothing, while the
-	// settlement read observes the advanced tip.
-	var casDone atomic.Bool
-	fx.api.updateSourceOptions = git.SourceUpdateOptions{
-		UpdateRefRunner: sourceUpdateRefRunnerFunc(func(ctx context.Context, repoPath, stdin string, args []string, diagnosticLimit int) git.BranchProbeCommandResult {
-			result := git.ExecSourceUpdateRefRunner{}.Run(ctx, repoPath, stdin, args, diagnosticLimit)
-			if result.ExitCode == 0 {
-				casDone.Store(true)
-			}
-			return result
-		}),
-		OriginCheckOptions: git.OriginCheckOptions{Runner: git.BranchProbeRunnerFunc(func(ctx context.Context, repoPath string, args []string, diagnosticLimit int) git.BranchProbeCommandResult {
-			if casDone.Load() && len(args) > 0 && args[0] == "rev-parse" {
-				return git.BranchProbeCommandResult{ExitCode: -1, Err: errors.New("connection lost"), Diagnostics: "connection lost while verifying the ref update"}
-			}
-			return git.ExecBranchProbeRunner{}.Run(ctx, repoPath, args, diagnosticLimit)
-		})},
-	}
-
-	w, _ := fx.updateSource(body)
-	if w.Code != http.StatusServiceUnavailable {
-		t.Fatalf("update status = %d body=%s; want 503", w.Code, w.Body.String())
-	}
-	assertCanonicalCode(t, w, "source_update_unavailable")
-	if got := fx.gitIn(repo, "rev-parse", "refs/heads/main"); got != body["expected_origin_sha"] {
-		t.Fatalf("refs/heads/main = %s; want the advanced tip the CAS landed", got)
-	}
-	w, resp := fx.reconcileSource(reconcileSourceBodyFromUpdate(body))
-	if w.Code != http.StatusOK || resp.Outcome != ExpectedTargetPresent {
-		t.Fatalf("reconcile = status %d outcome %q; want 200 expected_target_present", w.Code, resp.Outcome)
 	}
 }
 
@@ -460,7 +416,7 @@ func newSequencingFixture(t *testing.T) (*initializeFixture, *sequencingCreateTa
 	cfg.WorkspaceRoots = []string{root}
 	target := &sequencingCreateTarget{called: make(chan struct{})}
 	api := newAPIHandler(HandlerOptions{Config: cfg, Mutations: target, DisableHostValidation: true})
-	fx := &initializeFixture{t: t, api: api, handler: api.routes(), root: root, cfg: cfg}
+	fx := &initializeFixture{t: t, api: api, handler: api, root: root, cfg: cfg}
 	return fx, target
 }
 

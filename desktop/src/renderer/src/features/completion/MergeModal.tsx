@@ -31,7 +31,7 @@ import { UNMERGED_CHANGES } from './pendingDelivery';
 const REBASE_HANDOFF_HINT =
   "A conflict or behind-base outcome can be resolved with a rebase pass. Use Start rebase pass in the feature's aftercare workspace, then return here to retry the merge.";
 
-export interface MergeModalProps {
+interface MergeModalProps {
   featureId: string;
   preflight: CompletionPreflightResult;
   dispatchAction: (

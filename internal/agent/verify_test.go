@@ -23,12 +23,12 @@ func TestParsePlanVerification(t *testing.T) {
 	tests := []struct {
 		name     string
 		planText string
-		want     []VerificationStep
+		want     []verificationStep
 	}{
 		{
 			name:     "standard format with colon separator",
 			planText: "## Phase 1: Setup\n\n### Success Criteria:\n\n#### Automated Verification:\n- [ ] Migration applies cleanly: `make migrate`\n- [ ] Unit tests pass: `go test ./... -race`\n- [ ] Linting passes: `golangci-lint run`\n\n#### Manual Verification:\n- [ ] Feature works in the UI\n",
-			want: []VerificationStep{
+			want: []verificationStep{
 				{Description: "Migration applies cleanly", Command: "make migrate"},
 				{Description: "Unit tests pass", Command: "go test ./... -race"},
 				{Description: "Linting passes", Command: "golangci-lint run"},
@@ -37,14 +37,14 @@ func TestParsePlanVerification(t *testing.T) {
 		{
 			name:     "command only, no description",
 			planText: "#### Automated Verification:\n- [ ] `go test ./...`\n",
-			want: []VerificationStep{
+			want: []verificationStep{
 				{Description: "", Command: "go test ./..."},
 			},
 		},
 		{
 			name:     "checked items still parsed",
 			planText: "#### Automated Verification:\n- [x] Tests pass: `go test ./...`\n- [ ] Lint passes: `go vet ./...`\n",
-			want: []VerificationStep{
+			want: []verificationStep{
 				{Description: "Tests pass", Command: "go test ./..."},
 				{Description: "Lint passes", Command: "go vet ./..."},
 			},
@@ -52,7 +52,7 @@ func TestParsePlanVerification(t *testing.T) {
 		{
 			name:     "multiple phases collected",
 			planText: "## Phase 1\n\n#### Automated Verification:\n- [ ] Build passes: `make build`\n\n## Phase 2\n\n#### Automated Verification:\n- [ ] Integration tests pass: `make test-integration`\n",
-			want: []VerificationStep{
+			want: []verificationStep{
 				{Description: "Build passes", Command: "make build"},
 				{Description: "Integration tests pass", Command: "make test-integration"},
 			},
@@ -70,21 +70,21 @@ func TestParsePlanVerification(t *testing.T) {
 		{
 			name:     "checklist items without backtick commands ignored",
 			planText: "#### Automated Verification:\n- [ ] Make sure everything works\n- [ ] Tests should pass: `go test ./...`\n- [ ] Check the logs\n",
-			want: []VerificationStep{
+			want: []verificationStep{
 				{Description: "Tests should pass", Command: "go test ./..."},
 			},
 		},
 		{
 			name:     "parenthesized command format",
 			planText: "#### Automated Verification:\n- [ ] API returns 200 (`curl localhost:8080/health`)\n",
-			want: []VerificationStep{
+			want: []verificationStep{
 				{Description: "API returns 200", Command: "curl localhost:8080/health"},
 			},
 		},
 		{
 			name:     "multiple backticks uses last as command",
 			planText: "#### Automated Verification:\n- [ ] `commands/chat.md` is embedded: verify `agent.ReadCommand(\"chat\")` returns content (add a test)\n- [ ] Config loads with `chat` model: verify defaults are applied (`go test ./internal/config/...`)\n",
-			want: []VerificationStep{
+			want: []verificationStep{
 				{Description: "`commands/chat.md` is embedded: verify  returns content (add a test", Command: `agent.ReadCommand("chat")`},
 				{Description: "Config loads with `chat` model: verify defaults are applied", Command: "go test ./internal/config/..."},
 			},
@@ -92,7 +92,7 @@ func TestParsePlanVerification(t *testing.T) {
 		{
 			name:     "varied header levels",
 			planText: "### Automated Verification:\n- [ ] Tests pass: `make test`\n\n##### Automated Verification:\n- [ ] Lint ok: `make lint`\n",
-			want: []VerificationStep{
+			want: []verificationStep{
 				{Description: "Tests pass", Command: "make test"},
 				{Description: "Lint ok", Command: "make lint"},
 			},
@@ -100,21 +100,21 @@ func TestParsePlanVerification(t *testing.T) {
 		{
 			name:     "ignores content inside fenced code blocks",
 			planText: "#### Automated Verification:\n- [ ] Real command: `make test`\n\n```go\n#### Automated Verification:\n- [ ] Fake command inside fence: `echo injected`\n```\n",
-			want: []VerificationStep{
+			want: []verificationStep{
 				{Description: "Real command", Command: "make test"},
 			},
 		},
 		{
 			name:     "ignores fake headers and checklists in fenced blocks",
 			planText: "## Phase 1\n\n```markdown\n#### Automated Verification:\n- [ ] Should be ignored: `rm -rf /`\n- [ ] Also ignored: `drop database`\n```\n\n#### Automated Verification:\n- [ ] Real step: `go vet ./...`\n",
-			want: []VerificationStep{
+			want: []verificationStep{
 				{Description: "Real step", Command: "go vet ./..."},
 			},
 		},
 		{
 			name:     "handles multiple fenced blocks interspersed with real sections",
 			planText: "```\nfake header\n#### Automated Verification:\n- [ ] fake: `bad1`\n```\n\n#### Automated Verification:\n- [ ] Good: `good1`\n\n```bash\n- [ ] Another fake: `bad2`\n```\n\n#### Automated Verification:\n- [ ] Also good: `good2`\n",
-			want: []VerificationStep{
+			want: []verificationStep{
 				{Description: "Good", Command: "good1"},
 				{Description: "Also good", Command: "good2"},
 			},
@@ -122,7 +122,7 @@ func TestParsePlanVerification(t *testing.T) {
 		{
 			name:     "ignores Go code snippet with backtick fragments",
 			planText: "#### Automated Verification:\n- [ ] Tests pass: `go test ./...`\n\n```go\nfunc example() {\n\t// #### Automated Verification:\n\t// - [ ] Description: ` + \"`command`\" + `\n}\n```\n",
-			want: []VerificationStep{
+			want: []verificationStep{
 				{Description: "Tests pass", Command: "go test ./..."},
 			},
 		},
@@ -151,7 +151,7 @@ type VerificationStep struct {
 #### Automated Verification:
 - [ ] Vet clean: ` + "`go vet ./...`" + `
 `,
-			want: []VerificationStep{
+			want: []verificationStep{
 				{Description: "Build passes", Command: "go build ./..."},
 				{Description: "Vet clean", Command: "go vet ./..."},
 			},
@@ -164,7 +164,7 @@ type VerificationStep struct {
 			// See agentic-in-napolitan run for the original symptom.
 			name:     "inverted format yields empty description",
 			planText: "#### Automated Verification:\n- [ ] `go build ./...` succeeds.\n- [ ] `go test ./... -race -short` passes.\n- [ ] `git diff --name-only HEAD~1` shows exactly `README.md`.\n",
-			want: []VerificationStep{
+			want: []verificationStep{
 				{Description: "", Command: "go build ./..."},
 				{Description: "", Command: "go test ./... -race -short"},
 				{Description: "", Command: "git diff --name-only HEAD~1"},
@@ -178,7 +178,7 @@ type VerificationStep struct {
 			// whole.
 			name:     "command with literal backticks inside single quotes",
 			planText: "#### Automated Verification:\n- [ ] `grep -cE '^" + "```" + "' README.md` returns the same count as the snapshot.\n",
-			want: []VerificationStep{
+			want: []verificationStep{
 				{Description: "", Command: "grep -cE '^" + "```" + "' README.md"},
 			},
 		},
@@ -188,7 +188,7 @@ type VerificationStep struct {
 			// quote-aware scanner still keeps the command intact.
 			name:     "canonical format with literal backticks inside command",
 			planText: "#### Automated Verification:\n- [ ] Fence count preserved: `grep -cE '^" + "```" + "' README.md`\n",
-			want: []VerificationStep{
+			want: []verificationStep{
 				{Description: "Fence count preserved", Command: "grep -cE '^" + "```" + "' README.md"},
 			},
 		},
@@ -196,7 +196,7 @@ type VerificationStep struct {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got := ParsePlanVerification(tt.planText)
+			got := parsePlanVerification(tt.planText)
 			if len(got) != len(tt.want) {
 				t.Fatalf("got %d steps, want %d", len(got), len(tt.want))
 			}
@@ -213,7 +213,7 @@ type VerificationStep struct {
 }
 
 func TestParsePlanVerificationDeclaresCapabilityProbe(t *testing.T) {
-	steps := ParsePlanVerification("### Automated Verification\n- [ ] Protected integration [agentico capability: Okta session; probe: okta auth status]: `make test-integration`\n")
+	steps := parsePlanVerification("### Automated Verification\n- [ ] Protected integration [agentico capability: Okta session; probe: okta auth status]: `make test-integration`\n")
 	if len(steps) != 1 {
 		t.Fatalf("ParsePlanVerification() len = %d, want 1", len(steps))
 	}
@@ -229,7 +229,7 @@ func TestParsePlanVerificationDeclaresCapabilityProbe(t *testing.T) {
 }
 
 func TestParsePlanVerificationDeclaresRepoScope(t *testing.T) {
-	steps := ParsePlanVerification("### Automated Verification\n- [ ] [repo: web] Frontend tests: `npm test`\n")
+	steps := parsePlanVerification("### Automated Verification\n- [ ] [repo: web] Frontend tests: `npm test`\n")
 	if len(steps) != 1 {
 		t.Fatalf("ParsePlanVerification() len = %d, want 1", len(steps))
 	}
@@ -239,7 +239,7 @@ func TestParsePlanVerificationDeclaresRepoScope(t *testing.T) {
 }
 
 func TestParsePlanVerificationDeclaresTimeoutOverride(t *testing.T) {
-	steps := ParsePlanVerification("### Automated Verification\n- [ ] [timeout: 30m] Slow suite passes: `make e2e`\n")
+	steps := parsePlanVerification("### Automated Verification\n- [ ] [timeout: 30m] Slow suite passes: `make e2e`\n")
 	if len(steps) != 1 {
 		t.Fatalf("ParsePlanVerification() len = %d, want 1", len(steps))
 	}
@@ -249,7 +249,7 @@ func TestParsePlanVerificationDeclaresTimeoutOverride(t *testing.T) {
 }
 
 func TestParsePlanVerificationIgnoresInvalidTimeoutToken(t *testing.T) {
-	steps := ParsePlanVerification("### Automated Verification\n- [ ] [timeout: soon] Suite passes: `make e2e`\n")
+	steps := parsePlanVerification("### Automated Verification\n- [ ] [timeout: soon] Suite passes: `make e2e`\n")
 	if len(steps) != 1 {
 		t.Fatalf("ParsePlanVerification() len = %d, want 1", len(steps))
 	}
@@ -269,7 +269,7 @@ func TestParsePlanManualVerification(t *testing.T) {
 		"- [ ] Fake manual check in a fence.\n" +
 		"```\n"
 
-	got := ParsePlanManualVerification(plan)
+	got := parsePlanManualVerification(plan)
 	if len(got) != 2 {
 		t.Fatalf("got %d manual steps, want 2: %+v", len(got), got)
 	}
@@ -283,7 +283,7 @@ func TestParsePlanManualVerification(t *testing.T) {
 
 func TestParsePlanManualVerification_NoneRequiredIgnored(t *testing.T) {
 	plan := "### Manual Verification\n- [ ] None required: internal parser-only change.\n"
-	if got := ParsePlanManualVerification(plan); len(got) != 0 {
+	if got := parsePlanManualVerification(plan); len(got) != 0 {
 		t.Fatalf("None required marker should not produce manual contract items, got %+v", got)
 	}
 }
@@ -306,7 +306,7 @@ func TestParsePlanEvidenceRequirements(t *testing.T) {
 		"- [ ] Fake behavior inside a fence.\n" +
 		"```\n"
 
-	visual := ParsePlanVisualEvidence(plan)
+	visual := parsePlanVisualEvidence(plan)
 	if len(visual) != 2 {
 		t.Fatalf("ParsePlanVisualEvidence() got %d requirements, want 2: %+v", len(visual), visual)
 	}
@@ -317,7 +317,7 @@ func TestParsePlanEvidenceRequirements(t *testing.T) {
 		t.Fatalf("visual[1] = %q", visual[1].Description)
 	}
 
-	behavioral := ParsePlanBehavioralEvidence(plan)
+	behavioral := parsePlanBehavioralEvidence(plan)
 	if len(behavioral) != 1 {
 		t.Fatalf("ParsePlanBehavioralEvidence() got %d requirements, want 1: %+v", len(behavioral), behavioral)
 	}
@@ -325,7 +325,7 @@ func TestParsePlanEvidenceRequirements(t *testing.T) {
 		t.Fatalf("behavioral[0] = %q", behavioral[0].Description)
 	}
 
-	manual := ParsePlanManualVerification(plan)
+	manual := parsePlanManualVerification(plan)
 	if len(manual) != 1 || manual[0].Description != "Click through the release flow." {
 		t.Fatalf("ParsePlanManualVerification() = %+v, want only manual check", manual)
 	}
@@ -335,10 +335,10 @@ func TestParsePlanEvidence_NoneRequiredIgnored(t *testing.T) {
 	plan := "### Visual Evidence\n- [ ] None required: no UI surface.\n" +
 		"### Behavioral Evidence\n- [ ] None required: automated tests are the artifact.\n"
 
-	if got := ParsePlanVisualEvidence(plan); len(got) != 0 {
+	if got := parsePlanVisualEvidence(plan); len(got) != 0 {
 		t.Fatalf("ParsePlanVisualEvidence() None required marker produced rows: %+v", got)
 	}
-	if got := ParsePlanBehavioralEvidence(plan); len(got) != 0 {
+	if got := parsePlanBehavioralEvidence(plan); len(got) != 0 {
 		t.Fatalf("ParsePlanBehavioralEvidence() None required marker produced rows: %+v", got)
 	}
 }
@@ -437,8 +437,8 @@ func TestParseCrossRepoVerification(t *testing.T) {
 		"## Manual Verification",
 		"- [ ] UI looks fine",
 	}, "\n")
-	got := ParseCrossRepoVerification(plan)
-	want := []VerificationStep{
+	got := parseCrossRepoVerification(plan)
+	want := []verificationStep{
 		{Description: "e2e smoke", Command: "scripts/e2e.sh"},
 		{Description: "contract test", Command: "scripts/contract-test.sh"},
 	}

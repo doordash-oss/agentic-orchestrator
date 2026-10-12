@@ -25,11 +25,11 @@ import (
 	"go.uber.org/fx"
 )
 
-// AgentParams holds fx-injected parameters for the agent module.
-type AgentParams struct {
+// agentParams holds fx-injected parameters for the agent module.
+type agentParams struct {
 	fx.In
 	SessionManager  ports.SessionManager
-	FeatureStore    ports.FeatureStore
+	FeatureStore    FeatureStore
 	Config          *config.Config
 	Registry        *llm.Registry
 	PermissionCache *permission.Cache
@@ -42,8 +42,8 @@ type AgentParams struct {
 var Module = fx.Module("agent",
 	// Bridge concrete types from sibling modules to port interfaces.
 	fx.Provide(func(sm *session.Manager) ports.SessionManager { return sm }),
-	fx.Provide(func(store *feature.Store) ports.FeatureStore { return store }),
-	fx.Provide(func(p AgentParams) *PhaseRunner {
+	fx.Provide(func(store *feature.Store) FeatureStore { return store }),
+	fx.Provide(func(p agentParams) *PhaseRunner {
 		pr := NewPhaseRunner(p.SessionManager, p.FeatureStore, p.StateDir)
 		pr.CommandRunner = &execCommandRunner{}
 		pr.Registry = p.Registry

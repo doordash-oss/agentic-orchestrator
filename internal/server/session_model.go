@@ -144,9 +144,7 @@ func (h *apiHandler) handleTranscript(w http.ResponseWriter, r *http.Request, se
 		Cursor:     Cursor{Total: total, Start: offset, End: end},
 		Messages:   transcriptDTOs(messages, offset, sess.WorkDir()),
 	}
-	revision := revisionForAny(resp)
-	resp.Meta = h.responseMeta(revision)
-	h.writeRevisionedJSON(w, r, revision, resp)
+	h.writeRevisionedResponse(w, r, resp, func(meta ResponseMeta) any { resp.Meta = meta; return resp })
 }
 
 // handleSessionOutputStream tails a session's transcript live over SSE,
@@ -162,11 +160,6 @@ func (h *apiHandler) handleTranscript(w http.ResponseWriter, r *http.Request, se
 // reconcile against the index-based snapshot-refresh path — don't reopen
 // this without solving that.
 func (h *apiHandler) handleSessionOutputStream(w http.ResponseWriter, r *http.Request, sessionID string) {
-	flusher, ok := w.(http.Flusher)
-	if !ok {
-		writeAPIError(w, http.StatusInternalServerError, errcat.InternalError, errcat.WithDiagnostics("streaming unavailable"))
-		return
-	}
 	sess := h.getSession(sessionID)
 	if sess == nil {
 		writeAPIError(w, http.StatusNotFound, errcat.NotFound,
@@ -180,9 +173,10 @@ func (h *apiHandler) handleSessionOutputStream(w http.ResponseWriter, r *http.Re
 		return
 	}
 	from := int(fromOffset)
-	w.Header().Set("Content-Type", "text/event-stream")
-	w.Header().Set("Cache-Control", "no-cache")
-	w.Header().Set("Connection", "keep-alive")
+	flusher, ok := beginSSE(w)
+	if !ok {
+		return
+	}
 
 	ticker := time.NewTicker(250 * time.Millisecond)
 	defer ticker.Stop()
@@ -190,7 +184,7 @@ func (h *apiHandler) handleSessionOutputStream(w http.ResponseWriter, r *http.Re
 		messages := sess.MessageLog().Messages()
 		total := len(messages)
 		// Re-include the previously-sent tail index on every tick (not just
-		// strictly-new ones): UpdateLast/UpdateLastAssistantPartial can mutate
+		// strictly-new ones): UpdateLastAssistantPartial can mutate
 		// the last message in place without growing Len(), so the tail may
 		// still be changing. Resending an unchanged row is harmless — the
 		// client's row-level dedup (shared with snapshot-refresh
@@ -202,7 +196,7 @@ func (h *apiHandler) handleSessionOutputStream(w http.ResponseWriter, r *http.Re
 		if tailStart < total {
 			for _, row := range transcriptDTOs(messages[tailStart:], tailStart, sess.WorkDir()) {
 				chunk := SessionOutputChunk{APIVersion: APIVersion, SessionID: sessionID, Index: row.Index, Message: row}
-				if err := writeSessionOutputSSE(w, "session.output", strconv.Itoa(row.Index), chunk); err != nil {
+				if err := writeSSEFrame(w, "session.output", strconv.Itoa(row.Index), true, chunk); err != nil {
 					return
 				}
 				flusher.Flush()
@@ -211,7 +205,7 @@ func (h *apiHandler) handleSessionOutputStream(w http.ResponseWriter, r *http.Re
 		}
 		if !sess.IsActive() {
 			done := SessionOutputChunk{APIVersion: APIVersion, SessionID: sessionID, Index: total - 1, Done: true}
-			if err := writeSessionOutputSSE(w, "session.output.done", strconv.Itoa(total-1), done); err != nil {
+			if err := writeSSEFrame(w, "session.output.done", strconv.Itoa(total-1), true, done); err != nil {
 				return
 			}
 			flusher.Flush()
@@ -229,10 +223,7 @@ func (h *apiHandler) handleSessionOutputStream(w http.ResponseWriter, r *http.Re
 // the "from" query param or the "Last-Event-ID" header. This is a transcript
 // row index (the same index space handleTranscript uses), not a byte offset.
 func sessionOutputStreamOffset(r *http.Request) int64 {
-	raw := r.URL.Query().Get("from")
-	if raw == "" {
-		raw = r.Header.Get("Last-Event-ID")
-	}
+	raw := streamCursor(r, "from")
 	if raw == "" {
 		return 0
 	}
@@ -241,16 +232,6 @@ func sessionOutputStreamOffset(r *http.Request) int64 {
 		return -1
 	}
 	return offset
-}
-
-func writeSessionOutputSSE(w http.ResponseWriter, event, id string, data SessionOutputChunk) error {
-	payload, err := json.Marshal(data)
-	if err != nil {
-		return err
-	}
-	setStreamWriteDeadline(w)
-	_, err = fmt.Fprintf(w, "id: %s\nevent: %s\ndata: %s\n\n", id, event, payload)
-	return err
 }
 
 func (h *apiHandler) allSessions() []ports.SessionView {
@@ -457,7 +438,7 @@ func transcriptDTOs(messages []llm.SDKMessage, start int, workDir ...string) []T
 				out = append(out, rows...)
 				continue
 			}
-			out = append(out, TranscriptMessage{Index: index, Role: roleSystem, Type: transcriptTypeToolProgress, Tool: msg.ToolProgress.ToolName, Redacted: true, FileChange: fileChangeDTOFromToolProgress(msg.ToolProgress, root)})
+			out = append(out, TranscriptMessage{Index: index, Role: roleSystem, Type: transcriptTypeToolProgress, Tool: msg.ToolProgress.ToolName, Redacted: true, FileChange: fileChangeDTOFromToolProgress(msg.ToolProgress, root), ToolCall: toolCallDTOFromToolProgress(msg.ToolProgress, root)})
 		case msg.TaskStarted != nil:
 			out = append(out, TranscriptMessage{Index: index, Role: roleSystem, Type: transcriptTypeTaskStarted, Redacted: true, Task: taskDTOFromStarted(msg.TaskStarted)})
 		case msg.TaskProgress != nil:
@@ -665,6 +646,35 @@ func fileChangeDTOFromToolUse(block llm.ContentBlock, workDir string) *FileChang
 	default:
 		return nil
 	}
+}
+
+// toolProgressSummaryLimit bounds a tool_progress summary in runes.
+const toolProgressSummaryLimit = 200
+
+// toolCallDTOFromToolProgress exposes the provider's one-line Summary (the
+// title, path, pattern, or command a tool_use row would show) and never Data,
+// which may hold raw tool output. Paths under workDir become relative.
+func toolCallDTOFromToolProgress(progress *llm.ToolProgressMessage, workDir string) *ToolCall {
+	if progress == nil {
+		return nil
+	}
+	line := ""
+	for _, candidate := range strings.Split(progress.Summary, "\n") {
+		if line = strings.Join(strings.Fields(candidate), " "); line != "" {
+			break
+		}
+	}
+	if root := strings.TrimRight(strings.TrimSpace(workDir), "/"); root != "" {
+		line = strings.ReplaceAll(line, root+"/", "")
+	}
+	if runes := []rune(line); len(runes) > toolProgressSummaryLimit {
+		line = strings.TrimSpace(string(runes[:toolProgressSummaryLimit])) + "..."
+	}
+	line = SafeDisplayText(line, 0)
+	if line == "" || strings.EqualFold(line, strings.TrimSpace(progress.ToolName)) {
+		return nil
+	}
+	return &ToolCall{Summary: line}
 }
 
 func fileChangeDTOFromToolProgress(progress *llm.ToolProgressMessage, workDir string) *FileChange {

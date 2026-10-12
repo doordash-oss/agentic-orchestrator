@@ -109,7 +109,7 @@ func TestImplementLoopSuccessFirstIteration(t *testing.T) {
 		BuildSession:        mockBuildSession(agentScript, reviewScript),
 	}
 
-	result, err := RunImplementationLoop(cfg, sm)
+	result, err := runImplementationLoop(cfg, sm)
 	if err != nil {
 		t.Fatalf("RunImplementationLoop error: %v", err)
 	}
@@ -203,10 +203,10 @@ fi
 		ReviewModel:         "reviewer",
 		ArtifactDir:         artifactDir,
 		StateDir:            stateDir,
-		BuildSession:        mockBuildSession(agentScript, reviewScript),
+		BuildSession:        mockBuildSessionStillCrashingOnResume(agentScript, reviewScript),
 	}
 
-	result, err := RunImplementationLoop(cfg, sm)
+	result, err := runImplementationLoop(cfg, sm)
 	if err != nil {
 		t.Fatalf("RunImplementationLoop error: %v", err)
 	}
@@ -275,7 +275,7 @@ exit 1`+"\n")
 		BuildSession:        mockBuildSession(agentScript, reviewScript),
 	}
 
-	result, err := RunImplementationLoop(cfg, sm)
+	result, err := runImplementationLoop(cfg, sm)
 	if err != nil {
 		t.Fatalf("RunImplementationLoop error: %v", err)
 	}
@@ -341,7 +341,7 @@ func TestImplementLoopSafetyRailNoProgress(t *testing.T) {
 		BuildSession:        mockBuildSession(agentScript, reviewScript),
 	}
 
-	result, err := RunImplementationLoop(cfg, sm)
+	result, err := runImplementationLoop(cfg, sm)
 	if err != nil {
 		t.Fatalf("RunImplementationLoop error: %v", err)
 	}
@@ -417,7 +417,7 @@ fi
 		BuildSession:        mockBuildSession(agentScript, reviewScript),
 	}
 
-	result, err := RunImplementationLoop(cfg, sm)
+	result, err := runImplementationLoop(cfg, sm)
 	if err != nil {
 		t.Fatalf("RunImplementationLoop error: %v", err)
 	}
@@ -568,7 +568,7 @@ fi
 		BuildSession:        capturingBuildSession,
 	}
 
-	result, err := RunImplementationLoop(cfg, sm)
+	result, err := runImplementationLoop(cfg, sm)
 	if err != nil {
 		t.Fatalf("RunImplementationLoop error: %v", err)
 	}
@@ -642,7 +642,7 @@ echo "more progress $(date +%s%N)" >> "$PROGRESS_FILE"
 		BuildSession:        mockBuildSession(agentScript, reviewScript),
 	}
 
-	result, err := RunImplementationLoop(cfg, sm)
+	result, err := runImplementationLoop(cfg, sm)
 	if err != nil {
 		t.Fatalf("RunImplementationLoop error: %v", err)
 	}
@@ -699,7 +699,7 @@ func TestImplementLoopEventRouting(t *testing.T) {
 		BuildSession:        mockBuildSession(agentScript, reviewScript),
 	}
 
-	result, err := RunImplementationLoop(cfg, sm)
+	result, err := runImplementationLoop(cfg, sm)
 	if err != nil {
 		t.Fatalf("RunImplementationLoop error: %v", err)
 	}
@@ -786,7 +786,7 @@ func TestImplementLoopReviewWithShellSpecialChars(t *testing.T) {
 		BuildSession:        mockBuildSession(agentScript, reviewScript),
 	}
 
-	result, err := RunImplementationLoop(cfg, sm)
+	result, err := runImplementationLoop(cfg, sm)
 	if err != nil {
 		t.Fatalf("RunImplementationLoop error: %v", err)
 	}
@@ -812,10 +812,10 @@ func TestImplementLoopResumesFromLatestIteration(t *testing.T) {
 
 	// Pre-populate 2 iteration directories to simulate a prior run that was
 	// interrupted after iteration 2 (RETRY).
-	am := NewArtifactManager(artifactDir)
+	am := newArtifactManager(artifactDir)
 	for _, n := range []int{1, 2} {
-		iterDir, _ := am.CreateIterationDir(n)
-		am.WriteMeta(iterDir, IterationMeta{
+		iterDir, _ := am.createIterationDir(n)
+		am.writeMeta(iterDir, iterationMeta{
 			Iteration:   n,
 			AgentStatus: "FAILED",
 		})
@@ -849,7 +849,7 @@ func TestImplementLoopResumesFromLatestIteration(t *testing.T) {
 		BuildSession:        mockBuildSession(agentScript, reviewScript),
 	}
 
-	result, err := RunImplementationLoop(cfg, sm)
+	result, err := runImplementationLoop(cfg, sm)
 	if err != nil {
 		t.Fatalf("RunImplementationLoop error: %v", err)
 	}
@@ -883,9 +883,9 @@ func TestImplementLoopResumesReviewerFeedback(t *testing.T) {
 	}
 
 	// Pre-populate iteration 1 with CHANGES_REQUESTED review
-	am := NewArtifactManager(artifactDir)
-	iterDir, _ := am.CreateIterationDir(1)
-	am.WriteMeta(iterDir, IterationMeta{
+	am := newArtifactManager(artifactDir)
+	iterDir, _ := am.createIterationDir(1)
+	am.writeMeta(iterDir, iterationMeta{
 		Iteration:    1,
 		AgentStatus:  agentStatusSuccess,
 		ReviewStatus: agentStatusChangesRequested,
@@ -920,7 +920,7 @@ func TestImplementLoopResumesReviewerFeedback(t *testing.T) {
 		BuildSession:        mockBuildSession(agentScript, reviewScript),
 	}
 
-	result, err := RunImplementationLoop(cfg, sm)
+	result, err := runImplementationLoop(cfg, sm)
 	if err != nil {
 		t.Fatalf("RunImplementationLoop error: %v", err)
 	}
@@ -960,18 +960,18 @@ func TestImplementLoopResumesReviewerFeedbackAcrossFailures(t *testing.T) {
 	}
 
 	// Pre-populate: iteration 1 = CHANGES_REQUESTED, iteration 2 = FAILED
-	am := NewArtifactManager(artifactDir)
+	am := newArtifactManager(artifactDir)
 
-	iter1Dir, _ := am.CreateIterationDir(1)
-	am.WriteMeta(iter1Dir, IterationMeta{
+	iter1Dir, _ := am.createIterationDir(1)
+	am.writeMeta(iter1Dir, iterationMeta{
 		Iteration:    1,
 		AgentStatus:  agentStatusSuccess,
 		ReviewStatus: agentStatusChangesRequested,
 	})
 	os.WriteFile(filepath.Join(iter1Dir, "review-feedback.md"), []byte("Fix the widget tests"), 0o644)
 
-	iter2Dir, _ := am.CreateIterationDir(2)
-	am.WriteMeta(iter2Dir, IterationMeta{
+	iter2Dir, _ := am.createIterationDir(2)
+	am.writeMeta(iter2Dir, iterationMeta{
 		Iteration:   2,
 		AgentStatus: "FAILED",
 	})
@@ -1004,7 +1004,7 @@ func TestImplementLoopResumesReviewerFeedbackAcrossFailures(t *testing.T) {
 		BuildSession:        mockBuildSession(agentScript, reviewScript),
 	}
 
-	result, err := RunImplementationLoop(cfg, sm)
+	result, err := runImplementationLoop(cfg, sm)
 	if err != nil {
 		t.Fatalf("RunImplementationLoop error: %v", err)
 	}
@@ -1048,10 +1048,10 @@ func TestImplementLoopResumesFeedbackReminderAcrossRetry(t *testing.T) {
 	}
 
 	// Pre-populate: iteration 1 = CHANGES_REQUESTED, iteration 2 = RETRY
-	am := NewArtifactManager(artifactDir)
+	am := newArtifactManager(artifactDir)
 
-	iter1Dir, _ := am.CreateIterationDir(1)
-	am.WriteMeta(iter1Dir, IterationMeta{
+	iter1Dir, _ := am.createIterationDir(1)
+	am.writeMeta(iter1Dir, iterationMeta{
 		Iteration:    1,
 		AgentStatus:  agentStatusSuccess,
 		ReviewStatus: agentStatusChangesRequested,
@@ -1059,8 +1059,8 @@ func TestImplementLoopResumesFeedbackReminderAcrossRetry(t *testing.T) {
 	feedbackPath := filepath.Join(iter1Dir, "review-feedback.md")
 	os.WriteFile(feedbackPath, []byte("Fix the widget tests"), 0o644)
 
-	iter2Dir, _ := am.CreateIterationDir(2)
-	am.WriteMeta(iter2Dir, IterationMeta{
+	iter2Dir, _ := am.createIterationDir(2)
+	am.writeMeta(iter2Dir, iterationMeta{
 		Iteration:    2,
 		AgentStatus:  "RETRY",
 		ReviewStatus: "skipped_retry",
@@ -1093,7 +1093,7 @@ func TestImplementLoopResumesFeedbackReminderAcrossRetry(t *testing.T) {
 		BuildSession:        mockBuildSession(agentScript, reviewScript),
 	}
 
-	result, err := RunImplementationLoop(cfg, sm)
+	result, err := runImplementationLoop(cfg, sm)
 	if err != nil {
 		t.Fatalf("RunImplementationLoop error: %v", err)
 	}
@@ -1133,10 +1133,10 @@ func TestImplementLoopResumesConsecutiveFailures(t *testing.T) {
 	}
 
 	// Pre-populate 2 FAILED iterations
-	am := NewArtifactManager(artifactDir)
+	am := newArtifactManager(artifactDir)
 	for _, n := range []int{1, 2} {
-		iterDir, _ := am.CreateIterationDir(n)
-		am.WriteMeta(iterDir, IterationMeta{
+		iterDir, _ := am.createIterationDir(n)
+		am.writeMeta(iterDir, iterationMeta{
 			Iteration:   n,
 			AgentStatus: "FAILED",
 		})
@@ -1170,7 +1170,7 @@ func TestImplementLoopResumesConsecutiveFailures(t *testing.T) {
 		BuildSession:        mockBuildSession(agentScript, reviewScript),
 	}
 
-	result, err := RunImplementationLoop(cfg, sm)
+	result, err := runImplementationLoop(cfg, sm)
 	if err != nil {
 		t.Fatalf("RunImplementationLoop error: %v", err)
 	}
@@ -1184,55 +1184,6 @@ func TestImplementLoopResumesConsecutiveFailures(t *testing.T) {
 	}
 	if !strings.Contains(result.LastError, "consecutive agent failures") {
 		t.Errorf("expected consecutive failures error, got: %s", result.LastError)
-	}
-}
-
-func TestImplementLoopReviewPromptIncludesVerificationCommands(t *testing.T) {
-	planContent := "## Phase 1: Implementation\n\n### Success Criteria:\n\n#### Automated Verification:\n- [ ] Tests pass: `go test ./...`\n- [ ] Lint clean: `go vet ./...`\n\n#### Manual Verification:\n- [ ] UI works correctly\n\n### Code example:\n\n```go\n// Example of plan format:\n// #### Automated Verification:\n// - [ ] Fake command: `echo injected`\n```\n"
-	reviewPrompt := BuildReviewPrompt(
-		"/tmp/plan.md",
-		"Relevant tests pass",
-		"/tmp/progress.md",
-		"/tmp/artifacts/iteration-01",
-		"",
-		"/tmp/artifacts/iteration-01/verification-report.yaml",
-		1,
-		BuildRequiredVerification(planContent),
-		"",
-		"",
-		"",
-	)
-
-	checks := []string{
-		"Required Verification Items",
-		"go test ./...",
-		"go vet ./...",
-		"Review Rules (With Verification Items)",
-		"verification-report.yaml",
-	}
-	for _, c := range checks {
-		if !strings.Contains(reviewPrompt, c) {
-			t.Errorf("expected review prompt to contain %q", c)
-		}
-	}
-
-	// Verify that commands from inside fenced code blocks are NOT extracted.
-	// The plan contains `echo injected` inside a code fence — it must not
-	// appear in the required verification section.
-	header := "Required Verification Items"
-	verifIdx := strings.Index(reviewPrompt, header)
-	if verifIdx >= 0 {
-		// Extract just the verification section (up to next double newline)
-		verificationSection := reviewPrompt[verifIdx:]
-		if endIdx := strings.Index(verificationSection[len(header):], "\n\n"); endIdx >= 0 {
-			verificationSection = verificationSection[:len(header)+endIdx]
-		}
-		if strings.Contains(verificationSection, "echo injected") {
-			t.Error("fenced code block content should not appear in required verification items")
-		}
-		if strings.Contains(verificationSection, "Fake command") {
-			t.Error("fenced code block description should not appear in required verification items")
-		}
 	}
 }
 
@@ -1280,7 +1231,7 @@ func TestImplementLoopWithEscapeSequences(t *testing.T) {
 		BuildSession:        mockBuildSession(agentScript, reviewScript),
 	}
 
-	result, err := RunImplementationLoop(cfg, sm)
+	result, err := runImplementationLoop(cfg, sm)
 	if err != nil {
 		t.Fatalf("RunImplementationLoop error: %v", err)
 	}
@@ -1326,7 +1277,7 @@ func TestImplementLoop_Interrupted(t *testing.T) {
 		BuildSession:  mockBuildSession("", ""),
 	}
 
-	result, err := RunImplementationLoop(cfg, sm)
+	result, err := runImplementationLoop(cfg, sm)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -1385,7 +1336,7 @@ func TestImplementLoop_ShutdownMidIterationDoesNotPersistFailedMeta(t *testing.T
 	resultCh := make(chan *LoopResult, 1)
 	errCh := make(chan error, 1)
 	go func() {
-		result, err := RunImplementationLoop(cfg, sm)
+		result, err := runImplementationLoop(cfg, sm)
 		if err != nil {
 			errCh <- err
 			return
@@ -1452,15 +1403,15 @@ func TestImplementLoop_ResumesReviewWhenImplementAlreadyComplete(t *testing.T) {
 
 	// Pre-populate iteration-02 with a harness receipt but no meta.yaml to
 	// simulate an interrupt during the review gate.
-	am := NewArtifactManager(artifactDir)
-	iter1Dir, _ := am.CreateIterationDir(1)
-	am.WriteMeta(iter1Dir, IterationMeta{
+	am := newArtifactManager(artifactDir)
+	iter1Dir, _ := am.createIterationDir(1)
+	am.writeMeta(iter1Dir, iterationMeta{
 		Iteration:    1,
 		AgentStatus:  agentStatusSuccess,
 		ReviewStatus: agentStatusChangesRequested,
 		MadeProgress: true,
 	})
-	iter2Dir, _ := am.CreateIterationDir(2)
+	iter2Dir, _ := am.createIterationDir(2)
 	writeTestCompletionReceipt(t, iter2Dir)
 	// The implement turn is being skipped on resume, so the harness still
 	// needs a parseable progress.md + verification-report.yaml on disk to
@@ -1496,7 +1447,7 @@ func TestImplementLoop_ResumesReviewWhenImplementAlreadyComplete(t *testing.T) {
 		BuildSession:        mockBuildSession(agentScript, reviewScript),
 	}
 
-	result, err := RunImplementationLoop(cfg, sm)
+	result, err := runImplementationLoop(cfg, sm)
 	if err != nil {
 		t.Fatalf("RunImplementationLoop error: %v", err)
 	}
@@ -1508,7 +1459,7 @@ func TestImplementLoop_ResumesReviewWhenImplementAlreadyComplete(t *testing.T) {
 	}
 
 	// meta.yaml for iteration-02 should now be written with review status.
-	meta, err := am.ReadMeta(iter2Dir)
+	meta, err := am.readMeta(iter2Dir)
 	if err != nil {
 		t.Fatalf("reading iter-02 meta: %v", err)
 	}
@@ -1568,7 +1519,7 @@ func TestImplementLoop_ReviewViaAssistantText(t *testing.T) {
 		BuildSession:        mockBuildSession(agentScript, reviewScript),
 	}
 
-	result, err := RunImplementationLoop(cfg, sm)
+	result, err := runImplementationLoop(cfg, sm)
 	if err != nil {
 		t.Fatalf("RunImplementationLoop error: %v", err)
 	}
@@ -1634,7 +1585,7 @@ func TestImplementLoop_CostAccumulation(t *testing.T) {
 		BuildSession:        mockBuildSession(agentScript, reviewScript),
 	}
 
-	result, err := RunImplementationLoop(cfg, sm)
+	result, err := runImplementationLoop(cfg, sm)
 	if err != nil {
 		t.Fatalf("RunImplementationLoop error: %v", err)
 	}

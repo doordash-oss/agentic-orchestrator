@@ -59,7 +59,7 @@ func mustDigest(t *testing.T, path string) string {
 func installExecutable(t *testing.T, content string) Executable {
 	t.Helper()
 	path := writeExecutableFile(t, t.TempDir(), "agentico", 0o755, []byte(content))
-	exec, err := CaptureExecutableAt(path)
+	exec, err := captureExecutableAt(path)
 	if err != nil {
 		t.Fatalf("capture executable: %v", err)
 	}
@@ -79,16 +79,16 @@ func replaceFile(t *testing.T, path, content string) {
 func TestStatFileRequiresRegularFile(t *testing.T) {
 	dir := t.TempDir()
 
-	if _, err := StatFile(dir); err == nil {
-		t.Fatal("StatFile on directory: expected error")
+	if _, err := statFile(dir); err == nil {
+		t.Fatal("statFile on directory: expected error")
 	}
-	if _, err := StatFile(filepath.Join(dir, "missing")); err == nil {
-		t.Fatal("StatFile on missing file: expected error")
+	if _, err := statFile(filepath.Join(dir, "missing")); err == nil {
+		t.Fatal("statFile on missing file: expected error")
 	}
 	path := writeExecutableFile(t, dir, "regular", 0o644, []byte("x"))
-	id, err := StatFile(path)
+	id, err := statFile(path)
 	if err != nil {
-		t.Fatalf("StatFile regular: %v", err)
+		t.Fatalf("statFile regular: %v", err)
 	}
 	if id.Mode != 0o644 || id.Size != 1 {
 		t.Fatalf("identity = %+v, want mode 0644 size 1", id)
@@ -114,7 +114,7 @@ func TestCaptureExecutableAtRoundTrip(t *testing.T) {
 	if exec.Digest != mustDigest(t, exec.Path) {
 		t.Fatalf("digest %s does not match fresh digest", exec.Digest)
 	}
-	matches, err := exec.PathStillMatches()
+	matches, err := exec.pathStillMatches()
 	if err != nil || !matches {
 		t.Fatalf("PathStillMatches = (%v, %v), want (true, nil)", matches, err)
 	}
@@ -128,7 +128,7 @@ func TestCaptureExecutableOfRunningBinary(t *testing.T) {
 	if exec.Path == "" || exec.Digest == "" || exec.ID.Ino == 0 {
 		t.Fatalf("incomplete capture: %+v", exec)
 	}
-	matches, err := exec.PathStillMatches()
+	matches, err := exec.pathStillMatches()
 	if err != nil || !matches {
 		t.Fatalf("PathStillMatches = (%v, %v), want (true, nil)", matches, err)
 	}
@@ -137,7 +137,7 @@ func TestCaptureExecutableOfRunningBinary(t *testing.T) {
 func TestPathStillMatchesFalseAfterReplacement(t *testing.T) {
 	exec := installExecutable(t, "v1")
 	replaceFile(t, exec.Path, "v2-replacement")
-	matches, err := exec.PathStillMatches()
+	matches, err := exec.pathStillMatches()
 	if err != nil {
 		t.Fatalf("PathStillMatches: %v", err)
 	}
@@ -151,7 +151,7 @@ func TestPathStillMatchesSurvivesChmod(t *testing.T) {
 	if err := os.Chmod(exec.Path, 0o700); err != nil {
 		t.Fatalf("chmod: %v", err)
 	}
-	matches, err := exec.PathStillMatches()
+	matches, err := exec.pathStillMatches()
 	if err != nil || !matches {
 		t.Fatalf("PathStillMatches = (%v, %v), want (true, nil): chmod alone must not invalidate identity", matches, err)
 	}

@@ -24,6 +24,7 @@ import (
 	"github.com/doordash-oss/agentic-orchestrator/internal/feature"
 	"github.com/doordash-oss/agentic-orchestrator/internal/ports"
 	"github.com/doordash-oss/agentic-orchestrator/internal/session"
+	"github.com/doordash-oss/agentic-orchestrator/test/testutil"
 )
 
 func TestTerminalProviderErrorEndsKeepAlivePhase(t *testing.T) {
@@ -36,7 +37,7 @@ func TestTerminalProviderErrorEndsKeepAlivePhase(t *testing.T) {
 	// keep the process alive until the phase waiter closes its input.
 	command := []string{"sh", "-c", `printf '%s\n' '{"type":"result","subtype":"error","is_error":true,"result":"Model only supports text input; received unsupported content type image_url."}'; cat >/dev/null`}
 	sess, err := mgr.StartSession("terminal-error", "feature-error", feature.PhaseImplement,
-		command, t.TempDir(), nil, &session.SessionOpts{TurnMode: ports.TurnModeInteractive})
+		command, t.TempDir(), nil, &session.SessionOpts{TurnMode: ports.TurnModeInteractive, Protocol: testutil.SessionProtocol("")})
 	if err != nil {
 		t.Fatal(err)
 	}

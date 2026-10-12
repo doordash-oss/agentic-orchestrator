@@ -28,17 +28,14 @@ import {
   featureBranch,
   fieldForCreationError,
   formatDuration,
-  formatElapsed,
   highestSeverityError,
   isReadyToStart,
   isRunAtRest,
   orderDashboardFeatures,
   runningPhaseSubline,
-  setupProgress,
   spineActiveIndex,
   spineActiveIndexForPhase,
   spineStages,
-  spineTone,
 } from './featureView';
 
 function ownedError(
@@ -275,14 +272,6 @@ describe('formatDuration', () => {
   });
 });
 
-describe('formatElapsed', () => {
-  it('formats run time and hides it when there is none', () => {
-    expect(formatElapsed(featureSnapshot({ timing: { totalSeconds: 760 } }))).toBe('12m 40s');
-    expect(formatElapsed(featureSnapshot({ timing: { totalSeconds: 0 } }))).toBeNull();
-    expect(formatElapsed(featureSnapshot({}))).toBeNull();
-  });
-});
-
 describe('spineStages', () => {
   it('prepends Setup to the medium profile phases', () => {
     expect(spineStages('medium').map((stage) => stage.label)).toEqual([
@@ -328,7 +317,6 @@ describe('spineActiveIndex', () => {
       setup: { status: 'failed', attempt: 1, tasks: [] },
     });
     expect(spineActiveIndex(failed, stages)).toBe(0);
-    expect(spineTone(failed)).toBe('error');
   });
 
   it('points at the next phase once the feature is Created and setup is done', () => {
@@ -338,7 +326,6 @@ describe('spineActiveIndex', () => {
       setup: { status: 'done', attempt: 1, tasks: [] },
     });
     expect(spineActiveIndex(created, stages)).toBe(1);
-    expect(spineTone(created)).toBe('progress');
   });
 
   it('follows the server-reported current phase for later lifecycles', () => {
@@ -360,12 +347,7 @@ describe('spineActiveIndex', () => {
   });
 });
 
-describe('setupProgress / featureBranch / actions', () => {
-  it('counts completed tasks against the server-owned total', () => {
-    const snapshot = featureSnapshot();
-    expect(setupProgress(snapshot.setup!)).toEqual({ done: 1, total: 2 });
-  });
-
+describe('featureBranch / actions', () => {
   it('surfaces the branch recorded on the setup tasks', () => {
     expect(featureBranch(featureSnapshot())).toBe('feature/search-revamp');
     expect(featureBranch(featureSnapshot({ setup: undefined }))).toBeNull();

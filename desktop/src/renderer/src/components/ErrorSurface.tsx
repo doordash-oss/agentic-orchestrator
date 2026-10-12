@@ -62,7 +62,7 @@ export type ErrorSurfaceLocalAction =
       onAction?: never;
     };
 
-export interface ErrorSurfaceProps {
+interface ErrorSurfaceProps {
   error: CanonicalError;
   variant?: 'full' | 'compact';
   /** Expand the underlying cause when the summary alone cannot explain the failure. */
@@ -289,12 +289,18 @@ export function ErrorSurface({
   const ClassIcon = CLASS_ICON[error.class];
   const remediation = error.remediation;
   const remediationHint = remediation?.hint;
-  // Only the first referenced action drives the slot; later IDs exist for the
-  // catalog's benefit, not the surface. A local action, when passed, owns the
-  // slot outright — the catalog resolution never even runs.
-  const actionId = remediation?.actions?.[0];
-  const resolvedAction =
-    localAction == null && actionId != null ? resolveAction?.(actionId) : undefined;
+  // Prefer the first enabled catalog action. A later action can still recover
+  // the failure when the first is unavailable (for example, a child pass can
+  // restart a failed phase even when its retry action is disabled).
+  const resolvedActions =
+    localAction == null
+      ? (remediation?.actions ?? []).map((id) => ({ id, action: resolveAction?.(id) }))
+      : [];
+  const selectedAction =
+    resolvedActions.find(({ action }) => action?.enabled === true) ??
+    resolvedActions.find(({ action }) => action !== undefined);
+  const actionId = selectedAction?.id;
+  const resolvedAction = selectedAction?.action;
   const localActionSlot =
     localAction == null ? null : localAction.disabledReason != null ? (
       <span className="error-surface__action-reason">{localAction.disabledReason}</span>

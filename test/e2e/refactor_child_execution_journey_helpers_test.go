@@ -126,6 +126,7 @@ func journeyChildPhaseRunnerWithOpts(t *testing.T, sm *session.Manager, store *f
 			PermHandler:   opts.PermHandler,
 			InitialPrompt: opts.Prompt,
 			RepoName:      opts.RepoName,
+			Protocol:      testutil.SessionProtocol(opts.Prompt),
 		}, nil
 	}
 	pr.RunImplementFn = func(c agent.ImplementConfig, _ ports.SessionManager) (*agent.LoopResult, error) {

@@ -111,15 +111,15 @@ func TestShellObserverIncrementalSnapshotsAndExclusions(t *testing.T) {
 	os.WriteFile(filepath.Join(root, "ignored.txt"), []byte("ignored"), 0600)
 	os.WriteFile(outside, []byte("private after"), 0600)
 	os.WriteFile(filepath.Join(root, "binary.bin"), []byte{0, 1, 2}, 0600)
-	changes := repo.changes()
+	changes := repo.changesExcept(nil)
 	if len(changes) != 1 || !strings.HasSuffix(changes[0].Path, "app.go") {
 		t.Fatalf("unexpected changes: %+v", changes)
 	}
-	if again := repo.changes(); len(again) != 0 {
+	if again := repo.changesExcept(nil); len(again) != 0 {
 		t.Fatalf("duplicate nuggets: %+v", again)
 	}
 	os.Remove(filepath.Join(root, "app.go"))
-	changes = repo.changes()
+	changes = repo.changesExcept(nil)
 	if len(changes) != 1 || changes[0].Operation != "delete" || !strings.Contains(changes[0].Detail, "-const Value = 9") {
 		t.Fatalf("wrong deletion: %+v", changes)
 	}

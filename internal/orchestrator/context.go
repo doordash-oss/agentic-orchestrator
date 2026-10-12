@@ -34,10 +34,7 @@ func (o *Orchestrator) stateDir() string {
 	if o.deps.PhaseRunner != nil && o.deps.PhaseRunner.StateDir != "" {
 		return o.deps.PhaseRunner.StateDir
 	}
-	if s, ok := o.deps.Store.(*feature.Store); ok && s != nil {
-		return s.BaseDir
-	}
-	return ""
+	return o.deps.Store.BaseDir
 }
 
 // computeKBInfos builds KB info metadata for all feature repos.
@@ -154,7 +151,7 @@ func (o *Orchestrator) resolvePhaseDirForKey(f *feature.Feature, key string) str
 }
 
 // phasePlanDirForFeature returns the plan subdirectory for a roadmap phase.
-// Mirrors the directory choice RunPhasePlanningLoop makes at
+// Mirrors the directory choice phase planning makes at
 // plan_validation.go — the phase-plan artifacts live under
 // <stateDir>/<featureID>/runs/run-N/phase-NN/plan. Returns "" when the state
 // dir is unset. Callers that reach into phase-plan directories (iterate

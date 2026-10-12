@@ -90,7 +90,7 @@ func newPromotionFaultFixture(t *testing.T) *promotionFaultFixture {
 
 	return &promotionFaultFixture{
 		t:        t,
-		o:        New(Deps{Lifecycle: mgr, Store: store}, Hooks{}),
+		o:        New(Deps{Manager: mgr, Store: store}, Hooks{}),
 		store:    store,
 		stateDir: stateDir,
 		baseDir:  baseDir,

@@ -18,6 +18,7 @@ import (
 	"os"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/doordash-oss/agentic-orchestrator/internal/selfupdate"
 )
@@ -73,20 +74,14 @@ func TestClassifyRuntimeEligibilityGathersRealSignals(t *testing.T) {
 	})
 
 	dir := t.TempDir()
-	binaryDir := dir + "/bin"
-	if err := os.MkdirAll(binaryDir, 0o755); err != nil {
-		t.Fatal(err)
-	}
-	exec := selfupdate.Executable{Path: binaryDir + "/agentico"}
-	exec.ID.UID = os.Geteuid()
-	exec.ID.Mode = 0o755
+	exec := captureFixtureExecutable(t, dir)
 
 	boot := &runtimeBootstrap{selfUpdateExec: exec}
 	eligibility := classifyRuntimeEligibility(boot)
 	if eligibility.Supported {
 		t.Fatalf("no lease held should not be eligible: %+v", eligibility)
 	}
-	if eligibility.Reason != selfupdate.UnsupportedLeaseUnavailable {
+	if eligibility.Reason != "lease_unavailable" {
 		t.Fatalf("reason = %q, want lease_unavailable (not contention)", eligibility.Reason)
 	}
 
@@ -98,11 +93,30 @@ func TestClassifyRuntimeEligibilityGathersRealSignals(t *testing.T) {
 	}
 
 	// Contention is reported as ownership_contention, not a generic lease
-	// failure: the running binary is a secondary runtime.
+	// failure: the running binary is a secondary runtime. The contention
+	// error comes from a second acquisition of the same binary lease through
+	// the exported acquisition path.
 	boot.updateLease = nil
-	boot.updateLeaseErr = &selfupdate.LeaseHeldError{}
+	record := selfupdate.OwnershipRecord{
+		RuntimeDir:       dir,
+		StateDir:         dir + "/features",
+		Config:           dir + "/config.yaml",
+		PID:              os.Getpid(),
+		Version:          "1.2.3",
+		StartedAt:        time.Now(),
+		ExecutablePath:   exec.Path,
+		ExecutableDigest: exec.Digest,
+		ExecutableIno:    exec.ID.Ino,
+	}
+	firstLease, err := selfupdate.AcquireLease(exec, record)
+	if err != nil {
+		t.Fatalf("first lease acquisition: %v", err)
+	}
+	t.Cleanup(func() { _ = firstLease.Close() })
+	_, contention := selfupdate.AcquireLease(exec, record)
+	boot.updateLeaseErr = contention
 	eligibility = classifyRuntimeEligibility(boot)
-	if eligibility.Supported || eligibility.Reason != selfupdate.UnsupportedOwnershipContention {
+	if eligibility.Supported || eligibility.Reason != "ownership_contention" {
 		t.Fatalf("contention classification = %+v", eligibility)
 	}
 }

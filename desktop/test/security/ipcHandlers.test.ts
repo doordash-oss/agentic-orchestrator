@@ -17,9 +17,8 @@ limitations under the License.
 import { describe, expect, it, vi } from 'vitest';
 import { registerIpcHandlers, type IpcServices } from '../../src/main/ipcHandlers';
 import type { TrustedSender } from '../../src/main/security';
+import { IPC_CHANNELS, IPC_EVENTS } from '../../src/shared/ipcChannels';
 import {
-  IPC_CHANNELS,
-  IPC_EVENTS,
   defaultSettings,
   type DiagnosticsSnapshot,
   type SessionOutputEvent,
@@ -187,8 +186,8 @@ function makeServices(): IpcServices {
     getSettings: vi.fn(() => defaultSettings()),
     updateSettings: vi.fn((patch) => ({ ...defaultSettings(), ...patch })),
     openSettingsWindow: vi.fn(() => ({ opened: true })),
-    getTheme: vi.fn(() => ({ preference: 'system' as const, resolved: 'dark' as const })),
-    setTheme: vi.fn((preference) => ({ preference, resolved: 'light' as const })),
+    getThemePreference: vi.fn(() => ({ preference: 'system' as const, resolved: 'dark' as const })),
+    setThemePreference: vi.fn((preference) => ({ preference, resolved: 'light' as const })),
     getRuntimeReadiness: vi.fn(() => Promise.resolve(emptyReadinessSnapshot())),
     refreshRuntimeReadiness: vi.fn(() => Promise.resolve(emptyReadinessSnapshot())),
     getReadiness: vi.fn(() => Promise.resolve(emptyReadinessSnapshot())),
@@ -443,7 +442,7 @@ describe('registerIpcHandlers', () => {
 
   it('rejects untrusted senders without invoking the service', async () => {
     const { handlers, services } = register();
-    const result = (await handlers.get(IPC_CHANNELS.settingsGet)!(foreignEvent)) as {
+    const result = (await handlers.get(IPC_CHANNELS.getSettings)!(foreignEvent)) as {
       ok: boolean;
       error?: { code: string };
     };
@@ -454,7 +453,7 @@ describe('registerIpcHandlers', () => {
 
   it('returns a validated ok envelope for a trusted, valid request', async () => {
     const { handlers } = register();
-    const result = (await handlers.get(IPC_CHANNELS.connectionGetStatus)!(goodEvent)) as {
+    const result = (await handlers.get(IPC_CHANNELS.getConnectionStatus)!(goodEvent)) as {
       ok: boolean;
       value: { status: string };
     };
@@ -462,19 +461,48 @@ describe('registerIpcHandlers', () => {
     expect(result.value.status).toBe('discovering');
   });
 
-  it('invokes the required attention service instead of returning a fallback success', async () => {
-    const { handlers, services } = register();
-    const result = (await handlers.get(IPC_CHANNELS.attentionAnswerPermission)!(goodEvent, {
-      requestId: 'perm-1',
-      decision: 'deny',
-    })) as { ok: boolean; value: { result: string } };
-
-    expect(result.ok).toBe(true);
-    expect(result.value.result).toBe('submitted');
-    expect(services.answerPermission).toHaveBeenCalledWith({
-      requestId: 'perm-1',
-      decision: 'deny',
+  it('returns the bare session-output cancellation boolean', async () => {
+    const services = makeServices();
+    vi.mocked(services.cancelSessionOutput).mockReturnValue(true);
+    const { handlers } = register(services);
+    expect(
+      await handlers.get(IPC_CHANNELS.cancelSessionOutput)!(goodEvent, 'subscription-1'),
+    ).toEqual({
+      ok: true,
+      value: true,
     });
+    expect(services.cancelSessionOutput).toHaveBeenCalledWith('subscription-1');
+  });
+
+  it('returns the bare file-search cancellation boolean', async () => {
+    const services = makeServices();
+    vi.mocked(services.cancelCreationFileSearch).mockReturnValue(true);
+    const { handlers } = register(services);
+    const requestId = 'd60d032b-edb4-4ea8-86ca-a49373f63d9f';
+    expect(
+      await handlers.get(IPC_CHANNELS.cancelCreationFileSearch)!(goodEvent, requestId),
+    ).toEqual({
+      ok: true,
+      value: true,
+    });
+    expect(services.cancelCreationFileSearch).toHaveBeenCalledWith(requestId);
+  });
+
+  it('returns the bare local-draft discard boolean', async () => {
+    const services = makeServices();
+    vi.mocked(services.discardLocalReviewDraft).mockReturnValue(true);
+    const { handlers } = register(services);
+    const request = {
+      runtimeId: 'runtime-1',
+      featureId: 'feature-1',
+      reviewId: 'review-1',
+      baseDraftRevision: 'revision-1',
+    };
+    expect(await handlers.get(IPC_CHANNELS.discardLocalReviewDraft)!(goodEvent, request)).toEqual({
+      ok: true,
+      value: true,
+    });
+    expect(services.discardLocalReviewDraft).toHaveBeenCalledWith(request);
   });
 
   it('guards the UI-state push: trusted senders only, schema-validated, no domain data', async () => {
@@ -489,7 +517,7 @@ describe('registerIpcHandlers', () => {
       featureCommands: { 'feature.start': true, 'feature.delete': false },
     };
 
-    const foreign = (await handlers.get(IPC_CHANNELS.uiStatePublish)!(foreignEvent, valid)) as {
+    const foreign = (await handlers.get(IPC_CHANNELS.publishUiState)!(foreignEvent, valid)) as {
       ok: boolean;
       error?: { code: string };
     };
@@ -497,7 +525,7 @@ describe('registerIpcHandlers', () => {
     expect(foreign.error?.code).toBe('E_UNTRUSTED_SENDER');
     expect(services.publishUiState).not.toHaveBeenCalled();
 
-    const accepted = (await handlers.get(IPC_CHANNELS.uiStatePublish)!(goodEvent, valid)) as {
+    const accepted = (await handlers.get(IPC_CHANNELS.publishUiState)!(goodEvent, valid)) as {
       ok: boolean;
       value: { accepted: boolean };
     };
@@ -508,14 +536,14 @@ describe('registerIpcHandlers', () => {
     // Anything beyond the identity-and-presentation summary is rejected — the
     // menu never becomes a side channel for server-domain state.
     const acceptedCalls = vi.mocked(services.publishUiState).mock.calls.length;
-    const extra = (await handlers.get(IPC_CHANNELS.uiStatePublish)!(goodEvent, {
+    const extra = (await handlers.get(IPC_CHANNELS.publishUiState)!(goodEvent, {
       ...valid,
       featureName: 'Search revamp',
     })) as { ok: boolean; error?: { code: string } };
     expect(extra.ok).toBe(false);
     expect(extra.error?.code).toBe('E_SCHEMA_MISMATCH');
 
-    const malformed = (await handlers.get(IPC_CHANNELS.uiStatePublish)!(goodEvent, {
+    const malformed = (await handlers.get(IPC_CHANNELS.publishUiState)!(goodEvent, {
       ...valid,
       featureCommands: { 'feature.start': 'yes' },
     })) as { ok: boolean; error?: { code: string } };
@@ -529,7 +557,7 @@ describe('registerIpcHandlers', () => {
     const services = makeServices();
     const { handlers } = register(services);
 
-    const extra = (await handlers.get(IPC_CHANNELS.remoteServerAdd)!(goodEvent, {
+    const extra = (await handlers.get(IPC_CHANNELS.addRemoteServer)!(goodEvent, {
       connectionString: 'agentico://tok@127.0.0.1:8080',
       token: 'smuggled',
     })) as { ok: boolean; error?: { code: string } };
@@ -537,7 +565,7 @@ describe('registerIpcHandlers', () => {
     expect(extra.error?.code).toBe('E_SCHEMA_MISMATCH');
     expect(services.addRemoteServer).not.toHaveBeenCalled();
 
-    const missing = (await handlers.get(IPC_CHANNELS.remoteServerAdd)!(goodEvent, {})) as {
+    const missing = (await handlers.get(IPC_CHANNELS.addRemoteServer)!(goodEvent, {})) as {
       ok: boolean;
       error?: { code: string };
     };
@@ -551,7 +579,7 @@ describe('registerIpcHandlers', () => {
         token: 'tok-leak-456',
       } as never),
     );
-    const leaky = (await handlers.get(IPC_CHANNELS.remoteServerAdd)!(goodEvent, {
+    const leaky = (await handlers.get(IPC_CHANNELS.addRemoteServer)!(goodEvent, {
       connectionString: 'agentico://tok@127.0.0.1:8080',
     })) as { ok: boolean; error?: { code: string } };
     expect(leaky.ok).toBe(false);
@@ -563,7 +591,7 @@ describe('registerIpcHandlers', () => {
     const services = makeServices();
     const { handlers } = register(services);
 
-    const extra = (await handlers.get(IPC_CHANNELS.serverRemove)!(goodEvent, {
+    const extra = (await handlers.get(IPC_CHANNELS.removeServer)!(goodEvent, {
       serverKey: 'a'.repeat(32),
       token: 'smuggled',
     })) as { ok: boolean; error?: { code: string } };
@@ -571,14 +599,14 @@ describe('registerIpcHandlers', () => {
     expect(extra.error?.code).toBe('E_SCHEMA_MISMATCH');
     expect(services.removeServer).not.toHaveBeenCalled();
 
-    const empty = (await handlers.get(IPC_CHANNELS.serverRemove)!(goodEvent, {
+    const empty = (await handlers.get(IPC_CHANNELS.removeServer)!(goodEvent, {
       serverKey: '',
     })) as { ok: boolean; error?: { code: string } };
     expect(empty.ok).toBe(false);
     expect(empty.error?.code).toBe('E_SCHEMA_MISMATCH');
     expect(services.removeServer).not.toHaveBeenCalled();
 
-    const accepted = (await handlers.get(IPC_CHANNELS.serverRemove)!(goodEvent, {
+    const accepted = (await handlers.get(IPC_CHANNELS.removeServer)!(goodEvent, {
       serverKey: 'a'.repeat(32),
     })) as { ok: boolean; value?: { status: string } };
     expect(accepted.ok).toBe(true);
@@ -590,14 +618,14 @@ describe('registerIpcHandlers', () => {
     const services = makeServices();
     const { handlers } = register(services);
 
-    const accepted = (await handlers.get(IPC_CHANNELS.serverTokenStatus)!(goodEvent, {
+    const accepted = (await handlers.get(IPC_CHANNELS.getServerTokenStatus)!(goodEvent, {
       serverKey: 'b'.repeat(32),
     })) as { ok: boolean; value?: { status: string } };
     expect(accepted.ok).toBe(true);
     expect(accepted.value).toEqual({ status: 'local' });
 
     services.getServerTokenStatus = vi.fn(() => ({ status: 'ok', token: 'tok' }) as never);
-    const rogue = (await handlers.get(IPC_CHANNELS.serverTokenStatus)!(goodEvent, {
+    const rogue = (await handlers.get(IPC_CHANNELS.getServerTokenStatus)!(goodEvent, {
       serverKey: 'b'.repeat(32),
     })) as { ok: boolean; error?: { code: string } };
     expect(rogue.ok).toBe(false);
@@ -618,7 +646,7 @@ describe('registerIpcHandlers', () => {
         }) as never,
     );
     const { handlers } = register(services);
-    const result = (await handlers.get(IPC_CHANNELS.connectionGetStatus)!(goodEvent)) as {
+    const result = (await handlers.get(IPC_CHANNELS.getConnectionStatus)!(goodEvent)) as {
       ok: boolean;
       error?: { code: string };
     };
@@ -629,7 +657,7 @@ describe('registerIpcHandlers', () => {
 
   it('fails closed on schema-invalid payloads without invoking the service', async () => {
     const { handlers, services } = register();
-    const result = (await handlers.get(IPC_CHANNELS.settingsUpdate)!(goodEvent, {
+    const result = (await handlers.get(IPC_CHANNELS.updateSettings)!(goodEvent, {
       theme: 'neon',
     })) as { ok: boolean; error?: { code: string } };
     expect(result.ok).toBe(false);
@@ -639,7 +667,7 @@ describe('registerIpcHandlers', () => {
 
   it('rejects unsafe provider names before invoking model refresh', async () => {
     const { handlers, services } = register();
-    const result = (await handlers.get(IPC_CHANNELS.configProviderModelsRefresh)!(
+    const result = (await handlers.get(IPC_CHANNELS.refreshProviderModels)!(
       goodEvent,
       '../claude',
     )) as { ok: boolean; error?: { code: string } };
@@ -651,7 +679,7 @@ describe('registerIpcHandlers', () => {
 
   it('validates local draft requests before calling the owner-only store', async () => {
     const { handlers, services } = register();
-    const result = (await handlers.get(IPC_CHANNELS.reviewDraftsSave)!(goodEvent, {
+    const result = (await handlers.get(IPC_CHANNELS.saveLocalReviewDraft)!(goodEvent, {
       runtimeId: 'runtime-a',
       featureId: 'feature-a',
       reviewId: 'review-a',
@@ -668,7 +696,7 @@ describe('registerIpcHandlers', () => {
   it('fails closed on prototype-polluting payloads', async () => {
     const { handlers, services } = register();
     const payload = JSON.parse('{"theme": "dark", "__proto__": {"polluted": true}}');
-    const result = (await handlers.get(IPC_CHANNELS.settingsUpdate)!(goodEvent, payload)) as {
+    const result = (await handlers.get(IPC_CHANNELS.updateSettings)!(goodEvent, payload)) as {
       ok: boolean;
       error?: { code: string };
     };
@@ -679,7 +707,7 @@ describe('registerIpcHandlers', () => {
 
   it('fails closed on oversized payloads', async () => {
     const { handlers, services } = register();
-    const result = (await handlers.get(IPC_CHANNELS.settingsUpdate)!(goodEvent, {
+    const result = (await handlers.get(IPC_CHANNELS.updateSettings)!(goodEvent, {
       runtime: { selection: 'x'.repeat(6 * 1024 * 1024) },
     })) as { ok: boolean; error?: { code: string } };
     expect(result.ok).toBe(false);
@@ -689,9 +717,10 @@ describe('registerIpcHandlers', () => {
 
   it('fails closed when the service returns a response violating its schema', async () => {
     const services = makeServices();
-    services.getTheme = vi.fn(() => ({ preference: 'system', resolved: 'sepia' }) as never);
+    // @ts-expect-error A service returning an invalid response must fail to compile.
+    services.getThemePreference = vi.fn(() => ({ preference: 'system', resolved: 'sepia' }));
     const { handlers } = register(services);
-    const result = (await handlers.get(IPC_CHANNELS.themeGet)!(goodEvent)) as {
+    const result = (await handlers.get(IPC_CHANNELS.getThemePreference)!(goodEvent)) as {
       ok: boolean;
       error?: { code: string };
     };
@@ -701,7 +730,7 @@ describe('registerIpcHandlers', () => {
 
   it('validates update install consent before invoking the service', async () => {
     const { handlers, services } = register();
-    const result = (await handlers.get(IPC_CHANNELS.updatesInstallNow)!(goodEvent, {
+    const result = (await handlers.get(IPC_CHANNELS.installUpdateNow)!(goodEvent, {
       consent: false,
       stopActiveWork: true,
     })) as { ok: boolean; error?: { code: string } };
@@ -721,7 +750,7 @@ describe('registerIpcHandlers', () => {
         }) as never,
     );
     const { handlers } = register(services);
-    const result = (await handlers.get(IPC_CHANNELS.diagnosticsGet)!(goodEvent)) as {
+    const result = (await handlers.get(IPC_CHANNELS.getDiagnostics)!(goodEvent)) as {
       ok: boolean;
       error?: { code: string };
     };
@@ -736,7 +765,7 @@ describe('registerIpcHandlers', () => {
       throw new Error('exploded at /Users/somebody/secret with Bearer tok123');
     });
     const { handlers } = register(services);
-    const result = (await handlers.get(IPC_CHANNELS.settingsGet)!(goodEvent)) as {
+    const result = (await handlers.get(IPC_CHANNELS.getSettings)!(goodEvent)) as {
       ok: boolean;
       error?: { code: string; summary: string; diagnostics?: string };
     };
@@ -772,7 +801,7 @@ describe('registerIpcHandlers', () => {
     const { handlers } = register(services);
 
     await expect(
-      handlers.get(IPC_CHANNELS.sessionsOutputOpen)!(event, {
+      handlers.get(IPC_CHANNELS.openSessionOutput)!(event, {
         sessionId: 'session-1',
       }),
     ).resolves.toMatchObject({ ok: true, value: { subscriptionId: 'sub-fixed' } });
@@ -789,7 +818,7 @@ describe('registerIpcHandlers', () => {
   it('supervisor handlers validate requests, mint nothing renderer-side, and pass results through', async () => {
     const { handlers, services } = register();
 
-    const state = (await handlers.get(IPC_CHANNELS.supervisorStateGet)!(goodEvent)) as {
+    const state = (await handlers.get(IPC_CHANNELS.getSupervisorState)!(goodEvent)) as {
       ok: boolean;
       value: SupervisorState;
     };
@@ -809,13 +838,13 @@ describe('registerIpcHandlers', () => {
     vi.mocked(services.getSupervisorState).mockResolvedValueOnce(
       supervisorState({ lifecycle: 'waiting_permission', pendingRequests: [childPending] }),
     );
-    await expect(handlers.get(IPC_CHANNELS.supervisorStateGet)!(goodEvent)).resolves.toMatchObject({
+    await expect(handlers.get(IPC_CHANNELS.getSupervisorState)!(goodEvent)).resolves.toMatchObject({
       ok: true,
       value: { lifecycle: 'waiting_permission', pendingRequests: [childPending] },
     });
 
     await expect(
-      handlers.get(IPC_CHANNELS.supervisorSettingsUpdate)!(goodEvent, {
+      handlers.get(IPC_CHANNELS.updateSupervisorSettings)!(goodEvent, {
         harness: 'claude',
         model: 'claude-sonnet-4-5',
         effort: 'high',
@@ -825,7 +854,7 @@ describe('registerIpcHandlers', () => {
     ).resolves.toMatchObject({ ok: true, value: { settings: { harness: 'claude' } } });
 
     await expect(
-      handlers.get(IPC_CHANNELS.supervisorSettingsUpdate)!(goodEvent, {
+      handlers.get(IPC_CHANNELS.updateSupervisorSettings)!(goodEvent, {
         harness: 'codex',
         requestId: 'req-harness-only',
         expectedGeneration: 1,
@@ -838,10 +867,10 @@ describe('registerIpcHandlers', () => {
     });
 
     await expect(
-      handlers.get(IPC_CHANNELS.supervisorTranscriptGet)!(goodEvent, { before: 10, limit: 50 }),
+      handlers.get(IPC_CHANNELS.getSupervisorTranscript)!(goodEvent, { before: 10, limit: 50 }),
     ).resolves.toMatchObject({ ok: true, value: { items: [], headSeq: 0 } });
 
-    const sent = (await handlers.get(IPC_CHANNELS.supervisorMessageSend)!(goodEvent, {
+    const sent = (await handlers.get(IPC_CHANNELS.sendSupervisorMessage)!(goodEvent, {
       text: 'Summarize the open features.',
     })) as { ok: boolean; value: { launched: boolean } };
     expect(sent).toMatchObject({ ok: true, value: { launched: true } });
@@ -849,7 +878,7 @@ describe('registerIpcHandlers', () => {
       text: 'Summarize the open features.',
     });
 
-    const explained = (await handlers.get(IPC_CHANNELS.supervisorMessageSend)!(goodEvent, {
+    const explained = (await handlers.get(IPC_CHANNELS.sendSupervisorMessage)!(goodEvent, {
       text: 'Explain the run failure.',
       errorReference: { scope: 'run', code: 'run_failed', featureId: 'abcd1234' },
     })) as { ok: boolean };
@@ -859,14 +888,14 @@ describe('registerIpcHandlers', () => {
       errorReference: { scope: 'run', code: 'run_failed', featureId: 'abcd1234' },
     });
 
-    await expect(handlers.get(IPC_CHANNELS.supervisorInterrupt)!(goodEvent)).resolves.toMatchObject(
+    await expect(handlers.get(IPC_CHANNELS.interruptSupervisor)!(goodEvent)).resolves.toMatchObject(
       { ok: true, value: { result: 'accepted' } },
     );
-    await expect(handlers.get(IPC_CHANNELS.supervisorEnd)!(goodEvent)).resolves.toMatchObject({
+    await expect(handlers.get(IPC_CHANNELS.endSupervisor)!(goodEvent)).resolves.toMatchObject({
       ok: true,
       value: { result: 'not_active' },
     });
-    await expect(handlers.get(IPC_CHANNELS.supervisorReset)!(goodEvent)).resolves.toMatchObject({
+    await expect(handlers.get(IPC_CHANNELS.resetSupervisor)!(goodEvent)).resolves.toMatchObject({
       ok: true,
       value: { result: 'reset', previousConversationId: 'conv-0' },
     });
@@ -874,11 +903,11 @@ describe('registerIpcHandlers', () => {
 
   it('supervisor reset takes no arguments and never leaks extra response fields', async () => {
     const { handlers, services } = register();
-    const withArgs = (await handlers.get(IPC_CHANNELS.supervisorReset)!(goodEvent, {
+    const withArgs = (await handlers.get(IPC_CHANNELS.resetSupervisor)!(goodEvent, {
       conversationId: 'conv-9',
     })) as { ok: boolean };
     expect(withArgs.ok).toBe(false);
-    const untrusted = (await handlers.get(IPC_CHANNELS.supervisorReset)!(foreignEvent)) as {
+    const untrusted = (await handlers.get(IPC_CHANNELS.resetSupervisor)!(foreignEvent)) as {
       ok: boolean;
       error?: { code: string };
     };
@@ -894,7 +923,7 @@ describe('registerIpcHandlers', () => {
         authToken: 'tok-leak',
       } as Awaited<ReturnType<IpcServices['resetSupervisor']>>),
     );
-    const leaked = (await register(smuggling).handlers.get(IPC_CHANNELS.supervisorReset)!(
+    const leaked = (await register(smuggling).handlers.get(IPC_CHANNELS.resetSupervisor)!(
       goodEvent,
     )) as { ok: boolean };
     expect(leaked.ok).toBe(false);
@@ -903,7 +932,7 @@ describe('registerIpcHandlers', () => {
 
   it('supervisor message send carries absolute attachment paths and staged refs only', async () => {
     const { handlers, services } = register();
-    const accepted = (await handlers.get(IPC_CHANNELS.supervisorMessageSend)!(goodEvent, {
+    const accepted = (await handlers.get(IPC_CHANNELS.sendSupervisorMessage)!(goodEvent, {
       text: '',
       images: ['/Users/me/shot.png'],
       attachments: ['/Users/me/notes.txt'],
@@ -914,7 +943,7 @@ describe('registerIpcHandlers', () => {
       images: ['/Users/me/shot.png'],
       attachments: ['/Users/me/notes.txt'],
     });
-    const staged = (await handlers.get(IPC_CHANNELS.supervisorMessageSend)!(goodEvent, {
+    const staged = (await handlers.get(IPC_CHANNELS.sendSupervisorMessage)!(goodEvent, {
       text: 'look',
       imageUploads: ['0123456789abcdef0123456789abcdef'],
       attachmentUploads: ['fedcba9876543210fedcba9876543210'],
@@ -942,7 +971,7 @@ describe('registerIpcHandlers', () => {
       { text: 'hi', attachments: Array.from({ length: 25 }, (_, i) => `/f/${String(i)}`) },
     ];
     for (const payload of rejected) {
-      const result = (await handlers.get(IPC_CHANNELS.supervisorMessageSend)!(
+      const result = (await handlers.get(IPC_CHANNELS.sendSupervisorMessage)!(
         goodEvent,
         payload,
       )) as { ok: boolean };
@@ -977,9 +1006,9 @@ describe('registerIpcHandlers', () => {
     const { handlers } = register(services);
 
     await expect(
-      handlers.get(IPC_CHANNELS.supervisorMessageSend)!(goodEvent, { text: 'look' }),
+      handlers.get(IPC_CHANNELS.sendSupervisorMessage)!(goodEvent, { text: 'look' }),
     ).resolves.toMatchObject({ ok: true, value: { record: { attachments: [attachment] } } });
-    const leaked = (await handlers.get(IPC_CHANNELS.supervisorMessageSend)!(goodEvent, {
+    const leaked = (await handlers.get(IPC_CHANNELS.sendSupervisorMessage)!(goodEvent, {
       text: 'look',
     })) as { ok: boolean };
     expect(leaked.ok).toBe(false);
@@ -990,26 +1019,26 @@ describe('registerIpcHandlers', () => {
     const { handlers, services } = register();
     const rejected = [
       // The renderer may never supply the idempotency key.
-      [IPC_CHANNELS.supervisorMessageSend, { text: 'hi', client_message_id: 'forged' }],
-      [IPC_CHANNELS.supervisorMessageSend, { text: '   ' }],
-      [IPC_CHANNELS.supervisorMessageSend, { text: 'x'.repeat(100_001) }],
+      [IPC_CHANNELS.sendSupervisorMessage, { text: 'hi', client_message_id: 'forged' }],
+      [IPC_CHANNELS.sendSupervisorMessage, { text: '   ' }],
+      [IPC_CHANNELS.sendSupervisorMessage, { text: 'x'.repeat(100_001) }],
       // The reference crosses camelCase and disciplined, never wire-shaped.
       [
-        IPC_CHANNELS.supervisorMessageSend,
+        IPC_CHANNELS.sendSupervisorMessage,
         { text: 'hi', error_reference: { scope: 'run', code: 'run_failed', feature_id: 'f' } },
       ],
-      [IPC_CHANNELS.supervisorMessageSend, { text: 'hi', errorReference: { scope: 'run' } }],
+      [IPC_CHANNELS.sendSupervisorMessage, { text: 'hi', errorReference: { scope: 'run' } }],
       [
-        IPC_CHANNELS.supervisorMessageSend,
+        IPC_CHANNELS.sendSupervisorMessage,
         { text: 'hi', errorReference: { scope: 'recovery', code: 'x', featureId: 'f' } },
       ],
-      [IPC_CHANNELS.supervisorTranscriptGet, { before: 5, after: 2 }],
-      [IPC_CHANNELS.supervisorTranscriptGet, { limit: 501 }],
-      [IPC_CHANNELS.supervisorTranscriptGet, { before: 0 }],
-      [IPC_CHANNELS.supervisorTranscriptGet, { after: -1 }],
-      [IPC_CHANNELS.supervisorSettingsUpdate, { harness: '', model: 'm' }],
+      [IPC_CHANNELS.getSupervisorTranscript, { before: 5, after: 2 }],
+      [IPC_CHANNELS.getSupervisorTranscript, { limit: 501 }],
+      [IPC_CHANNELS.getSupervisorTranscript, { before: 0 }],
+      [IPC_CHANNELS.getSupervisorTranscript, { after: -1 }],
+      [IPC_CHANNELS.updateSupervisorSettings, { harness: '', model: 'm' }],
       [
-        IPC_CHANNELS.supervisorSettingsUpdate,
+        IPC_CHANNELS.updateSupervisorSettings,
         { harness: 'claude', requestId: 'req-extra', expectedGeneration: 1, token: 'x' },
       ],
     ] as const;
@@ -1021,7 +1050,7 @@ describe('registerIpcHandlers', () => {
     expect(services.getSupervisorTranscript).not.toHaveBeenCalled();
     expect(services.updateSupervisorSettings).not.toHaveBeenCalled();
 
-    const untrusted = (await handlers.get(IPC_CHANNELS.supervisorStateGet)!(foreignEvent)) as {
+    const untrusted = (await handlers.get(IPC_CHANNELS.getSupervisorState)!(foreignEvent)) as {
       ok: boolean;
       error?: { code: string };
     };
@@ -1035,7 +1064,7 @@ describe('registerIpcHandlers', () => {
       Promise.resolve({ ...supervisorState(), authToken: 'tok-leak' } as SupervisorState),
     );
     const { handlers } = register(services);
-    const result = (await handlers.get(IPC_CHANNELS.supervisorStateGet)!(goodEvent)) as {
+    const result = (await handlers.get(IPC_CHANNELS.getSupervisorState)!(goodEvent)) as {
       ok: boolean;
     };
     expect(result.ok).toBe(false);
@@ -1061,11 +1090,11 @@ describe('registerIpcHandlers', () => {
       } as SupervisorState);
     const { handlers } = register(services);
 
-    await expect(handlers.get(IPC_CHANNELS.supervisorStateGet)!(goodEvent)).resolves.toMatchObject({
+    await expect(handlers.get(IPC_CHANNELS.getSupervisorState)!(goodEvent)).resolves.toMatchObject({
       ok: true,
       value: { lifecycle: 'failed', failure },
     });
-    const smuggled = (await handlers.get(IPC_CHANNELS.supervisorStateGet)!(goodEvent)) as {
+    const smuggled = (await handlers.get(IPC_CHANNELS.getSupervisorState)!(goodEvent)) as {
       ok: boolean;
     };
     expect(smuggled.ok).toBe(false);
@@ -1097,12 +1126,12 @@ describe('registerIpcHandlers', () => {
     const { handlers } = register(services);
 
     await expect(
-      handlers.get(IPC_CHANNELS.supervisorTranscriptGet)!(goodEvent, {}),
+      handlers.get(IPC_CHANNELS.getSupervisorTranscript)!(goodEvent, {}),
     ).resolves.toMatchObject({
       ok: true,
       value: { items: [{ kind: 'marker', marker: { marker: 'interrupted' } }] },
     });
-    const unknown = (await handlers.get(IPC_CHANNELS.supervisorTranscriptGet)!(goodEvent, {})) as {
+    const unknown = (await handlers.get(IPC_CHANNELS.getSupervisorTranscript)!(goodEvent, {})) as {
       ok: boolean;
     };
     expect(unknown.ok).toBe(false);
@@ -1170,21 +1199,21 @@ describe('registerIpcHandlers', () => {
         page([{ ...checkpoint, checkpoint: { ...checkpoint.checkpoint, bearer: 'secret' } }]),
       );
     const { handlers } = register(services);
-    await expect(handlers.get(IPC_CHANNELS.supervisorStateGet)!(goodEvent)).resolves.toMatchObject({
+    await expect(handlers.get(IPC_CHANNELS.getSupervisorState)!(goodEvent)).resolves.toMatchObject({
       ok: true,
       value: { contextUsage: { percent: 80 } },
     });
-    await expect(handlers.get(IPC_CHANNELS.supervisorStateGet)!(goodEvent)).resolves.toMatchObject({
+    await expect(handlers.get(IPC_CHANNELS.getSupervisorState)!(goodEvent)).resolves.toMatchObject({
       ok: false,
     });
     await expect(
-      handlers.get(IPC_CHANNELS.supervisorTranscriptGet)!(goodEvent, {}),
+      handlers.get(IPC_CHANNELS.getSupervisorTranscript)!(goodEvent, {}),
     ).resolves.toMatchObject({
       ok: true,
       value: { items: [{ kind: 'checkpoint' }, { marker: { marker: 'compacted' } }] },
     });
     await expect(
-      handlers.get(IPC_CHANNELS.supervisorTranscriptGet)!(goodEvent, {}),
+      handlers.get(IPC_CHANNELS.getSupervisorTranscript)!(goodEvent, {}),
     ).resolves.toMatchObject({ ok: false });
   });
 });

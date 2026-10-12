@@ -175,6 +175,76 @@ func acquireRecoveryLease(exec selfupdate.Executable, runtimeDir, stateDir, conf
 	})
 }
 
+// acquireRecoveryLocks takes the binary lease then the runtime update lock; a
+// refusal releases whatever was taken and returns the rendered exit code.
+func acquireRecoveryLocks(exec selfupdate.Executable, runtimeDir, stateDir, configPath string) (*selfupdate.Lease, *selfupdate.RuntimeUpdateLock, int) {
+	lease, err := acquireRecoveryLease(exec, runtimeDir, stateDir, configPath)
+	if err != nil {
+		return nil, nil, renderRecoveryRefusal(err)
+	}
+	rlock, err := selfupdate.AcquireRuntimeUpdateLock(runtimeDir)
+	if err != nil {
+		_ = lease.Close()
+		return nil, nil, renderRecoveryRefusal(err)
+	}
+	return lease, rlock, 0
+}
+
+// recoveryExec is one recovery hand-off: restore the previous build (kind
+// RecoveryKindRestore, rebinding the restored receipt's endpoint) or mark the
+// unchanged-build restart (RecoveryKindRestart, rebinding bind), release the
+// lease, and exec the installed path under the launch-chain guard. The labels
+// name a restore/mark failure, a deferred lease close and an exec failure;
+// marked, when set, runs with the restore/mark error before it is rendered.
+type recoveryExec struct {
+	exec                             selfupdate.Executable
+	lease                            *selfupdate.Lease
+	plan                             selfupdate.RecoveryPlan
+	reason, runtimeDir, kind         string
+	bind                             selfupdate.BindEndpoint
+	failLabel, leaseLabel, execLabel string
+	marked                           func(error)
+}
+
+// run returns the exit code of a failed recovery; a successful exec never returns.
+func (r recoveryExec) run() int {
+	restore := r.kind == selfupdate.RecoveryKindRestore
+	var receipt selfupdate.Receipt
+	var err error
+	if restore {
+		recoveryBarrier("before-restore")
+		receipt, err = selfupdate.RestorePrevious(r.exec, r.lease, r.plan, r.reason, recoverySeams())
+	} else {
+		recoveryBarrier("before-restart")
+		receipt, err = selfupdate.MarkRecoveryRestart(r.exec, r.lease, r.plan, r.reason, recoverySeams())
+	}
+	if r.marked != nil {
+		r.marked(err)
+	}
+	if err != nil {
+		renderStartupFailure(os.Stderr, &runtimeInitError{fmt.Errorf("%s: %v", r.failLabel, err)})
+		return 1
+	}
+	bind, after := r.bind, "after-restart-marked"
+	if restore {
+		bind, after = receipt.Bind, "after-restore"
+	}
+	recoveryBarrier(after)
+	// The lease does not cross the recovery exec: the exec'd build takes its own
+	// ownership, and no inherited descriptor outlives a build predating this.
+	if err := r.lease.Close(); err != nil {
+		reportDeferredClose(os.Stderr, r.leaseLabel, err)
+	}
+	env := selfupdate.BuildRecoveryEnv(os.Environ(), selfupdate.RecoveryGuard{SchemaVersion: 1, TransactionID: receipt.TransactionID,
+		AttemptID: receipt.RecoveryAttemptID, Kind: r.kind, Bind: bind, AuthTokenPath: serverruntime.AuthTokenPath(r.runtimeDir)})
+	recoveryBarrier("before-recovery-exec")
+	if err := selfupdate.ExecRecovery(r.exec.Path, os.Args, env, selfUpdateRecoveryExecFn); err != nil {
+		renderStartupFailure(os.Stderr, &runtimeInitError{fmt.Errorf("%s: %v", r.execLabel, err)})
+		return 1
+	}
+	return 0
+}
+
 // renderRecoveryRefusal renders an unsafe-record or persistence refusal as a
 // sanitized startup fatal and returns exit code 1.
 func renderRecoveryRefusal(err error) int {
@@ -227,14 +297,9 @@ func resolveRecoveryOnBoot(stateDir, configPath, listenAddr string) bootRecovery
 
 	case selfupdate.RecoveryActionAbandon:
 		// Abandonment is always safe in-chain: it mutates no installed bytes.
-		lease, err := acquireRecoveryLease(exec, runtimeDir, stateDir, configPath)
-		if err != nil {
-			return bootRecoveryResult{exit: true, code: renderRecoveryRefusal(err)}
-		}
-		rlock, err := selfupdate.AcquireRuntimeUpdateLock(runtimeDir)
-		if err != nil {
-			_ = lease.Close()
-			return bootRecoveryResult{exit: true, code: renderRecoveryRefusal(err)}
+		lease, rlock, code := acquireRecoveryLocks(exec, runtimeDir, stateDir, configPath)
+		if lease == nil {
+			return bootRecoveryResult{exit: true, code: code}
 		}
 		reason := fmt.Sprintf("update to %s never replaced the installed build; installation failed and the previous build stays in service", plan.Receipt.ToVersion)
 		settled, err := selfupdate.ResolveAbandoned(exec, lease, plan, reason, recoverySeams())
@@ -257,46 +322,23 @@ func resolveRecoveryOnBoot(stateDir, configPath, listenAddr string) bootRecovery
 			renderStartupFailure(os.Stderr, &runtimeInitError{fmt.Errorf("refusing a second automatic recovery of transaction %s in the same launch chain; start a new launch to retry", plan.Receipt.TransactionID)})
 			return bootRecoveryResult{exit: true, code: 1}
 		}
-		lease, err := acquireRecoveryLease(exec, runtimeDir, stateDir, configPath)
-		if err != nil {
-			return bootRecoveryResult{exit: true, code: renderRecoveryRefusal(err)}
+		lease, rlock, code := acquireRecoveryLocks(exec, runtimeDir, stateDir, configPath)
+		if lease == nil {
+			return bootRecoveryResult{exit: true, code: code}
 		}
-		rlock, err := selfupdate.AcquireRuntimeUpdateLock(runtimeDir)
-		if err != nil {
-			_ = lease.Close()
-			return bootRecoveryResult{exit: true, code: renderRecoveryRefusal(err)}
-		}
-		recoveryBarrier("before-restore")
-		reason := fmt.Sprintf("target %s failed to return to service; previous build %s restored", plan.Receipt.ToVersion, plan.Receipt.FromVersion)
-		receipt, err := selfupdate.RestorePrevious(exec, lease, plan, reason, recoverySeams())
-		_ = rlock.Close()
-		if err != nil {
-			_ = lease.Close()
-			return bootRecoveryResult{exit: true, code: renderRecoveryRefusal(err)}
-		}
-		recoveryBarrier("after-restore")
-		// The lease does not cross the recovery exec: the restored build
-		// takes its own ownership on boot, and no inherited descriptor can
-		// outlive a build that may predate this feature.
-		if err := lease.Close(); err != nil {
-			reportDeferredClose(os.Stderr, "close recovery lease", err)
-		}
-		guard := selfupdate.RecoveryGuard{
-			SchemaVersion: 1,
-			TransactionID: receipt.TransactionID,
-			AttemptID:     receipt.RecoveryAttemptID,
-			Kind:          selfupdate.RecoveryKindRestore,
-			Bind:          receipt.Bind,
-			AuthTokenPath: serverruntime.AuthTokenPath(runtimeDir),
-		}
-		env := selfupdate.BuildRecoveryEnv(os.Environ(), guard)
-		recoveryBarrier("before-recovery-exec")
-		if err := selfupdate.ExecRecovery(exec.Path, os.Args, env, selfUpdateRecoveryExecFn); err != nil {
-			renderStartupFailure(os.Stderr, &runtimeInitError{fmt.Errorf("recovery exec onto restored build: %v", err)})
-			return bootRecoveryResult{exit: true, code: 1}
-		}
-		// A successful exec never returns.
-		return bootRecoveryResult{exit: true, code: 0}
+		// A successful exec never returns; code is the recovery failure exit.
+		code = recoveryExec{
+			exec: exec, lease: lease, plan: plan, runtimeDir: runtimeDir,
+			reason:    fmt.Sprintf("target %s failed to return to service; previous build %s restored", plan.Receipt.ToVersion, plan.Receipt.FromVersion),
+			kind:      selfupdate.RecoveryKindRestore,
+			failLabel: "resolving interrupted selfupdate transaction", leaseLabel: "close recovery lease", execLabel: "recovery exec onto restored build",
+			marked: func(err error) {
+				if _ = rlock.Close(); err != nil {
+					_ = lease.Close()
+				}
+			},
+		}.run()
+		return bootRecoveryResult{exit: true, code: code}
 	default:
 		return bootRecoveryResult{exit: true, code: renderRecoveryRefusal(fmt.Errorf("unsupported recovery action %q", plan.Action))}
 	}
@@ -416,60 +458,17 @@ func (t failedTargetRecovery) recover() int {
 	}
 	defer func() { _ = rlock.Close() }()
 
-	plan := selfupdate.RecoveryPlan{Receipt: t.receipt, ReceiptPath: selfupdate.ReceiptPath(t.exec.Path)}
+	r := recoveryExec{
+		exec: t.exec, lease: t.lease, reason: t.reason, runtimeDir: t.runtimeDir,
+		plan:      selfupdate.RecoveryPlan{Receipt: t.receipt, ReceiptPath: selfupdate.ReceiptPath(t.exec.Path)},
+		kind:      selfupdate.RecoveryKindRestore,
+		failLabel: "recovery restore", leaseLabel: "close lease before recovery exec", execLabel: "recovery exec onto restored build",
+	}
 	if t.restartUnchanged {
-		recoveryBarrier("before-restart")
-		receipt, err := selfupdate.MarkRecoveryRestart(t.exec, t.lease, plan, t.reason, recoverySeams())
-		if err != nil {
-			renderStartupFailure(os.Stderr, &runtimeInitError{fmt.Errorf("marking unchanged-build restart: %v", err)})
-			return 1
-		}
-		recoveryBarrier("after-restart-marked")
-		if err := t.lease.Close(); err != nil {
-			reportDeferredClose(os.Stderr, "close lease before restart exec", err)
-		}
-		guard := selfupdate.RecoveryGuard{
-			SchemaVersion: 1,
-			TransactionID: receipt.TransactionID,
-			AttemptID:     receipt.RecoveryAttemptID,
-			Kind:          selfupdate.RecoveryKindRestart,
-			Bind:          t.bind,
-			AuthTokenPath: serverruntime.AuthTokenPath(t.runtimeDir),
-		}
-		env := selfupdate.BuildRecoveryEnv(os.Environ(), guard)
-		recoveryBarrier("before-recovery-exec")
-		if err := selfupdate.ExecRecovery(t.exec.Path, os.Args, env, selfUpdateRecoveryExecFn); err != nil {
-			renderStartupFailure(os.Stderr, &runtimeInitError{fmt.Errorf("restart exec onto unchanged build: %v", err)})
-			return 1
-		}
-		return 0
+		r.kind, r.bind = selfupdate.RecoveryKindRestart, t.bind
+		r.failLabel, r.leaseLabel, r.execLabel = "marking unchanged-build restart", "close lease before restart exec", "restart exec onto unchanged build"
 	}
-
-	recoveryBarrier("before-restore")
-	receipt, err := selfupdate.RestorePrevious(t.exec, t.lease, plan, t.reason, recoverySeams())
-	if err != nil {
-		renderStartupFailure(os.Stderr, &runtimeInitError{fmt.Errorf("recovery restore: %v", err)})
-		return 1
-	}
-	recoveryBarrier("after-restore")
-	if err := t.lease.Close(); err != nil {
-		reportDeferredClose(os.Stderr, "close lease before recovery exec", err)
-	}
-	guard := selfupdate.RecoveryGuard{
-		SchemaVersion: 1,
-		TransactionID: receipt.TransactionID,
-		AttemptID:     receipt.RecoveryAttemptID,
-		Kind:          selfupdate.RecoveryKindRestore,
-		Bind:          receipt.Bind,
-		AuthTokenPath: serverruntime.AuthTokenPath(t.runtimeDir),
-	}
-	env := selfupdate.BuildRecoveryEnv(os.Environ(), guard)
-	recoveryBarrier("before-recovery-exec")
-	if err := selfupdate.ExecRecovery(t.exec.Path, os.Args, env, selfUpdateRecoveryExecFn); err != nil {
-		renderStartupFailure(os.Stderr, &runtimeInitError{fmt.Errorf("recovery exec onto restored build: %v", err)})
-		return 1
-	}
-	return 0
+	return r.run()
 }
 
 // tolerableShutdownDeadline reports whether a server close error is solely

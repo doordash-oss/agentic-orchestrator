@@ -24,7 +24,7 @@ var knowledgeBaseBuilderRoleSpec = roleSpec{
 	Role:      RoleKnowledgeBaseBuilder,
 	SkillName: "build-knowledge-base",
 	OutputRoots: []outputRootSpec{
-		singleShotPhaseDirOutputRoot("Repository-scoped knowledge-base root. The KB graph entrypoint is written here."),
+		iterationOutputRoot("phase_dir", "Repository-scoped knowledge-base root. The KB graph entrypoint is written here."),
 	},
 	Artifacts: []roleArtifactSpec{
 		{

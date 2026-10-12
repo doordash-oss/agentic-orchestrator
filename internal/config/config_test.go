@@ -168,7 +168,7 @@ func TestLoadOrCreate(t *testing.T) {
 		t.Fatal("expected file to not exist")
 	}
 
-	cfg, err := LoadOrCreate(path)
+	cfg, err := loadOrCreate(path)
 	if err != nil {
 		t.Fatalf("load or create: %v", err)
 	}
@@ -183,7 +183,7 @@ func TestLoadOrCreate(t *testing.T) {
 	}
 
 	// Load again - should return same config
-	cfg2, err := LoadOrCreate(path)
+	cfg2, err := loadOrCreate(path)
 	if err != nil {
 		t.Fatalf("second load or create: %v", err)
 	}
@@ -695,13 +695,13 @@ func TestKBBuildYAMLPresent(t *testing.T) {
 
 func TestApplyProviderDefaults_FillsEmptyFields(t *testing.T) {
 	cfg := &Config{}
-	defaults := map[string]string{
-		"research":       "claude:opus",
-		"planning":       "claude:opus",
-		"implementation": "claude:opus",
-		"review":         "codex:codex",
-		"chat":           "claude:sonnet",
-		"kb_build":       "claude:opus",
+	defaults := ModelConfig{
+		Research:       "claude:opus",
+		Planning:       "claude:opus",
+		Implementation: "claude:opus",
+		Review:         "codex:codex",
+		Utilities:      "claude:sonnet",
+		KBBuild:        "claude:opus",
 	}
 	ApplyProviderDefaults(cfg, defaults)
 
@@ -732,13 +732,13 @@ func TestApplyProviderDefaults_PreservesUserSetValues(t *testing.T) {
 	cfg.Defaults.Models.Utilities = "opus"
 	cfg.Defaults.Models.KBBuild = "sonnet"
 
-	defaults := map[string]string{
-		"research":       "claude:opus",
-		"planning":       "claude:opus",
-		"implementation": "claude:opus",
-		"review":         "codex:codex",
-		"chat":           "claude:sonnet",
-		"kb_build":       "claude:opus",
+	defaults := ModelConfig{
+		Research:       "claude:opus",
+		Planning:       "claude:opus",
+		Implementation: "claude:opus",
+		Review:         "codex:codex",
+		Utilities:      "claude:sonnet",
+		KBBuild:        "claude:opus",
 	}
 	ApplyProviderDefaults(cfg, defaults)
 
@@ -761,13 +761,13 @@ func TestApplyProviderDefaults_PreservesUserSetValues(t *testing.T) {
 func TestApplyProviderDefaults_SingleProvider_BareNames(t *testing.T) {
 	cfg := &Config{}
 	// Single-provider scenario: bare names without provider prefix.
-	defaults := map[string]string{
-		"research":       "opus",
-		"planning":       "opus",
-		"implementation": "opus",
-		"review":         "opus",
-		"chat":           "sonnet",
-		"kb_build":       "opus",
+	defaults := ModelConfig{
+		Research:       "opus",
+		Planning:       "opus",
+		Implementation: "opus",
+		Review:         "opus",
+		Utilities:      "sonnet",
+		KBBuild:        "opus",
 	}
 	ApplyProviderDefaults(cfg, defaults)
 
@@ -782,13 +782,13 @@ func TestApplyProviderDefaults_SingleProvider_BareNames(t *testing.T) {
 func TestApplyProviderDefaults_MultiProvider_PrefixedNames(t *testing.T) {
 	cfg := &Config{}
 	// Multi-provider scenario: provider:model format.
-	defaults := map[string]string{
-		"research":       "claude:opus",
-		"planning":       "claude:opus",
-		"implementation": "claude:opus",
-		"review":         "codex:codex",
-		"chat":           "claude:sonnet",
-		"kb_build":       "claude:opus",
+	defaults := ModelConfig{
+		Research:       "claude:opus",
+		Planning:       "claude:opus",
+		Implementation: "claude:opus",
+		Review:         "codex:codex",
+		Utilities:      "claude:sonnet",
+		KBBuild:        "claude:opus",
 	}
 	ApplyProviderDefaults(cfg, defaults)
 
@@ -803,21 +803,13 @@ func TestApplyProviderDefaults_MultiProvider_PrefixedNames(t *testing.T) {
 	}
 }
 
-func TestApplyProviderDefaults_NilDefaults(t *testing.T) {
-	cfg := &Config{}
-	cfg.Defaults.Models.Research = "opus"
-	// Should not panic with nil defaults.
-	ApplyProviderDefaults(cfg, nil)
-	if cfg.Defaults.Models.Research != "opus" {
-		t.Errorf("Research = %q, want opus (unchanged)", cfg.Defaults.Models.Research)
-	}
-}
-
 func TestApplyProviderDefaults_EmptyDefaults(t *testing.T) {
 	cfg := &Config{}
 	cfg.Defaults.Models.Research = "opus"
-	// Empty map: no changes.
-	ApplyProviderDefaults(cfg, map[string]string{})
+	// Empty defaults: no changes.
+	if ApplyProviderDefaults(cfg, ModelConfig{}) {
+		t.Error("expected changed=false for empty defaults")
+	}
 	if cfg.Defaults.Models.Research != "opus" {
 		t.Errorf("Research = %q, want opus (unchanged)", cfg.Defaults.Models.Research)
 	}
@@ -826,12 +818,77 @@ func TestApplyProviderDefaults_EmptyDefaults(t *testing.T) {
 	}
 }
 
+func TestApplyProviderDefaults_FillsEmptyConfigInquiryDefault(t *testing.T) {
+	cfg := &Config{}
+	defaults := ModelConfig{
+		Inquiry: "sonnet", Research: "opus", Planning: "opus", Implementation: "opus",
+		Review: "gpt-5.4", Utilities: "sonnet", KBBuild: "opus",
+	}
+	if !ApplyProviderDefaults(cfg, defaults) {
+		t.Error("expected changed=true when filling empty config")
+	}
+	if cfg.Defaults.Models.Inquiry != "sonnet" {
+		t.Errorf("expected Inquiry='sonnet', got %q", cfg.Defaults.Models.Inquiry)
+	}
+	if cfg.Defaults.Models.Research != "opus" {
+		t.Errorf("expected Research='opus', got %q", cfg.Defaults.Models.Research)
+	}
+	if cfg.Defaults.Models.Review != "gpt-5.4" {
+		t.Errorf("expected Review='gpt-5.4', got %q", cfg.Defaults.Models.Review)
+	}
+}
+
+func TestApplyProviderDefaults_InquiryFallsBackToResearchDefault(t *testing.T) {
+	cfg := &Config{}
+	ApplyProviderDefaults(cfg, ModelConfig{Research: "opus"})
+	if cfg.Defaults.Models.Inquiry != "opus" {
+		t.Errorf("Inquiry = %q, want research default opus", cfg.Defaults.Models.Inquiry)
+	}
+}
+
+func TestApplyProviderDefaults_ReportsChangeWhenOtherFieldsFilled(t *testing.T) {
+	cfg := &Config{}
+	cfg.Defaults.Models.Inquiry = "haiku"
+	cfg.Defaults.Models.Research = "haiku"
+	defaults := ModelConfig{
+		Inquiry: "sonnet", Research: "opus", Planning: "opus", Implementation: "opus",
+		Review: "gpt-5.4", Utilities: "sonnet", KBBuild: "opus",
+	}
+	if !ApplyProviderDefaults(cfg, defaults) {
+		t.Error("expected changed=true since other fields were empty")
+	}
+	if cfg.Defaults.Models.Inquiry != "haiku" {
+		t.Errorf("expected Inquiry='haiku' preserved, got %q", cfg.Defaults.Models.Inquiry)
+	}
+	if cfg.Defaults.Models.Research != "haiku" {
+		t.Errorf("expected Research='haiku' preserved, got %q", cfg.Defaults.Models.Research)
+	}
+	if cfg.Defaults.Models.Planning != "opus" {
+		t.Errorf("expected Planning='opus' filled, got %q", cfg.Defaults.Models.Planning)
+	}
+}
+
+func TestApplyProviderDefaults_NoChange(t *testing.T) {
+	cfg := &Config{}
+	cfg.Defaults.Models = ModelConfig{
+		Inquiry: "z", Research: "a", Planning: "b", Implementation: "c",
+		Review: "d", Utilities: "e", KBBuild: "f",
+	}
+	defaults := ModelConfig{
+		Inquiry: "sonnet", Research: "opus", Planning: "opus", Implementation: "opus",
+		Review: "codex", Utilities: "sonnet", KBBuild: "opus",
+	}
+	if ApplyProviderDefaults(cfg, defaults) {
+		t.Error("expected changed=false when all fields already set")
+	}
+}
+
 func TestLoadOrCreateWithStatus_NewConfig(t *testing.T) {
 	t.Helper()
 	dir := t.TempDir()
 	path := filepath.Join(dir, "config.yaml")
 
-	cfg, isNew, err := LoadOrCreateWithStatus(path)
+	cfg, isNew, err := loadOrCreateWithStatus(path)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -859,7 +916,7 @@ func TestLoadOrCreateWithStatus_ExistingConfig(t *testing.T) {
 		t.Fatalf("failed to save initial config: %v", err)
 	}
 
-	cfg, isNew, err := LoadOrCreateWithStatus(path)
+	cfg, isNew, err := loadOrCreateWithStatus(path)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -1734,9 +1791,9 @@ func TestObservabilityConfig(t *testing.T) {
 		tmpDir := t.TempDir()
 		cfgPath := filepath.Join(tmpDir, "subdir", "config.yaml")
 
-		cfg, isNew, err := LoadOrCreateWithStatus(cfgPath)
+		cfg, isNew, err := loadOrCreateWithStatus(cfgPath)
 		if err != nil {
-			t.Fatalf("LoadOrCreateWithStatus failed: %v", err)
+			t.Fatalf("loadOrCreateWithStatus failed: %v", err)
 		}
 		if !isNew {
 			t.Error("expected isNew == true")
@@ -1765,35 +1822,35 @@ func TestObservabilityConfig(t *testing.T) {
 func TestProviderCLI_OverrideAndFallback(t *testing.T) {
 	tests := []struct {
 		name      string
-		providers map[string]ProviderConfig
+		providers map[string]providerConfig
 		key       string
 		fallback  string
 		want      string
 	}{
 		{
 			name:      "override set returns override",
-			providers: map[string]ProviderConfig{"claude": {CLI: "fcc-claude"}},
+			providers: map[string]providerConfig{"claude": {CLI: "fcc-claude"}},
 			key:       "claude",
 			fallback:  "claude",
 			want:      "fcc-claude",
 		},
 		{
 			name:      "empty CLI returns fallback",
-			providers: map[string]ProviderConfig{"claude": {CLI: ""}},
+			providers: map[string]providerConfig{"claude": {CLI: ""}},
 			key:       "claude",
 			fallback:  "claude",
 			want:      "claude",
 		},
 		{
 			name:      "whitespace CLI returns fallback",
-			providers: map[string]ProviderConfig{"claude": {CLI: "   "}},
+			providers: map[string]providerConfig{"claude": {CLI: "   "}},
 			key:       "claude",
 			fallback:  "claude",
 			want:      "claude",
 		},
 		{
 			name:      "key absent returns fallback",
-			providers: map[string]ProviderConfig{"codex": {CLI: "my-codex"}},
+			providers: map[string]providerConfig{"codex": {CLI: "my-codex"}},
 			key:       "claude",
 			fallback:  "claude",
 			want:      "claude",
@@ -1822,7 +1879,7 @@ func TestProvidersRoundTrip(t *testing.T) {
 	path := filepath.Join(dir, "config.yaml")
 
 	original := NewDefault()
-	original.Providers = map[string]ProviderConfig{"claude": {CLI: "fcc-claude"}}
+	original.Providers = map[string]providerConfig{"claude": {CLI: "fcc-claude"}}
 	if err := Save(path, original); err != nil {
 		t.Fatalf("save: %v", err)
 	}

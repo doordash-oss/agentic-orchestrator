@@ -32,8 +32,13 @@ func TestRenameNoReplacePublishesAtomically(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(staging, ".git", "HEAD"), []byte("ref: refs/heads/main\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	if err := RenameNoReplace(staging, dst); err != nil {
-		t.Fatalf("RenameNoReplace: %v", err)
+	handle, _, err := openRootDir(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer handle.Close()
+	if err := renameNoReplaceDir(handle, "staging", "dst"); err != nil {
+		t.Fatalf("renameNoReplaceDir: %v", err)
 	}
 	if _, err := os.Lstat(staging); !errors.Is(err, os.ErrNotExist) {
 		t.Errorf("staging still present: %v", err)
@@ -51,6 +56,11 @@ func TestRenameNoReplaceRefusesExistingDestination(t *testing.T) {
 	if err := os.MkdirAll(staging, 0o755); err != nil {
 		t.Fatal(err)
 	}
+	handle, _, err := openRootDir(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer handle.Close()
 
 	// A populated destination.
 	populated := filepath.Join(dir, "populated")
@@ -60,8 +70,8 @@ func TestRenameNoReplaceRefusesExistingDestination(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(populated, "keep.txt"), []byte("keep"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	if err := RenameNoReplace(staging, populated); !errors.Is(err, ErrDestinationExists) {
-		t.Errorf("populated destination: err = %v, want ErrDestinationExists", err)
+	if err := renameNoReplaceDir(handle, "staging", "populated"); !errors.Is(err, errDestinationExists) {
+		t.Errorf("populated destination: err = %v, want errDestinationExists", err)
 	}
 	if _, err := os.Stat(filepath.Join(populated, "keep.txt")); err != nil {
 		t.Errorf("existing destination data damaged: %v", err)
@@ -75,8 +85,8 @@ func TestRenameNoReplaceRefusesExistingDestination(t *testing.T) {
 	if err := os.MkdirAll(empty, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	if err := RenameNoReplace(staging, empty); !errors.Is(err, ErrDestinationExists) {
-		t.Errorf("empty destination: err = %v, want ErrDestinationExists", err)
+	if err := renameNoReplaceDir(handle, "staging", "empty"); !errors.Is(err, errDestinationExists) {
+		t.Errorf("empty destination: err = %v, want errDestinationExists", err)
 	}
 	if _, err := os.Lstat(empty); err != nil {
 		t.Errorf("empty destination removed: %v", err)
@@ -87,8 +97,8 @@ func TestRenameNoReplaceRefusesExistingDestination(t *testing.T) {
 	if err := os.Symlink(filepath.Join(dir, "nowhere"), link); err != nil {
 		t.Fatal(err)
 	}
-	if err := RenameNoReplace(staging, link); !errors.Is(err, ErrDestinationExists) {
-		t.Errorf("symlink destination: err = %v, want ErrDestinationExists", err)
+	if err := renameNoReplaceDir(handle, "staging", "link"); !errors.Is(err, errDestinationExists) {
+		t.Errorf("symlink destination: err = %v, want errDestinationExists", err)
 	}
 	if _, err := os.Lstat(link); err != nil {
 		t.Errorf("symlink destination removed: %v", err)
@@ -102,7 +112,7 @@ func TestOpenRootDirPinsIdentityAcrossSymlinkSwap(t *testing.T) {
 	if err := os.MkdirAll(realDir, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	handle, identity, err := OpenRootDir(realDir)
+	handle, identity, err := openRootDir(realDir)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -120,7 +130,7 @@ func TestOpenRootDirPinsIdentityAcrossSymlinkSwap(t *testing.T) {
 	if err := os.Symlink(other, realDir); err != nil {
 		t.Fatal(err)
 	}
-	if !SameDirIdentity(handle, identity) {
+	if !sameDirIdentity(handle, identity) {
 		t.Error("pinned handle lost its identity after a symlink swap")
 	}
 }

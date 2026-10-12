@@ -39,6 +39,7 @@ import {
   type MessageBoxReturnValue,
 } from 'electron';
 import { registryEntryKey } from './gateway/registry';
+import { defined } from '../shared/defined';
 import { createRuntimeGateway, fetchJson, MAX_PROBE_RESPONSE_BYTES } from './gateway/wiring';
 import { ServerListService } from './gateway/serverListService';
 import { addRemoteServer } from './gateway/addRemoteServer';
@@ -88,12 +89,12 @@ import { RunHistoryService } from './runHistory';
 import { SetupService } from './setup';
 import { CreationFilesService } from './creationFiles';
 import { ThemeController } from './theme';
+import { IPC_EVENTS } from '../shared/ipcChannels';
 import {
   actionableAttentionCount,
   DEFAULT_RUNTIME_ID,
   disabledMainWindowUiState,
   CREATION_IMAGE_FORMATS,
-  IPC_EVENTS,
   SETTINGS_WINDOW_DEFAULT_HEIGHT,
   SETTINGS_WINDOW_DEFAULT_WIDTH,
   SETTINGS_WINDOW_MIN_HEIGHT,
@@ -337,7 +338,8 @@ function createMainWindow(
     title: 'Agentico',
     width: bounds?.width ?? 1080,
     height: bounds?.height ?? 720,
-    ...(bounds !== undefined ? { x: bounds.x, y: bounds.y } : {}),
+    ...defined('x', bounds?.x),
+    ...defined('y', bounds?.y),
     minWidth: 400,
     minHeight: 480,
     ...(process.env['AGENTICO_E2E_ALLOW_LARGE_WINDOW'] === '1'
@@ -408,7 +410,8 @@ function createSettingsWindow(
     title: 'Settings',
     width: bounds?.width ?? SETTINGS_WINDOW_DEFAULT_WIDTH,
     height: bounds?.height ?? SETTINGS_WINDOW_DEFAULT_HEIGHT,
-    ...(bounds !== undefined ? { x: bounds.x, y: bounds.y } : {}),
+    ...defined('x', bounds?.x),
+    ...defined('y', bounds?.y),
     minWidth: SETTINGS_WINDOW_MIN_WIDTH,
     minHeight: SETTINGS_WINDOW_MIN_HEIGHT,
     minimizable: false,
@@ -1504,8 +1507,8 @@ if (!hasSingleInstanceLock) {
       openSettingsWindow: (request) => ({
         opened: openSettingsWindow(request.section ?? null, request.focus ?? null),
       }),
-      getTheme: () => theme.getInfo(),
-      setTheme: (preference) => {
+      getThemePreference: () => theme.getInfo(),
+      setThemePreference: (preference) => {
         const info = theme.setPreference(preference);
         // The renderer's own sync event cannot cross a window boundary, so
         // the resolved theme is fanned out here: a theme picked in Settings

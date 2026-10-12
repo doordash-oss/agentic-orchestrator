@@ -263,7 +263,7 @@ func TestHandshake_HappyPath(t *testing.T) {
 	if snReq.Method != "session/new" {
 		t.Fatalf("second request method = %q, want session/new", snReq.Method)
 	}
-	var snParams SessionNewParams
+	var snParams sessionNewParams
 	if err := json.Unmarshal(snReq.Params, &snParams); err != nil {
 		t.Fatalf("unmarshal session/new params: %v", err)
 	}
@@ -277,25 +277,25 @@ func TestHandshake_HappyPath(t *testing.T) {
 	if promptReq.Method != "session/prompt" {
 		t.Fatalf("third request method = %q, want session/prompt", promptReq.Method)
 	}
-	var promptParams PromptParams
-	if err := json.Unmarshal(promptReq.Params, &promptParams); err != nil {
+	var decoded promptParams
+	if err := json.Unmarshal(promptReq.Params, &decoded); err != nil {
 		t.Fatalf("unmarshal session/prompt params: %v", err)
 	}
-	if promptParams.SessionID != "ses_abc123" {
-		t.Fatalf("session/prompt sessionId = %q, want ses_abc123", promptParams.SessionID)
+	if decoded.SessionID != "ses_abc123" {
+		t.Fatalf("session/prompt sessionId = %q, want ses_abc123", decoded.SessionID)
 	}
-	if len(promptParams.Prompt) != 1 || promptParams.Prompt[0].Text != "RENDERED PHASE PROMPT with marker path" {
-		t.Fatalf("session/prompt prompt = %+v, want the rendered phase prompt", promptParams.Prompt)
+	if len(decoded.Prompt) != 1 || decoded.Prompt[0].Text != "RENDERED PHASE PROMPT with marker path" {
+		t.Fatalf("session/prompt prompt = %+v, want the rendered phase prompt", decoded.Prompt)
 	}
 
 	if err := <-errCh; err != nil {
 		t.Fatalf("Handshake() error: %v", err)
 	}
-	if got := h.p.ACPSessionID(); got != "ses_abc123" {
-		t.Fatalf("ACPSessionID() = %q, want ses_abc123", got)
-	}
-	if got := h.p.NegotiatedVersion(); got != 1 {
-		t.Fatalf("NegotiatedVersion() = %d, want 1", got)
+	h.p.mu.Lock()
+	negotiated := h.p.negotiatedACPVersion
+	h.p.mu.Unlock()
+	if negotiated != 1 {
+		t.Fatalf("negotiated ACP version = %d, want 1", negotiated)
 	}
 	// Session-identity parity: the captured ACP session id is surfaced through
 	// the Agentico-facing SessionID so session views, PID-file identity, and the
@@ -330,7 +330,7 @@ func TestHandshake_NativeToollessReviewDeclaresNoClientToolSurface(t *testing.T)
 	h.feed(t, responseLine(t, mustID(t, initReq.ID), map[string]any{"protocolVersion": 1}))
 
 	sessionReq := h.nextRequest(t)
-	var sessionParams SessionNewParams
+	var sessionParams sessionNewParams
 	if err := json.Unmarshal(sessionReq.Params, &sessionParams); err != nil {
 		t.Fatalf("unmarshal session/new params: %v", err)
 	}
@@ -340,12 +340,12 @@ func TestHandshake_NativeToollessReviewDeclaresNoClientToolSurface(t *testing.T)
 	h.feed(t, responseLine(t, mustID(t, sessionReq.ID), map[string]any{"sessionId": "hidden-review"}))
 
 	promptReq := h.nextRequest(t)
-	var promptParams PromptParams
-	if err := json.Unmarshal(promptReq.Params, &promptParams); err != nil {
+	var decoded promptParams
+	if err := json.Unmarshal(promptReq.Params, &decoded); err != nil {
 		t.Fatalf("unmarshal session/prompt params: %v", err)
 	}
-	if len(promptParams.Prompt) != 1 || promptParams.Prompt[0].Text != "Classify one command." {
-		t.Fatalf("review prompt = %+v, want exact minimal prompt", promptParams.Prompt)
+	if len(decoded.Prompt) != 1 || decoded.Prompt[0].Text != "Classify one command." {
+		t.Fatalf("review prompt = %+v, want exact minimal prompt", decoded.Prompt)
 	}
 	if err := <-errCh; err != nil {
 		t.Fatalf("Handshake() error: %v", err)
@@ -396,8 +396,10 @@ func TestHandshake_TimesOutWhenNoResponse(t *testing.T) {
 
 // --- stream normalization tests (Task 4) ---
 
-// newPostHandshakeProtocol returns a protocol with handshake request ids pinned
-// so response/notification handling can be exercised directly.
+// newPostHandshakeProtocol returns a protocol whose handshake requests have
+// been sent to the fake harness, with the pending session/prompt request id
+// read back from the frame the harness received, so response/notification
+// handling can be exercised directly.
 func newPostHandshakeProtocol(t *testing.T, opts ...llm.ProtocolOpts) (*Protocol, *syncBuffer, int) {
 	t.Helper()
 	buf := &syncBuffer{}
@@ -407,10 +409,33 @@ func newPostHandshakeProtocol(t *testing.T, opts ...llm.ProtocolOpts) (*Protocol
 	}
 	p := NewProtocol(protocolOpts)
 	p.SetStdin(buf)
-	const initID, sessionNewID, promptID = 100, 101, 102
-	p.setRequestIDsForTest(initID, sessionNewID, promptID)
+	if err := p.sendInitialize(); err != nil {
+		t.Fatalf("sendInitialize: %v", err)
+	}
+	if err := p.sendSessionNew(); err != nil {
+		t.Fatalf("sendSessionNew: %v", err)
+	}
 	p.acpSessionID = "ses_x"
-	return p, buf, promptID
+	if err := p.sendPrompt(""); err != nil {
+		t.Fatalf("sendPrompt: %v", err)
+	}
+	var promptReq Request
+	if err := json.Unmarshal(buf.lastLine(t), &promptReq); err != nil || promptReq.Method != "session/prompt" {
+		t.Fatalf("last frame = %s, want the session/prompt request", buf.String())
+	}
+	return p, buf, promptReq.ID
+}
+
+// lastPromptRequestID returns the id of the most recent session/prompt request
+// frame the fake harness received (a reformat reminder, answer envelope, or
+// user turn), which is the id the pending-turn response must carry.
+func lastPromptRequestID(t *testing.T, buf *syncBuffer) int {
+	t.Helper()
+	var req Request
+	if err := json.Unmarshal(buf.lastLine(t), &req); err != nil || req.Method != "session/prompt" {
+		t.Fatalf("last frame = %s, want a session/prompt request", buf.String())
+	}
+	return req.ID
 }
 
 func TestParseLine_AssistantTextAccumulatesWithoutLoss(t *testing.T) {
@@ -550,6 +575,7 @@ func TestParseLine_NativeToollessReviewIgnoresAvailableCommandMetadata(t *testin
 
 func TestNativeToollessReviewRejectsQuestionAndAdditionalTurn(t *testing.T) {
 	p, buf, promptID := newPostHandshakeProtocol(t, llm.ProtocolOpts{NativeToollessReview: true})
+	basePrompts := strings.Count(buf.String(), `"method":"session/prompt"`)
 	mustParse(t, p, notificationLine(t, "session/update", map[string]any{
 		"sessionId": "ses_x",
 		"update": map[string]any{
@@ -563,8 +589,8 @@ func TestNativeToollessReviewRejectsQuestionAndAdditionalTurn(t *testing.T) {
 	if len(msgs) != 1 || msgs[0].Result == nil || !msgs[0].Result.IsError {
 		t.Fatalf("question-shaped review response produced %+v, want terminal error", msgs)
 	}
-	if got := strings.Count(buf.String(), `"method":"session/prompt"`); got != 0 {
-		t.Fatalf("question-shaped review response sent %d continuation prompts, want none: %s", got, buf.String())
+	if got := strings.Count(buf.String(), `"method":"session/prompt"`); got != basePrompts {
+		t.Fatalf("question-shaped review response sent %d continuation prompts, want none: %s", got-basePrompts, buf.String())
 	}
 	if err := p.SendUserMessage("second turn"); err == nil {
 		t.Fatal("SendUserMessage() in native tool-less review succeeded, want rejection")
@@ -722,8 +748,9 @@ func TestParseLine_ToolProgressKeepsStableID(t *testing.T) {
 	if tp.ToolUseID != "call_42" {
 		t.Fatalf("tool progress id = %q, want call_42", tp.ToolUseID)
 	}
-	if tp.ToolName != "Read file" {
-		t.Fatalf("tool progress name = %q, want 'Read file'", tp.ToolName)
+	// A display title is not a tool identifier; the name comes from the kind.
+	if tp.ToolName != "Read" {
+		t.Fatalf("tool progress name = %q, want Read", tp.ToolName)
 	}
 
 	msgs = mustParse(t, p, notificationLine(t, "session/update", map[string]any{
@@ -779,10 +806,20 @@ func TestParseLine_ToolProgressCarriesDeclaredTimeout(t *testing.T) {
 		t.Fatalf("tool progress timeout = %d, want 7200000", tp.TimeoutMS)
 	}
 
+	// A repeated in_progress update with nothing new collapses.
+	for _, m := range mustParse(t, p, notificationLine(t, "session/update", map[string]any{
+		"sessionId": "ses_x",
+		"update":    map[string]any{"sessionUpdate": "tool_call_update", "toolCallId": "bash_42", "status": "in_progress"},
+	})) {
+		if m.ToolProgress != nil {
+			t.Fatalf("bare in_progress update produced %+v, want it collapsed", m.ToolProgress)
+		}
+	}
+
 	// Later updates without rawInput keep the declared timeout.
 	tp = toolProgress(mustParse(t, p, notificationLine(t, "session/update", map[string]any{
 		"sessionId": "ses_x",
-		"update":    map[string]any{"sessionUpdate": "tool_call_update", "toolCallId": "bash_42", "status": "in_progress"},
+		"update":    map[string]any{"sessionUpdate": "tool_call_update", "toolCallId": "bash_42", "status": "completed"},
 	})))
 	if tp.TimeoutMS != 7200000 {
 		t.Fatalf("tool progress timeout after bare update = %d, want 7200000", tp.TimeoutMS)
@@ -831,7 +868,7 @@ func TestParseLine_OpenCodeTaskUpdateEmitsTaskToolUsePrompt(t *testing.T) {
 		msgs[1].TaskStarted.TaskType != "codebase-locator" {
 		t.Fatalf("second message = %+v, want normalized task start for call_task", msgs[1])
 	}
-	if msgs[2].ToolProgress == nil || msgs[2].ToolProgress.ToolName != "Find markdown/link CI checks & hooks" {
+	if msgs[2].ToolProgress == nil || msgs[2].ToolProgress.ToolName != "Task" {
 		t.Fatalf("third message = %+v, want task tool_progress", msgs[2])
 	}
 
@@ -867,8 +904,8 @@ func TestParseLine_OpenCodeTaskUpdateEmitsTaskToolUsePrompt(t *testing.T) {
 			"status":        "completed",
 		},
 	}))
-	if len(duplicateTerminal) != 1 || duplicateTerminal[0].ToolProgress == nil {
-		t.Fatalf("duplicate terminal task update produced %+v, want only tool_progress", duplicateTerminal)
+	if len(duplicateTerminal) != 0 {
+		t.Fatalf("duplicate terminal task update produced %+v, want it collapsed", duplicateTerminal)
 	}
 }
 
@@ -1081,8 +1118,7 @@ func TestParseLine_PromptErrorResponseIsNonSuccess(t *testing.T) {
 func TestParseLine_MalformedPromptResultIsNonSuccess(t *testing.T) {
 	p, _, promptID := newPostHandshakeProtocol(t)
 	// A result that is a JSON array rather than the expected object.
-	line := []byte(`{"jsonrpc":"2.0","id":102,"result":[1,2,3]}`)
-	_ = promptID
+	line := []byte(fmt.Sprintf(`{"jsonrpc":"2.0","id":%d,"result":[1,2,3]}`, promptID))
 	msgs := mustParse(t, p, line)
 	if len(msgs) != 1 || msgs[0].Result == nil || msgs[0].Result.IsSuccess() {
 		t.Fatalf("malformed prompt result produced %+v, want non-success result", msgs)
@@ -1100,8 +1136,8 @@ func TestParseLine_MalformedPromptResultIsNonSuccess(t *testing.T) {
 // contents, and environment-derived secrets.
 func TestParseLine_PromptErrorRedactsSecrets(t *testing.T) {
 	withEnv(t, []string{"PATH=/usr/bin"})
-	p, _, _ := newPostHandshakeProtocol(t)
-	line := []byte(`{"jsonrpc":"2.0","id":102,"error":{"code":-32000,"message":"auth failed for apiKey sk-ant-PROMPTMSGLEAK111222333","data":{"provider":{"anthropic":{"options":{"apiKey":"sk-ant-PROMPTDATALEAK444555666"}}}}}}`)
+	p, _, promptID := newPostHandshakeProtocol(t)
+	line := []byte(fmt.Sprintf(`{"jsonrpc":"2.0","id":%d,"error":{"code":-32000,"message":"auth failed for apiKey sk-ant-PROMPTMSGLEAK111222333","data":{"provider":{"anthropic":{"options":{"apiKey":"sk-ant-PROMPTDATALEAK444555666"}}}}}}`, promptID))
 	msgs := mustParse(t, p, line)
 	if len(msgs) != 1 || msgs[0].Result == nil || msgs[0].Result.IsSuccess() {
 		t.Fatalf("prompt error produced %+v, want non-success result", msgs)
@@ -1125,8 +1161,8 @@ func TestParseLine_PromptErrorRedactsSecrets(t *testing.T) {
 // structure nor its contents reach a surfaced or persisted diagnostic.
 func TestParseLine_PromptErrorOmitsProviderConfigInMessage(t *testing.T) {
 	withEnv(t, []string{"PATH=/usr/bin"})
-	p, _, _ := newPostHandshakeProtocol(t)
-	line := []byte(`{"jsonrpc":"2.0","id":102,"error":{"code":-32000,"message":"auth rejected for config {\"provider\":{\"anthropic\":{\"options\":{\"apiKey\":\"sk-ant-MSGCONFIGLEAK1234567890\"}}}}"}}`)
+	p, _, promptID := newPostHandshakeProtocol(t)
+	line := []byte(fmt.Sprintf(`{"jsonrpc":"2.0","id":%d,"error":{"code":-32000,"message":"auth rejected for config {\"provider\":{\"anthropic\":{\"options\":{\"apiKey\":\"sk-ant-MSGCONFIGLEAK1234567890\"}}}}"}}`, promptID))
 	msgs := mustParse(t, p, line)
 	if len(msgs) != 1 || msgs[0].Result == nil || msgs[0].Result.IsSuccess() {
 		t.Fatalf("prompt error produced %+v, want non-success result", msgs)
@@ -1436,6 +1472,11 @@ func (b *syncBuffer) String() string {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	return b.buf.String()
+}
+
+// lineCount returns the number of non-empty newline-delimited lines written.
+func (b *syncBuffer) lineCount() int {
+	return len(strings.Split(strings.TrimSpace(b.String()), "\n"))
 }
 
 // lastLine returns the last non-empty newline-delimited line written.

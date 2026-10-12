@@ -49,9 +49,17 @@ func publishAPIDiscovery(t *testing.T, runtimeDir, baseURL, token string) {
 func runAPICommand(t *testing.T, args ...string) (int, string, string) {
 	t.Helper()
 	var stdout, stderr bytes.Buffer
-	code := runArgs(append([]string{cliSubcommandAPI}, args...), &stdout, &stderr, failingServerLauncher(t), failingUpdater(t))
+	code := runArgs(append([]string{cliSubcommandAPI}, args...), &stdout, &stderr, failingServerLauncher(t))
 	assertNoAPIToken(t, stdout.String(), stderr.String())
 	return code, stdout.String(), stderr.String()
+}
+
+// useAPIRuntime points the helper at runtimeDir through the runtime-directory
+// environment variable. Not parallel: the variable is process state, so
+// callers of this helper must not run under t.Parallel.
+func useAPIRuntime(t *testing.T, runtimeDir string) {
+	t.Helper()
+	t.Setenv(agent.RuntimeDirEnv, runtimeDir)
 }
 
 func assertNoAPIToken(t *testing.T, outputs ...string) {
@@ -126,9 +134,9 @@ func wantCLIHeading(t *testing.T, stderr, code string) {
 }
 
 func TestAPIGetHealthPrintsBodyVerbatim(t *testing.T) {
-	t.Parallel()
 	srv, _ := realAPIServer(t)
-	code, stdout, stderr := runAPICommand(t, "--runtime-dir", newAPIRuntime(t, srv), "GET", "/api/v1/health")
+	useAPIRuntime(t, newAPIRuntime(t, srv))
+	code, stdout, stderr := runAPICommand(t, "GET", "/api/v1/health")
 	if code != 0 {
 		t.Fatalf("code = %d; want 0\nstderr: %s", code, stderr)
 	}
@@ -141,10 +149,10 @@ func TestAPIGetHealthPrintsBodyVerbatim(t *testing.T) {
 }
 
 func TestAPIPostSendsBearerTrustedHeaderAndJSONBody(t *testing.T) {
-	t.Parallel()
 	const created = `{"id":"feat-x","name":"x"}` + "\n"
 	srv, last := recordingServer(t, http.StatusCreated, created)
-	code, stdout, stderr := runAPICommand(t, "--runtime-dir", newAPIRuntime(t, srv), "post", "/api/v1/features", `{"name":"x"}`)
+	useAPIRuntime(t, newAPIRuntime(t, srv))
+	code, stdout, stderr := runAPICommand(t, "post", "/api/v1/features", `{"name":"x"}`)
 	if code != 0 {
 		t.Fatalf("code = %d; want 0\nstderr: %s", code, stderr)
 	}
@@ -168,9 +176,9 @@ func TestAPIPostSendsBearerTrustedHeaderAndJSONBody(t *testing.T) {
 }
 
 func TestAPIGetForwardsQueryAndOmitsContentType(t *testing.T) {
-	t.Parallel()
 	srv, last := recordingServer(t, http.StatusOK, `[]`)
-	code, _, stderr := runAPICommand(t, "--runtime-dir", newAPIRuntime(t, srv), "GET", "/api/v1/features?status=running")
+	useAPIRuntime(t, newAPIRuntime(t, srv))
+	code, _, stderr := runAPICommand(t, "GET", "/api/v1/features?status=running")
 	if code != 0 {
 		t.Fatalf("code = %d; want 0\nstderr: %s", code, stderr)
 	}
@@ -187,10 +195,10 @@ func TestAPIGetForwardsQueryAndOmitsContentType(t *testing.T) {
 }
 
 func TestAPINon2xxPrintsEnvelopeToStdoutAndExits1(t *testing.T) {
-	t.Parallel()
 	const envelope = `{"error":{"code":"conflict","title":"Conflict"}}`
 	srv, _ := recordingServer(t, http.StatusConflict, envelope)
-	code, stdout, stderr := runAPICommand(t, "--runtime-dir", newAPIRuntime(t, srv), "POST", "/api/v1/features/f1/actions/start")
+	useAPIRuntime(t, newAPIRuntime(t, srv))
+	code, stdout, stderr := runAPICommand(t, "POST", "/api/v1/features/f1/actions/start")
 	if code != 1 {
 		t.Fatalf("code = %d; want 1", code)
 	}
@@ -200,11 +208,11 @@ func TestAPINon2xxPrintsEnvelopeToStdoutAndExits1(t *testing.T) {
 }
 
 func TestAPIRealServerRejectionPrintsCanonicalEnvelope(t *testing.T) {
-	t.Parallel()
 	srv, _ := realAPIServer(t)
 	dir := t.TempDir()
 	publishAPIDiscovery(t, dir, srv.URL, "a-stale-token")
-	code, stdout, stderr := runAPICommand(t, "--runtime-dir", dir, "GET", "/api/v1/features")
+	useAPIRuntime(t, dir)
+	code, stdout, stderr := runAPICommand(t, "GET", "/api/v1/features")
 	if code != 1 {
 		t.Fatalf("code = %d; want 1", code)
 	}
@@ -217,7 +225,6 @@ func TestAPIRealServerRejectionPrintsCanonicalEnvelope(t *testing.T) {
 }
 
 func TestAPIDiscoveryFailuresRenderTheirOwnCodes(t *testing.T) {
-	t.Parallel()
 	srv, _ := recordingServer(t, http.StatusOK, `{}`)
 	cases := []struct {
 		name string
@@ -230,7 +237,6 @@ func TestAPIDiscoveryFailuresRenderTheirOwnCodes(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			t.Parallel()
 			dir := t.TempDir()
 			if tc.mode != 0 {
 				publishAPIDiscovery(t, dir, srv.URL, apiTestToken)
@@ -238,7 +244,8 @@ func TestAPIDiscoveryFailuresRenderTheirOwnCodes(t *testing.T) {
 					t.Fatalf("Chmod() error = %v", err)
 				}
 			}
-			code, stdout, stderr := runAPICommand(t, "--runtime-dir", dir, "GET", "/api/v1/health")
+			useAPIRuntime(t, dir)
+			code, stdout, stderr := runAPICommand(t, "GET", "/api/v1/health")
 			if code != 1 || stdout != "" {
 				t.Fatalf("code = %d stdout = %q; want 1 and empty stdout", code, stdout)
 			}
@@ -251,11 +258,11 @@ func TestAPIDiscoveryFailuresRenderTheirOwnCodes(t *testing.T) {
 }
 
 func TestAPIUnreachableServerRendersServerUnreachable(t *testing.T) {
-	t.Parallel()
 	srv := httptest.NewServer(http.NotFoundHandler())
 	dir := newAPIRuntime(t, srv)
 	srv.Close()
-	code, stdout, stderr := runAPICommand(t, "--runtime-dir", dir, "GET", "/api/v1/health")
+	useAPIRuntime(t, dir)
+	code, stdout, stderr := runAPICommand(t, "GET", "/api/v1/health")
 	if code != 1 || stdout != "" {
 		t.Fatalf("code = %d stdout = %q; want 1 and empty stdout", code, stdout)
 	}
@@ -265,7 +272,7 @@ func TestAPIUnreachableServerRendersServerUnreachable(t *testing.T) {
 	}
 }
 
-// TestAPIRuntimeDirResolutionOrder pins flag over environment over the
+// TestAPIRuntimeDirResolutionOrder pins environment variable over the
 // default home runtime directory. Not parallel: it sets HOME and the
 // runtime-directory variable.
 func TestAPIRuntimeDirResolutionOrder(t *testing.T) {
@@ -278,12 +285,8 @@ func TestAPIRuntimeDirResolutionOrder(t *testing.T) {
 	defaultDir := filepath.Join(home, ".agentic-orchestrator")
 	publishAPIDiscovery(t, defaultDir, serve("default").URL, apiTestToken)
 	envDir := newAPIRuntime(t, serve("env"))
-	flagDir := newAPIRuntime(t, serve("flag"))
 
 	t.Setenv(agent.RuntimeDirEnv, envDir)
-	if _, stdout, stderr := runAPICommand(t, "--runtime-dir", flagDir, "GET", "/api/v1/health"); stdout != `{"who":"flag"}` {
-		t.Fatalf("with flag: stdout = %q stderr = %q; want the flag runtime", stdout, stderr)
-	}
 	if _, stdout, stderr := runAPICommand(t, "GET", "/api/v1/health"); stdout != `{"who":"env"}` {
 		t.Fatalf("with env: stdout = %q stderr = %q; want the env runtime", stdout, stderr)
 	}
@@ -294,10 +297,9 @@ func TestAPIRuntimeDirResolutionOrder(t *testing.T) {
 }
 
 func TestAPIFlagsMayFollowPositionals(t *testing.T) {
-	t.Parallel()
 	srv, last := recordingServer(t, http.StatusOK, `{}`)
-	dir := newAPIRuntime(t, srv)
-	code, _, stderr := runAPICommand(t, "PATCH", "/api/v1/features/f1/config", `{"a":1}`, "--runtime-dir", dir, "--timeout=5s")
+	useAPIRuntime(t, newAPIRuntime(t, srv))
+	code, _, stderr := runAPICommand(t, "PATCH", "/api/v1/features/f1/config", `{"a":1}`, "--timeout=5s")
 	if code != 0 {
 		t.Fatalf("code = %d; want 0\nstderr: %s", code, stderr)
 	}
@@ -312,7 +314,6 @@ func TestAPIInvalidUsageNeverReachesTheServer(t *testing.T) {
 		t.Error("server reached on an invalid-usage path")
 	}))
 	t.Cleanup(srv.Close)
-	dir := newAPIRuntime(t, srv)
 	cases := []struct {
 		name string
 		args []string
@@ -329,6 +330,8 @@ func TestAPIInvalidUsageNeverReachesTheServer(t *testing.T) {
 		{"bad timeout", []string{"--timeout", "soon", "GET", "/api/v1/health"}, "invalid --timeout"},
 		{"zero timeout", []string{"--timeout", "0s", "GET", "/api/v1/health"}, "invalid --timeout"},
 		{"unknown flag", []string{"--bogus", "GET", "/api/v1/health"}, "unknown api flag: --bogus"},
+		{"removed runtime-dir flag", []string{"--runtime-dir", "/tmp/rt", "GET", "/api/v1/health"}, "unknown api flag: --runtime-dir"},
+		{"removed runtime-dir flag equals form", []string{"--runtime-dir=/tmp/rt", "GET", "/api/v1/health"}, "unknown api flag: --runtime-dir=/tmp/rt"},
 		{"stream without timeout", []string{"GET", "/api/v1/events"}, "requires --timeout"},
 		{"stream with post", []string{"--timeout", "1s", "POST", "/api/v1/events"}, "stream paths accept only GET"},
 		{"after on one-shot path", []string{"--after", "3", "GET", "/api/v1/features"}, "--after applies only to stream paths"},
@@ -337,7 +340,7 @@ func TestAPIInvalidUsageNeverReachesTheServer(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
-			code, stdout, stderr := runAPICommand(t, append([]string{"--runtime-dir", dir}, tc.args...)...)
+			code, stdout, stderr := runAPICommand(t, tc.args...)
 			if code != 1 || stdout != "" {
 				t.Fatalf("code = %d stdout = %q; want 1 and empty stdout", code, stdout)
 			}
@@ -356,10 +359,13 @@ func TestAPIHelpPrintsSubcommandUsage(t *testing.T) {
 		if code != 0 || stderr != "" {
 			t.Fatalf("%s: code = %d stderr = %q; want 0 and empty stderr", flag, code, stderr)
 		}
-		for _, want := range []string{"Usage: agentico api", "--runtime-dir", "--timeout", "--after", agent.RuntimeDirEnv} {
+		for _, want := range []string{"Usage: agentico api", "--timeout", "--after", agent.RuntimeDirEnv} {
 			if !strings.Contains(stdout, want) {
 				t.Fatalf("%s: usage %q does not mention %q", flag, stdout, want)
 			}
+		}
+		if strings.Contains(stdout, "--runtime-dir") {
+			t.Fatalf("%s: usage %q still mentions the removed --runtime-dir flag", flag, stdout)
 		}
 	}
 	var stdout bytes.Buffer
@@ -403,7 +409,7 @@ func startAPIStream(t *testing.T, args ...string) *streamResult {
 	pr, pw := io.Pipe()
 	res := &streamResult{lines: make(chan string, 64), done: make(chan int, 1)}
 	go func() {
-		code := runArgs(append([]string{cliSubcommandAPI}, args...), pw, &res.err, failingServerLauncher(t), failingUpdater(t))
+		code := runArgs(append([]string{cliSubcommandAPI}, args...), pw, &res.err, failingServerLauncher(t))
 		_ = pw.Close()
 		res.done <- code
 	}()
@@ -452,11 +458,10 @@ func (r *streamResult) wait(t *testing.T) (int, []string) {
 }
 
 func TestAPIStreamPrintsConnectedAndPublishedEventsUntilTimeout(t *testing.T) {
-	t.Parallel()
 	srv, events := realAPIServer(t)
-	dir := newAPIRuntime(t, srv)
+	useAPIRuntime(t, newAPIRuntime(t, srv))
 	started := time.Now()
-	stream := startAPIStream(t, "--runtime-dir", dir, "--timeout", "2s", "GET", "/api/v1/events?heartbeat_ms=10")
+	stream := startAPIStream(t, "--timeout", "2s", "GET", "/api/v1/events?heartbeat_ms=10")
 
 	if first := stream.next(t); !strings.Contains(first, `"kind":"connected"`) {
 		t.Fatalf("first line = %q; want the connected event payload", first)
@@ -486,10 +491,9 @@ func TestAPIStreamPrintsConnectedAndPublishedEventsUntilTimeout(t *testing.T) {
 }
 
 func TestAPIStreamStaleCursorSurfacesStreamReset(t *testing.T) {
-	t.Parallel()
 	srv, _ := realAPIServer(t)
-	dir := newAPIRuntime(t, srv)
-	stream := startAPIStream(t, "--runtime-dir", dir, "--timeout", "500ms", "--after", "999", "GET", "/api/v1/events")
+	useAPIRuntime(t, newAPIRuntime(t, srv))
+	stream := startAPIStream(t, "--timeout", "500ms", "--after", "999", "GET", "/api/v1/events")
 	if first := stream.next(t); !strings.Contains(first, `"kind":"stream.reset"`) {
 		t.Fatalf("first line = %q; want the stream.reset event", first)
 	}
@@ -499,7 +503,6 @@ func TestAPIStreamStaleCursorSurfacesStreamReset(t *testing.T) {
 }
 
 func TestAPIStreamForwardsCursorAndExitsOnServerClose(t *testing.T) {
-	t.Parallel()
 	var (
 		mu  sync.Mutex
 		got *http.Request
@@ -515,9 +518,9 @@ func TestAPIStreamForwardsCursorAndExitsOnServerClose(t *testing.T) {
 		_, _ = fmt.Fprint(w, "event: state\ndata: {\"kind\":\"state\"}\n\n")
 	}))
 	t.Cleanup(srv.Close)
-	dir := newAPIRuntime(t, srv)
+	useAPIRuntime(t, newAPIRuntime(t, srv))
 	started := time.Now()
-	stream := startAPIStream(t, "--runtime-dir", dir, "--timeout", "30s", "--after", "7", "GET", "/api/v1/supervisor/events")
+	stream := startAPIStream(t, "--timeout", "30s", "--after", "7", "GET", "/api/v1/supervisor/events")
 	code, lines := stream.wait(t)
 	if code != 0 {
 		t.Fatalf("code = %d; want 0 on server close\nstderr: %s", code, stream.err.String())
@@ -543,11 +546,11 @@ func TestAPIStreamForwardsCursorAndExitsOnServerClose(t *testing.T) {
 }
 
 func TestAPIStreamNon2xxPrintsEnvelope(t *testing.T) {
-	t.Parallel()
 	srv, _ := realAPIServer(t)
 	dir := t.TempDir()
 	publishAPIDiscovery(t, dir, srv.URL, "a-stale-token")
-	code, stdout, stderr := runAPICommand(t, "--runtime-dir", dir, "--timeout", "2s", "GET", "/api/v1/events")
+	useAPIRuntime(t, dir)
+	code, stdout, stderr := runAPICommand(t, "--timeout", "2s", "GET", "/api/v1/events")
 	if code != 1 || stderr != "" || !strings.Contains(stdout, `"code":"unauthorized"`) {
 		t.Fatalf("code = %d stdout = %q stderr = %q; want the unauthorized envelope on stdout and exit 1", code, stdout, stderr)
 	}

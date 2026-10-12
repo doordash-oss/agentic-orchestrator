@@ -15,7 +15,6 @@
 package agent
 
 import (
-	"context"
 	"encoding/json"
 	"os"
 	"path/filepath"
@@ -41,8 +40,8 @@ func TestBuildKBSessionIDKeepsQualifiedRepoNamesURLSafeAndDistinct(t *testing.T)
 	t.Parallel()
 
 	validSessionID := regexp.MustCompile(`^[A-Za-z0-9._-]{1,200}$`)
-	first := BuildKBSessionID("abc123", "root-a/service")
-	second := BuildKBSessionID("abc123", "root-b/service")
+	first := buildKBSessionID("abc123", "root-a/service")
+	second := buildKBSessionID("abc123", "root-b/service")
 
 	for _, id := range []string{first, second} {
 		if !validSessionID.MatchString(id) {
@@ -55,7 +54,7 @@ func TestBuildKBSessionIDKeepsQualifiedRepoNamesURLSafeAndDistinct(t *testing.T)
 	if got := RepoNameFromKBSession(first); got != "" {
 		t.Errorf("RepoNameFromKBSession(encoded ID) = %q, want empty metadata fallback", got)
 	}
-	if got, want := BuildKBSessionID("abc123", "my-service"), "abc123-kb-my-service"; got != want {
+	if got, want := buildKBSessionID("abc123", "my-service"), "abc123-kb-my-service"; got != want {
 		t.Errorf("BuildKBSessionID preserved format = %q, want %q", got, want)
 	}
 }
@@ -69,7 +68,7 @@ func TestKBPath(t *testing.T) {
 }
 
 func TestKBRootDir(t *testing.T) {
-	got := KBRootDir("/tmp/kb")
+	got := kbRootDir("/tmp/kb")
 	want := "/tmp/kb"
 	if got != want {
 		t.Errorf("KBRootDir = %q, want %q", got, want)
@@ -77,7 +76,7 @@ func TestKBRootDir(t *testing.T) {
 }
 
 func TestKBLockPath(t *testing.T) {
-	got := KBLockPath("/tmp/kb")
+	got := kbLockPath("/tmp/kb")
 	want := "/tmp/kb/kb.lock"
 	if got != want {
 		t.Errorf("KBLockPath = %q, want %q", got, want)
@@ -131,139 +130,67 @@ func TestAcquireReleaseKBLock(t *testing.T) {
 	dir := t.TempDir()
 
 	// First acquire succeeds
-	locked, err := AcquireKBLock(dir, "feature-1")
+	locked, err := acquireKBLockWithStatus(dir, "feature-1", nil)
 	if err != nil {
-		t.Fatalf("AcquireKBLock: %v", err)
+		t.Fatalf("AcquireKBLockWithStatus: %v", err)
 	}
 	if !locked {
 		t.Fatal("expected lock to be acquired")
 	}
 
 	// Second acquire fails (contention)
-	locked2, err := AcquireKBLock(dir, "feature-2")
+	locked2, err := acquireKBLockWithStatus(dir, "feature-2", nil)
 	if err != nil {
-		t.Fatalf("AcquireKBLock (second): %v", err)
+		t.Fatalf("AcquireKBLockWithStatus (second): %v", err)
 	}
 	if locked2 {
 		t.Fatal("expected lock NOT to be acquired (contention)")
 	}
 
 	// Release with wrong feature ID should not remove lock
-	if err := ReleaseKBLock(dir, "feature-2"); err != nil {
+	if err := releaseKBLock(dir, "feature-2"); err != nil {
 		t.Fatalf("ReleaseKBLock (wrong ID): %v", err)
 	}
 	// Lock should still exist
-	if _, err := os.Stat(KBLockPath(dir)); err != nil {
+	if _, err := os.Stat(kbLockPath(dir)); err != nil {
 		t.Fatal("lock should still exist after release with wrong ID")
 	}
 
 	// Release with correct ID
-	if err := ReleaseKBLock(dir, "feature-1"); err != nil {
+	if err := releaseKBLock(dir, "feature-1"); err != nil {
 		t.Fatalf("ReleaseKBLock: %v", err)
 	}
-	if _, err := os.Stat(KBLockPath(dir)); !os.IsNotExist(err) {
+	if _, err := os.Stat(kbLockPath(dir)); !os.IsNotExist(err) {
 		t.Fatal("lock should be removed after release")
 	}
 
 	// Reentrant: same feature can re-acquire its own lock
-	_, _ = AcquireKBLock(dir, "feature-reentrant")
-	locked3, err := AcquireKBLock(dir, "feature-reentrant")
+	_, _ = acquireKBLockWithStatus(dir, "feature-reentrant", nil)
+	locked3, err := acquireKBLockWithStatus(dir, "feature-reentrant", nil)
 	if err != nil {
-		t.Fatalf("AcquireKBLock (reentrant): %v", err)
+		t.Fatalf("AcquireKBLockWithStatus (reentrant): %v", err)
 	}
 	if !locked3 {
 		t.Fatal("expected reentrant lock acquisition to succeed")
 	}
-	if err := ReleaseKBLock(dir, "feature-reentrant"); err != nil {
+	if err := releaseKBLock(dir, "feature-reentrant"); err != nil {
 		t.Fatalf("ReleaseKBLock (reentrant): %v", err)
 	}
 
 	// Force release (empty feature ID)
-	_, _ = AcquireKBLock(dir, "feature-3")
-	if err := ReleaseKBLock(dir, ""); err != nil {
+	_, _ = acquireKBLockWithStatus(dir, "feature-3", nil)
+	if err := releaseKBLock(dir, ""); err != nil {
 		t.Fatalf("ReleaseKBLock (force): %v", err)
 	}
-	if _, err := os.Stat(KBLockPath(dir)); !os.IsNotExist(err) {
+	if _, err := os.Stat(kbLockPath(dir)); !os.IsNotExist(err) {
 		t.Fatal("lock should be removed after force release")
-	}
-}
-
-func TestIsKBLockStale(t *testing.T) {
-	dir := t.TempDir()
-
-	// No lock = not stale
-	if IsKBLockStale(dir, nil) {
-		t.Error("expected no stale lock when no lock exists")
-	}
-
-	// Fresh lock = not stale (nil statusFn — time-only check)
-	_, _ = AcquireKBLock(dir, "feature-1")
-	if IsKBLockStale(dir, nil) {
-		t.Error("expected fresh lock not to be stale")
-	}
-}
-
-func TestIsKBLockStaleOwnerCheck(t *testing.T) {
-	tests := []struct {
-		name      string
-		statusFn  FeatureStatusFunc
-		wantStale bool
-	}{
-		{
-			name:      "owner still building KB",
-			statusFn:  func(id string) (int, bool) { return int(feature.StatusBuildingKB), true },
-			wantStale: false,
-		},
-		{
-			name:      "owner no longer building KB",
-			statusFn:  func(id string) (int, bool) { return 0, true }, // StatusCreated
-			wantStale: true,
-		},
-		{
-			name:      "owner feature not found",
-			statusFn:  func(id string) (int, bool) { return 0, false },
-			wantStale: true,
-		},
-		{
-			name:      "nil statusFn — time-only",
-			statusFn:  nil,
-			wantStale: false,
-		},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			dir := t.TempDir()
-			_, _ = AcquireKBLock(dir, "feature-1")
-			got := IsKBLockStale(dir, tt.statusFn)
-			if got != tt.wantStale {
-				t.Errorf("IsKBLockStale = %v, want %v", got, tt.wantStale)
-			}
-		})
-	}
-}
-
-func TestIsKBLockStalePreservesOldActiveOwner(t *testing.T) {
-	dir := t.TempDir()
-	old := KBLockInfo{FeatureID: "feature-1", Timestamp: time.Now().Add(-2 * time.Hour)}
-	data, _ := json.Marshal(old)
-	if err := os.WriteFile(KBLockPath(dir), data, 0o644); err != nil {
-		t.Fatalf("write lock: %v", err)
-	}
-
-	if IsKBLockStale(dir, func(id string) (int, bool) {
-		return int(feature.StatusBuildingKB), true
-	}) {
-		t.Fatal("old lock with confirmed BuildingKB owner should not be stale")
-	}
-	if !IsKBLockStale(dir, nil) {
-		t.Fatal("old lock without owner status should use age fallback")
 	}
 }
 
 func TestAcquireKBLockWithStatusReclaimsMissingOrStoppedOwner(t *testing.T) {
 	tests := []struct {
 		name     string
-		statusFn FeatureStatusFunc
+		statusFn featureStatusFunc
 	}{
 		{
 			name:     "missing owner",
@@ -277,11 +204,11 @@ func TestAcquireKBLockWithStatusReclaimsMissingOrStoppedOwner(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			dir := t.TempDir()
-			if locked, err := AcquireKBLock(dir, "owner"); err != nil || !locked {
-				t.Fatalf("AcquireKBLock owner = %v, %v; want acquired", locked, err)
+			if locked, err := acquireKBLockWithStatus(dir, "owner", nil); err != nil || !locked {
+				t.Fatalf("AcquireKBLockWithStatus owner = %v, %v; want acquired", locked, err)
 			}
 
-			locked, err := AcquireKBLockWithStatus(dir, "waiter", tt.statusFn)
+			locked, err := acquireKBLockWithStatus(dir, "waiter", tt.statusFn)
 			if err != nil {
 				t.Fatalf("AcquireKBLockWithStatus: %v", err)
 			}
@@ -299,11 +226,11 @@ func TestAcquireKBLockWithStatusPreservesActiveOwner(t *testing.T) {
 	dir := t.TempDir()
 	old := KBLockInfo{FeatureID: "owner", Timestamp: time.Now().Add(-2 * time.Hour)}
 	data, _ := json.Marshal(old)
-	if err := os.WriteFile(KBLockPath(dir), data, 0o644); err != nil {
+	if err := os.WriteFile(kbLockPath(dir), data, 0o644); err != nil {
 		t.Fatalf("write lock: %v", err)
 	}
 
-	locked, err := AcquireKBLockWithStatus(dir, "waiter", func(id string) (int, bool) {
+	locked, err := acquireKBLockWithStatus(dir, "waiter", func(id string) (int, bool) {
 		return int(feature.StatusBuildingKB), true
 	})
 	if err != nil {
@@ -319,8 +246,8 @@ func TestAcquireKBLockWithStatusPreservesActiveOwner(t *testing.T) {
 
 func TestAcquireKBLockWithStatusConcurrentReclaimHasOneWinner(t *testing.T) {
 	dir := t.TempDir()
-	if locked, err := AcquireKBLock(dir, "owner"); err != nil || !locked {
-		t.Fatalf("AcquireKBLock owner = %v, %v; want acquired", locked, err)
+	if locked, err := acquireKBLockWithStatus(dir, "owner", nil); err != nil || !locked {
+		t.Fatalf("AcquireKBLockWithStatus owner = %v, %v; want acquired", locked, err)
 	}
 
 	const contenders = 16
@@ -331,7 +258,7 @@ func TestAcquireKBLockWithStatusConcurrentReclaimHasOneWinner(t *testing.T) {
 		i := i
 		go func() {
 			defer wg.Done()
-			locked, err := AcquireKBLockWithStatus(dir, "waiter-"+string(rune('a'+i)), func(id string) (int, bool) {
+			locked, err := acquireKBLockWithStatus(dir, "waiter-"+string(rune('a'+i)), func(id string) (int, bool) {
 				if id == "owner" {
 					return 0, false
 				}
@@ -354,8 +281,8 @@ func TestAcquireKBLockWithStatusConcurrentReclaimHasOneWinner(t *testing.T) {
 
 func TestReleaseKBLockIfOwnedDoesNotRemoveReplacement(t *testing.T) {
 	dir := t.TempDir()
-	if locked, err := AcquireKBLock(dir, "replacement"); err != nil || !locked {
-		t.Fatalf("AcquireKBLock replacement = %v, %v; want acquired", locked, err)
+	if locked, err := acquireKBLockWithStatus(dir, "replacement", nil); err != nil || !locked {
+		t.Fatalf("AcquireKBLockWithStatus replacement = %v, %v; want acquired", locked, err)
 	}
 
 	removed, err := ReleaseKBLockIfOwned(dir, "old-owner")
@@ -408,61 +335,8 @@ func TestIsKBFreshRequiresKBFile(t *testing.T) {
 	}
 }
 
-func TestHasKBChanges(t *testing.T) {
-	repoDir := t.TempDir()
-	runner := &fakeGitRunner{head: "commit-a"}
-	headCommit := runner.head
-	kbDir := t.TempDir()
-
-	t.Run("no state.json returns true", func(t *testing.T) {
-		emptyDir := t.TempDir()
-		has, err := HasKBChanges(context.Background(), runner, emptyDir, repoDir)
-		if err != nil {
-			t.Fatalf("unexpected error: %v", err)
-		}
-		if !has {
-			t.Error("expected true when no state.json exists")
-		}
-	})
-
-	t.Run("no index.md returns true", func(t *testing.T) {
-		dir := t.TempDir()
-		_ = SaveKBState(dir, &KBState{HeadCommit: headCommit, LastUpdated: time.Now(), Version: 1})
-		has, err := HasKBChanges(context.Background(), runner, dir, repoDir)
-		if err != nil {
-			t.Fatalf("unexpected error: %v", err)
-		}
-		if !has {
-			t.Error("expected true when index.md is missing")
-		}
-	})
-
-	t.Run("state + index.md + no changes returns false", func(t *testing.T) {
-		_ = SaveKBState(kbDir, &KBState{HeadCommit: headCommit, LastUpdated: time.Now(), Version: 1})
-		_ = os.WriteFile(KBPath(kbDir), []byte("# KB"), 0o644)
-		has, err := HasKBChanges(context.Background(), runner, kbDir, repoDir)
-		if err != nil {
-			t.Fatalf("unexpected error: %v", err)
-		}
-		if has {
-			t.Error("expected false when no git changes exist")
-		}
-	})
-
-	t.Run("state + index.md + new commits returns true", func(t *testing.T) {
-		runner.log = "commit-b second\n"
-		has, err := HasKBChanges(context.Background(), runner, kbDir, repoDir)
-		if err != nil {
-			t.Fatalf("unexpected error: %v", err)
-		}
-		if !has {
-			t.Error("expected true when new commits exist")
-		}
-	})
-}
-
 func TestBuildKBPromptFullBuild(t *testing.T) {
-	prompt := BuildKBPrompt("myrepo", "/tmp/myrepo", "/tmp/kb", "", "")
+	prompt := buildKBPrompt("myrepo", "/tmp/myrepo", "/tmp/kb", "", "")
 	checks := []string{
 		"# Repository Context",
 		"**Repository**: myrepo",
@@ -481,7 +355,7 @@ func TestBuildKBPromptFullBuild(t *testing.T) {
 }
 
 func TestBuildKBPromptIncrementalUpdate(t *testing.T) {
-	prompt := BuildKBPrompt("myrepo", "/tmp/myrepo", "/tmp/kb", "/tmp/kb/index.md", "abc123")
+	prompt := buildKBPrompt("myrepo", "/tmp/myrepo", "/tmp/kb", "/tmp/kb/index.md", "abc123")
 	checks := []string{
 		"# Repository Context",
 		"**KB Root Directory**: /tmp/kb",

@@ -63,8 +63,9 @@ import {
   toTranscriptMessage,
   type ServerTransport,
 } from './serverClient';
+import { defined } from '../shared/defined';
 
-export type RunHistoryTransport = ServerTransport;
+type RunHistoryTransport = ServerTransport;
 
 export class RunHistoryService {
   constructor(private readonly transport: RunHistoryTransport) {}
@@ -112,7 +113,10 @@ export class RunHistoryService {
     return {
       featureId: validateWithSchema(response.feature.id, FeatureIdSchema),
       activity: redactText(response.activity),
-      ...(response.session === undefined ? {} : { session: toSessionSummary(response.session) }),
+      ...defined(
+        'session',
+        response.session === undefined ? undefined : toSessionSummary(response.session),
+      ),
       contextPercentage: response.context.percentage,
       totalSeconds: response.timing.total_seconds,
       totalUsd: response.cost.total_usd,
@@ -194,7 +198,7 @@ export class RunHistoryService {
       sourceRevision: response.source_revision,
       targetPhase: response.target_phase,
       effectivePhase: response.effective_phase,
-      ...(response.roadmap_phase !== undefined ? { roadmapPhase: response.roadmap_phase } : {}),
+      ...defined('roadmapPhase', response.roadmap_phase),
       ...(response.upgrade_pipeline !== undefined && response.upgrade_pipeline !== ''
         ? { upgradePipeline: response.upgrade_pipeline }
         : {}),
@@ -211,38 +215,30 @@ export class RunHistoryService {
             })),
           }
         : {}),
-      ...(response.valid_roadmap_phases !== undefined
-        ? { validRoadmapPhases: response.valid_roadmap_phases }
-        : {}),
-      ...(response.upgrade_pipeline_options !== undefined
-        ? { upgradePipelineOptions: response.upgrade_pipeline_options }
-        : {}),
-      ...(response.carried_phases !== undefined ? { carriedPhases: response.carried_phases } : {}),
-      ...(response.carried_from_run !== undefined
-        ? { carriedFromRun: response.carried_from_run }
-        : {}),
-      ...(response.pr_consequences !== undefined
-        ? {
-            prConsequences: response.pr_consequences.map((p) => ({
+      ...defined('validRoadmapPhases', response.valid_roadmap_phases),
+      ...defined('upgradePipelineOptions', response.upgrade_pipeline_options),
+      ...defined('carriedPhases', response.carried_phases),
+      ...defined('carriedFromRun', response.carried_from_run),
+      ...defined(
+        'prConsequences',
+        response.pr_consequences === undefined
+          ? undefined
+          : response.pr_consequences.map((p) => ({
               repo: p.repo,
               prUrl: p.pr_url,
             })),
-          }
-        : {}),
-      ...(response.worktree_consequences !== undefined
-        ? {
-            worktreeConsequences: response.worktree_consequences.map((w) => ({
+      ),
+      ...defined(
+        'worktreeConsequences',
+        response.worktree_consequences === undefined
+          ? undefined
+          : response.worktree_consequences.map((w) => ({
               repo: w.repo,
               resetKind: w.reset_kind,
             })),
-          }
-        : {}),
-      ...(response.backup_branch_repos !== undefined
-        ? { backupBranchRepos: response.backup_branch_repos }
-        : {}),
-      ...(response.validation_findings !== undefined
-        ? { validationFindings: response.validation_findings }
-        : {}),
+      ),
+      ...defined('backupBranchRepos', response.backup_branch_repos),
+      ...defined('validationFindings', response.validation_findings),
     };
   }
 
@@ -265,19 +261,14 @@ export class RunHistoryService {
       featureId: validateWithSchema(result.feature_id, FeatureIdSchema),
       action: 'rewind',
       result: result.result,
-      ...(result.effective_phase !== undefined && result.effective_phase !== ''
-        ? { phase: result.effective_phase }
-        : {}),
-      sessionIds: [],
-      ...(result.source_run_number !== undefined
-        ? { sourceRunNumber: result.source_run_number }
-        : {}),
-      ...(result.new_run_number !== undefined ? { newRunNumber: result.new_run_number } : {}),
+      ...defined('sourceRunNumber', result.source_run_number),
+      ...defined('newRunNumber', result.new_run_number),
       // Canonical warning objects cross IPC intact except diagnostics,
       // which pass through the same redaction as every other raw text.
-      ...(result.warnings === undefined
-        ? {}
-        : { warnings: result.warnings.map(redactedCanonicalError) }),
+      ...defined(
+        'warnings',
+        result.warnings === undefined ? undefined : result.warnings.map(redactedCanonicalError),
+      ),
     };
   }
 
@@ -289,20 +280,18 @@ export class RunHistoryService {
 function toRunSummaryView(run: ServerRunSummary): RunSummaryView {
   return {
     runNumber: run.run_number,
-    ...(run.started_at !== undefined ? { startedAt: run.started_at } : {}),
-    ...(run.sealed_at !== undefined ? { sealedAt: run.sealed_at } : {}),
-    ...(run.seal_reason !== undefined ? { sealReason: run.seal_reason } : {}),
-    ...(run.current_phase !== undefined ? { currentPhase: run.current_phase } : {}),
-    ...(run.phase_status !== undefined ? { phaseStatus: run.phase_status } : {}),
-    ...(run.iteration !== undefined ? { iteration: run.iteration } : {}),
-    ...(run.roadmap_phase !== undefined ? { roadmapPhase: run.roadmap_phase } : {}),
-    ...(run.roadmap_total !== undefined ? { roadmapTotal: run.roadmap_total } : {}),
-    ...(run.pending_review_phase !== undefined
-      ? { pendingReviewPhase: run.pending_review_phase }
-      : {}),
-    ...(run.is_rewind !== undefined ? { isRewind: run.is_rewind } : {}),
+    ...defined('startedAt', run.started_at),
+    ...defined('sealedAt', run.sealed_at),
+    ...defined('sealReason', run.seal_reason),
+    ...defined('currentPhase', run.current_phase),
+    ...defined('phaseStatus', run.phase_status),
+    ...defined('iteration', run.iteration),
+    ...defined('roadmapPhase', run.roadmap_phase),
+    ...defined('roadmapTotal', run.roadmap_total),
+    ...defined('pendingReviewPhase', run.pending_review_phase),
+    ...defined('isRewind', run.is_rewind),
     artifactCount: run.artifact_count,
-    ...(run.has_need_user_gate !== undefined ? { hasNeedUserGate: run.has_need_user_gate } : {}),
+    ...defined('hasNeedUserGate', run.has_need_user_gate),
   };
 }
 
@@ -310,36 +299,36 @@ function toRunDetailView(run: ServerRunDetail): RunDetailView {
   const base = toRunSummaryView(run);
   return {
     ...base,
-    ...(run.rewind_target !== undefined ? { rewindTarget: run.rewind_target } : {}),
-    ...(run.rewind_roadmap_phase !== undefined
-      ? { rewindRoadmapPhase: run.rewind_roadmap_phase }
-      : {}),
-    ...(run.carried_from_run !== undefined ? { carriedFromRun: run.carried_from_run } : {}),
-    ...(run.carried_phases !== undefined ? { carriedPhases: run.carried_phases } : {}),
-    ...(run.backup_branch_repos !== undefined
-      ? { backupBranchRepos: run.backup_branch_repos }
-      : {}),
-    ...(run.committing !== undefined ? { committing: run.committing } : {}),
-    ...(run.timing !== undefined
-      ? { timing: { totalSeconds: run.timing.total_seconds, byPhase: run.timing.by_phase } }
-      : {}),
-    ...(run.cost !== undefined
-      ? { cost: { totalUsd: run.cost.total_usd, byPhase: run.cost.by_phase } }
-      : {}),
+    ...defined('rewindTarget', run.rewind_target),
+    ...defined('rewindRoadmapPhase', run.rewind_roadmap_phase),
+    ...defined('carriedFromRun', run.carried_from_run),
+    ...defined('carriedPhases', run.carried_phases),
+    ...defined('backupBranchRepos', run.backup_branch_repos),
+    ...defined('committing', run.committing),
+    ...defined(
+      'timing',
+      run.timing === undefined
+        ? undefined
+        : { totalSeconds: run.timing.total_seconds, byPhase: run.timing.by_phase },
+    ),
+    ...defined(
+      'cost',
+      run.cost === undefined
+        ? undefined
+        : { totalUsd: run.cost.total_usd, byPhase: run.cost.by_phase },
+    ),
   };
 }
 
 function toArtifactView(artifact: ServerArtifact): RunArtifactsListResult['artifacts'][number] {
   return {
     id: artifact.id,
-    ...(artifact.type !== undefined ? { type: artifact.type } : {}),
-    ...(artifact.category !== undefined ? { category: artifact.category } : {}),
+    ...defined('type', artifact.type),
+    ...defined('category', artifact.category),
     runNumber: artifact.run_number,
-    ...(artifact.phase !== undefined ? { phase: artifact.phase } : {}),
-    ...(artifact.size !== undefined ? { size: artifact.size } : {}),
-    ...(artifact.modified_at !== undefined ? { modifiedAt: artifact.modified_at } : {}),
-    ...(artifact.content_available !== undefined
-      ? { contentAvailable: artifact.content_available }
-      : {}),
+    ...defined('phase', artifact.phase),
+    ...defined('size', artifact.size),
+    ...defined('modifiedAt', artifact.modified_at),
+    ...defined('contentAvailable', artifact.content_available),
   };
 }

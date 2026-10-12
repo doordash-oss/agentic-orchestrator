@@ -17,6 +17,7 @@ package session
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"os"
 	"os/exec"
@@ -137,7 +138,7 @@ func TestSessionInitPersistsProtocolSessionIDToPIDFile(t *testing.T) {
 		if msg.Init == nil {
 			return
 		}
-		if pf, err := ReadPIDFile(filepath.Join(dir, PIDFileName("repo"))); err == nil {
+		if pf, err := ReadPIDFile(filepath.Join(dir, pidfileName("repo"))); err == nil {
 			captured = pf.SessionID
 		}
 	})
@@ -173,6 +174,7 @@ sleep 30
 		nil,
 		&SessionOpts{
 			ProviderName: "test-provider",
+			Protocol:     claude.NewProtocol(llm.ProtocolOpts{}),
 			Watchdog: &ports.SessionWatchdogConfig{
 				PendingToolIdleTimeout:    200 * time.Millisecond,
 				TurnCompletionIdleTimeout: 100 * time.Millisecond,
@@ -228,6 +230,7 @@ sleep 30
 		nil,
 		&SessionOpts{
 			ProviderName: "test-provider",
+			Protocol:     claude.NewProtocol(llm.ProtocolOpts{}),
 			Watchdog: &ports.SessionWatchdogConfig{
 				PendingToolIdleTimeout:    25 * time.Millisecond,
 				TurnCompletionIdleTimeout: 25 * time.Millisecond,
@@ -284,6 +287,7 @@ printf '%s\n' '{"type":"result","subtype":"success","result":"ok"}'
 		nil,
 		&SessionOpts{
 			ProviderName: "test-provider",
+			Protocol:     claude.NewProtocol(llm.ProtocolOpts{}),
 			Watchdog: &ports.SessionWatchdogConfig{
 				PendingToolIdleTimeout:    25 * time.Millisecond,
 				TurnCompletionIdleTimeout: 25 * time.Millisecond,
@@ -329,6 +333,7 @@ sleep 30
 		nil,
 		&SessionOpts{
 			ProviderName: "test-provider",
+			Protocol:     claude.NewProtocol(llm.ProtocolOpts{}),
 			Watchdog: &ports.SessionWatchdogConfig{
 				PendingToolIdleTimeout:    50 * time.Millisecond,
 				TurnCompletionIdleTimeout: 50 * time.Millisecond,
@@ -401,6 +406,7 @@ printf '%s\n' '{"type":"result","subtype":"success","result":"ok"}'
 		nil,
 		&SessionOpts{
 			ProviderName: "test-provider",
+			Protocol:     claude.NewProtocol(llm.ProtocolOpts{}),
 			Watchdog: &ports.SessionWatchdogConfig{
 				// This test verifies the completed→result lifecycle, not a
 				// near-deadline race. Leave enough per-test headroom for the
@@ -876,6 +882,7 @@ sleep 30
 		nil,
 		&SessionOpts{
 			ProviderName: "test-provider",
+			Protocol:     claude.NewProtocol(llm.ProtocolOpts{}),
 			Watchdog: &ports.SessionWatchdogConfig{
 				PendingToolIdleTimeout:    25 * time.Millisecond,
 				TurnCompletionIdleTimeout: 25 * time.Millisecond,
@@ -968,6 +975,7 @@ func TestSessionStop(t *testing.T) {
 	os.WriteFile(script, []byte("#!/bin/bash\necho '"+initMsg+"'\ncat > /dev/null\n"), 0o755)
 
 	s := NewSession("stop-test", "feat-1", feature.PhaseResearch)
+	s.protocol = claude.NewProtocol(llm.ProtocolOpts{})
 	err := s.Start([]string{"bash", script}, dir, nil, func(msg llm.SDKMessage) {})
 	if err != nil {
 		t.Fatalf("start: %v", err)
@@ -1021,7 +1029,7 @@ func TestSession_CodexProviderStaysAliveAfterResult(t *testing.T) {
 	s := NewSession("codex-alive", "feat-1", feature.PhaseResearch)
 	s.protocol = claude.NewProtocol(llm.ProtocolOpts{WorkDir: dir})
 	s.providerName = "codex"
-	s.setResultShutdownGraceForTest(100 * time.Millisecond)
+	s.resultShutdownGrace = 100 * time.Millisecond
 	if err := s.Start([]string{"bash", script}, dir, nil, func(llm.SDKMessage) {}); err != nil {
 		t.Fatalf("start: %v", err)
 	}
@@ -1072,7 +1080,7 @@ func TestSession_ResultUnsticksHungWrapper(t *testing.T) {
 
 	s := NewSession("hung-wrapper", "feat-1", feature.PhaseResearch)
 	s.protocol = claude.NewProtocol(llm.ProtocolOpts{WorkDir: dir})
-	s.setResultShutdownGraceForTest(200 * time.Millisecond)
+	s.resultShutdownGrace = 200 * time.Millisecond
 	if err := s.Start([]string{"bash", script}, dir, nil, func(llm.SDKMessage) {}); err != nil {
 		t.Fatalf("start: %v", err)
 	}
@@ -1122,7 +1130,7 @@ func TestSession_TurnResultKeepsStdinForContinuationWhenOptedIn(t *testing.T) {
 		[]string{"bash", script},
 		dir,
 		[]string{"CONTINUED_FILE=" + continuedPath},
-		&SessionOpts{KeepAliveOnTurnResult: true, ResultShutdownGrace: 100 * time.Millisecond},
+		&SessionOpts{KeepAliveOnTurnResult: true, ResultShutdownGrace: 100 * time.Millisecond, Protocol: claude.NewProtocol(llm.ProtocolOpts{})},
 	)
 	if err != nil {
 		t.Fatalf("start: %v", err)
@@ -1303,38 +1311,6 @@ func TestWaitingSinceStampedOnWaitingHelpTransition(t *testing.T) {
 	}
 }
 
-func TestSessionSendInput(t *testing.T) {
-	t.Parallel()
-	// parallel-candidate: in-process stdin pipe with per-test session state.
-	stdinR, stdinW, err := os.Pipe()
-	if err != nil {
-		t.Fatalf("Pipe: %v", err)
-	}
-	t.Cleanup(func() {
-		_ = stdinR.Close()
-		_ = stdinW.Close()
-	})
-	s := NewSession("input-test", "feat-1", feature.PhaseResearch)
-	s.SetStdinForTest(stdinW)
-
-	// Send raw input
-	err = s.SendInput([]byte("test-input\n"))
-	if err != nil {
-		t.Errorf("send input: %v", err)
-	}
-	if err := stdinW.Close(); err != nil {
-		t.Fatalf("close stdin writer: %v", err)
-	}
-
-	data, err := io.ReadAll(stdinR)
-	if err != nil {
-		t.Fatalf("ReadAll(stdin): %v", err)
-	}
-	if got := string(data); got != "test-input\n" {
-		t.Errorf("stdin = %q, want %q", got, "test-input\n")
-	}
-}
-
 func TestSessionControlRequest(t *testing.T) {
 	t.Parallel()
 	// parallel-candidate: in-process protocol replay with per-test session state.
@@ -1490,14 +1466,94 @@ func TestSessionSendUserMessageWithHiddenContextSplitsWireFromEcho(t *testing.T)
 	}
 }
 
-func TestSessionWriteJSON(t *testing.T) {
-	resp := llm.NewAllowResponse("req_1")
-	data, err := json.Marshal(resp)
-	if err != nil {
-		t.Fatalf("marshal: %v", err)
+// TestSessionPersistTranscriptRowMatchesIndexUnderConcurrentAppends pins that
+// each persisted row's index is the index the message log assigned to that
+// message under its own lock when a reader-delivered assistant message and a
+// hidden-context user message are appended concurrently.
+func TestSessionPersistTranscriptRowMatchesIndexUnderConcurrentAppends(t *testing.T) {
+	t.Parallel()
+	// parallel-candidate: in-process protocol double with per-test session state.
+	s := NewSession("supervisor-concurrent-test", "__supervisor__", feature.PhaseResearch)
+	s.SetKind(ports.KindSupervisor)
+	s.protocol = &wireRecordingProtocol{}
+	s.transcriptPath = filepath.Join(t.TempDir(), "transcript.jsonl")
+
+	const rounds = 64
+	var wg sync.WaitGroup
+	wg.Add(2)
+	go func() {
+		defer wg.Done()
+		for i := 0; i < rounds; i++ {
+			msg := llm.SDKMessage{Type: "assistant", Assistant: &llm.AssistantMessage{
+				Message: llm.ConversationMsg{Role: "assistant", Content: []llm.ContentBlock{
+					{Type: "text", Text: fmt.Sprintf("assistant turn %d", i)},
+				}},
+			}}
+			row := s.messageLog.UpdateLastAssistantPartial(msg)
+			if err := s.persistTranscriptRow(row, msg); err != nil {
+				t.Errorf("persist assistant row: %v", err)
+				return
+			}
+		}
+	}()
+	go func() {
+		defer wg.Done()
+		for i := 0; i < rounds; i++ {
+			if err := s.SendUserMessageWithHiddenContext(fmt.Sprintf("user turn %d", i), "hidden context"); err != nil {
+				t.Errorf("SendUserMessageWithHiddenContext: %v", err)
+				return
+			}
+		}
+	}()
+	wg.Wait()
+
+	messages := s.messageLog.Messages()
+	if len(messages) != 2*rounds {
+		t.Fatalf("message log rows = %d, want %d", len(messages), 2*rounds)
 	}
-	if !json.Valid(data) {
-		t.Error("invalid JSON")
+	textAt := func(i int) string {
+		m := messages[i]
+		switch {
+		case m.Assistant != nil:
+			return "assistant: " + m.Assistant.Message.Content[0].Text
+		case m.User != nil:
+			return "user: " + m.User.Message.Content[0].Text
+		default:
+			return ""
+		}
+	}
+
+	data, err := os.ReadFile(s.transcriptPath)
+	if err != nil {
+		t.Fatalf("reading transcript: %v", err)
+	}
+	var rows int
+	for _, line := range strings.Split(strings.TrimSpace(string(data)), "\n") {
+		if line == "" {
+			continue
+		}
+		var record persistedTranscriptRecord
+		if err := json.Unmarshal([]byte(line), &record); err != nil {
+			t.Fatalf("parsing transcript row %q: %v", line, err)
+		}
+		rows++
+		if record.Index < 0 || record.Index >= len(messages) {
+			t.Fatalf("transcript row index %d out of range (log rows = %d)", record.Index, len(messages))
+		}
+		msg := record.Message.sdkMessage()
+		got := ""
+		switch {
+		case msg.Assistant != nil:
+			got = "assistant: " + msg.Assistant.Message.Content[0].Text
+		case msg.User != nil:
+			got = "user: " + msg.User.Message.Content[0].Text
+		}
+		if want := textAt(record.Index); got != want {
+			t.Fatalf("transcript row %d persisted %q, but the message log at that index is %q", record.Index, got, want)
+		}
+	}
+	if rows != 2*rounds {
+		t.Fatalf("persisted rows = %d, want %d", rows, 2*rounds)
 	}
 }
 
@@ -1516,6 +1572,7 @@ echo "" >&2
 `), 0o755)
 
 	s := NewSession("stderr-test", "feat-1", feature.PhaseReview)
+	s.protocol = claude.NewProtocol(llm.ProtocolOpts{})
 	s.stderrPath = filepath.Join(dir, "stderr.log")
 
 	var messages []llm.SDKMessage
@@ -1567,6 +1624,7 @@ echo "stderr content" >&2
 `), 0o755)
 
 	s := NewSession("stderr-attach-test", "feat-1", feature.PhaseReview)
+	s.protocol = claude.NewProtocol(llm.ProtocolOpts{})
 	s.stderrPath = filepath.Join(dir, "stderr.log")
 
 	err := s.Start([]string{"bash", script}, dir, nil, nil)
@@ -1615,7 +1673,7 @@ func TestSessionResultDeliveredUnderBackpressure(t *testing.T) {
 	t.Parallel()
 	// parallel-candidate: in-process protocol replay with per-test attach buffer.
 	s := NewSession("bp-test", "feat-1", feature.PhaseImplement)
-	s.setCriticalAttachSendTimeoutForTest(time.Second)
+	s.criticalAttachSendTimeout = time.Second
 	unregister := registerAttachConsumerForTest(t, s)
 	defer unregister()
 	for i := 0; i < cap(s.attachCh); i++ {
@@ -1686,6 +1744,7 @@ func TestSession_OnSubagentEventFires(t *testing.T) {
 	}
 
 	s := NewSession("sub-test", "feat-1", feature.PhaseImplement)
+	s.protocol = claude.NewProtocol(llm.ProtocolOpts{})
 
 	var mu sync.Mutex
 	var captured []llm.SDKMessage
@@ -1745,6 +1804,7 @@ echo '{"type":"result","subtype":"success","session_id":"s1","total_cost_usd":0}
 `), 0o755)
 
 	s := NewSession("no-stderr-test", "feat-1", feature.PhaseImplement)
+	s.protocol = claude.NewProtocol(llm.ProtocolOpts{})
 	// printMode is false by default
 
 	err := s.Start([]string{"bash", script}, dir, nil, nil)
@@ -1769,6 +1829,7 @@ func TestSession_MalformedJSONWrappedAsAssistant(t *testing.T) {
 	t.Parallel()
 	// parallel-candidate: in-process stdout replay with per-test session state.
 	s := NewSession("malformed-test", "feat-1", feature.PhaseImplement)
+	s.protocol = claude.NewProtocol(llm.ProtocolOpts{})
 	runSessionWithStdoutLines(t, s, []string{
 		`{"type":"system","subtype":"init","session_id":"s1","model":"test"}`,
 		`WARNING: rate limit approaching`,
@@ -1811,6 +1872,7 @@ echo '{"type":"result","subtype":"success","session_id":"s2","total_cost_usd":0.
 `), 0o755)
 
 	s := NewSession("apierror-test", "feat-1", feature.PhaseImplement)
+	s.protocol = claude.NewProtocol(llm.ProtocolOpts{})
 	err := s.Start([]string{"bash", script}, dir, nil, nil)
 	if err != nil {
 		t.Fatalf("start: %v", err)
@@ -1850,6 +1912,7 @@ echo '{"type":"result","subtype":"success","session_id":"s2","total_cost_usd":0.
 func TestSession_StatusChCoalescesToLatestResult(t *testing.T) {
 	t.Parallel()
 	s := NewSession("coalesce-test", "feat-1", feature.PhaseImplement)
+	s.protocol = claude.NewProtocol(llm.ProtocolOpts{})
 	runSessionWithStdoutLines(t, s, []string{
 		`{"type":"system","subtype":"init","session_id":"s1","model":"test"}`,
 		`{"type":"result","subtype":"error","error":"rate limited"}`,
@@ -1878,6 +1941,7 @@ func TestSession_SIGTERMEscalation(t *testing.T) {
 	os.WriteFile(script, []byte("#!/bin/bash\ntrap '' SIGTERM\ntrap '' INT\nwhile true; do sleep 1; done\n"), 0o755)
 
 	s := NewSession("sigterm-test", "feat-1", feature.PhaseImplement)
+	s.protocol = claude.NewProtocol(llm.ProtocolOpts{})
 	err := s.Start([]string{"bash", script}, dir, nil, nil)
 	if err != nil {
 		t.Fatalf("start: %v", err)
@@ -1917,6 +1981,7 @@ echo '{"type":"result","subtype":"success","session_id":"s1","total_cost_usd":0.
 `), 0o755)
 
 	s := NewSession("large-test", "feat-1", feature.PhaseImplement)
+	s.protocol = claude.NewProtocol(llm.ProtocolOpts{})
 	err := s.Start([]string{"bash", script}, dir, nil, nil)
 	if err != nil {
 		t.Fatalf("start: %v", err)
@@ -1952,6 +2017,7 @@ echo '{"type":"result","subtype":"success","session_id":"s1","total_cost_usd":0.
 `), 0o755)
 
 	s := NewSession("largeline-test", "feat-1", feature.PhaseImplement)
+	s.protocol = claude.NewProtocol(llm.ProtocolOpts{})
 	err := s.Start([]string{"bash", script}, dir, nil, nil)
 	if err != nil {
 		t.Fatalf("start: %v", err)
@@ -1989,6 +2055,7 @@ echo '{"type":"result","subtype":"success","session_id":"s1","total_cost_usd":0.
 `), 0o755)
 
 	s := NewSession("oversized-test", "feat-1", feature.PhaseImplement)
+	s.protocol = claude.NewProtocol(llm.ProtocolOpts{})
 	err := s.Start([]string{"bash", script}, dir, nil, nil)
 	if err != nil {
 		t.Fatalf("start: %v", err)
@@ -2030,11 +2097,13 @@ echo '{"type":"result","subtype":"success","session_id":"s1","total_cost_usd":0.
 `), 0o755)
 
 	s := NewSession("ask-user-test", "feat-1", feature.PhaseResearch)
+	s.protocol = claude.NewProtocol(llm.ProtocolOpts{})
 	// No permHandler — AskUserQuestion is always surfaced to desktop app
 	err := s.Start([]string{"bash", script}, dir, nil, nil)
 	if err != nil {
 		t.Fatalf("start: %v", err)
 	}
+	wireProtocolStdinForTest(s)
 
 	// Wait for the control_request to arrive (hasUnansweredQuestion or pending request)
 	deadline := time.After(5 * time.Second)
@@ -2068,7 +2137,10 @@ echo '{"type":"result","subtype":"success","session_id":"s1","total_cost_usd":0.
 	}
 
 	// Verify hasUnansweredQuestion was cleared
-	if s.HasUnansweredQuestion() {
+	s.mu.Lock()
+	cleared := !s.hasUnansweredQuestion
+	s.mu.Unlock()
+	if !cleared {
 		t.Error("expected hasUnansweredQuestion to be cleared after response")
 	}
 
@@ -2087,7 +2159,7 @@ func TestSession_DenyResponse_E2E(t *testing.T) {
 	dir := t.TempDir()
 	script := filepath.Join(dir, "deny.sh")
 	// Script emits init, then a control_request for Bash tool.
-	// DenyAllHandler will auto-deny it. Script reads the response and continues.
+	// denyAllTestHandler will auto-deny it. Script reads the response and continues.
 	os.WriteFile(script, []byte(`#!/bin/bash
 echo '{"type":"system","subtype":"init","session_id":"s1","model":"test"}'
 # Emit Bash tool permission request
@@ -2100,11 +2172,13 @@ echo '{"type":"result","subtype":"success","session_id":"s1","total_cost_usd":0.
 `), 0o755)
 
 	s := NewSession("deny-test", "feat-1", feature.PhaseResearch)
-	s.permHandler = &permission.DenyAllHandler{}
+	s.protocol = claude.NewProtocol(llm.ProtocolOpts{})
+	s.permHandler = denyAllTestHandler{}
 	err := s.Start([]string{"bash", script}, dir, nil, nil)
 	if err != nil {
 		t.Fatalf("start: %v", err)
 	}
+	wireProtocolStdinForTest(s)
 
 	// Wait for session to complete
 	select {
@@ -2689,7 +2763,7 @@ func TestSession_NoAttachConsumerSuppressesCriticalDropReport(t *testing.T) {
 	wantTimeout := 200 * time.Millisecond
 
 	s := NewSession("headless-drop-test", "feat-headless", feature.PhaseImplement)
-	s.setCriticalAttachSendTimeoutForTest(wantTimeout)
+	s.criticalAttachSendTimeout = wantTimeout
 	for i := 0; i < cap(s.attachCh); i++ {
 		s.attachCh <- llm.SDKMessage{Type: "assistant"}
 	}
@@ -2723,7 +2797,7 @@ func TestSession_AttachDropReporterFiresOnCriticalDrop(t *testing.T) {
 	wantTimeout := 50 * time.Millisecond
 
 	s := NewSession("drop-test", "feat-9", feature.PhaseImplement)
-	s.setCriticalAttachSendTimeoutForTest(wantTimeout)
+	s.criticalAttachSendTimeout = wantTimeout
 	unregister := registerAttachConsumerForTest(t, s)
 	defer unregister()
 	for i := 0; i < cap(s.attachCh); i++ {
@@ -2775,7 +2849,7 @@ func TestSession_AttachDropReporterSilentWithoutReporter(t *testing.T) {
 	const timeout = 50 * time.Millisecond
 
 	s := NewSession("quiet-test", "feat-9", feature.PhaseImplement)
-	s.setCriticalAttachSendTimeoutForTest(timeout)
+	s.criticalAttachSendTimeout = timeout
 	unregister := registerAttachConsumerForTest(t, s)
 	defer unregister()
 	for i := 0; i < cap(s.attachCh); i++ {
@@ -2980,7 +3054,7 @@ func TestSession_StatusChSignalAfterResultCallback(t *testing.T) {
 	t.Parallel()
 	// parallel-candidate: in-process protocol replay with per-test attach buffer.
 	s := NewSession("callback-order-test", "feat-1", feature.PhaseImplement)
-	s.setCriticalAttachSendTimeoutForTest(100 * time.Millisecond)
+	s.criticalAttachSendTimeout = 100 * time.Millisecond
 	for i := 0; i < cap(s.attachCh); i++ {
 		s.attachCh <- llm.SDKMessage{Type: "assistant"}
 	}
@@ -3316,11 +3390,17 @@ func TestSendUserMessage_KeepsCommittableOutcomeUntilHarnessClearsIt(t *testing.
 	t.Parallel()
 	var stdin strings.Builder
 	s := NewSession("outcome-preserve", "feat-1", feature.PhaseImplement)
+	proto := claude.NewProtocol(llm.ProtocolOpts{})
+	proto.SetStdin(nopWriteCloser{Writer: &stdin})
+	s.protocol = proto
 	s.SetStdinForTest(nopWriteCloser{Writer: &stdin})
 	s.observeCompletionIntent(rootAssistantText(`<agentico-outcome>{"status":"success"}</agentico-outcome>`))
 
 	if err := s.SendUserMessage("thanks"); err != nil {
 		t.Fatalf("SendUserMessage() error: %v", err)
+	}
+	if wire := stdin.String(); !strings.Contains(wire, `"content":"thanks"`) {
+		t.Fatalf("Claude protocol wire = %q, want the user-input message carrying %q", wire, "thanks")
 	}
 	if got := s.RootCompletionIntent(); !got.Valid() {
 		t.Fatalf("RootCompletionIntent() after user message = %+v, want the outcome preserved", got)
@@ -3401,5 +3481,62 @@ func TestLateCostReconciliationPreservesTerminalOutcome(t *testing.T) {
 	usage := s.AccumulatedUsage()
 	if usage.CostUSD != 0 || usage.CacheCreationInputTokens != 25 || usage.CostCreditsMicros == nil || *usage.CostCreditsMicros != 123 {
 		t.Fatalf("lost usage: %+v", usage)
+	}
+}
+
+// TestClaudeSessionContextPercentageFromCacheHeavyUsage replays a synthetic
+// Claude stream through the real Claude protocol for a model whose discovered
+// catalog entry has no context window (ContextWindowForModel returns 0). Claude reports almost the whole prompt
+// as cache reads/creations with a tiny input_tokens, so the meter must sum all
+// three buckets of the latest turn against the provider's default window and
+// be available mid-run, not only after result.modelUsage arrives.
+func TestClaudeSessionContextPercentageFromCacheHeavyUsage(t *testing.T) {
+	t.Parallel()
+	prov := claude.NewProvider("")
+	prov.SetModelCatalog([]llm.ModelInfo{{ID: "claude-haiku-5-5", Aliases: []string{"claude-haiku-5-5"}}})
+	window := prov.ContextWindowForModel("claude-haiku-5-5")
+	if window != 0 {
+		t.Fatalf("precondition: catalog window = %d, want 0 (unknown)", window)
+	}
+
+	s := NewSession("claude-ctx", "feat-ctx", feature.PhaseImplement)
+	s.protocol = claude.NewProtocol(llm.ProtocolOpts{Model: "claude-haiku-5-5", ContextWindow: window})
+	lines := []string{
+		`{"type":"system","subtype":"init","session_id":"c1","model":"claude-haiku-5-5"}`,
+		`{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"a"}],"usage":{"input_tokens":2,"output_tokens":8,"cache_read_input_tokens":20000,"cache_creation_input_tokens":4000}}}`,
+		`{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"b"}],"usage":{"input_tokens":3,"output_tokens":40,"cache_read_input_tokens":40000,"cache_creation_input_tokens":4000}}}`,
+		`{"type":"result","subtype":"success","session_id":"c1","total_cost_usd":0.01}`,
+	}
+	var pcts []int
+	runSessionWithStdoutLines(t, s, lines, func(msg llm.SDKMessage) {
+		if msg.Assistant != nil {
+			pcts = append(pcts, s.ContextPercentage())
+		}
+	})
+	// (2+20000+4000)/200000 = 12%; (3+40000+4000)/200000 = 22%. The second
+	// value reflects the latest turn's context, not a sum across turns.
+	if want := []int{12, 22}; fmt.Sprint(pcts) != fmt.Sprint(want) {
+		t.Fatalf("mid-run ContextPercentage() = %v, want %v", pcts, want)
+	}
+	if got := s.ContextPercentage(); got != 22 {
+		t.Fatalf("final ContextPercentage() = %d, want 22", got)
+	}
+}
+
+// TestContextPercentageUnknownWindowStaysUnavailable confirms a provider that
+// supplies usage but no context window still reports -1 (unknown).
+func TestContextPercentageUnknownWindowStaysUnavailable(t *testing.T) {
+	t.Parallel()
+	s := NewSession("unknown-ctx", "feat-ctx", feature.PhaseImplement)
+	runMockSession(t, s, []llm.SDKMessage{{
+		Type: "assistant",
+		Assistant: &llm.AssistantMessage{Message: llm.ConversationMsg{
+			Role:    "assistant",
+			Content: []llm.ContentBlock{{Type: "text", Text: "a"}},
+			Usage:   &llm.Usage{InputTokens: 2, OutputTokens: 8, CacheReadInputTokens: 20_000},
+		}},
+	}}, nil)
+	if got := s.ContextPercentage(); got != -1 {
+		t.Fatalf("ContextPercentage() = %d, want -1 without a context window", got)
 	}
 }

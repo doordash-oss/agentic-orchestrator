@@ -86,14 +86,14 @@ const (
 	StepHandshake  StartingStep = "handshake"
 )
 
-// TurnOutcome is how the most recent turn ended.
-type TurnOutcome string
+// turnOutcome is how the most recent turn ended.
+type turnOutcome string
 
 const (
-	OutcomeNone        TurnOutcome = "none"
-	OutcomeCompleted   TurnOutcome = "completed"
-	OutcomeInterrupted TurnOutcome = "interrupted"
-	OutcomeFailed      TurnOutcome = "failed"
+	OutcomeNone        turnOutcome = "none"
+	OutcomeCompleted   turnOutcome = "completed"
+	OutcomeInterrupted turnOutcome = "interrupted"
+	OutcomeFailed      turnOutcome = "failed"
 )
 
 // InterruptedBy says who cut the most recent turn; meaningful when the
@@ -179,7 +179,7 @@ func (s Settings) Complete() bool { return s.Harness != "" && s.Model != "" }
 
 // State is a point-in-time snapshot of the read model.
 type State struct {
-	BackgroundTasks []BackgroundTask
+	BackgroundTasks []backgroundTask
 	ConversationID  string
 	Generation      int64
 	SessionID       string
@@ -188,7 +188,7 @@ type State struct {
 	NativeSessionID string
 	Lifecycle       Lifecycle
 	StartingStep    StartingStep
-	LastTurnOutcome TurnOutcome
+	LastTurnOutcome turnOutcome
 	InterruptedBy   InterruptedBy
 	Settings        Settings
 	PendingChange   *PendingChange
@@ -220,9 +220,9 @@ type ContextUsage struct {
 	WindowTokens int `json:"window_tokens"`
 }
 
-// SessionIDPrefix marks supervisor session-manager ids:
+// sessionIDPrefix marks supervisor session-manager ids:
 // __supervisor__.<conversation>.<generation>.
-const SessionIDPrefix = "__supervisor__."
+const sessionIDPrefix = "__supervisor__."
 
 // FeatureID is the constant feature identity supervisor sessions register
 // under.
@@ -230,7 +230,7 @@ const FeatureID = "__supervisor__"
 
 // SessionID forms the manager id for one generation.
 func SessionID(conversationID string, generation int64) string {
-	return fmt.Sprintf("%s%s.%d", SessionIDPrefix, conversationID, generation)
+	return fmt.Sprintf("%s%s.%d", sessionIDPrefix, conversationID, generation)
 }
 
 // Typed refusals. The REST layer maps each to its catalog code.
@@ -249,9 +249,9 @@ func (e *ClientMessageConflictError) Error() string {
 	return fmt.Sprintf("supervisor client message id already committed at seq %d with different content", e.CommittedSeq)
 }
 
-// ErrHiddenContextUnsupported refuses a message carrying hidden context on
+// errHiddenContextUnsupported refuses a message carrying hidden context on
 // a session that cannot deliver it, rather than dropping the context.
-var ErrHiddenContextUnsupported = errors.New("supervisor session cannot carry hidden context")
+var errHiddenContextUnsupported = errors.New("supervisor session cannot carry hidden context")
 
 // SettingsInvalidError rejects a harness, model or effort the catalog does
 // not offer.
@@ -269,8 +269,8 @@ type LaunchFailedError struct {
 func (e *LaunchFailedError) Error() string { return "supervisor launch failed: " + e.Err.Error() }
 func (e *LaunchFailedError) Unwrap() error { return e.Err }
 
-// LaunchRequest carries one generation's launch inputs.
-type LaunchRequest struct {
+// launchRequest carries one generation's launch inputs.
+type launchRequest struct {
 	SessionID      string
 	ConversationID string
 	Generation     int64
@@ -294,7 +294,7 @@ type LaunchRequest struct {
 // Launcher starts one supervisor provider process and registers it with the
 // session manager. It returns once the protocol handshake was written.
 type Launcher interface {
-	Launch(ctx context.Context, req LaunchRequest) (ports.SessionView, error)
+	Launch(ctx context.Context, req launchRequest) (ports.SessionView, error)
 }
 
 // Catalog validates a settings choice against the model catalog.
@@ -352,14 +352,14 @@ type SendResult struct {
 	Deduplicated bool
 }
 
-// EventKind classifies a live event.
-type EventKind string
+// eventKind classifies a live event.
+type eventKind string
 
 const (
-	EventRecord  EventKind = "record"
-	EventDelta   EventKind = "delta"
-	EventState   EventKind = "state"
-	EventRequest EventKind = "request"
+	EventRecord  eventKind = "record"
+	EventDelta   eventKind = "delta"
+	EventState   eventKind = "state"
+	EventRequest eventKind = "request"
 )
 
 // Delta is one non-persisted streaming text chunk.
@@ -372,7 +372,7 @@ type Delta struct {
 
 // Event is one live supervisor event.
 type Event struct {
-	Kind       EventKind
+	Kind       eventKind
 	Generation int64
 	Record     *Record
 	Delta      *Delta

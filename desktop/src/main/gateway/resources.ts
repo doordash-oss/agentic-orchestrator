@@ -59,7 +59,7 @@ export function serverBinaryCandidates(ctx: ResourceContext): string[] {
   return candidates;
 }
 
-export interface ResolveDeps {
+interface ResolveDeps {
   isExecutableFile(candidate: string): boolean;
 }
 

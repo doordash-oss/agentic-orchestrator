@@ -157,7 +157,7 @@ func TestRefactorEntryBlockedWhenCleanlinessIndeterminate(t *testing.T) {
 			handler := NewHandler(opts)
 
 			body := getJSONMap(t, handler, "/api/v1/features/"+parent.ID)[entityFeature].(map[string]any)
-			for _, id := range []string{actionRefactor, actionReviewFeedback, actionRebase} {
+			for _, id := range []string{string(FeatureActionRefactor), string(FeatureActionReviewFeedback), string(FeatureActionRebase)} {
 				action := actionJSONByID(t, body, id)
 				if action["enabled"] != false {
 					t.Fatalf("%s enabled = %v, want blocked on indeterminate cleanliness", id, action["enabled"])
@@ -189,7 +189,7 @@ func TestRefactorEntryNotBlockedWhenCleanlinessProbeTimesOut(t *testing.T) {
 	handler := NewHandler(opts)
 
 	body := getJSONMap(t, handler, "/api/v1/features/"+parent.ID)[entityFeature].(map[string]any)
-	for _, id := range []string{actionRefactor, actionReviewFeedback, actionRebase} {
+	for _, id := range []string{string(FeatureActionRefactor), string(FeatureActionReviewFeedback), string(FeatureActionRebase)} {
 		action := actionJSONByID(t, body, id)
 		if action["enabled"] != true {
 			t.Fatalf("%s enabled = %v, want enabled despite a timed-out probe; reasons = %+v",
@@ -213,7 +213,7 @@ func TestRefactorEntryBlockedWhenFreshnessUnknown(t *testing.T) {
 	handler := NewHandler(opts)
 
 	body := getJSONMap(t, handler, "/api/v1/features/"+parent.ID)[entityFeature].(map[string]any)
-	action := actionJSONByID(t, body, actionRefactor)
+	action := actionJSONByID(t, body, string(FeatureActionRefactor))
 	if action["enabled"] != false {
 		t.Fatalf("refactor enabled = %v, want blocked on unknown freshness", action["enabled"])
 	}

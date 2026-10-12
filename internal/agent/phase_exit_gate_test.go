@@ -112,7 +112,7 @@ func TestRunImplementationLoop_PhaseExitGateFixRoundThenPass(t *testing.T) {
 	gate, calls := countingGate(1)
 	cfg.PhaseExitGate = gate
 
-	result, err := RunImplementationLoop(cfg, sm)
+	result, err := runImplementationLoop(cfg, sm)
 	if err != nil {
 		t.Fatalf("RunImplementationLoop error: %v", err)
 	}
@@ -142,7 +142,7 @@ func TestRunImplementationLoop_PhaseExitGatePersistentFailureTripsRail(t *testin
 	gate, calls := countingGate(1 << 30)
 	cfg.PhaseExitGate = gate
 
-	result, err := RunImplementationLoop(cfg, sm)
+	result, err := runImplementationLoop(cfg, sm)
 	if err != nil {
 		t.Fatalf("RunImplementationLoop error: %v", err)
 	}
@@ -165,7 +165,7 @@ func TestRunImplementationLoop_PhaseExitGateAfterReviewApproved(t *testing.T) {
 	gate, calls := countingGate(1)
 	cfg.PhaseExitGate = gate
 
-	result, err := RunImplementationLoop(cfg, sm)
+	result, err := runImplementationLoop(cfg, sm)
 	if err != nil {
 		t.Fatalf("RunImplementationLoop error: %v", err)
 	}
@@ -195,7 +195,7 @@ func TestRunImplementationLoop_PhaseExitGateAfterReviewApproved(t *testing.T) {
 func TestRunImplementationLoop_PhaseExitGateNilUnchanged(t *testing.T) {
 	cfg, captured, sm := phaseExitGateLoopConfig(t, "test-gate-nil-001", true)
 
-	result, err := RunImplementationLoop(cfg, sm)
+	result, err := runImplementationLoop(cfg, sm)
 	if err != nil {
 		t.Fatalf("RunImplementationLoop error: %v", err)
 	}

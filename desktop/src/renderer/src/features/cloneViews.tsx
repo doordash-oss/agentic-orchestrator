@@ -37,7 +37,7 @@ import type {
   WorkspaceRootState,
 } from '../../../shared/ipc';
 
-export const STATE_LABELS: Record<CloneOperation['state'], string> = {
+const STATE_LABELS: Record<CloneOperation['state'], string> = {
   accepted: 'Starting',
   running: 'Cloning',
   finalizing: 'Publishing',
@@ -49,7 +49,7 @@ export const STATE_LABELS: Record<CloneOperation['state'], string> = {
   cleanup_pending: 'Cleanup pending',
 };
 
-export const ACTIVE_STATES: CloneOperation['state'][] = [
+const ACTIVE_STATES: CloneOperation['state'][] = [
   'accepted',
   'running',
   'finalizing',
@@ -59,7 +59,7 @@ export const ACTIVE_STATES: CloneOperation['state'][] = [
 export const RETRYABLE_STATES: CloneOperation['state'][] = ['failed', 'cancelled', 'interrupted'];
 
 /** Strips a trailing ".git" and trailing slashes, mirroring the server's suggestion rule. */
-export function suggestDestination(remote: string): string {
+function suggestDestination(remote: string): string {
   let trimmed = remote
     .trim()
     .replace(/[?#].*$/, '')
@@ -463,7 +463,7 @@ export function CloneRepositoryForm({
  * points — the unborn clone-success offer and the later opt-in beside an
  * unborn catalog row — present exactly this explanation.
  */
-export const INITIALIZE_CONSENT_COPY =
+const INITIALIZE_CONSENT_COPY =
   "Create initial commit makes one empty local commit on the repository's current branch using Agentico's identity. The origin remote and the branch are kept, existing files are untouched, and nothing is pushed.";
 
 /**

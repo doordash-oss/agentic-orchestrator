@@ -19,28 +19,27 @@ import (
 	"sort"
 
 	"github.com/doordash-oss/agentic-orchestrator/internal/feature"
-	"github.com/doordash-oss/agentic-orchestrator/internal/ports"
 )
 
-// PhaseOutcome is the verdict the unified phase implementer hands to
+// phaseOutcome is the verdict the unified phase implementer hands to
 // AtomicPhaseStamp. Every phase-declared repo transitions to the same
 // outcome in one Modify call so the on-disk state can never reflect a
 // partial-phase shipment.
-type PhaseOutcome int
+type phaseOutcome int
 
 const (
-	// PhaseOutcomeReviewPassed marks the phase as passing review. Every
+	// phaseOutcomeReviewPassed marks the phase as passing review. Every
 	// declared repo is stamped Touched=true.
-	PhaseOutcomeReviewPassed PhaseOutcome = iota
-	// PhaseOutcomeFailed marks the phase as failed (safety-rail trip,
+	phaseOutcomeReviewPassed phaseOutcome = iota
+	// phaseOutcomeFailed marks the phase as failed (safety-rail trip,
 	// reviewer rejection after MaxIterations, etc.). Every declared repo
 	// is stamped Touched=true; the failure itself lives on the run record.
-	PhaseOutcomeFailed
-	// PhaseOutcomeNeedUserInput marks the phase as paused on a need-user-input
+	phaseOutcomeFailed
+	// phaseOutcomeNeedUserInput marks the phase as paused on a need-user-input
 	// gate. Per-repo state is NOT mutated (the gate lives at the feature
 	// level under the unified flow); the function still records the gate
 	// path so the harness can surface it.
-	PhaseOutcomeNeedUserInput
+	phaseOutcomeNeedUserInput
 	// PhaseOutcomeFinalReviewPassed marks the feature-level Final Review
 	// as passing. No per-repo state mutation happens (feature-level Status
 	// carries the verdict). Optional PR URL writes are mirrored when
@@ -55,7 +54,7 @@ const (
 type AtomicPhaseStampInput struct {
 	FeatureID string
 	Repos     []string
-	Outcome   PhaseOutcome
+	Outcome   phaseOutcome
 	GatePath  string
 	// PRURLs is an optional per-repo PR URL map applied alongside the
 	// state transition. May be nil.
@@ -77,7 +76,7 @@ type AtomicPhaseStampInput struct {
 //
 // Ordering: repos are sorted before iteration so the on-disk YAML is stable
 // for tests; the resulting state is order-independent.
-func AtomicPhaseStamp(store ports.FeatureStore, in AtomicPhaseStampInput) error {
+func AtomicPhaseStamp(store FeatureStore, in AtomicPhaseStampInput) error {
 	if store == nil {
 		return fmt.Errorf("atomic phase stamp: store is nil")
 	}
@@ -93,7 +92,7 @@ func AtomicPhaseStamp(store ports.FeatureStore, in AtomicPhaseStampInput) error 
 			f.RepoStates = make(map[string]*feature.RepoState)
 		}
 		switch in.Outcome {
-		case PhaseOutcomeReviewPassed, PhaseOutcomeFailed:
+		case phaseOutcomeReviewPassed, phaseOutcomeFailed:
 			for _, name := range repos {
 				ns := f.RepoStates[name]
 				if ns == nil {
@@ -105,7 +104,7 @@ func AtomicPhaseStamp(store ports.FeatureStore, in AtomicPhaseStampInput) error 
 					ns.PRURL = pr
 				}
 			}
-		case PhaseOutcomeNeedUserInput:
+		case phaseOutcomeNeedUserInput:
 			// Per-repo state is intentionally NOT mutated. The unified-flow
 			// gate is feature-level; we still attach the gate path to the
 			// feature for the harness to surface.

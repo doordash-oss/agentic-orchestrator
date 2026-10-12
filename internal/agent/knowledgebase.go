@@ -47,12 +47,12 @@ func KBStateDir(stateDir, repoName string) string {
 
 var validKBSessionIDPattern = regexp.MustCompile(`^[A-Za-z0-9._-]{1,200}$`)
 
-// BuildKBSessionID returns a desktop- and URL-safe session ID for a per-repo
+// buildKBSessionID returns a desktop- and URL-safe session ID for a per-repo
 // KB build. It preserves the legacy "<featureID>-kb-<repoName>" form when the
 // repository name is already safe. Qualified discovery keys and other names
 // containing unsafe characters use a readable slug plus a collision-resistant
 // hash; callers must use the session's RepoName metadata as canonical identity.
-func BuildKBSessionID(featureID, repoName string) string {
+func buildKBSessionID(featureID, repoName string) string {
 	legacyID := fmt.Sprintf("%s-kb-%s", featureID, repoName)
 	if validKBSessionIDPattern.MatchString(legacyID) {
 		return legacyID
@@ -98,9 +98,9 @@ var kbStandardCategories = []string{
 	"verification",
 }
 
-// KBRootDir returns the root directory of the knowledge base graph.
+// kbRootDir returns the root directory of the knowledge base graph.
 // Downstream agents browse this directory for category subdirectories.
-func KBRootDir(kbDir string) string {
+func kbRootDir(kbDir string) string {
 	return kbDir
 }
 
@@ -111,8 +111,8 @@ type KBInfo struct {
 	RootDir   string // absolute path to the KB root directory (for browsing)
 }
 
-// KBLockPath returns the path to the knowledge base lock file.
-func KBLockPath(kbDir string) string {
+// kbLockPath returns the path to the knowledge base lock file.
+func kbLockPath(kbDir string) string {
 	return filepath.Join(kbDir, "kb.lock")
 }
 
@@ -171,20 +171,12 @@ func kbLockMutex(kbDir string) *sync.Mutex {
 	return mu.(*sync.Mutex)
 }
 
-// AcquireKBLock attempts to create a lock file for the KB directory.
-// Returns true if the lock was acquired, false if another feature holds it.
-// The lock is reentrant: if the same featureID already holds it, the
-// timestamp is refreshed and the call succeeds.
-func AcquireKBLock(kbDir, featureID string) (bool, error) {
-	return AcquireKBLockWithStatus(kbDir, featureID, nil)
-}
-
-// AcquireKBLockWithStatus attempts to create a lock file, reclaiming an
+// acquireKBLockWithStatus attempts to create a lock file, reclaiming an
 // existing lock only when the owner can be proven stale by statusFn, when the
 // lock is corrupt, or when no statusFn is available and the timestamp exceeds
 // the age fallback. Reclamation and acquisition are serialized per KB path so
 // concurrent contenders cannot both steal the same lock.
-func AcquireKBLockWithStatus(kbDir, featureID string, statusFn FeatureStatusFunc) (bool, error) {
+func acquireKBLockWithStatus(kbDir, featureID string, statusFn featureStatusFunc) (bool, error) {
 	mu := kbLockMutex(kbDir)
 	mu.Lock()
 	defer mu.Unlock()
@@ -192,11 +184,11 @@ func AcquireKBLockWithStatus(kbDir, featureID string, statusFn FeatureStatusFunc
 	if err := os.MkdirAll(kbDir, 0o755); err != nil {
 		return false, fmt.Errorf("creating KB dir: %w", err)
 	}
-	lockPath := KBLockPath(kbDir)
+	lockPath := kbLockPath(kbDir)
 	return acquireKBLockLocked(lockPath, featureID, statusFn)
 }
 
-func acquireKBLockLocked(lockPath, featureID string, statusFn FeatureStatusFunc) (bool, error) {
+func acquireKBLockLocked(lockPath, featureID string, statusFn featureStatusFunc) (bool, error) {
 	f, err := os.OpenFile(lockPath, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o644)
 	if err != nil {
 		if os.IsExist(err) {
@@ -244,7 +236,7 @@ func acquireKBLockLocked(lockPath, featureID string, statusFn FeatureStatusFunc)
 // the lock file is missing or unreadable. Used by startKB to attribute
 // ErrKBLocked to a specific waiting feature without taking the lock itself.
 func ReadKBLockOwner(kbDir string) string {
-	data, err := os.ReadFile(KBLockPath(kbDir))
+	data, err := os.ReadFile(kbLockPath(kbDir))
 	if err != nil {
 		return ""
 	}
@@ -255,9 +247,9 @@ func ReadKBLockOwner(kbDir string) string {
 	return info.FeatureID
 }
 
-// ReleaseKBLock removes the lock file only if it belongs to the given featureID.
+// releaseKBLock removes the lock file only if it belongs to the given featureID.
 // If featureID is empty, the lock is forcibly removed (for stale lock cleanup).
-func ReleaseKBLock(kbDir, featureID string) error {
+func releaseKBLock(kbDir, featureID string) error {
 	_, err := ReleaseKBLockIfOwned(kbDir, featureID)
 	return err
 }
@@ -270,7 +262,7 @@ func ReleaseKBLockIfOwned(kbDir, featureID string) (bool, error) {
 	mu.Lock()
 	defer mu.Unlock()
 
-	lockPath := KBLockPath(kbDir)
+	lockPath := kbLockPath(kbDir)
 	if featureID == "" {
 		if err := os.Remove(lockPath); err != nil {
 			if os.IsNotExist(err) {
@@ -307,28 +299,11 @@ func ReleaseKBLockIfOwned(kbDir, featureID string) (bool, error) {
 	return true, nil
 }
 
-// FeatureStatusFunc is a callback that returns a feature's current status.
+// featureStatusFunc is a callback that returns a feature's current status.
 // Returns the status and true if found, or zero value and false if not found.
-type FeatureStatusFunc func(featureID string) (int, bool)
+type featureStatusFunc func(featureID string) (int, bool)
 
-// IsKBLockStale checks if the lock file is stale. A lock is stale if:
-// - The lock file is corrupt
-// - The lock owner feature no longer exists or is not in StatusBuildingKB
-// - The lock is older than 30 minutes and no statusFn is available
-// The statusFn parameter looks up a feature's status; if nil, only time-based
-// staleness is checked. A confirmed BuildingKB owner is authoritative even
-// when the timestamp is old because the timestamp is not a heartbeat.
-func IsKBLockStale(kbDir string, statusFn FeatureStatusFunc) bool {
-	mu := kbLockMutex(kbDir)
-	mu.Lock()
-	defer mu.Unlock()
-
-	lockPath := KBLockPath(kbDir)
-	data, err := os.ReadFile(lockPath)
-	return isKBLockStaleData(data, err, statusFn)
-}
-
-func isKBLockStaleData(data []byte, readErr error, statusFn FeatureStatusFunc) bool {
+func isKBLockStaleData(data []byte, readErr error, statusFn featureStatusFunc) bool {
 	if readErr != nil {
 		return false
 	}
@@ -363,7 +338,7 @@ func IsKBFresh(ctx context.Context, runner ports.CommandRunner, kbDir, repoPath 
 	if _, err := os.Stat(KBPath(kbDir)); err != nil {
 		return false
 	}
-	currentCommit, err := GetCurrentCommit(ctx, runner, repoPath)
+	currentCommit, err := getCurrentCommit(ctx, runner, repoPath)
 	if err != nil {
 		return false
 	}
@@ -373,7 +348,7 @@ func IsKBFresh(ctx context.Context, runner ports.CommandRunner, kbDir, repoPath 
 // MarkKBFresh saves the KB state with the current HEAD commit.
 // Should only be called after confirmed successful KB generation.
 func MarkKBFresh(ctx context.Context, runner ports.CommandRunner, kbDir, repoPath string) error {
-	commit, err := GetCurrentCommit(ctx, runner, repoPath)
+	commit, err := getCurrentCommit(ctx, runner, repoPath)
 	if err != nil {
 		return fmt.Errorf("getting current commit: %w", err)
 	}
@@ -384,8 +359,8 @@ func MarkKBFresh(ctx context.Context, runner ports.CommandRunner, kbDir, repoPat
 	})
 }
 
-// GetCurrentCommit returns the current HEAD commit hash for the given repo.
-func GetCurrentCommit(ctx context.Context, runner ports.CommandRunner, repoPath string) (string, error) {
+// getCurrentCommit returns the current HEAD commit hash for the given repo.
+func getCurrentCommit(ctx context.Context, runner ports.CommandRunner, repoPath string) (string, error) {
 	out, err := runner.Run(ctx, "git", []string{"rev-parse", "HEAD"}, ports.CommandOpts{Dir: repoPath})
 	if err != nil {
 		return "", fmt.Errorf("git rev-parse HEAD: %w", err)
@@ -393,39 +368,16 @@ func GetCurrentCommit(ctx context.Context, runner ports.CommandRunner, repoPath 
 	return strings.TrimSpace(string(out)), nil
 }
 
-// HasKBChanges checks whether there are actual git changes since the last KB build.
-// Returns true (assume changes) when state or index.md is missing, or on any error.
-// Returns false only when state.json and index.md exist and git log shows no commits
-// between the stored HEAD and the current HEAD.
-func HasKBChanges(ctx context.Context, runner ports.CommandRunner, kbDir, repoPath string) (bool, error) {
-	state, err := LoadKBState(kbDir)
-	if err != nil || state == nil || state.HeadCommit == "" {
-		return true, nil // can't determine, assume changes
-	}
-	if _, err := os.Stat(KBPath(kbDir)); err != nil {
-		return true, nil // no index.md, need full build
-	}
-	// Check for commits between stored HEAD and current HEAD
-	out, err := runner.Run(ctx, "git", []string{"log", "--oneline", state.HeadCommit + "..HEAD"}, ports.CommandOpts{Dir: repoPath})
-	if err != nil {
-		return true, nil // git error, assume changes
-	}
-	if len(strings.TrimSpace(string(out))) > 0 {
-		return true, nil
-	}
-	return false, nil
-}
-
-// BuildKBPrompt constructs the user prompt for the KB agent.
+// buildKBPrompt constructs the user prompt for the KB agent.
 // For full builds (no existing KB), it instructs the agent to analyze the entire repo.
 // For incremental updates (existing KB + last commit), it provides context for a targeted update.
 //
 // The prose lives in internal/agent/prompts/templates/kb_build.user.tmpl.
-func BuildKBPrompt(repoName, repoPath, kbDir string, existingKBPath string, lastCommit string) string {
-	return prompts.KBBuildUserPrompt(kbBuildUserInput{
+func buildKBPrompt(repoName, repoPath, kbDir string, existingKBPath string, lastCommit string) string {
+	return prompts.MustRender(prompts.TemplateKBBuildUser, kbBuildUserInput{
 		RepoName:       repoName,
 		RepoPath:       repoPath,
-		KBRootDir:      KBRootDir(kbDir),
+		KBRootDir:      kbRootDir(kbDir),
 		KBIndexPath:    KBPath(kbDir),
 		ExistingKBPath: existingKBPath,
 		LastCommit:     lastCommit,

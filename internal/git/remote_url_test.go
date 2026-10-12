@@ -30,15 +30,15 @@ func TestParseRemoteURL(t *testing.T) {
 		{remote: "https://github.com/only-owner", wantErr: true},
 	}
 	for _, tc := range cases {
-		host, owner, repo, err := ParseRemoteURL(tc.remote)
+		host, owner, repo, err := parseRemoteURL(tc.remote)
 		if tc.wantErr {
 			if err == nil {
-				t.Errorf("ParseRemoteURL(%q) = %s/%s/%s; want error", tc.remote, host, owner, repo)
+				t.Errorf("parseRemoteURL(%q) = %s/%s/%s; want error", tc.remote, host, owner, repo)
 			}
 			continue
 		}
 		if err != nil || host != tc.host || owner != tc.owner || repo != tc.repo {
-			t.Errorf("ParseRemoteURL(%q) = %s/%s/%s, %v; want %s/%s/%s", tc.remote, host, owner, repo, err, tc.host, tc.owner, tc.repo)
+			t.Errorf("parseRemoteURL(%q) = %s/%s/%s, %v; want %s/%s/%s", tc.remote, host, owner, repo, err, tc.host, tc.owner, tc.repo)
 		}
 	}
 }

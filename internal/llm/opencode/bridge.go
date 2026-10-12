@@ -252,7 +252,6 @@ type bridgeLine struct {
 type serverBridge struct {
 	client serverClient
 	nonce  string
-	logf   func(string, ...interface{})
 
 	ctx    context.Context
 	cancel context.CancelFunc
@@ -263,10 +262,10 @@ type serverBridge struct {
 	closed   atomic.Bool
 }
 
-func newServerBridge(client serverClient, logf func(string, ...interface{})) *serverBridge {
+func newServerBridge(client serverClient) *serverBridge {
 	nonce, _ := randomServerPassword()
 	ctx, cancel := context.WithCancel(context.Background())
-	return &serverBridge{client: client, nonce: nonce, logf: logf, ctx: ctx, cancel: cancel}
+	return &serverBridge{client: client, nonce: nonce, ctx: ctx, cancel: cancel}
 }
 
 // interposedStdout is the merged stream the session reads.
@@ -431,7 +430,6 @@ func (b *serverBridge) reconnect() *http.Response {
 		if err == nil {
 			return resp
 		}
-		b.logf("[opencode] event stream reconnect failed: %v", err)
 		delay = min(delay*2, bridgeBackoffMax)
 	}
 }
@@ -453,7 +451,6 @@ func (b *serverBridge) reconcile(seq int) error {
 	} {
 		var pending []json.RawMessage
 		if err := b.client.getJSON(b.ctx, list.path, &pending); err != nil {
-			b.logf("[opencode] reconcile %s failed: %v", list.path, err)
 			return err
 		}
 		for _, item := range pending {

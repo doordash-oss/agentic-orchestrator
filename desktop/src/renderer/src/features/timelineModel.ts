@@ -16,12 +16,9 @@ limitations under the License.
 
 import type { TranscriptMessage } from '../../../shared/ipc';
 
-export const MAX_RETAINED_MESSAGES = 1000;
-/** Aggregate raw-record budget; row count alone permits gigabytes of valid text. */
-export const MAX_RETAINED_BYTES = 8 * 1024 * 1024;
 export const MAX_RENDERED_ENTRIES = 200;
 
-export type SemanticKind = 'agent' | 'phase' | 'error' | 'result' | 'routine-group';
+type SemanticKind = 'agent' | 'phase' | 'error' | 'result' | 'routine-group';
 
 export interface SemanticEntry {
   id: string;
@@ -29,29 +26,6 @@ export interface SemanticEntry {
   label: string;
   text: string;
   records: TranscriptMessage[];
-}
-
-/** Reconcile the REST/live shared row index, replacing legitimate updates. */
-export function reconcileTranscript(
-  current: readonly TranscriptMessage[],
-  incoming: readonly TranscriptMessage[],
-): TranscriptMessage[] {
-  const rows = new Map(current.map((message) => [message.index, message]));
-  for (const message of incoming) rows.set(message.index, message);
-  const tail = [...rows.values()]
-    .sort((left, right) => left.index - right.index)
-    .slice(-MAX_RETAINED_MESSAGES);
-  const encoder = new TextEncoder();
-  let retainedBytes = 0;
-  let start = tail.length;
-  while (start > 0) {
-    const record = tail[start - 1]!;
-    const recordBytes = encoder.encode(JSON.stringify(record)).byteLength;
-    if (retainedBytes + recordBytes > MAX_RETAINED_BYTES) break;
-    retainedBytes += recordBytes;
-    start -= 1;
-  }
-  return tail.slice(start);
 }
 
 export function semanticTimeline(messages: readonly TranscriptMessage[]): SemanticEntry[] {

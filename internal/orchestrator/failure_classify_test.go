@@ -21,6 +21,7 @@ import (
 	"testing"
 
 	"github.com/doordash-oss/agentic-orchestrator/internal/agent"
+	"github.com/doordash-oss/agentic-orchestrator/internal/config"
 	"github.com/doordash-oss/agentic-orchestrator/internal/errcat"
 	"github.com/doordash-oss/agentic-orchestrator/internal/feature"
 	"github.com/doordash-oss/agentic-orchestrator/internal/orchestrator"
@@ -37,9 +38,8 @@ import (
 // message.
 // ---------------------------------------------------------------------------
 
-// failureRecordFixture wires a real feature.Store-backed lifecycle mock whose
-// MarkFailed persists the canonical failure record, so tests can assert the
-// durable run state after a terminal path.
+// failureRecordFixture persists the feature and checks terminal paths through
+// the real manager and store.
 type failureRecordFixture struct {
 	o     *orchestrator.Orchestrator
 	store *feature.Store
@@ -60,17 +60,8 @@ func newFailureRecordFixture(t *testing.T, f *feature.Feature) *failureRecordFix
 	if err := store.Save(f); err != nil {
 		t.Fatalf("save feature: %v", err)
 	}
-	lc := lifecycleForFeature(f)
-	lc.GetFn = func(id string) (*feature.Feature, error) { return store.Load(id) }
-	lc.MarkFailedFn = func(id string, failure errcat.FailureRecord) error {
-		return store.Modify(id, func(ff *feature.Feature) error {
-			ff.Status = feature.StatusFailed
-			rec := failure
-			ff.Run().Failure = &rec
-			return nil
-		})
-	}
-	o := orchestrator.New(orchestrator.Deps{Lifecycle: lc, Store: store}, orchestrator.Hooks{})
+	lc := feature.NewManager(store, config.NewDefault())
+	o := orchestrator.New(orchestrator.Deps{Manager: lc, Store: store}, orchestrator.Hooks{})
 	return &failureRecordFixture{o: o, store: store, f: f}
 }
 
@@ -648,19 +639,10 @@ func TestFailureRecord_TerminalFailureWritesNoErrorLog(t *testing.T) {
 	if err := store.Save(f); err != nil {
 		t.Fatalf("save feature: %v", err)
 	}
-	lc := lifecycleForFeature(f)
-	lc.GetFn = func(id string) (*feature.Feature, error) { return store.Load(id) }
-	lc.MarkFailedFn = func(id string, failure errcat.FailureRecord) error {
-		return store.Modify(id, func(ff *feature.Feature) error {
-			ff.Status = feature.StatusFailed
-			rec := failure
-			ff.Run().Failure = &rec
-			return nil
-		})
-	}
+	lc := feature.NewManager(store, config.NewDefault())
 
 	o := orchestrator.New(orchestrator.Deps{
-		Lifecycle:   lc,
+		Manager:     lc,
 		Store:       store,
 		PhaseRunner: &agent.PhaseRunner{StateDir: stateDir},
 	}, orchestrator.Hooks{})

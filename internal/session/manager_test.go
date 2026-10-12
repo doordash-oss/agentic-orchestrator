@@ -28,6 +28,7 @@ import (
 
 	"github.com/doordash-oss/agentic-orchestrator/internal/feature"
 	"github.com/doordash-oss/agentic-orchestrator/internal/llm"
+	"github.com/doordash-oss/agentic-orchestrator/internal/llm/claude"
 	"github.com/doordash-oss/agentic-orchestrator/internal/ports"
 )
 
@@ -57,6 +58,7 @@ echo '{"type":"result","subtype":"success","session_id":"s1","total_cost_usd":0.
 	sess, err := sm.StartSession(
 		"rapid-test", "feat-1", feature.PhaseImplement,
 		[]string{"bash", scriptPath}, tmpDir, nil,
+		&SessionOpts{Protocol: claude.NewProtocol(llm.ProtocolOpts{})},
 	)
 	if err != nil {
 		t.Fatalf("starting session: %v", err)
@@ -153,13 +155,13 @@ sleep 30
 	sess, err := original.StartSession(
 		"feature-1-implement", "feature-1", feature.PhaseImplement,
 		[]string{"bash", scriptPath}, stateDir, nil,
-		&SessionOpts{PIDDir: stateDir, RunNumber: 3, LogPath: logPath, ProviderName: "fixture"},
+		&SessionOpts{PIDDir: stateDir, RunNumber: 3, LogPath: logPath, ProviderName: "fixture", Protocol: claude.NewProtocol(llm.ProtocolOpts{})},
 	)
 	if err != nil {
 		t.Fatalf("starting live session: %v", err)
 	}
 	waitForMessageCount(t, sess, 2)
-	pidFile, err := ReadPIDFile(filepath.Join(stateDir, PIDFileName("")))
+	pidFile, err := ReadPIDFile(filepath.Join(stateDir, pidfileName("")))
 	if err != nil {
 		t.Fatalf("reading live session metadata: %v", err)
 	}
@@ -175,7 +177,7 @@ sleep 30
 		t.Fatalf("closing persisted transcript: %v", err)
 	}
 
-	restarted := NewRecoveringManager(nil, stateDir)
+	restarted := newRecoveringManager(nil, stateDir)
 	restored := restarted.FeatureSessions("feature-1")
 	if len(restored) != 1 {
 		t.Fatalf("restored session count = %d, want 1", len(restored))
@@ -224,7 +226,7 @@ echo '{"type":"result","subtype":"success","session_id":"s1","total_cost_usd":0}
 	sess, err := sm.StartSession(
 		"model-fallback", "feat-1", feature.PhaseInquire,
 		[]string{"bash", scriptPath}, tmpDir, nil,
-		&SessionOpts{Model: "gpt-5.4-mini[272K]"},
+		&SessionOpts{Model: "gpt-5.4-mini[272K]", Protocol: claude.NewProtocol(llm.ProtocolOpts{})},
 	)
 	if err != nil {
 		t.Fatalf("StartSession() error = %v", err)
@@ -283,6 +285,7 @@ echo '{"type":"result","subtype":"success","session_id":"s1","total_cost_usd":0.
 	sess, err := sm.StartSession(
 		"partial-test", "feat-1", feature.PhaseImplement,
 		[]string{"bash", scriptPath}, tmpDir, nil,
+		&SessionOpts{Protocol: claude.NewProtocol(llm.ProtocolOpts{})},
 	)
 	if err != nil {
 		t.Fatalf("starting session: %v", err)
@@ -363,7 +366,7 @@ echo '{"type":"result","subtype":"success","session_id":"s1","total_cost_usd":0}
 
 	sess, err := sm.StartSession("prompt-test", "feat-1", feature.PhaseResearch,
 		[]string{"bash", scriptPath}, tmpDir, nil,
-		&SessionOpts{InitialPrompt: "Hello from initial prompt"})
+		&SessionOpts{InitialPrompt: "Hello from initial prompt", Protocol: claude.NewProtocol(llm.ProtocolOpts{InitialPrompt: "Hello from initial prompt"})})
 	if err != nil {
 		t.Fatalf("starting session: %v", err)
 	}
@@ -403,7 +406,7 @@ echo '{"type":"result","subtype":"success","session_id":"s1","total_cost_usd":0}
 	prompt := strings.Repeat("abcd", 100)
 	sess, err := sm.StartSession("context-seed-test", "feat-1", feature.PhaseResearch,
 		[]string{"bash", scriptPath}, tmpDir, nil,
-		&SessionOpts{InitialPrompt: prompt, ContextWindow: contextWindow})
+		&SessionOpts{InitialPrompt: prompt, ContextWindow: contextWindow, Protocol: claude.NewProtocol(llm.ProtocolOpts{InitialPrompt: prompt})})
 	if err != nil {
 		t.Fatalf("starting session: %v", err)
 	}
@@ -418,12 +421,20 @@ echo '{"type":"result","subtype":"success","session_id":"s1","total_cost_usd":0}
 	if err != nil {
 		t.Fatalf("reading received prompt: %v", err)
 	}
-	var input llm.UserInputMessage
+	// The Claude protocol delivers the initial prompt as the SDK's user-input
+	// wire shape: {"type":"user","message":{"role":"user","content":"…"}}.
+	var input struct {
+		Type    string `json:"type"`
+		Message struct {
+			Role    string `json:"role"`
+			Content string `json:"content"`
+		} `json:"message"`
+	}
 	if err := json.Unmarshal(received, &input); err != nil {
 		t.Fatalf("decoding received prompt: %v", err)
 	}
-	if input != llm.NewUserInput(prompt) {
-		t.Fatalf("received prompt = %+v, want user message containing %q", input, prompt)
+	if input.Type != "user" || input.Message.Role != "user" || input.Message.Content != prompt {
+		t.Fatalf("received prompt = %s, want Claude user-input message containing %q", received, prompt)
 	}
 
 	usage := sess.LatestUsage()
@@ -463,7 +474,8 @@ echo '{"type":"result","subtype":"success","session_id":"s1","total_cost_usd":0}
 `), 0o755)
 
 	sess, err := sm.StartSession("noprompt-test", "feat-1", feature.PhaseResearch,
-		[]string{"bash", scriptPath}, tmpDir, nil)
+		[]string{"bash", scriptPath}, tmpDir, nil,
+		&SessionOpts{Protocol: claude.NewProtocol(llm.ProtocolOpts{})})
 	if err != nil {
 		t.Fatalf("starting session: %v", err)
 	}
@@ -516,7 +528,8 @@ echo '{"type":"result","subtype":"success","session_id":"s1","total_cost_usd":0}
 `), 0o755)
 
 	sess, err := sm.StartSession("done-msg-test", "feat-1", feature.PhaseImplement,
-		[]string{"bash", scriptPath}, tmpDir, nil)
+		[]string{"bash", scriptPath}, tmpDir, nil,
+		&SessionOpts{Protocol: claude.NewProtocol(llm.ProtocolOpts{})})
 	if err != nil {
 		t.Fatalf("starting session: %v", err)
 	}
@@ -578,6 +591,7 @@ echo '{"type":"result","subtype":"success","session_id":"s1","total_cost_usd":0}
 	sess, err := sm.StartSession("perm-clobber-test", "feat-1", feature.PhaseImplement,
 		[]string{"bash", scriptPath}, tmpDir, nil,
 		// No PermHandler → control_request is deferred to desktop app (not auto-handled)
+		&SessionOpts{Protocol: claude.NewProtocol(llm.ProtocolOpts{})},
 	)
 	if err != nil {
 		t.Fatalf("starting session: %v", err)
@@ -725,7 +739,7 @@ echo '{"type":"result","subtype":"success","session_id":"s1","total_cost_usd":0}
 
 	stderrPath := filepath.Join(tmpDir, "stderr.log")
 	sess, err := sm.StartSession("piped-test", "feat-1", feature.PhaseReview,
-		[]string{"bash", scriptPath}, tmpDir, nil, &SessionOpts{StderrPath: stderrPath})
+		[]string{"bash", scriptPath}, tmpDir, nil, &SessionOpts{StderrPath: stderrPath, Protocol: claude.NewProtocol(llm.ProtocolOpts{})})
 	if err != nil {
 		t.Fatalf("starting piped session: %v", err)
 	}

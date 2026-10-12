@@ -53,7 +53,7 @@ func requireOrder(t testing.TB, got string, markers ...string) {
 
 func TestPreflightBranchBehavior(t *testing.T) {
 	render := func(in PreflightInput) string {
-		return RoleSystemPrompt(RoleSystemInput{
+		return MustRender(TemplateSystem, RoleSystemInput{
 			OutputRoots: []OutputRootView{{Name: "phase_dir", Path: "/phase"}},
 			SkillPath:   "/skills/role/SKILL.md",
 			Preflight:   in,
@@ -120,7 +120,7 @@ func TestPreflightBranchBehavior(t *testing.T) {
 
 func TestReadOnlyOutsideRootsBranch(t *testing.T) {
 	render := func(readOnly bool) string {
-		return RoleSystemPrompt(RoleSystemInput{
+		return MustRender(TemplateSystem, RoleSystemInput{
 			OutputRoots:          []OutputRootView{{Name: "phase_dir", Path: "/phase"}},
 			SkillPath:            "/skills/role/SKILL.md",
 			ReadOnlyOutsideRoots: readOnly,
@@ -159,7 +159,7 @@ func TestMultiRepoPromptBranches(t *testing.T) {
 		{
 			name: "design_target_repositories_block_emitted_when_multi_repo_with_multiple_repos",
 			render: func() string {
-				return DesignUserPrompt(DesignUserInput{Name: "Name", Description: "Desc", MultiRepo: true, Repos: repos})
+				return MustRender(TemplateDesignUser, DesignUserInput{Name: "Name", Description: "Desc", MultiRepo: true, Repos: repos})
 			},
 			want:     true,
 			wantRepo: wantRepoAPI,
@@ -167,19 +167,19 @@ func TestMultiRepoPromptBranches(t *testing.T) {
 		{
 			name: "design_target_repositories_block_omitted_when_multi_repo_flag_false",
 			render: func() string {
-				return DesignUserPrompt(DesignUserInput{Name: "Name", Description: "Desc", MultiRepo: false, Repos: repos})
+				return MustRender(TemplateDesignUser, DesignUserInput{Name: "Name", Description: "Desc", MultiRepo: false, Repos: repos})
 			},
 		},
 		{
 			name: "design_target_repositories_block_omitted_when_only_one_repo",
 			render: func() string {
-				return DesignUserPrompt(DesignUserInput{Name: "Name", Description: "Desc", MultiRepo: true, Repos: repos[:1]})
+				return MustRender(TemplateDesignUser, DesignUserInput{Name: "Name", Description: "Desc", MultiRepo: true, Repos: repos[:1]})
 			},
 		},
 		{
 			name: "roadmap_target_repositories_block_emitted_when_multi_repo_with_multiple_repos",
 			render: func() string {
-				return RoadmapUserPrompt(RoadmapUserInput{Name: "Name", Description: "Desc", MultiRepo: true, Repos: repos})
+				return MustRender(TemplateRoadmapUser, RoadmapUserInput{Name: "Name", Description: "Desc", MultiRepo: true, Repos: repos})
 			},
 			want:     true,
 			wantRepo: wantRepoAPI,
@@ -187,7 +187,7 @@ func TestMultiRepoPromptBranches(t *testing.T) {
 		{
 			name: "roadmap_target_repositories_block_emitted_even_when_multi_repo_flag_false",
 			render: func() string {
-				return RoadmapUserPrompt(RoadmapUserInput{Name: "Name", Description: "Desc", MultiRepo: false, Repos: repos})
+				return MustRender(TemplateRoadmapUser, RoadmapUserInput{Name: "Name", Description: "Desc", MultiRepo: false, Repos: repos})
 			},
 			want:     true,
 			wantRepo: wantRepoAPI,
@@ -195,7 +195,7 @@ func TestMultiRepoPromptBranches(t *testing.T) {
 		{
 			name: "roadmap_target_repositories_block_emitted_when_only_one_repo",
 			render: func() string {
-				return RoadmapUserPrompt(RoadmapUserInput{Name: "Name", Description: "Desc", MultiRepo: true, Repos: repos[:1]})
+				return MustRender(TemplateRoadmapUser, RoadmapUserInput{Name: "Name", Description: "Desc", MultiRepo: true, Repos: repos[:1]})
 			},
 			want:     true,
 			wantRepo: "**web**",
@@ -216,9 +216,9 @@ func TestMultiRepoPromptBranches(t *testing.T) {
 }
 
 func TestInquirenessBranches(t *testing.T) {
-	grillMeNone := GrillMeInquireness("none")
-	grillMeMedium := GrillMeInquireness("medium")
-	grillMeHigh := GrillMeInquireness("high")
+	grillMeNone := MustRender(TemplateGrillMeInquireness, GrillMeInquirenessInput{Level: "none"})
+	grillMeMedium := MustRender(TemplateGrillMeInquireness, GrillMeInquirenessInput{Level: "medium"})
+	grillMeHigh := MustRender(TemplateGrillMeInquireness, GrillMeInquirenessInput{Level: "high"})
 	if grillMeNone != grillMeMedium || grillMeMedium != grillMeHigh {
 		t.Fatalf("grill-me directive should be invariant by inquireness level:\n--- none ---\n%s\n--- medium ---\n%s\n--- high ---\n%s", grillMeNone, grillMeMedium, grillMeHigh)
 	}
@@ -249,7 +249,7 @@ func TestInquirenessBranches(t *testing.T) {
 		},
 		{
 			name:         "autonomous_inquireness_forbids_questions",
-			got:          AutonomousInquireness(),
+			got:          MustRender(TemplateAutonomousInquireness, AutonomousInquirenessInput{}),
 			wantContains: []string{"Ambiguity Resolution [none]", "Do NOT ask the user any questions"},
 			wantOmit:     []string{"Ambiguity Resolution [grill-me]"},
 		},
@@ -315,7 +315,7 @@ func TestKBBuildModeBranches(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got := KBBuildUserPrompt(tt.input)
+			got := MustRender(TemplateKBBuildUser, tt.input)
 			for _, want := range tt.wantContains {
 				requireContains(t, got, want)
 			}
@@ -327,7 +327,7 @@ func TestKBBuildModeBranches(t *testing.T) {
 }
 
 func TestPromptBranchFixturesUseRegisteredImplementSkills(t *testing.T) {
-	got := RoleSystemPrompt(RoleSystemInput{
+	got := MustRender(TemplateSystem, RoleSystemInput{
 		OutputRoots: []OutputRootView{{Name: "phase_dir", Path: "/phase"}},
 		SkillPath:   "/skills/implement/SKILL.md",
 		Preflight: PreflightInput{

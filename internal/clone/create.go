@@ -45,7 +45,7 @@ type CreateStartInput struct {
 // provably owned staging and releases the reservation; an uncertain
 // cleanup stays truthfully cleanup-pending. Create fails with
 // *workadmission.ClosedError when admission is closed.
-func (s *Service) Create(ctx context.Context, input CreateStartInput) (Record, error) {
+func (s *service) Create(ctx context.Context, input CreateStartInput) (Record, error) {
 	if s.drainingNow() {
 		return Record{}, serviceError(CodeUnavailable, "server is shutting down")
 	}
@@ -61,16 +61,16 @@ func (s *Service) Create(ctx context.Context, input CreateStartInput) (Record, e
 			res.Release()
 		}
 	}()
-	if err := ValidateIdempotencyKey(input.IdempotencyKey); err != nil {
-		var verr *ValidationError
+	if err := validateIdempotencyKey(input.IdempotencyKey); err != nil {
+		var verr *validationError
 		detail := ""
 		if errors.As(err, &verr) {
 			detail = verr.Detail
 		}
 		return Record{}, serviceError(CodeIdempotencyConflict, detail)
 	}
-	var verr *ValidationError
-	if err := ValidateDestination(input.Destination); err != nil {
+	var verr *validationError
+	if err := validateDestination(input.Destination); err != nil {
 		detail := ""
 		if errors.As(err, &verr) {
 			detail = verr.Detail
@@ -101,7 +101,7 @@ func (s *Service) Create(ctx context.Context, input CreateStartInput) (Record, e
 		return Record{}, err
 	}
 	if replayed {
-		// Replay returns the retained record whatever its state: a
+		// Replay returns the retained record whatever its State: a
 		// succeeded record replays its published result; anything else is
 		// mapped by the server layer onto a truthful unavailable error.
 		// The retained operation owns its own reservation; the request's
@@ -114,7 +114,7 @@ func (s *Service) Create(ctx context.Context, input CreateStartInput) (Record, e
 	s.runCreateOperation(ctx, &rec)
 	out, ok := s.store.get(rec.ID)
 	if !ok {
-		return Record{}, serviceError(CodeInternal, "read create outcome")
+		return Record{}, serviceError(codeInternal, "read create outcome")
 	}
 	return out, nil
 }
@@ -122,31 +122,31 @@ func (s *Service) Create(ctx context.Context, input CreateStartInput) (Record, e
 // runCreateOperation drives one accepted create record to a terminal
 // outcome while holding the operation lock, so cancellation, recovery and
 // competing mutations serialize exactly as they do for clones.
-func (s *Service) runCreateOperation(ctx context.Context, rec *Record) {
+func (s *service) runCreateOperation(ctx context.Context, rec *Record) {
 	op := s.op(rec.ID)
 	op.mu.Lock()
 	defer op.mu.Unlock()
 
 	cur, ok := s.store.get(rec.ID)
-	if !ok || !ActiveStates[cur.State] {
+	if !ok || !activeStates[cur.State] {
 		return
 	}
 	if cur.CancelRequested {
 		// A cancellation won before any git execution: resolve through the
 		// same verified-cleanup boundary as every other outcome.
-		s.finalizeOutcomeLocked(op, &cur, StateCancelled, "", "", nil)
+		s.finalizeOutcomeLocked(op, &cur, stateCancelled, "", "", nil)
 		return
 	}
-	cur.State = StateRunning
+	cur.State = stateRunning
 	if err := s.save(&cur); err != nil {
 		// A truthful unresolved record stays on disk; reconciliation
 		// retries the transition and cleanup.
-		s.finalizeOutcomeLocked(op, &cur, StateFailed, FailureCleanupPending, "persist running state", nil)
+		s.finalizeOutcomeLocked(op, &cur, stateFailed, failureCleanupPending, "persist running state", nil)
 		return
 	}
 	workDir := filepath.Join(cur.StagingPath, stagingWorkDir)
 	if err := os.MkdirAll(workDir, 0o755); err != nil {
-		s.finalizeOutcomeLocked(op, &cur, StateFailed, FailureExecution, "create work directory: "+err.Error(), nil)
+		s.finalizeOutcomeLocked(op, &cur, stateFailed, failureExecution, "create work directory: "+err.Error(), nil)
 		return
 	}
 	createGit := s.opts.CreateGit
@@ -154,15 +154,15 @@ func (s *Service) runCreateOperation(ctx context.Context, rec *Record) {
 		createGit = git.CreateRepository
 	}
 	if err := createGit(ctx, workDir); err != nil {
-		s.finalizeOutcomeLocked(op, &cur, StateFailed, FailureExecution, "create repository: "+err.Error(), nil)
+		s.finalizeOutcomeLocked(op, &cur, stateFailed, failureExecution, "create repository: "+err.Error(), nil)
 		return
 	}
 	fresh, ok := s.store.get(rec.ID)
-	if !ok || !ActiveStates[fresh.State] {
+	if !ok || !activeStates[fresh.State] {
 		return
 	}
 	if fresh.CancelRequested {
-		s.finalizeOutcomeLocked(op, &fresh, StateCancelled, "", "", nil)
+		s.finalizeOutcomeLocked(op, &fresh, stateCancelled, "", "", nil)
 		return
 	}
 	// The irreversible success boundary is shared with clones: verify the

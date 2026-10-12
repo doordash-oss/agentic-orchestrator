@@ -77,13 +77,13 @@ func TestPipelineProfilePhaseProgression(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got := PhasesForProfile(tt.profile)
+			got := phasesForProfile(tt.profile)
 			if len(got) != len(tt.wantPhases) {
-				t.Fatalf("PhasesForProfile(%q) returned %d phases, want %d", tt.profile, len(got), len(tt.wantPhases))
+				t.Fatalf("phasesForProfile(%q) returned %d phases, want %d", tt.profile, len(got), len(tt.wantPhases))
 			}
 			for i := range tt.wantPhases {
 				if got[i] != tt.wantPhases[i] {
-					t.Errorf("PhasesForProfile(%q)[%d] = %v, want %v", tt.profile, i, got[i], tt.wantPhases[i])
+					t.Errorf("phasesForProfile(%q)[%d] = %v, want %v", tt.profile, i, got[i], tt.wantPhases[i])
 				}
 			}
 			if got := tt.profile.FirstPhase(); got != tt.wantPhases[0] {
@@ -108,27 +108,6 @@ func TestPipelineProfilePhaseProgression(t *testing.T) {
 			last := tt.wantPhases[len(tt.wantPhases)-1]
 			if gotNext, ok := tt.profile.NextPhase(last); ok {
 				t.Errorf("%s.NextPhase(%v) = %v, true; want no next phase", tt.profile, last, gotNext)
-			}
-		})
-	}
-}
-
-func TestPipelineProfileNextProfile(t *testing.T) {
-	t.Parallel()
-	// parallel-candidate: pure value, table-driven, or per-test temp-dir assertions with no shared state.
-	tests := []struct {
-		name    string
-		profile PipelineProfile
-		want    PipelineProfile
-	}{
-		{"moonshot to medium", PipelineMoonshot, PipelineMedium},
-		{"medium to large", PipelineMedium, PipelineLarge},
-		{"large to moonshot", PipelineLarge, PipelineMoonshot},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			if got := tt.profile.NextProfile(); got != tt.want {
-				t.Errorf("%s.NextProfile() = %v, want %v", tt.profile, got, tt.want)
 			}
 		})
 	}
@@ -237,13 +216,13 @@ func TestPipelineProfileApplicableGates(t *testing.T) {
 		profile PipelineProfile
 		want    []GateIndex
 	}{
-		{"medium", PipelineMedium, []GateIndex{GateRoadmapReview, GatePhasePlanReview, GateManualPublish}},
-		{"large", PipelineLarge, []GateIndex{GateInquiryReview, GateResearchReview, GateDesignReview, GateRoadmapReview, GatePhasePlanReview, GateManualPublish}},
-		{"moonshot", PipelineMoonshot, []GateIndex{GateInquiryReview, GateResearchReview, GateDesignReview, GateRoadmapReview, GatePhasePlanReview, GateManualPublish}},
+		{"medium", PipelineMedium, []GateIndex{gateRoadmapReview, gatePhasePlanReview, gateManualPublish}},
+		{"large", PipelineLarge, []GateIndex{gateInquiryReview, gateResearchReview, gateDesignReview, gateRoadmapReview, gatePhasePlanReview, gateManualPublish}},
+		{"moonshot", PipelineMoonshot, []GateIndex{gateInquiryReview, gateResearchReview, gateDesignReview, gateRoadmapReview, gatePhasePlanReview, gateManualPublish}},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			requireGateSliceEqual(t, tt.profile.ApplicableGates(), tt.want)
+			requireGateSliceEqual(t, tt.profile.applicableGates(), tt.want)
 		})
 	}
 }
@@ -265,7 +244,7 @@ func TestProjectGatesNormalizeCheckpointsForPersistence(t *testing.T) {
 			input:       Checkpoints{InquiryReview: true, DesignReview: true, RoadmapReview: true, PhasePlanReview: true, ManualPublish: true},
 			publishable: true,
 			want:        Checkpoints{RoadmapReview: true, PhasePlanReview: true, ManualPublish: true},
-			wantVisible: []GateIndex{GateRoadmapReview, GatePhasePlanReview, GateManualPublish},
+			wantVisible: []GateIndex{gateRoadmapReview, gatePhasePlanReview, gateManualPublish},
 		},
 		{
 			name:        "unpublished large forces manual publish while hiding the row",
@@ -273,7 +252,7 @@ func TestProjectGatesNormalizeCheckpointsForPersistence(t *testing.T) {
 			input:       Checkpoints{DesignReview: true, RoadmapReview: true, PhasePlanReview: true, ManualPublish: false},
 			publishable: false,
 			want:        Checkpoints{DesignReview: true, RoadmapReview: true, PhasePlanReview: true, ManualPublish: true},
-			wantVisible: []GateIndex{GateInquiryReview, GateResearchReview, GateDesignReview, GateRoadmapReview, GatePhasePlanReview},
+			wantVisible: []GateIndex{gateInquiryReview, gateResearchReview, gateDesignReview, gateRoadmapReview, gatePhasePlanReview},
 		},
 	}
 
@@ -318,76 +297,9 @@ func TestPipelineProfileFilterCheckpoints(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got := tt.profile.FilterCheckpoints(allTrue)
+			got := tt.profile.filterCheckpoints(allTrue)
 			if got != tt.want {
-				t.Errorf("%s.FilterCheckpoints(allTrue) = %+v, want %+v", tt.profile, got, tt.want)
-			}
-		})
-	}
-}
-
-func TestProjectMergedGates(t *testing.T) {
-	t.Parallel()
-	// parallel-candidate: pure value, table-driven, or per-test temp-dir assertions with no shared state.
-	tests := []struct {
-		name           string
-		profile        PipelineProfile
-		base           Checkpoints
-		overrides      []Checkpoints
-		publishable    bool
-		wantCheckpoint Checkpoints
-		wantVisible    []GateIndex
-		wantFromConfig bool
-	}{
-		{
-			name:    "medium keeps planning gate overrides",
-			profile: PipelineMedium,
-			base:    DefaultCheckpointsForProfile(PipelineMedium),
-			overrides: []Checkpoints{{
-				InquiryReview:   true,
-				DesignReview:    true,
-				RoadmapReview:   true,
-				PhasePlanReview: true,
-				ManualPublish:   true,
-			}},
-			publishable:    true,
-			wantCheckpoint: Checkpoints{RoadmapReview: true, PhasePlanReview: true, ManualPublish: true},
-			wantVisible:    []GateIndex{GateRoadmapReview, GatePhasePlanReview, GateManualPublish},
-			wantFromConfig: true,
-		},
-		{
-			name:    "large keeps every gate override",
-			profile: PipelineLarge,
-			base:    DefaultCheckpointsForProfile(PipelineLarge),
-			overrides: []Checkpoints{
-				{InquiryReview: true, ManualPublish: true},
-				{ResearchReview: true, DesignReview: true, RoadmapReview: true, PhasePlanReview: true},
-			},
-			publishable:    true,
-			wantCheckpoint: Checkpoints{InquiryReview: true, ResearchReview: true, DesignReview: true, RoadmapReview: true, PhasePlanReview: true, ManualPublish: true},
-			wantVisible:    []GateIndex{GateInquiryReview, GateResearchReview, GateDesignReview, GateRoadmapReview, GatePhasePlanReview, GateManualPublish},
-			wantFromConfig: true,
-		},
-		{
-			name:           "unpublished hides publish gate but keeps checkpoint true",
-			profile:        PipelineMedium,
-			base:           DefaultCheckpointsForProfile(PipelineMedium),
-			publishable:    false,
-			wantCheckpoint: Checkpoints{RoadmapReview: true, PhasePlanReview: true, ManualPublish: true},
-			wantVisible:    []GateIndex{GateRoadmapReview, GatePhasePlanReview},
-			wantFromConfig: false,
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			got := tt.profile.ProjectMergedGates(tt.base, tt.overrides, tt.publishable)
-			if got.Checkpoints != tt.wantCheckpoint {
-				t.Fatalf("ProjectMergedGates(%s).Checkpoints = %+v, want %+v", tt.profile, got.Checkpoints, tt.wantCheckpoint)
-			}
-			requireGateSliceEqual(t, got.Visible, tt.wantVisible)
-			if got.FromConfig != tt.wantFromConfig {
-				t.Fatalf("ProjectMergedGates(%s).FromConfig = %v, want %v", tt.profile, got.FromConfig, tt.wantFromConfig)
+				t.Errorf("%s.filterCheckpoints(allTrue) = %+v, want %+v", tt.profile, got, tt.want)
 			}
 		})
 	}
@@ -459,69 +371,6 @@ func TestParsePipelineProfileInvalid(t *testing.T) {
 	}
 }
 
-func TestConfigCheckpointsToFeatureCheckpoints(t *testing.T) {
-	t.Parallel()
-	// parallel-candidate: pure value, table-driven, or per-test temp-dir assertions with no shared state.
-	tests := []struct {
-		name  string
-		input config.Checkpoints
-		want  Checkpoints
-	}{
-		{
-			"all false",
-			config.Checkpoints{},
-			Checkpoints{},
-		},
-		{
-			"all true",
-			config.Checkpoints{
-				InquiryReview:   true,
-				ResearchReview:  true,
-				DesignReview:    true,
-				RoadmapReview:   true,
-				PhasePlanReview: true,
-				ManualPublish:   true,
-				DraftPublish:    true,
-			},
-			Checkpoints{
-				InquiryReview:   true,
-				ResearchReview:  true,
-				DesignReview:    true,
-				RoadmapReview:   true,
-				PhasePlanReview: true,
-				ManualPublish:   true,
-				DraftPublish:    true,
-			},
-		},
-		{
-			"planning gates",
-			config.Checkpoints{RoadmapReview: true, PhasePlanReview: true},
-			Checkpoints{RoadmapReview: true, PhasePlanReview: true},
-		},
-		{
-			"mixed",
-			config.Checkpoints{
-				InquiryReview: true,
-				DesignReview:  true,
-				ManualPublish: true,
-			},
-			Checkpoints{
-				InquiryReview: true,
-				DesignReview:  true,
-				ManualPublish: true,
-			},
-		},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			got := ConfigCheckpointsToFeature(tt.input)
-			if got != tt.want {
-				t.Errorf("ConfigCheckpointsToFeature(%+v) = %+v, want %+v", tt.input, got, tt.want)
-			}
-		})
-	}
-}
-
 func TestFeatureCheckpointsToConfigCheckpoints(t *testing.T) {
 	t.Parallel()
 	// parallel-candidate: pure value, table-driven, or per-test temp-dir assertions with no shared state.
@@ -584,32 +433,6 @@ func TestFeatureCheckpointsToConfigCheckpoints(t *testing.T) {
 				got.ManualPublish != tt.want.ManualPublish ||
 				got.DraftPublish != tt.want.DraftPublish {
 				t.Errorf("FeatureCheckpointsToConfig(%+v) = %+v, want %+v", tt.input, got, tt.want)
-			}
-		})
-	}
-}
-
-func TestMinimumProfileForPhase(t *testing.T) {
-	t.Parallel()
-	// parallel-candidate: pure value, table-driven, or per-test temp-dir assertions with no shared state.
-	tests := []struct {
-		name  string
-		phase Phase
-		want  PipelineProfile
-	}{
-		{"KB requires large", PhaseKnowledgeBase, PipelineLarge},
-		{"Inquire requires large", PhaseInquire, PipelineLarge},
-		{"Research requires large", PhaseResearch, PipelineLarge},
-		{"Design requires large", PhaseDesign, PipelineLarge},
-		{"Plan available in medium", PhasePlan, PipelineMedium},
-		{"Implement available in medium", PhaseImplement, PipelineMedium},
-		{"Publish available in medium", PhasePublish, PipelineMedium},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			got := MinimumProfileForPhase(tt.phase)
-			if got != tt.want {
-				t.Errorf("MinimumProfileForPhase(%v) = %v, want %v", tt.phase, got, tt.want)
 			}
 		})
 	}

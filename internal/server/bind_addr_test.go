@@ -29,7 +29,7 @@ func TestRuntimeServerBindDefaultLoopback(t *testing.T) {
 	t.Parallel()
 	srv, err := Start(context.Background(), Options{
 		AllowUnauthenticated: true,
-		AuthToken:            "token",
+		HandlerOptions:       HandlerOptions{AuthToken: "token"},
 	})
 	if err != nil {
 		t.Fatalf("Start() error = %v", err)
@@ -60,7 +60,7 @@ func TestRuntimeServerBindFixedLoopbackPort(t *testing.T) {
 
 	srv, err := Start(context.Background(), Options{
 		AllowUnauthenticated: true,
-		AuthToken:            "token",
+		HandlerOptions:       HandlerOptions{AuthToken: "token"},
 		ListenAddr:           "127.0.0.1:" + strconv.Itoa(port),
 	})
 	if err != nil {
@@ -101,7 +101,7 @@ func TestRuntimeServerBindWildcardPreservesWildcardHost(t *testing.T) {
 
 	srv, err := Start(context.Background(), Options{
 		AllowUnauthenticated: true,
-		AuthToken:            "token",
+		HandlerOptions:       HandlerOptions{AuthToken: "token"},
 		ListenAddr:           "0.0.0.0:" + strconv.Itoa(port),
 	})
 	if err != nil {

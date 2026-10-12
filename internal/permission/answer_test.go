@@ -51,7 +51,7 @@ func TestAnswerServiceAllowRememberPersistsBeforeAnswerAndAudits(t *testing.T) {
 	t.Parallel()
 
 	dir := t.TempDir()
-	cache := NewCache(NewStore(filepath.Join(dir, "permissions")))
+	cache := newCache(newStore(filepath.Join(dir, "permissions")))
 	audit := NewAuditSink(filepath.Join(dir, "permissions"))
 	service := NewAnswerService(cache, audit)
 	var calls []answerCall
@@ -62,7 +62,7 @@ func TestAnswerServiceAllowRememberPersistsBeforeAnswerAndAudits(t *testing.T) {
 		FeatureID:        testFeatureID,
 		ToolName:         toolNameBash,
 		ToolInput:        testGoTestBashInput,
-		Decision:         DecisionAllowRemember,
+		Decision:         decisionAllowRemember,
 		RememberPattern:  patternBashGoTest,
 		RememberScope:    testRepoA,
 		RememberScopeSet: true,
@@ -76,7 +76,7 @@ func TestAnswerServiceAllowRememberPersistsBeforeAnswerAndAudits(t *testing.T) {
 	if !result.Persisted || !result.Answered || result.AlreadyExisted || result.AuditPath == "" || result.AuditWarning != "" {
 		t.Fatalf("result = %+v, want persisted answered audited", result)
 	}
-	rules, err := NewStore(filepath.Join(dir, "permissions")).Load(scopeFor(testRepoA))
+	rules, err := newStore(filepath.Join(dir, "permissions")).load(scopeFor(testRepoA))
 	if err != nil {
 		t.Fatalf("Load(repo-a) error = %v", err)
 	}
@@ -97,7 +97,7 @@ func TestAnswerServiceAllowRememberPersistenceFailureDoesNotAnswer(t *testing.T)
 	if err := os.WriteFile(blockingFile, []byte("not a dir"), 0o600); err != nil {
 		t.Fatalf("write blocking file: %v", err)
 	}
-	cache := NewCache(NewStore(blockingFile))
+	cache := newCache(newStore(blockingFile))
 	audit := NewAuditSink(filepath.Join(dir, "audit"))
 	service := NewAnswerService(cache, audit)
 	var calls []answerCall
@@ -108,7 +108,7 @@ func TestAnswerServiceAllowRememberPersistenceFailureDoesNotAnswer(t *testing.T)
 		FeatureID:        testFeatureID,
 		ToolName:         toolNameBash,
 		ToolInput:        testGoTestBashInput,
-		Decision:         DecisionAllowRemember,
+		Decision:         decisionAllowRemember,
 		RememberPattern:  patternBashGoTest,
 		RememberScope:    testRepoA,
 		RememberScopeSet: true,
@@ -132,7 +132,7 @@ func TestAnswerServiceAllowRememberDuplicateSkipsAuditButAnswers(t *testing.T) {
 	t.Parallel()
 
 	dir := t.TempDir()
-	cache := NewCache(NewStore(filepath.Join(dir, "permissions")))
+	cache := newCache(newStore(filepath.Join(dir, "permissions")))
 	auditDir := filepath.Join(dir, "audit")
 	service := NewAnswerService(cache, NewAuditSink(auditDir))
 	req := AnswerRequest{
@@ -141,7 +141,7 @@ func TestAnswerServiceAllowRememberDuplicateSkipsAuditButAnswers(t *testing.T) {
 		FeatureID:        testFeatureID,
 		ToolName:         toolNameBash,
 		ToolInput:        testGoTestBashInput,
-		Decision:         DecisionAllowRemember,
+		Decision:         decisionAllowRemember,
 		RememberPattern:  patternBashGoTest,
 		RememberScope:    testRepoA,
 		RememberScopeSet: true,
@@ -175,7 +175,7 @@ func TestAnswerServiceAllowRememberAnswerFailureKeepsRuleAndAudits(t *testing.T)
 	t.Parallel()
 
 	dir := t.TempDir()
-	cache := NewCache(NewStore(filepath.Join(dir, "permissions")))
+	cache := newCache(newStore(filepath.Join(dir, "permissions")))
 	audit := NewAuditSink(filepath.Join(dir, "audit"))
 	service := NewAnswerService(cache, audit)
 	answerErr := errors.New("session closed with token=answer-secret")
@@ -186,7 +186,7 @@ func TestAnswerServiceAllowRememberAnswerFailureKeepsRuleAndAudits(t *testing.T)
 		FeatureID:        testFeatureID,
 		ToolName:         toolNameBash,
 		ToolInput:        testGoTestBashInput,
-		Decision:         DecisionAllowRemember,
+		Decision:         decisionAllowRemember,
 		RememberPattern:  patternBashGoTest,
 		RememberScope:    testRepoA,
 		RememberScopeSet: true,
@@ -199,7 +199,7 @@ func TestAnswerServiceAllowRememberAnswerFailureKeepsRuleAndAudits(t *testing.T)
 	if !result.Persisted || result.Answered {
 		t.Fatalf("result = %+v, want persisted but not answered", result)
 	}
-	if _, ok := cache.Check(toolNameBash, testGoTestBashInput, testRepoA); !ok {
+	if _, ok := cache.check(toolNameBash, testGoTestBashInput, testRepoA); !ok {
 		t.Fatal("remembered rule missing after answer failure")
 	}
 	event := readSingleAuditEvent(t, result.AuditPath)
@@ -219,7 +219,7 @@ func TestAnswerServiceAuditFailureIsWarningOnly(t *testing.T) {
 	if err := os.WriteFile(blockingFile, []byte("not a dir"), 0o600); err != nil {
 		t.Fatalf("write blocking file: %v", err)
 	}
-	service := NewAnswerService(NewCache(NewStore(filepath.Join(dir, "permissions"))), NewAuditSink(blockingFile))
+	service := NewAnswerService(newCache(newStore(filepath.Join(dir, "permissions"))), NewAuditSink(blockingFile))
 	var calls []answerCall
 
 	result, err := service.Answer(AnswerRequest{
@@ -228,7 +228,7 @@ func TestAnswerServiceAuditFailureIsWarningOnly(t *testing.T) {
 		FeatureID:        testFeatureID,
 		ToolName:         toolNameBash,
 		ToolInput:        testGoTestBashInput,
-		Decision:         DecisionAllowRemember,
+		Decision:         decisionAllowRemember,
 		RememberPattern:  patternBashGoTest,
 		RememberScope:    testRepoA,
 		RememberScopeSet: true,
@@ -247,15 +247,15 @@ func TestAnswerServiceAuditFailureIsWarningOnly(t *testing.T) {
 func TestAnswerServiceAllowOnceAndDenyDoNotRemember(t *testing.T) {
 	t.Parallel()
 
-	service := NewAnswerService(NewCache(nil), NewAuditSink(t.TempDir()))
+	service := NewAnswerService(newCache(nil), NewAuditSink(t.TempDir()))
 	for _, tc := range []struct {
 		name       string
 		decision   string
 		wantAllow  bool
 		wantReason string
 	}{
-		{name: "allow once", decision: DecisionAllowOnce, wantAllow: true},
-		{name: DecisionDeny, decision: DecisionDeny, wantAllow: false, wantReason: "denied by user"},
+		{name: "allow once", decision: decisionAllowOnce, wantAllow: true},
+		{name: decisionDeny, decision: decisionDeny, wantAllow: false, wantReason: "denied by user"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			var calls []answerCall
@@ -279,15 +279,15 @@ func TestAnswerServiceAllowOnceAndDenyDoNotRemember(t *testing.T) {
 func TestAnswerServiceRejectsInvalidRememberRequests(t *testing.T) {
 	t.Parallel()
 
-	service := NewAnswerService(NewCache(nil), nil)
+	service := NewAnswerService(newCache(nil), nil)
 	for _, tc := range []struct {
 		name string
 		req  AnswerRequest
 	}{
 		{name: "unknown decision", req: AnswerRequest{RequestID: testPermID, Decision: DecisionAllow}},
-		{name: "missing cache", req: AnswerRequest{RequestID: testPermID, Decision: DecisionAllowRemember, RememberPattern: patternBashGoTest, RememberScopeSet: true}},
-		{name: "missing pattern", req: AnswerRequest{RequestID: testPermID, Decision: DecisionAllowRemember, RememberScopeSet: true}},
-		{name: "missing scope", req: AnswerRequest{RequestID: testPermID, Decision: DecisionAllowRemember, RememberPattern: patternBashGoTest}},
+		{name: "missing cache", req: AnswerRequest{RequestID: testPermID, Decision: decisionAllowRemember, RememberPattern: patternBashGoTest, RememberScopeSet: true}},
+		{name: "missing pattern", req: AnswerRequest{RequestID: testPermID, Decision: decisionAllowRemember, RememberScopeSet: true}},
+		{name: "missing scope", req: AnswerRequest{RequestID: testPermID, Decision: decisionAllowRemember, RememberPattern: patternBashGoTest}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			var calls []answerCall
@@ -308,7 +308,7 @@ type answerCall struct {
 	reason    string
 }
 
-func appendAnswerCall(calls *[]answerCall) AnswerFunc {
+func appendAnswerCall(calls *[]answerCall) answerFunc {
 	return func(requestID string, allow bool, reason string) error {
 		*calls = append(*calls, answerCall{requestID: requestID, allow: allow, reason: reason})
 		return nil
@@ -321,13 +321,13 @@ func TestAuditLogWritesBoundedJSONLEvent(t *testing.T) {
 	dir := t.TempDir()
 	sink := NewAuditSink(dir)
 	wantTime := time.Unix(100, 0).UTC()
-	event := RememberAuditEvent{
+	event := rememberAuditEvent{
 		Time:         wantTime,
 		SessionID:    testSessionID,
 		RequestID:    testPermID,
 		FeatureID:    testFeatureID,
 		ToolName:     toolNameBash,
-		Decision:     DecisionAllowRemember,
+		Decision:     decisionAllowRemember,
 		Pattern:      patternBashGoTest,
 		Scope:        testRepoA,
 		InputSummary: strings.Repeat("x", 500),
@@ -335,7 +335,7 @@ func TestAuditLogWritesBoundedJSONLEvent(t *testing.T) {
 		Persisted:    true,
 		Answered:     true,
 	}
-	result, err := sink.Append(event)
+	result, err := sink.append(event)
 	if err != nil {
 		t.Fatalf("Append() error = %v", err)
 	}
@@ -347,7 +347,7 @@ func TestAuditLogWritesBoundedJSONLEvent(t *testing.T) {
 	if len(lines) != 1 {
 		t.Fatalf("audit lines = %d, want 1", len(lines))
 	}
-	var got RememberAuditEvent
+	var got rememberAuditEvent
 	if err := json.Unmarshal([]byte(lines[0]), &got); err != nil {
 		t.Fatalf("audit line is not JSON: %v", err)
 	}
@@ -357,7 +357,7 @@ func TestAuditLogWritesBoundedJSONLEvent(t *testing.T) {
 	if got.SessionID != testSessionID || got.RequestID != testPermID || got.FeatureID != testFeatureID {
 		t.Fatalf("audit identifiers = session %q request %q feature %q, want sess-1 perm-1 feat-1", got.SessionID, got.RequestID, got.FeatureID)
 	}
-	if got.ToolName != toolNameBash || got.Decision != DecisionAllowRemember {
+	if got.ToolName != toolNameBash || got.Decision != decisionAllowRemember {
 		t.Fatalf("audit decision = tool %q decision %q, want Bash allow_remember", got.ToolName, got.Decision)
 	}
 	if got.Pattern != patternBashGoTest || got.Scope != testRepoA || got.Result != rememberAuditResultSuccess {
@@ -379,15 +379,15 @@ func TestAuditLogSanitizesInputSummary(t *testing.T) {
 
 	dir := t.TempDir()
 	sink := NewAuditSink(dir)
-	event := RememberAuditEvent{
-		Decision:     DecisionAllowRemember,
+	event := rememberAuditEvent{
+		Decision:     decisionAllowRemember,
 		Pattern:      `Bash(echo token=pattern-secret *)`,
 		Scope:        testRepoA,
 		InputSummary: ` {"Authorization":"Bearer json-auth-secret","password":"json-secret","api_key":"json-key"} Authorization: Bearer bearer-secret token=plain-secret api_key="quoted-secret" echo private-token ` + "\x00",
 		Result:       rememberAuditResultSuccess,
 		Error:        "failed with secret=error-secret",
 	}
-	result, err := sink.Append(event)
+	result, err := sink.append(event)
 	if err != nil {
 		t.Fatalf("Append() error = %v", err)
 	}
@@ -411,11 +411,11 @@ func TestAuditLogDefaultsTimeAndAppendsJSONLines(t *testing.T) {
 	dir := t.TempDir()
 	sink := NewAuditSink(dir)
 	before := time.Now().UTC()
-	first, err := sink.Append(RememberAuditEvent{Decision: DecisionAllowRemember, Scope: testRepoA, Result: rememberAuditResultSuccess})
+	first, err := sink.append(rememberAuditEvent{Decision: decisionAllowRemember, Scope: testRepoA, Result: rememberAuditResultSuccess})
 	if err != nil {
 		t.Fatalf("Append(first) error = %v", err)
 	}
-	if _, err := sink.Append(RememberAuditEvent{Decision: DecisionAllowRemember, Scope: testRepoA, Result: "failed", Error: "boom"}); err != nil {
+	if _, err := sink.append(rememberAuditEvent{Decision: decisionAllowRemember, Scope: testRepoA, Result: "failed", Error: "boom"}); err != nil {
 		t.Fatalf("Append(second) error = %v", err)
 	}
 	after := time.Now().UTC()
@@ -428,7 +428,7 @@ func TestAuditLogDefaultsTimeAndAppendsJSONLines(t *testing.T) {
 	if len(lines) != 2 {
 		t.Fatalf("audit lines = %d, want 2", len(lines))
 	}
-	var got RememberAuditEvent
+	var got rememberAuditEvent
 	if err := json.Unmarshal([]byte(lines[0]), &got); err != nil {
 		t.Fatalf("first audit line is not JSON: %v", err)
 	}
@@ -452,7 +452,7 @@ func TestAuditLogHardensExistingFileMode(t *testing.T) {
 	if err := os.WriteFile(path, []byte{}, 0o644); err != nil {
 		t.Fatalf("write audit log: %v", err)
 	}
-	if _, err := NewAuditSink(dir).Append(RememberAuditEvent{Decision: DecisionAllowRemember, Scope: testRepoA, Result: rememberAuditResultSuccess}); err != nil {
+	if _, err := NewAuditSink(dir).append(rememberAuditEvent{Decision: decisionAllowRemember, Scope: testRepoA, Result: rememberAuditResultSuccess}); err != nil {
 		t.Fatalf("Append() error = %v", err)
 	}
 	info, err := os.Stat(path)
@@ -474,7 +474,7 @@ func TestAuditLogConcurrentAppendsRemainJSONLines(t *testing.T) {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			if _, err := sink.Append(RememberAuditEvent{Decision: DecisionAllowRemember, Scope: testRepoA, Result: rememberAuditResultSuccess}); err != nil {
+			if _, err := sink.append(rememberAuditEvent{Decision: decisionAllowRemember, Scope: testRepoA, Result: rememberAuditResultSuccess}); err != nil {
 				t.Errorf("Append() error = %v", err)
 			}
 		}()
@@ -490,7 +490,7 @@ func TestAuditLogConcurrentAppendsRemainJSONLines(t *testing.T) {
 		t.Fatalf("audit lines = %d, want 20", len(lines))
 	}
 	for _, line := range lines {
-		var event RememberAuditEvent
+		var event rememberAuditEvent
 		if err := json.Unmarshal([]byte(line), &event); err != nil {
 			t.Fatalf("audit line is not JSON: %v\nline: %s", err, line)
 		}
@@ -501,10 +501,10 @@ func TestAuditLogNoopSinkDoesNotCreateFile(t *testing.T) {
 	t.Parallel()
 
 	dir := t.TempDir()
-	if result, err := (*AuditSink)(nil).Append(RememberAuditEvent{Decision: DecisionAllowRemember}); err != nil || result.Path != "" {
+	if result, err := (*AuditSink)(nil).append(rememberAuditEvent{Decision: decisionAllowRemember}); err != nil || result.Path != "" {
 		t.Fatalf("nil Append() = (%+v, %v), want zero nil", result, err)
 	}
-	if result, err := NewAuditSink("").Append(RememberAuditEvent{Decision: DecisionAllowRemember}); err != nil || result.Path != "" {
+	if result, err := NewAuditSink("").append(rememberAuditEvent{Decision: decisionAllowRemember}); err != nil || result.Path != "" {
 		t.Fatalf("empty Append() = (%+v, %v), want zero nil", result, err)
 	}
 	if _, err := os.Stat(filepath.Join(dir, rememberAuditFile)); !os.IsNotExist(err) {
@@ -517,8 +517,8 @@ func TestAuditLogTruncatesWithoutSplittingUTF8(t *testing.T) {
 
 	dir := t.TempDir()
 	sink := NewAuditSink(dir)
-	result, err := sink.Append(RememberAuditEvent{
-		Decision:     DecisionAllowRemember,
+	result, err := sink.append(rememberAuditEvent{
+		Decision:     decisionAllowRemember,
 		Scope:        testRepoA,
 		InputSummary: strings.Repeat("界", 200),
 		Result:       rememberAuditResultSuccess,
@@ -538,7 +538,7 @@ func TestAuditLogTruncatesWithoutSplittingUTF8(t *testing.T) {
 	}
 }
 
-func readSingleAuditEvent(t *testing.T, path string) RememberAuditEvent {
+func readSingleAuditEvent(t *testing.T, path string) rememberAuditEvent {
 	t.Helper()
 	data, err := os.ReadFile(path)
 	if err != nil {
@@ -548,7 +548,7 @@ func readSingleAuditEvent(t *testing.T, path string) RememberAuditEvent {
 	if len(lines) != 1 {
 		t.Fatalf("audit lines = %d, want 1", len(lines))
 	}
-	var got RememberAuditEvent
+	var got rememberAuditEvent
 	if err := json.Unmarshal([]byte(lines[0]), &got); err != nil {
 		t.Fatalf("audit line is not JSON: %v", err)
 	}

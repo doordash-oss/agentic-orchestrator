@@ -35,7 +35,7 @@ import (
 	"github.com/doordash-oss/agentic-orchestrator/internal/workspace"
 )
 
-// Service error codes surfaced to the server layer, which maps them onto
+// service error codes surfaced to the server layer, which maps them onto
 // canonical errors. Codes are stable API vocabulary.
 const (
 	CodeNotFound            = "clone_not_found"
@@ -47,7 +47,7 @@ const (
 	CodeRootIneligible      = "clone_root_ineligible"
 	CodeNotRetryable        = "clone_not_retryable"
 	CodeUnavailable         = "clone_unavailable"
-	CodeInternal            = "clone_internal"
+	codeInternal            = "clone_internal"
 )
 
 // ServiceError is a typed service failure the server layer maps onto a
@@ -76,22 +76,22 @@ type Hooks struct {
 	WorkspaceChanged func()
 }
 
-// Options configures a Service.
+// Options configures a service.
 type Options struct {
 	// StateDir is the runtime state dir; records live beneath it in
-	// StoreDirName.
+	// storeDirName.
 	StateDir string
 	// Config returns the authoritative runtime config (workspace roots,
 	// explicit repository registrations).
 	Config func() *config.Config
-	// Runner overrides the git clone runner (tests inject fakes).
-	Runner Runner
+	// runner overrides the git clone runner (tests inject fakes).
+	runner runner
 	// CreateGit overrides the repository-creation executor used by create
 	// operations (tests inject fakes). It receives the staged work
 	// directory and must leave a fresh repository with one empty initial
 	// commit on main inside it.
 	CreateGit func(ctx context.Context, dir string) error
-	// Deadline bounds one clone execution. Zero means DefaultDeadline.
+	// Deadline bounds one clone execution. Zero means defaultDeadline.
 	Deadline time.Duration
 	// Now overrides the clock (tests inject deterministic time).
 	Now func() time.Time
@@ -117,11 +117,11 @@ type StartInput struct {
 	IdempotencyKey string
 }
 
-// Service owns the clone lifecycle for one server process.
-type Service struct {
+// service owns the clone lifecycle for one server process.
+type service struct {
 	opts     Options
 	store    *store
-	runner   Runner
+	runner   runner
 	deadline time.Duration
 	now      func() time.Time
 
@@ -196,8 +196,8 @@ func (o *opState) cancelSignaled() bool {
 	}
 }
 
-// New builds a Service, loading durable records from the state dir.
-func New(opts Options) (*Service, error) {
+// New builds a service, loading durable records from the state dir.
+func New(opts Options) (*service, error) {
 	if strings.TrimSpace(opts.StateDir) == "" {
 		return nil, errors.New("clone service requires a state dir")
 	}
@@ -207,19 +207,19 @@ func New(opts Options) (*Service, error) {
 	if opts.Now == nil {
 		opts.Now = time.Now
 	}
-	runner := opts.Runner
+	runner := opts.runner
 	if runner == nil {
-		runner = NewRealRunner(opts.GitBin)
+		runner = newRealRunner(opts.GitBin)
 	}
 	deadline := opts.Deadline
 	if deadline <= 0 {
-		deadline = DefaultDeadline
+		deadline = defaultDeadline
 	}
-	st, err := newStore(filepath.Join(opts.StateDir, StoreDirName), opts.Now)
+	st, err := newStore(filepath.Join(opts.StateDir, storeDirName), opts.Now)
 	if err != nil {
 		return nil, err
 	}
-	return &Service{
+	return &service{
 		opts:     opts,
 		store:    st,
 		runner:   runner,
@@ -230,7 +230,7 @@ func New(opts Options) (*Service, error) {
 }
 
 // op returns (creating if needed) the coordination state for an operation.
-func (s *Service) op(id string) *opState {
+func (s *service) op(id string) *opState {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	o, ok := s.workers[id]
@@ -242,7 +242,7 @@ func (s *Service) op(id string) *opState {
 }
 
 // drainingNow reports whether the service stopped accepting clone work.
-func (s *Service) drainingNow() bool {
+func (s *service) drainingNow() bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return s.draining
@@ -251,7 +251,7 @@ func (s *Service) drainingNow() bool {
 // acquireStartReservation reserves one clone-category admission unit for
 // a new start/create request. It fails with *workadmission.ClosedError
 // when admission is closed. A nil coordinator disables the boundary.
-func (s *Service) acquireStartReservation() (*workadmission.Reservation, error) {
+func (s *service) acquireStartReservation() (*workadmission.Reservation, error) {
 	if s.opts.Admission == nil {
 		return nil, nil
 	}
@@ -264,7 +264,7 @@ func (s *Service) acquireStartReservation() (*workadmission.Reservation, error) 
 // pass skips itself and waits for a later tick rather than working behind
 // the boundary's back. A nil coordinator disables the boundary and every
 // pass runs.
-func (s *Service) acquirePassReservation() (*workadmission.Reservation, bool) {
+func (s *service) acquirePassReservation() (*workadmission.Reservation, bool) {
 	if s.opts.Admission == nil {
 		return nil, true
 	}
@@ -276,14 +276,14 @@ func (s *Service) acquirePassReservation() (*workadmission.Reservation, bool) {
 }
 
 // ActiveWork reports how many operations are queued or running
-// (ActiveStates) or awaiting cleanup resolution (cleanup_pending).
+// (activeStates) or awaiting cleanup resolution (cleanup_pending).
 // Resolved terminal records never count. It backs server-side activity
 // detection: together with held reservations it keeps unsettled clone
 // work visible to the admission boundary's idle decision.
-func (s *Service) ActiveWork() int {
+func (s *service) ActiveWork() int {
 	n := 0
 	for _, rec := range s.store.all() {
-		if ActiveStates[rec.State] || rec.State == StateCleanupPending {
+		if activeStates[rec.State] || rec.State == StateCleanupPending {
 			n++
 		}
 	}
@@ -293,7 +293,7 @@ func (s *Service) ActiveWork() int {
 // save persists the record and fires the operation-changed hook. The
 // caller holds the operation lock (or is inside the start critical
 // section).
-func (s *Service) save(rec *Record) error {
+func (s *service) save(rec *Record) error {
 	rec.UpdatedAt = s.now().UTC()
 	if err := s.store.save(rec); err != nil {
 		return err
@@ -305,7 +305,7 @@ func (s *Service) save(rec *Record) error {
 }
 
 // config returns the authoritative runtime config snapshot.
-func (s *Service) config() *config.Config {
+func (s *service) config() *config.Config {
 	return s.opts.Config()
 }
 
@@ -336,17 +336,17 @@ func inputFingerprint(remote, rootResolved, destination string) string {
 type resolvedRoot struct {
 	Configured string
 	Resolved   string
-	Identity   DirIdentity
+	Identity   dirIdentity
 }
 
 // resolveRoot resolves the requested root against the current config and
 // verifies clone eligibility (existing writable non-repository directory).
-func (s *Service) resolveRoot(requested string) (resolvedRoot, error) {
+func (s *service) resolveRoot(requested string) (resolvedRoot, error) {
 	requested = strings.TrimSpace(requested)
 	if requested == "" {
 		return resolvedRoot{}, serviceError(CodeRootIneligible, "root is required")
 	}
-	if len(requested) > MaxRootPathLength {
+	if len(requested) > maxRootPathLength {
 		return resolvedRoot{}, serviceError(CodeRootIneligible, "root path is too long")
 	}
 	for _, configured := range s.config().WorkspaceRoots {
@@ -369,7 +369,7 @@ func (s *Service) resolveRoot(requested string) (resolvedRoot, error) {
 		if workspace.IsGitRepo(resolved) {
 			continue
 		}
-		dir, identity, err := OpenRootDir(resolved)
+		dir, identity, err := openRootDir(resolved)
 		if err != nil {
 			continue
 		}
@@ -386,7 +386,7 @@ func (s *Service) resolveRoot(requested string) (resolvedRoot, error) {
 
 // probeWritable verifies write access by creating and removing an
 // exclusively-named temporary file through the pinned root handle.
-func (s *Service) probeWritable(dir *os.File) error {
+func (s *service) probeWritable(dir *os.File) error {
 	name := ".agentico-probe-" + newNonce()
 	fd, err := unixOpenat(int(dir.Fd()), name)
 	if err != nil {
@@ -402,7 +402,7 @@ func (s *Service) probeWritable(dir *os.File) error {
 type rootHandle struct {
 	file *os.File
 	root *os.Root
-	id   DirIdentity
+	id   dirIdentity
 }
 
 func (h *rootHandle) Close() {
@@ -417,7 +417,7 @@ func (h *rootHandle) Close() {
 // openRootHandle opens the resolved root twice: a raw fd for renameat and
 // an os.Root for tree operations. Both pin the directory inode.
 func openRootHandle(resolved string) (*rootHandle, error) {
-	file, id, err := OpenRootDir(resolved)
+	file, id, err := openRootDir(resolved)
 	if err != nil {
 		return nil, err
 	}
@@ -445,7 +445,7 @@ type publicationMarker struct {
 	OperationID string               `json:"operation_id"`
 	Nonce       string               `json:"nonce"`
 	PublishedAt time.Time            `json:"published_at"`
-	Identity    *PublicationIdentity `json:"identity,omitempty"`
+	Identity    *publicationIdentity `json:"identity,omitempty"`
 }
 
 const (
@@ -466,16 +466,11 @@ func stagingNameFor(kind, id string) string {
 	return stagingPrefix + kind + "-" + strings.TrimPrefix(strings.TrimPrefix(id, "clone-"), "create-")
 }
 
-// stagingName is the clone-kind staging name (legacy records have no kind).
-func stagingName(id string) string {
-	return stagingNameFor(KindClone, id)
-}
-
 // recordKind normalizes a record's kind: records written before kinds
 // existed are clone records.
 func recordKind(rec *Record) string {
 	if rec.Kind == "" {
-		return KindClone
+		return kindClone
 	}
 	return rec.Kind
 }
@@ -490,7 +485,7 @@ func stagingNameForRecord(rec *Record) string {
 // worker. The accepted snapshot returns promptly, independent of transfer
 // duration; closing the calling context does not own or cancel the worker.
 // Start fails with *workadmission.ClosedError when admission is closed.
-func (s *Service) Start(ctx context.Context, input StartInput) (Record, error) {
+func (s *service) Start(ctx context.Context, input StartInput) (Record, error) {
 	if s.drainingNow() {
 		return Record{}, serviceError(CodeUnavailable, "server is shutting down")
 	}
@@ -506,23 +501,23 @@ func (s *Service) Start(ctx context.Context, input StartInput) (Record, error) {
 			res.Release()
 		}
 	}()
-	if err := ValidateIdempotencyKey(input.IdempotencyKey); err != nil {
-		var verr *ValidationError
+	if err := validateIdempotencyKey(input.IdempotencyKey); err != nil {
+		var verr *validationError
 		detail := ""
 		if errors.As(err, &verr) {
 			detail = verr.Detail
 		}
 		return Record{}, serviceError(CodeIdempotencyConflict, detail)
 	}
-	var verr *ValidationError
-	if err := ValidateCloneRemote(input.Remote); err != nil {
+	var verr *validationError
+	if err := validateCloneRemote(input.Remote); err != nil {
 		detail := ""
 		if errors.As(err, &verr) {
 			detail = verr.Detail
 		}
-		return Record{}, serviceError(ValidationRemoteInvalid, RedactRemote(input.Remote)+" "+detail)
+		return Record{}, serviceError(ValidationRemoteInvalid, redactRemote(input.Remote)+" "+detail)
 	}
-	if err := ValidateDestination(input.Destination); err != nil {
+	if err := validateDestination(input.Destination); err != nil {
 		detail := ""
 		if errors.As(err, &verr) {
 			detail = verr.Detail
@@ -537,13 +532,13 @@ func (s *Service) Start(ctx context.Context, input StartInput) (Record, error) {
 	fp := inputFingerprint(input.Remote, root.Resolved, input.Destination)
 
 	rec, replayed, err := s.acceptOperation(acceptRequest{
-		kind:             KindClone,
+		kind:             kindClone,
 		root:             root,
 		destination:      input.Destination,
 		destinationPath:  destinationPath,
 		idempotencyKey:   input.IdempotencyKey,
 		inputFingerprint: fp,
-		remoteURL:        RedactRemote(input.Remote),
+		remoteURL:        redactRemote(input.Remote),
 		admission:        res,
 	})
 	if err != nil {
@@ -598,7 +593,7 @@ type acceptRequest struct {
 // A true second result means the returned record is a retained prior attempt
 // replayed for its idempotency key, whatever its state, not a fresh
 // acceptance the caller should drive.
-func (s *Service) acceptOperation(req acceptRequest) (Record, bool, error) {
+func (s *service) acceptOperation(req acceptRequest) (Record, bool, error) {
 	s.startMu.Lock()
 	defer s.startMu.Unlock()
 
@@ -615,7 +610,7 @@ func (s *Service) acceptOperation(req acceptRequest) (Record, bool, error) {
 	if _, err := os.Lstat(req.destinationPath); err == nil {
 		return Record{}, false, serviceError(CodeDestinationExists, "destination already exists")
 	} else if !errors.Is(err, os.ErrNotExist) {
-		return Record{}, false, serviceError(CodeInternal, "inspect destination")
+		return Record{}, false, serviceError(codeInternal, "inspect destination")
 	}
 	for name := range s.config().Repos {
 		if name == req.destination {
@@ -627,19 +622,19 @@ func (s *Service) acceptOperation(req acceptRequest) (Record, bool, error) {
 	nonce := newNonce()
 	handle, err := openRootHandle(req.root.Resolved)
 	if err != nil {
-		return Record{}, false, serviceError(CodeInternal, "open root")
+		return Record{}, false, serviceError(codeInternal, "open root")
 	}
 	staging := stagingNameFor(req.kind, id)
 	if _, err := handle.root.Lstat(staging); err == nil {
 		handle.Close()
-		return Record{}, false, serviceError(CodeInternal, "staging path collision")
+		return Record{}, false, serviceError(codeInternal, "staging path collision")
 	} else if !errors.Is(err, os.ErrNotExist) {
 		handle.Close()
-		return Record{}, false, serviceError(CodeInternal, "inspect staging path")
+		return Record{}, false, serviceError(codeInternal, "inspect staging path")
 	}
 	if err := handle.root.Mkdir(staging, 0o700); err != nil {
 		handle.Close()
-		return Record{}, false, serviceError(CodeInternal, "create staging")
+		return Record{}, false, serviceError(codeInternal, "create staging")
 	}
 	marker, err := json.Marshal(ownershipMarker{
 		OperationID: id, Nonce: nonce,
@@ -654,7 +649,7 @@ func (s *Service) acceptOperation(req acceptRequest) (Record, bool, error) {
 		// releases only the staging we just created and still own.
 		_ = handle.root.RemoveAll(staging)
 		handle.Close()
-		return Record{}, false, serviceError(CodeInternal, "write staging ownership marker")
+		return Record{}, false, serviceError(codeInternal, "write staging ownership marker")
 	}
 	handle.Close()
 
@@ -673,8 +668,8 @@ func (s *Service) acceptOperation(req acceptRequest) (Record, bool, error) {
 		DestinationPath:  req.destinationPath,
 		StagingPath:      filepath.Join(req.root.Resolved, staging),
 		OwnershipNonce:   nonce,
-		State:            StateAccepted,
-		Stage:            StagePreparing,
+		State:            stateAccepted,
+		Stage:            stagePreparing,
 		CreatedAt:        now,
 		UpdatedAt:        now,
 	}
@@ -688,7 +683,7 @@ func (s *Service) acceptOperation(req acceptRequest) (Record, bool, error) {
 	// publication is recoverable.
 	if err := s.save(&rec); err != nil {
 		s.releaseFreshStaging(&rec)
-		return Record{}, false, serviceError(CodeInternal, "persist accepted operation")
+		return Record{}, false, serviceError(codeInternal, "persist accepted operation")
 	}
 	return rec, false, nil
 }
@@ -696,20 +691,20 @@ func (s *Service) acceptOperation(req acceptRequest) (Record, bool, error) {
 // releaseFreshStaging removes staging this process just created inside its
 // own critical section (before any worker existed). It is only used when
 // acceptance persistence fails.
-func (s *Service) releaseFreshStaging(rec *Record) {
+func (s *service) releaseFreshStaging(rec *Record) {
 	handle, err := openRootHandle(rec.RootResolved)
 	if err != nil {
 		return
 	}
 	defer func() { handle.Close() }()
-	if !SameDirIdentity(handle.file, DirIdentity{Device: rec.RootDevice, Inode: rec.RootInode}) {
+	if !sameDirIdentity(handle.file, dirIdentity{Device: rec.RootDevice, Inode: rec.RootInode}) {
 		return
 	}
 	_ = handle.root.RemoveAll(stagingNameForRecord(rec))
 }
 
 // Snapshot returns the authoritative record.
-func (s *Service) Snapshot(id string) (Record, error) {
+func (s *service) Snapshot(id string) (Record, error) {
 	rec, ok := s.store.get(id)
 	if !ok {
 		return Record{}, serviceError(CodeNotFound, "operation not found")
@@ -718,7 +713,7 @@ func (s *Service) Snapshot(id string) (Record, error) {
 }
 
 // List returns one bounded page of operations.
-func (s *Service) List(q ListQuery) (ListResult, error) {
+func (s *service) List(q ListQuery) (ListResult, error) {
 	return s.store.list(q), nil
 }
 
@@ -728,7 +723,7 @@ func (s *Service) List(q ListQuery) (ListResult, error) {
 // duration; when admission is closed it skips itself — it is periodic and
 // can wait for a later tick rather than working behind the boundary's
 // back.
-func (s *Service) Sweep() []string {
+func (s *service) Sweep() []string {
 	res, ok := s.acquirePassReservation()
 	if !ok {
 		return nil
@@ -740,7 +735,7 @@ func (s *Service) Sweep() []string {
 // publicationIdentity computes the actual collision-safe catalog key for
 // the published repository by re-running workspace discovery against the
 // current config, plus whether the repository has commits.
-func (s *Service) publicationIdentity(rec *Record) Publication {
+func (s *service) publicationIdentity(rec *Record) publication {
 	cfg := s.config()
 	explicit := map[string]string{}
 	for name, rc := range cfg.Repos {
@@ -753,7 +748,7 @@ func (s *Service) publicationIdentity(rec *Record) Publication {
 			break
 		}
 	}
-	pub := Publication{
+	pub := publication{
 		RepoKey:     key,
 		Path:        rec.DestinationPath,
 		HasHead:     git.HasHead(rec.DestinationPath),
@@ -772,7 +767,7 @@ func (s *Service) publicationIdentity(rec *Record) Publication {
 
 // publicationMarkerIdentity reads the durable publication marker at the
 // destination and returns the identity it pinned, if any.
-func (s *Service) publicationMarkerIdentity(rec *Record) *PublicationIdentity {
+func (s *service) publicationMarkerIdentity(rec *Record) *publicationIdentity {
 	data, err := os.ReadFile(filepath.Join(rec.DestinationPath, ".git", publicationMarkerName))
 	if err != nil {
 		return nil
@@ -786,7 +781,7 @@ func (s *Service) publicationMarkerIdentity(rec *Record) *PublicationIdentity {
 
 // publicationIdentityEqual compares a pinned marker identity with a fresh
 // server-resolved identity.
-func publicationIdentityEqual(pinned *PublicationIdentity, fresh git.RepoIdentity) bool {
+func publicationIdentityEqual(pinned *publicationIdentity, fresh git.RepoIdentity) bool {
 	if pinned == nil {
 		return false
 	}
@@ -796,8 +791,8 @@ func publicationIdentityEqual(pinned *PublicationIdentity, fresh git.RepoIdentit
 		pinned.Inode == strconv.FormatUint(fresh.Inode, 10) && pinned.BirthTime == fresh.BirthTime
 }
 
-func wirePublicationIdentity(identity git.RepoIdentity) *PublicationIdentity {
-	return &PublicationIdentity{
+func wirePublicationIdentity(identity git.RepoIdentity) *publicationIdentity {
+	return &publicationIdentity{
 		Path:      identity.Path,
 		CommonDir: identity.CommonDir,
 		Device:    strconv.FormatUint(identity.Device, 10),
@@ -819,7 +814,7 @@ func sameResolvedPath(a, b string) bool {
 // touch anything whose ownership, root identity or shape cannot be proved:
 // a path, PID or marker alone is never sufficient. Returns whether staging
 // is gone and, when not, the canonical reason.
-func (s *Service) attemptCleanup(rec *Record) (bool, string) {
+func (s *service) attemptCleanup(rec *Record) (bool, string) {
 	root, err := s.resolveRoot(rec.RootPath)
 	if err != nil {
 		return false, "configured root is no longer clone-eligible"
@@ -829,7 +824,7 @@ func (s *Service) attemptCleanup(rec *Record) (bool, string) {
 		return false, "root directory could not be opened"
 	}
 	defer func() { handle.Close() }()
-	if handle.id != (DirIdentity{Device: rec.RootDevice, Inode: rec.RootInode}) {
+	if handle.id != (dirIdentity{Device: rec.RootDevice, Inode: rec.RootInode}) {
 		return false, "root identity changed"
 	}
 	staging := stagingNameForRecord(rec)
@@ -865,7 +860,7 @@ func (s *Service) attemptCleanup(rec *Record) (bool, string) {
 // this attempt's durable publication evidence: the repository at the
 // destination with our publication marker. An unrelated repository merely
 // occupying the destination is never reported as this attempt's success.
-func (s *Service) hasPublicationEvidence(rec *Record) bool {
+func (s *service) hasPublicationEvidence(rec *Record) bool {
 	info, err := os.Lstat(rec.DestinationPath)
 	if err != nil || !info.IsDir() {
 		return false

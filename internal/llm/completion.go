@@ -91,29 +91,6 @@ const (
 	TurnProtocolViolation
 )
 
-func (d TurnDisposition) String() string {
-	switch d {
-	case TurnCommitSuccess:
-		return "CommitSuccess"
-	case TurnCommitRetry:
-		return "CommitRetry"
-	case TurnAwaitingUser:
-		return "AwaitingUser"
-	case TurnAwaitingTasks:
-		return "AwaitingTasks"
-	case TurnTruncated:
-		return "Truncated"
-	case TurnRefused:
-		return "Refused"
-	case TurnErrored:
-		return "Errored"
-	case TurnProtocolViolation:
-		return "ProtocolViolation"
-	default:
-		return "Unknown"
-	}
-}
-
 // TurnSignals are the independent facts needed to classify a provider turn.
 // Filesystem markers are deliberately absent: phase_complete is a receipt
 // written after TurnCommitSuccess/TurnCommitRetry, never an input.

@@ -43,7 +43,7 @@ import (
 // crashes by re-running the interrupted unit from scratch.
 type OrchestratorConfig struct {
 	Feature      *feature.Feature
-	FeatureStore ports.FeatureStore
+	FeatureStore FeatureStore
 	PlanPath     string
 	StateDir     string
 	Config       *config.Config
@@ -53,7 +53,7 @@ type OrchestratorConfig struct {
 	// the single-repo path (feature-level overrides → config defaults → fallbacks).
 	Model                string
 	ReviewModel          string
-	ResolveSessionConfig func(llm.PhaseRole) (SessionRuntimeConfig, error)
+	ResolveSessionConfig func(llm.PhaseRole) (sessionRuntimeConfig, error)
 	MaxIterations        int
 	MaxConsecFails       int
 	MaxConsecNoProgress  int
@@ -81,7 +81,7 @@ type OrchestratorConfig struct {
 	BuildSession func(BuildSessionOpts) ([]string, []string, *ports.SessionOpts, error)
 
 	// AskingClause is the pre-resolved "Asking Questions" prompt section
-	// from the PromptAdapter for the implementation model. Passed through
+	// from the implementation model's provider. Passed through
 	// to ImplementConfig.
 	AskingClause   string
 	CompletionTool string
@@ -143,12 +143,12 @@ type OrchestratorConfig struct {
 	PhaseExitGate PhaseExitGate
 }
 
-func resolveOrchestratorSessionConfig(cfg OrchestratorConfig, role llm.PhaseRole) (SessionRuntimeConfig, error) {
+func resolveOrchestratorSessionConfig(cfg OrchestratorConfig, role llm.PhaseRole) (sessionRuntimeConfig, error) {
 	if cfg.ResolveSessionConfig != nil {
 		return cfg.ResolveSessionConfig(role)
 	}
 	if role == llm.PhaseReview {
-		return SessionRuntimeConfig{
+		return sessionRuntimeConfig{
 			Model:           cfg.ReviewModel,
 			EffectiveEffort: cfg.ReviewEffectiveEffort,
 			EffortSource:    cfg.ReviewEffortSource,
@@ -156,7 +156,7 @@ func resolveOrchestratorSessionConfig(cfg OrchestratorConfig, role llm.PhaseRole
 			CompletionTool:  cfg.CompletionTool,
 		}, nil
 	}
-	return SessionRuntimeConfig{
+	return sessionRuntimeConfig{
 		Model:           cfg.Model,
 		EffectiveEffort: cfg.ImplEffectiveEffort,
 		EffortSource:    cfg.ImplEffortSource,
@@ -186,7 +186,7 @@ type OrchestratorResult struct {
 	PlanRevisionFeedback string
 }
 
-// RunMultiRepoOrchestrator drives the unified phase-implement loop. Under
+// runMultiRepoOrchestrator drives the unified phase-implement loop. Under
 // SchemaVersionCurrent = 4 the entire phase runs as a single Claude session
 // owning every repo in Feature.Repos; per-stage goroutine fan-out is gone.
 //
@@ -196,7 +196,7 @@ type OrchestratorResult struct {
 //
 // Returns "awaiting_final_review" when the implement loop succeeds,
 // "failed" / "need_user_input" / "interrupted" otherwise.
-func RunMultiRepoOrchestrator(cfg OrchestratorConfig, sm ports.SessionManager) (*OrchestratorResult, error) {
+func runMultiRepoOrchestrator(cfg OrchestratorConfig, sm ports.SessionManager) (*OrchestratorResult, error) {
 	implResult, err := RunPhaseImplementLoop(cfg, sm)
 	if err != nil {
 		return nil, err
@@ -211,7 +211,7 @@ func RunMultiRepoOrchestrator(cfg OrchestratorConfig, sm ports.SessionManager) (
 // Final Review. Used by completion.go for per-phase implementation under
 // the "FR fires once at feature end" design.
 func RunMultiRepoImplementation(cfg OrchestratorConfig, sm ports.SessionManager) (*OrchestratorResult, error) {
-	return RunMultiRepoOrchestrator(cfg, sm)
+	return runMultiRepoOrchestrator(cfg, sm)
 }
 
 // phaseLoopResultToOrchestratorResult translates the unified
@@ -262,7 +262,7 @@ func phaseRepoStatuses(repos []string, status string) map[string]string {
 // repo at Touched (staged for FR) transitions to review_passed
 // (success) or failed (LastError set) (max_iterations / safety_rail) together.
 func RunMultiRepoFinalReview(cfg OrchestratorConfig, sm ports.SessionManager) (*OrchestratorResult, error) {
-	runFR := RunFeatureFinalReviewLoop
+	runFR := runFeatureFinalReviewLoop
 	if cfg.RunFinalReviewFn != nil {
 		runFR = cfg.RunFinalReviewFn
 	}
@@ -283,16 +283,6 @@ func RunMultiRepoFinalReview(cfg OrchestratorConfig, sm ports.SessionManager) (*
 		return &OrchestratorResult{FinalStatus: "all_passed"}, nil
 	case "interrupted":
 		return &OrchestratorResult{FinalStatus: "interrupted"}, nil
-	case "plan_revision_required":
-		// Final Review must keep fixes inside the final-review loop. Older
-		// injected/fake review runners may still return this status; surface
-		// it as a failure instead of reopening planning.
-		return &OrchestratorResult{
-			FinalStatus:  "failed",
-			RepoStatuses: finalReviewRepoStatuses(frResult),
-			FailedRepos:  append([]string(nil), frResultRepos(frResult)...),
-			LastError:    "final review requested unsupported phase-plan revision",
-		}, nil
 	default:
 		return &OrchestratorResult{
 			FinalStatus:  "failed",
@@ -324,14 +314,4 @@ func frResultRepos(r *FeatureFinalReviewResult) []string {
 	out := append([]string(nil), r.Repos...)
 	sort.Strings(out)
 	return out
-}
-
-// findRepo looks up a FeatureRepo by name.
-func findRepo(f *feature.Feature, name string) *feature.FeatureRepo {
-	for i := range f.Repos {
-		if f.Repos[i].Name == name {
-			return &f.Repos[i]
-		}
-	}
-	return nil
 }

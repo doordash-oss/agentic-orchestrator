@@ -73,7 +73,7 @@ func (o *Orchestrator) ResumeNeedUserInput(featureID string, d NeedUserInputResu
 // re-dispatches the paused implementation. Harness verification capability
 // gates resume the same implementation iteration.
 func (o *Orchestrator) resumeFeatureNeedUserInput(featureID string, d NeedUserInputResume) error {
-	f, err := o.deps.Lifecycle.Get(featureID)
+	f, err := o.deps.Store.Load(featureID)
 	if err != nil {
 		return fmt.Errorf("load feature: %w", err)
 	}

@@ -161,7 +161,7 @@ func TestPruneLiveRunReviewScratch_RemovesCacheAndTempButKeepsEvidence(t *testin
 		t.Fatalf("chmod module cache: %v", err)
 	}
 
-	if err := PruneLiveRunReviewScratch(featureDir); err != nil {
+	if err := pruneLiveRunReviewScratch(featureDir); err != nil {
 		t.Fatalf("PruneLiveRunReviewScratch() error = %v", err)
 	}
 
@@ -179,7 +179,7 @@ func TestPruneLiveRunReviewScratch_RemovesCacheAndTempButKeepsEvidence(t *testin
 			t.Errorf("%s stat = %v; want kept", kept, err)
 		}
 	}
-	if err := PruneLiveRunReviewScratch(filepath.Join(featureDir, "missing")); err != nil {
+	if err := pruneLiveRunReviewScratch(filepath.Join(featureDir, "missing")); err != nil {
 		t.Errorf("PruneLiveRunReviewScratch(missing) error = %v; want nil", err)
 	}
 }

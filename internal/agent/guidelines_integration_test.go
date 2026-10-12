@@ -27,7 +27,7 @@ import (
 )
 
 // newGuidelinesTestRunner creates a PhaseRunner configured for guidelines
-// injection tests, using a mock registry so BuildSession takes the production
+// mount tests, using a mock registry so BuildSession takes the production
 // code path (not the BuildSessionFn shortcut).
 func newGuidelinesTestRunner(t *testing.T) (*PhaseRunner, *mocks.MockProvider) {
 	t.Helper()
@@ -55,75 +55,6 @@ func newGuidelinesTestRunner(t *testing.T) (*PhaseRunner, *mocks.MockProvider) {
 		Registry:      registry,
 	}
 	return pr, mockProv
-}
-
-func TestBuildSession_GuidelinesInjection(t *testing.T) {
-	pr, mockProv := newGuidelinesTestRunner(t)
-
-	codeTouchingPhases := []feature.Phase{
-		feature.PhaseDesign,
-		feature.PhasePlan,
-		feature.PhaseImplement,
-		feature.PhaseReview,
-	}
-
-	for _, phase := range codeTouchingPhases {
-		t.Run(phase.String(), func(t *testing.T) {
-			mockProv.BuildCommandCalls = nil
-			_, _, _, err := pr.BuildSession(BuildSessionOpts{
-				Model:        "test-model",
-				SystemPrompt: "Base system prompt",
-				Phase:        phase,
-				AgentNames:   []string{},
-			})
-			if err != nil {
-				t.Fatalf("BuildSession error: %v", err)
-			}
-			if len(mockProv.BuildCommandCalls) != 1 {
-				t.Fatalf("expected 1 BuildCommand call, got %d", len(mockProv.BuildCommandCalls))
-			}
-			sysPrompt := mockProv.BuildCommandCalls[0].Opts.SystemPrompt
-			if !strings.Contains(sysPrompt, "Available Language Guidelines") {
-				t.Error("system prompt missing guidelines preamble")
-			}
-			if !strings.Contains(sysPrompt, "Go") {
-				t.Error("system prompt missing Go guideline entry")
-			}
-		})
-	}
-}
-
-func TestBuildSession_GuidelinesNotInjected(t *testing.T) {
-	pr, mockProv := newGuidelinesTestRunner(t)
-
-	nonCodePhases := []feature.Phase{
-		feature.PhaseResearch,
-		feature.PhaseInquire,
-		feature.PhaseKnowledgeBase,
-		feature.PhasePublish,
-	}
-
-	for _, phase := range nonCodePhases {
-		t.Run(phase.String(), func(t *testing.T) {
-			mockProv.BuildCommandCalls = nil
-			_, _, _, err := pr.BuildSession(BuildSessionOpts{
-				Model:        "test-model",
-				SystemPrompt: "Base system prompt",
-				Phase:        phase,
-				AgentNames:   []string{},
-			})
-			if err != nil {
-				t.Fatalf("BuildSession error: %v", err)
-			}
-			if len(mockProv.BuildCommandCalls) != 1 {
-				t.Fatalf("expected 1 BuildCommand call, got %d", len(mockProv.BuildCommandCalls))
-			}
-			sysPrompt := mockProv.BuildCommandCalls[0].Opts.SystemPrompt
-			if strings.Contains(sysPrompt, "Available Language Guidelines") {
-				t.Errorf("system prompt should NOT contain guidelines for phase %s", phase)
-			}
-		})
-	}
 }
 
 func TestBuildSession_GuidelinesAdditionalDirs(t *testing.T) {
@@ -188,11 +119,6 @@ func TestBuildSession_GuidelinesEmptyDir(t *testing.T) {
 		t.Fatalf("expected 1 BuildCommand call, got %d", len(mockProv.BuildCommandCalls))
 	}
 
-	sysPrompt := mockProv.BuildCommandCalls[0].Opts.SystemPrompt
-	if strings.Contains(sysPrompt, "Available Language Guidelines") {
-		t.Error("system prompt should NOT contain guidelines when GuidelinesDir is empty")
-	}
-
 	dirs := mockProv.BuildCommandCalls[0].Opts.AdditionalDirs
 	for _, d := range dirs {
 		if strings.Contains(d, "guidelines") {
@@ -202,29 +128,5 @@ func TestBuildSession_GuidelinesEmptyDir(t *testing.T) {
 	}
 }
 
-func TestBuildSession_GuidelinesReviewAxis(t *testing.T) {
-	pr, mockProv := newGuidelinesTestRunner(t)
-
-	// Review-axis sessions carry PhaseReview and a non-empty SystemPrompt,
-	// which triggers the guidelines preamble injection in BuildSession.
-	_, _, _, err := pr.BuildSession(BuildSessionOpts{
-		Model:        "test-model",
-		SystemPrompt: "You are a code reviewer.",
-		Phase:        feature.PhaseReview,
-		AgentNames:   []string{},
-	})
-	if err != nil {
-		t.Fatalf("BuildSession error: %v", err)
-	}
-	if len(mockProv.BuildCommandCalls) != 1 {
-		t.Fatalf("expected 1 BuildCommand call, got %d", len(mockProv.BuildCommandCalls))
-	}
-	sysPrompt := mockProv.BuildCommandCalls[0].Opts.SystemPrompt
-	if !strings.Contains(sysPrompt, "Available Language Guidelines") {
-		t.Error("review axis system prompt missing guidelines preamble")
-	}
-}
-
-// Guidelines are no longer inlined in BuildReviewPrompt — they are discovered
-// via the system prompt preamble injected by BuildSession. See
-// TestBuildSession_GuidelinesReviewAxis for the preamble test.
+// Guidelines are not inlined in review prompts — they are discovered via the
+// useful-resources catalog the prompt templates already carry.

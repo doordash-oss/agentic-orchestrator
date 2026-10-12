@@ -32,7 +32,6 @@ limitations under the License.
  *  - No token or other credential material ever appears in a row, a log
  *    line, or an IPC payload; base URLs stay in the main process.
  */
-import { z } from 'zod';
 import {
   MAX_SERVER_CHOICE_CANDIDATES,
   type BundledRuntimeInfo,
@@ -42,6 +41,8 @@ import {
 } from '../../shared/ipc';
 import type { RegistryScan } from './registry';
 import type { HttpResult } from './runtimeGateway';
+import { probeAuthExemptHealth } from './attachProfiles';
+import { defined } from '../../shared/defined';
 
 export interface ServerListServiceDeps {
   /** Fresh registry scan (renderer-safe fields only are ever projected). */
@@ -59,7 +60,10 @@ export interface ServerListServiceDeps {
    */
   bundledRuntime?(): Pick<BundledRuntimeInfo, 'serverKey' | 'runtimeDir'>;
   /** Bounded JSON GET; throws on network failure. Auth-exempt endpoints only. */
-  fetchJson(url: string, options: { timeoutMs: number }): Promise<HttpResult>;
+  fetchJson(
+    url: string,
+    options: { timeoutMs: number; maxResponseBytes?: number },
+  ): Promise<HttpResult>;
   /**
    * Persists probe-derived metadata for a persisted known-server entry
    * (refreshed base name and/or last-seen timestamp). Never tokens.
@@ -83,13 +87,6 @@ export interface ServerListServiceDeps {
   /** Interval between probe rounds while the popover is open. */
   pollIntervalMs?: number;
 }
-
-const HealthStatusSchema = z.object({
-  status: z.string(),
-  // Operator-assigned display name (server cap: 64). Informational only —
-  // an oversized or malformed name is dropped, never a probe failure.
-  name: z.string().max(64).optional().catch(undefined),
-});
 
 interface ProbeOutcome {
   healthy: boolean;
@@ -177,7 +174,7 @@ export class ServerListService {
     }
     const nicknameFor = (serverKey: string): Partial<Pick<ServerListRow, 'nickname'>> => {
       const nickname = nicknameByKey.get(serverKey);
-      return nickname === undefined ? {} : { nickname };
+      return defined('nickname', nickname);
     };
     const scan = this.deps.scanRegistry();
     for (const candidate of scan.candidates) {
@@ -212,10 +209,11 @@ export class ServerListService {
     const bundled = this.deps.bundledRuntime?.();
     return {
       rows: rows.slice(0, MAX_SERVER_CHOICE_CANDIDATES),
-      ...(bundled === undefined
-        ? {}
-        : {
-            bundled: {
+      ...defined(
+        'bundled',
+        bundled === undefined
+          ? undefined
+          : {
               serverKey: bundled.serverKey,
               runtimeDir: bundled.runtimeDir,
               // The scan already pruned dead entries: presence means a live
@@ -224,7 +222,7 @@ export class ServerListService {
                 (candidate) => candidate.serverKey === bundled.serverKey,
               ),
             },
-          }),
+      ),
     };
   }
 
@@ -302,24 +300,14 @@ export class ServerListService {
     if (baseUrl === null) {
       return { healthy: false, name: null };
     }
-    try {
-      const result = await this.deps.fetchJson(`${baseUrl.replace(/\/+$/, '')}/api/v1/health`, {
-        timeoutMs: this.probeTimeoutMs,
-      });
-      if (result.status !== 200) {
-        return { healthy: false, name: null };
-      }
-      const parsed = HealthStatusSchema.safeParse(result.body);
-      const healthy = parsed.success && parsed.data.status === 'ok';
-      const rawName = healthy && parsed.success ? (parsed.data.name ?? null) : null;
-      const scrub = this.deps.scrubProbeText;
-      return {
-        healthy,
-        name: rawName !== null && scrub !== undefined ? scrub(rawName).slice(0, 64) : rawName,
-      };
-    } catch {
-      return { healthy: false, name: null };
-    }
+    const result = await probeAuthExemptHealth(this.deps.fetchJson, baseUrl, this.probeTimeoutMs);
+    const healthy = result.kind === 'healthy';
+    const rawName = healthy ? (result.probe.name ?? null) : null;
+    const scrub = this.deps.scrubProbeText;
+    return {
+      healthy,
+      name: rawName !== null && scrub !== undefined ? scrub(rawName).slice(0, 64) : rawName,
+    };
   }
 
   /**
@@ -347,8 +335,8 @@ export class ServerListService {
       return;
     }
     this.deps.recordProbedServer(serverKey, {
-      ...(name === undefined ? {} : { name }),
-      ...(lastSeenAt === undefined ? {} : { lastSeenAt }),
+      ...defined('name', name),
+      ...defined('lastSeenAt', lastSeenAt),
     });
   }
 }

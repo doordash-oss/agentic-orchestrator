@@ -22,11 +22,11 @@ import (
 	"strings"
 )
 
-// SignaturePrefix is the exact detached-signature wire format shared by the
+// signaturePrefix is the exact detached-signature wire format shared by the
 // desktop updater and the release signer: "agentico-ed25519:" followed by
 // standard base64 of the 64-byte detached Ed25519 signature over the original
 // payload bytes.
-const SignaturePrefix = "agentico-ed25519:"
+const signaturePrefix = "agentico-ed25519:"
 
 // productionReleasePublicKeySPKI is the production Ed25519 trust root as SPKI
 // DER, base64-encoded. It must decode to the exact same key bytes as the
@@ -71,27 +71,27 @@ func isEd25519SPKIPrefix(header []byte) bool {
 	return string(header) == string(want)
 }
 
-// ProductionReleasePublicKey returns the production Ed25519 release trust
+// productionReleasePublicKey returns the production Ed25519 release trust
 // root. It is the same key the desktop updater embeds; unequal embeddings
 // fail the release signer before any signature is written.
-func ProductionReleasePublicKey() (ed25519.PublicKey, error) {
+func productionReleasePublicKey() (ed25519.PublicKey, error) {
 	return parseReleasePublicKey(productionReleasePublicKeySPKI)
 }
 
-// FixtureReleasePublicKey returns the committed test fixture trust root. It
+// fixtureReleasePublicKey returns the committed test fixture trust root. It
 // is only consulted by fixture routing bound to a loopback origin.
-func FixtureReleasePublicKey() (ed25519.PublicKey, error) {
+func fixtureReleasePublicKey() (ed25519.PublicKey, error) {
 	return parseReleasePublicKey(fixtureReleasePublicKeySPKI)
 }
 
-// ParseReleaseSignature parses the detached-signature wire format: optional
+// parseReleaseSignature parses the detached-signature wire format: optional
 // surrounding whitespace, the exact "agentico-ed25519:" prefix, and canonical
 // standard base64 of exactly 64 signature bytes. Anything else is malformed.
-func ParseReleaseSignature(text string) ([]byte, error) {
+func parseReleaseSignature(text string) ([]byte, error) {
 	trimmed := strings.TrimSpace(text)
-	rest, ok := strings.CutPrefix(trimmed, SignaturePrefix)
+	rest, ok := strings.CutPrefix(trimmed, signaturePrefix)
 	if !ok {
-		return nil, fmt.Errorf("signature is missing the %q prefix", SignaturePrefix)
+		return nil, fmt.Errorf("signature is missing the %q prefix", signaturePrefix)
 	}
 	if rest == "" {
 		return nil, errors.New("signature carries no signature bytes")
@@ -112,15 +112,15 @@ func ParseReleaseSignature(text string) ([]byte, error) {
 	return sig, nil
 }
 
-// VerifyReleaseSignature verifies a detached release signature over the exact
+// verifyReleaseSignature verifies a detached release signature over the exact
 // payload bytes. The payload is never trimmed, reserialized, or otherwise
 // transformed before verification; the signature text follows the shared
 // "agentico-ed25519:<base64>" wire format.
-func VerifyReleaseSignature(payload []byte, signatureText string, key ed25519.PublicKey) error {
+func verifyReleaseSignature(payload []byte, signatureText string, key ed25519.PublicKey) error {
 	if len(key) != ed25519.PublicKeySize {
 		return errors.New("release public key is not an Ed25519 key")
 	}
-	sig, err := ParseReleaseSignature(signatureText)
+	sig, err := parseReleaseSignature(signatureText)
 	if err != nil {
 		return err
 	}

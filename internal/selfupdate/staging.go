@@ -23,16 +23,16 @@ import (
 	"time"
 )
 
-// stagingRecordSchemaVersion is the on-disk schema of StagingRecord.
+// stagingRecordSchemaVersion is the on-disk schema of stagingRecord.
 const stagingRecordSchemaVersion = 1
 
-// StagingRecord is the durable ownership record written inside a transaction
+// stagingRecord is the durable ownership record written inside a transaction
 // dir before any install receipt exists. It makes the directory
 // self-describing: a tx dir whose record binds this executable is recognized
 // owned staging that later launches may clean once abandoned; a tx dir
 // created before its record became durable carries no record and is left
 // untouched rather than guessed to be owned.
-type StagingRecord struct {
+type stagingRecord struct {
 	SchemaVersion    int       `json:"schema_version"`
 	TransactionID    string    `json:"transaction_id"`
 	ExecutablePath   string    `json:"executable_path"`
@@ -44,7 +44,7 @@ type StagingRecord struct {
 // txDir: O_EXCL tmp, fsync, rename, transaction-dir sync. Both callers write
 // into a freshly created tx dir, so the rename's overwrite semantics never
 // race an existing record.
-func writeStagingRecord(txDir string, rec StagingRecord) error {
+func writeStagingRecord(txDir string, rec stagingRecord) error {
 	rec.SchemaVersion = stagingRecordSchemaVersion
 	data, err := json.MarshalIndent(rec, "", "  ")
 	if err != nil {
@@ -55,20 +55,20 @@ func writeStagingRecord(txDir string, rec StagingRecord) error {
 }
 
 // readStagingRecord reads and validates the staging record inside txDir.
-func readStagingRecord(txDir string) (StagingRecord, error) {
+func readStagingRecord(txDir string) (stagingRecord, error) {
 	data, err := os.ReadFile(filepath.Join(txDir, stagingRecordName))
 	if err != nil {
-		return StagingRecord{}, err
+		return stagingRecord{}, err
 	}
-	var rec StagingRecord
+	var rec stagingRecord
 	if err := json.Unmarshal(data, &rec); err != nil {
-		return StagingRecord{}, fmt.Errorf("parse staging record: %w", err)
+		return stagingRecord{}, fmt.Errorf("parse staging record: %w", err)
 	}
 	if rec.SchemaVersion != stagingRecordSchemaVersion {
-		return StagingRecord{}, fmt.Errorf("staging record schema version %d is not supported", rec.SchemaVersion)
+		return stagingRecord{}, fmt.Errorf("staging record schema version %d is not supported", rec.SchemaVersion)
 	}
 	if !validTransactionID(rec.TransactionID) {
-		return StagingRecord{}, fmt.Errorf("staging record transaction id %q is malformed", rec.TransactionID)
+		return stagingRecord{}, fmt.Errorf("staging record transaction id %q is malformed", rec.TransactionID)
 	}
 	return rec, nil
 }
@@ -210,7 +210,7 @@ func CleanupSettledTransaction(execPath, txID string, seams CleanupSeams) error 
 	if !validTransactionID(txID) {
 		return fmt.Errorf("invalid transaction id %q", txID)
 	}
-	txDir := filepath.Join(LeaseDir(execPath), txDirPrefix+txID)
+	txDir := filepath.Join(leaseDir(execPath), txDirPrefix+txID)
 	if _, err := os.Lstat(txDir); err != nil {
 		if errors.Is(err, os.ErrNotExist) {
 			// A completed cleanup is idempotent success.
@@ -233,7 +233,7 @@ func CleanupSettledTransaction(execPath, txID string, seams CleanupSeams) error 
 // lease, lock, ownership-record, receipt, and suppression files are never
 // candidates: only tx-* directories are considered.
 func ReconcileStaging(execPath, liveTxID string, seams CleanupSeams) error {
-	leaseDir := LeaseDir(execPath)
+	leaseDir := leaseDir(execPath)
 	entries, err := os.ReadDir(leaseDir)
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {

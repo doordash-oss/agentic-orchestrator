@@ -28,7 +28,7 @@ func TestChatContextCodesPinShape(t *testing.T) {
 		class Class
 	}{
 		{ChatContextInvalid, ClassBlocking},
-		{ChatContextNotFound, ClassWarning},
+		{ChatContextNotFound, classWarning},
 	}
 	for _, tc := range cases {
 		entry, ok := Lookup(tc.code)

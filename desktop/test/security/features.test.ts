@@ -24,8 +24,8 @@ limitations under the License.
 import { describe, expect, it, vi } from 'vitest';
 import { registerIpcHandlers, type IpcServices } from '../../src/main/ipcHandlers';
 import type { TrustedSender } from '../../src/main/security';
+import { IPC_CHANNELS } from '../../src/shared/ipcChannels';
 import {
-  IPC_CHANNELS,
   defaultSettings,
   type DiagnosticsSnapshot,
   type ServerUpdateState,
@@ -160,8 +160,8 @@ function makeServices(overrides: Partial<IpcServices> = {}): IpcServices {
     getSettings: vi.fn(() => defaultSettings()),
     updateSettings: vi.fn(() => defaultSettings()),
     openSettingsWindow: vi.fn(() => ({ opened: true })),
-    getTheme: vi.fn(() => ({ preference: 'system' as const, resolved: 'dark' as const })),
-    setTheme: vi.fn((preference) => ({ preference, resolved: 'dark' as const })),
+    getThemePreference: vi.fn(() => ({ preference: 'system' as const, resolved: 'dark' as const })),
+    setThemePreference: vi.fn((preference) => ({ preference, resolved: 'dark' as const })),
     getRuntimeReadiness: vi.fn(() => Promise.reject(new Error('unused'))),
     refreshRuntimeReadiness: vi.fn(() => Promise.reject(new Error('unused'))),
     getReadiness: vi.fn(() => Promise.reject(new Error('unused'))),
@@ -362,17 +362,17 @@ describe('feature IPC security', () => {
   it('rejects untrusted senders on every feature/creation channel', async () => {
     const { handlers, services } = register();
     for (const channel of [
-      IPC_CHANNELS.featuresList,
-      IPC_CHANNELS.featuresGet,
-      IPC_CHANNELS.featuresCreate,
-      IPC_CHANNELS.featuresSetup,
-      IPC_CHANNELS.featuresDispatchAction,
-      IPC_CHANNELS.sessionsList,
-      IPC_CHANNELS.sessionsGet,
-      IPC_CHANNELS.sessionsTranscript,
-      IPC_CHANNELS.sessionsOutputOpen,
-      IPC_CHANNELS.sessionsOutputCancel,
-      IPC_CHANNELS.creationDefaults,
+      IPC_CHANNELS.listFeatures,
+      IPC_CHANNELS.getFeature,
+      IPC_CHANNELS.createFeature,
+      IPC_CHANNELS.dispatchFeatureSetup,
+      IPC_CHANNELS.dispatchFeatureAction,
+      IPC_CHANNELS.listSessions,
+      IPC_CHANNELS.getSession,
+      IPC_CHANNELS.getSessionTranscript,
+      IPC_CHANNELS.openSessionOutput,
+      IPC_CHANNELS.cancelSessionOutput,
+      IPC_CHANNELS.getCreationDefaults,
     ]) {
       const result = (await handlers.get(channel)!(foreignEvent, validInput)) as Envelope;
       expect(result.ok).toBe(false);
@@ -386,13 +386,13 @@ describe('feature IPC security', () => {
   it('rejects broad feature actions and global cursors on session operations', async () => {
     const { handlers, services } = register();
     for (const action of ['delete', 'publish', 'merge', '../start']) {
-      const result = (await handlers.get(IPC_CHANNELS.featuresDispatchAction)!(goodEvent, {
+      const result = (await handlers.get(IPC_CHANNELS.dispatchFeatureAction)!(goodEvent, {
         featureId: 'abcd1234ef567890',
         action,
       })) as Envelope;
       expect(result.error?.code).toBe('E_SCHEMA_MISMATCH');
     }
-    const cursorResult = (await handlers.get(IPC_CHANNELS.sessionsOutputOpen)!(goodEvent, {
+    const cursorResult = (await handlers.get(IPC_CHANNELS.openSessionOutput)!(goodEvent, {
       sessionId: 'session-1',
       epoch: 'global',
       seq: 9,
@@ -404,7 +404,7 @@ describe('feature IPC security', () => {
 
   it('rejects invalid creation input at the schema layer before any service runs', async () => {
     const { handlers, services } = register();
-    const create = handlers.get(IPC_CHANNELS.featuresCreate)!;
+    const create = handlers.get(IPC_CHANNELS.createFeature)!;
     for (const bad of [
       { ...validInput, name: '' },
       { ...validInput, name: '   ' },
@@ -422,7 +422,7 @@ describe('feature IPC security', () => {
 
   it('rejects feature ids that could smuggle path segments', async () => {
     const { handlers, services } = register();
-    for (const channel of [IPC_CHANNELS.featuresGet, IPC_CHANNELS.featuresSetup]) {
+    for (const channel of [IPC_CHANNELS.getFeature, IPC_CHANNELS.dispatchFeatureSetup]) {
       for (const bad of ['../other', 'id/with/slash', 'id?a=1', 'id#f', '', 'id name']) {
         const result = (await handlers.get(channel)!(goodEvent, bad)) as Envelope;
         expect(result.ok).toBe(false);
@@ -440,7 +440,7 @@ describe('feature IPC security', () => {
       expectedRevision: 7,
       comments: [{ repo: 'repo-a', id: 1, type: 'review', body: 'x'.repeat(128 * 1024) }],
     };
-    const result = (await handlers.get(IPC_CHANNELS.featuresReviewFeedbackLaunch)!(
+    const result = (await handlers.get(IPC_CHANNELS.launchReviewFeedbackChild)!(
       goodEvent,
       huge,
     )) as Envelope;
@@ -451,7 +451,7 @@ describe('feature IPC security', () => {
     // The schema-valid launch carries only identity, revision, and the gate.
     const valid = { parentId: 'abcd1234ef567890', expectedRevision: 7, gate: true };
     expect(JSON.stringify(valid).length).toBeLessThan(256);
-    await handlers.get(IPC_CHANNELS.featuresReviewFeedbackLaunch)!(goodEvent, valid);
+    await handlers.get(IPC_CHANNELS.launchReviewFeedbackChild)!(goodEvent, valid);
     expect(services.launchReviewFeedbackChild).toHaveBeenCalledWith(valid);
   });
 
@@ -470,7 +470,7 @@ describe('feature IPC security', () => {
       },
       { featureId: 'abcd1234ef567890', expectedRevision: 7, updates: [] },
     ]) {
-      const result = (await handlers.get(IPC_CHANNELS.featuresReviewFeedbackSelection)!(
+      const result = (await handlers.get(IPC_CHANNELS.updateReviewFeedbackSelection)!(
         goodEvent,
         bad,
       )) as Envelope;
@@ -485,7 +485,7 @@ describe('feature IPC security', () => {
       getFeature: vi.fn(() => Promise.resolve({ ...snapshot(), authToken: 'tok-leak-9' } as never)),
     });
     const { handlers } = register(services);
-    const result = (await handlers.get(IPC_CHANNELS.featuresGet)!(
+    const result = (await handlers.get(IPC_CHANNELS.getFeature)!(
       goodEvent,
       'abcd1234ef567890',
     )) as Envelope;
@@ -499,7 +499,7 @@ describe('feature IPC security', () => {
     const payload = JSON.parse(
       '{"name":"x","description":"","repoKeys":["r"],"useCurrentBranch":false,"__proto__":{"polluted":true}}',
     );
-    const result = (await handlers.get(IPC_CHANNELS.featuresCreate)!(
+    const result = (await handlers.get(IPC_CHANNELS.createFeature)!(
       goodEvent,
       payload,
     )) as Envelope;
@@ -510,7 +510,7 @@ describe('feature IPC security', () => {
 
   it('rejects a shell settings patch carrying feature/domain state', async () => {
     const { handlers, services } = register();
-    const update = handlers.get(IPC_CHANNELS.settingsUpdate)!;
+    const update = handlers.get(IPC_CHANNELS.updateSettings)!;
     for (const shell of [
       // Domain fields beyond identity/presentation.
       { activeFeatureId: null, sidebarCollapsed: false, status: 'Created' },
@@ -526,7 +526,7 @@ describe('feature IPC security', () => {
 
   it('accepts a shell patch limited to identity and presentation', async () => {
     const { handlers } = register();
-    const result = (await handlers.get(IPC_CHANNELS.settingsUpdate)!(goodEvent, {
+    const result = (await handlers.get(IPC_CHANNELS.updateSettings)!(goodEvent, {
       shell: {
         setActiveFeature: { serverKey: 'a'.repeat(64), featureId: 'abcd1234ef567890' },
         sidebarCollapsed: false,

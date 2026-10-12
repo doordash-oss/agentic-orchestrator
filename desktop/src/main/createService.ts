@@ -40,7 +40,7 @@ import { fencedServerRequest, type ServerIdentitySource } from './serverFence';
 
 const CREATE_PATH = '/api/v1/workspace/repositories/create';
 
-export interface CreateServiceDeps {
+interface CreateServiceDeps {
   transport: ServerTransport;
   /** Captures the current server identity for request fencing. */
   identity?: ServerIdentitySource;
@@ -92,7 +92,7 @@ export class CreateService {
 }
 
 /** Maps the snake_case server DTO onto the renderer-facing camelCase shape. */
-export function toCreateRepositoryResult(dto: CreateRepositoryResponse): CreateRepositoryResult {
+function toCreateRepositoryResult(dto: CreateRepositoryResponse): CreateRepositoryResult {
   const result: CreateRepositoryResult = {
     repoKey: dto.repository.repo_key,
     path: dto.repository.path,

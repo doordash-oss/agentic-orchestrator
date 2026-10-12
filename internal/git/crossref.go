@@ -29,8 +29,8 @@ type CrossRefEntry struct {
 	PRURL    string // empty = pending, "(failed)" = failed repo
 }
 
-// CrossRefSectionHeader is the markdown header for the cross-reference section.
-const CrossRefSectionHeader = "## Related PRs"
+// crossRefSectionHeader is the markdown header for the cross-reference section.
+const crossRefSectionHeader = "## Related PRs"
 
 // BuildCrossReferenceSection builds a markdown table of related PRs for a multi-repo feature.
 // Returns empty string if there are fewer than 2 entries (no cross-refs for single-repo).
@@ -40,7 +40,7 @@ func BuildCrossReferenceSection(featureName string, entries []CrossRefEntry) str
 	}
 
 	var sb strings.Builder
-	sb.WriteString(CrossRefSectionHeader)
+	sb.WriteString(crossRefSectionHeader)
 	sb.WriteString("\n\n")
 	fmt.Fprintf(&sb, "This PR is part of the multi-repo feature **\"%s\"**.", featureName)
 	sb.WriteString("\n\n")
@@ -68,20 +68,20 @@ func BuildCrossReferenceSection(featureName string, entries []CrossRefEntry) str
 
 // InjectCrossReferenceSection inserts the cross-reference section into a PR body.
 // If the body already contains a cross-reference section, it is replaced.
-// The section is placed before the PRSignature if present, otherwise appended.
+// The section is placed before the pRSignature if present, otherwise appended.
 func InjectCrossReferenceSection(body, section string) string {
 	if section == "" {
 		return body
 	}
 
 	// Remove existing cross-reference section if present.
-	if strings.Contains(body, CrossRefSectionHeader) {
-		body = RemoveCrossReferenceSection(body)
+	if strings.Contains(body, crossRefSectionHeader) {
+		body = removeCrossReferenceSection(body)
 	}
 
-	// Insert before PRSignature if present.
-	if strings.Contains(body, PRSignature) {
-		idx := strings.Index(body, PRSignature)
+	// Insert before pRSignature if present.
+	if strings.Contains(body, pRSignature) {
+		idx := strings.Index(body, pRSignature)
 		before := body[:idx]
 		after := body[idx:]
 		return before + "\n\n" + section + after
@@ -94,44 +94,10 @@ func InjectCrossReferenceSection(body, section string) string {
 	return section
 }
 
-// ExtractCrossReferenceSection extracts the cross-reference section from a PR body.
-// Returns the section including the header, trimmed of trailing whitespace.
-// Returns empty string if no cross-reference section is found.
-func ExtractCrossReferenceSection(body string) string {
-	idx := strings.Index(body, CrossRefSectionHeader)
-	if idx < 0 {
-		return ""
-	}
-
-	sectionStart := idx
-	rest := body[sectionStart:]
-
-	// Find the end boundary: next "## " header, PRSignature, or end of body.
-	endIdx := len(rest)
-
-	// Look for next markdown H2 header after the current one.
-	afterHeader := rest[len(CrossRefSectionHeader):]
-	nextH2 := strings.Index(afterHeader, "\n## ")
-	if nextH2 >= 0 {
-		candidate := len(CrossRefSectionHeader) + nextH2
-		if candidate < endIdx {
-			endIdx = candidate
-		}
-	}
-
-	// Look for PRSignature boundary.
-	sigIdx := strings.Index(rest, PRSignature)
-	if sigIdx >= 0 && sigIdx < endIdx {
-		endIdx = sigIdx
-	}
-
-	return strings.TrimRight(rest[:endIdx], " \t\n\r")
-}
-
-// RemoveCrossReferenceSection removes the cross-reference section from a PR body.
+// removeCrossReferenceSection removes the cross-reference section from a PR body.
 // Cleans up extra whitespace left behind.
-func RemoveCrossReferenceSection(body string) string {
-	idx := strings.Index(body, CrossRefSectionHeader)
+func removeCrossReferenceSection(body string) string {
+	idx := strings.Index(body, crossRefSectionHeader)
 	if idx < 0 {
 		return body
 	}
@@ -139,19 +105,20 @@ func RemoveCrossReferenceSection(body string) string {
 	sectionStart := idx
 	rest := body[sectionStart:]
 
-	// Find the end boundary (same logic as ExtractCrossReferenceSection).
+	// Find the end boundary: the next "## " header, pRSignature, or the end
+	// of the body.
 	endIdx := len(rest)
 
-	afterHeader := rest[len(CrossRefSectionHeader):]
+	afterHeader := rest[len(crossRefSectionHeader):]
 	nextH2 := strings.Index(afterHeader, "\n## ")
 	if nextH2 >= 0 {
-		candidate := len(CrossRefSectionHeader) + nextH2
+		candidate := len(crossRefSectionHeader) + nextH2
 		if candidate < endIdx {
 			endIdx = candidate
 		}
 	}
 
-	sigIdx := strings.Index(rest, PRSignature)
+	sigIdx := strings.Index(rest, pRSignature)
 	if sigIdx >= 0 && sigIdx < endIdx {
 		endIdx = sigIdx
 	}
@@ -171,7 +138,7 @@ func RemoveCrossReferenceSection(body string) string {
 
 // UpdatePRBody updates the body of a GitHub PR by URL.
 func UpdatePRBody(prURL, newBody string) error {
-	owner, repo, number, err := ParsePRURL(prURL)
+	owner, repo, number, err := parsePRURL(prURL)
 	if err != nil {
 		return err
 	}
@@ -187,7 +154,7 @@ func UpdatePRBody(prURL, newBody string) error {
 
 // GetPRBody fetches the body of a GitHub PR by URL.
 func GetPRBody(prURL string) (string, error) {
-	owner, repo, number, err := ParsePRURL(prURL)
+	owner, repo, number, err := parsePRURL(prURL)
 	if err != nil {
 		return "", err
 	}

@@ -18,16 +18,14 @@ import (
 	"os"
 	"testing"
 
-	"github.com/doordash-oss/agentic-orchestrator/internal/github"
 	"github.com/doordash-oss/agentic-orchestrator/test/testutil"
 )
 
 func TestMain(m *testing.M) {
 	restoreGitEnv := testutil.IsolateGitEnv()
 	// Default-deny: tests must never reach the real GitHub API; fixtures stack on top of this default.
-	restoreGitHub := github.OverrideForTest("http://127.0.0.1:1", "test-dead")
+	_ = os.Setenv("AGENTICO_GITHUB_API_BASE", "http://127.0.0.1:1")
 	code := m.Run()
-	restoreGitHub()
 	restoreGitEnv()
 	os.Exit(code)
 }

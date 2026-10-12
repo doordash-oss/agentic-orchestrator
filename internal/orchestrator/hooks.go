@@ -33,16 +33,13 @@ import (
 //     SpanContext for events that carry no full feature payload)
 //   - baseDir   — feature store base directory; used by OnFeatureSummaryNeeded
 //     to compute per-feature directory paths. Empty string disables summary
-//     writes (tests wire nil fs and "" baseDir).
+//     writes.
 //
-// Every returned hook is safe to call without the side-effect collaborator
-// being ready: nil checks short-circuit at the top of each hook. This keeps
-// tests simple (pass nils / zero values) and lets the fx module hand back a
-// working orchestrator even if observability is disabled.
-func BuildHooks(obs *observe.Observer, permStore *permission.Store, fs ports.FeatureStore, baseDir ...string) Hooks {
-	// Variadic for backwards compatibility — existing tests call
-	// BuildHooks(obs, permStore, fs) without a baseDir. Production wiring
-	// (module.go) passes the store's BaseDir explicitly.
+// Every returned hook is safe to call when observability or permissions are
+// disabled.
+func BuildHooks(obs *observe.Observer, permStore *permission.Store, fs *feature.Store, baseDir ...string) Hooks {
+	// Production wiring passes the store's BaseDir explicitly; tests that do
+	// not write summaries omit it.
 	var summaryBaseDir string
 	if len(baseDir) > 0 {
 		summaryBaseDir = baseDir[0]
@@ -51,9 +48,6 @@ func BuildHooks(obs *observe.Observer, permStore *permission.Store, fs ports.Fea
 	// loadSpan re-reads the feature and builds a SpanContext rooted at the
 	// feature-level span. Used by hooks that only receive a featureID.
 	loadSpan := func(featureID string) (observe.SpanContext, bool) {
-		if fs == nil {
-			return observe.SpanContext{}, false
-		}
 		f, err := fs.Load(featureID)
 		if err != nil || f == nil {
 			return observe.SpanContext{}, false
@@ -71,7 +65,7 @@ func BuildHooks(obs *observe.Observer, permStore *permission.Store, fs ports.Fea
 			}
 		},
 		OnFeatureStarted: func(featureID string) {
-			if obs == nil || fs == nil {
+			if obs == nil {
 				return
 			}
 			f, err := fs.Load(featureID)
@@ -254,12 +248,10 @@ func BuildHooks(obs *observe.Observer, permStore *permission.Store, fs ports.Fea
 			// first failed repository's stored record renders through the catalog
 			// and its code and class travel as plain strings in the event data.
 			errorCode, errorClass := "", ""
-			if fs != nil {
-				if f, loadErr := fs.Load(featureID); loadErr == nil {
-					if rendered, failed := firstFailedRepoError(f); failed {
-						errorCode = string(rendered.Code)
-						errorClass = string(rendered.Class)
-					}
+			if f, loadErr := fs.Load(featureID); loadErr == nil {
+				if rendered, failed := firstFailedRepoError(f); failed {
+					errorCode = string(rendered.Code)
+					errorClass = string(rendered.Class)
 				}
 			}
 			obs.PhaseCompleted(sc, feature.PhasePublish.String(), 0, err, errorCode, errorClass)
@@ -270,7 +262,7 @@ func BuildHooks(obs *observe.Observer, permStore *permission.Store, fs ports.Fea
 			}
 			// If the caller did not pass a feature, best-effort reload so the
 			// summary sees the freshest state after terminal transitions.
-			if f == nil && fs != nil {
+			if f == nil {
 				loaded, err := fs.Load(featureID)
 				if err == nil && loaded != nil {
 					f = loaded
@@ -334,7 +326,7 @@ func BuildHooks(obs *observe.Observer, permStore *permission.Store, fs ports.Fea
 			obs.ConfigChanged(sc, before, after)
 		},
 		OnFeatureRewound: func(featureID string, request feature.RewindRequest, effectiveTarget feature.Phase, sourceRun, newRun int) {
-			if obs == nil || fs == nil {
+			if obs == nil {
 				return
 			}
 			f, err := fs.Load(featureID)

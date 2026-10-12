@@ -31,7 +31,7 @@ import (
 const (
 	ReviewFeedbackCommentTypeReview     = "review"
 	ReviewFeedbackCommentTypeIssue      = "issue"
-	ReviewFeedbackCommentTypeReviewBody = "review_body"
+	reviewFeedbackCommentTypeReviewBody = "review_body"
 )
 
 // reviewFeedbackDraftFilename is the single durable pending-draft file per
@@ -74,13 +74,13 @@ func (e *ReviewFeedbackRevisionConflictError) Error() string {
 // comment ID. The serialized form is "<repo>:<type>:<id>".
 type StableReviewFeedbackRef string
 
-// NewStableReviewFeedbackRef builds a validated stable reference.
-func NewStableReviewFeedbackRef(repo, commentType string, id int) (StableReviewFeedbackRef, error) {
+// newStableReviewFeedbackRef builds a validated stable reference.
+func newStableReviewFeedbackRef(repo, commentType string, id int) (StableReviewFeedbackRef, error) {
 	if repo == "" || strings.Contains(repo, ":") {
 		return "", fmt.Errorf("invalid repository identity %q", repo)
 	}
 	switch commentType {
-	case ReviewFeedbackCommentTypeReview, ReviewFeedbackCommentTypeIssue, ReviewFeedbackCommentTypeReviewBody:
+	case ReviewFeedbackCommentTypeReview, ReviewFeedbackCommentTypeIssue, reviewFeedbackCommentTypeReviewBody:
 	default:
 		return "", fmt.Errorf("unsupported comment type %q", commentType)
 	}
@@ -101,7 +101,7 @@ func ParseStableReviewFeedbackRef(raw string) (repo, commentType string, id int,
 	if err != nil {
 		return "", "", 0, fmt.Errorf("malformed stable reference %q: %v", raw, err)
 	}
-	if _, err := NewStableReviewFeedbackRef(parts[0], parts[1], id); err != nil {
+	if _, err := newStableReviewFeedbackRef(parts[0], parts[1], id); err != nil {
 		return "", "", 0, fmt.Errorf("malformed stable reference %q: %v", raw, err)
 	}
 	return parts[0], parts[1], id, nil
@@ -210,14 +210,6 @@ func (s *Store) SaveReviewFeedbackDraft(parentID string, draft *ReviewFeedbackDr
 	return nil
 }
 
-// DeleteReviewFeedbackDraft removes the pending draft. It is a no-op when no
-// draft exists so launch recovery stays idempotent.
-func (s *Store) DeleteReviewFeedbackDraft(parentID string) error {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	return s.deleteReviewFeedbackDraftUnlocked(parentID)
-}
-
 // DeleteReviewFeedbackDraftIfRevision removes the pending draft only when
 // its committed revision still equals revision, so launch replay and
 // recovery cleanup consume exactly the draft a launch receipt recorded and
@@ -278,9 +270,9 @@ func ReviewFeedbackSnapshotID(items []ReviewFeedbackDraftItem) string {
 	return hex.EncodeToString(h.Sum(nil))
 }
 
-// SortReviewFeedbackDraftItems orders comments chronologically (oldest
+// sortReviewFeedbackDraftItems orders comments chronologically (oldest
 // first) with the stable reference as the deterministic tie-breaker.
-func SortReviewFeedbackDraftItems(items []ReviewFeedbackDraftItem) {
+func sortReviewFeedbackDraftItems(items []ReviewFeedbackDraftItem) {
 	sort.SliceStable(items, func(i, j int) bool {
 		ci, cj := items[i].Comment, items[j].Comment
 		if ci.CreatedAt != cj.CreatedAt {
@@ -311,7 +303,7 @@ func ReconcileReviewFeedbackDraft(parent *Feature, existing *ReviewFeedbackDraft
 		comments := fetched[repo.Name]
 		repoItems := make([]ReviewFeedbackDraftItem, 0, len(comments))
 		for _, comment := range comments {
-			ref, err := NewStableReviewFeedbackRef(repo.Name, comment.Type, comment.ID)
+			ref, err := newStableReviewFeedbackRef(repo.Name, comment.Type, comment.ID)
 			if err != nil {
 				continue // unsupported types never enter durable state
 			}
@@ -321,7 +313,7 @@ func ReconcileReviewFeedbackDraft(parent *Feature, existing *ReviewFeedbackDraft
 			}
 			repoItems = append(repoItems, ReviewFeedbackDraftItem{StableRef: ref, Selected: selected, Comment: comment})
 		}
-		SortReviewFeedbackDraftItems(repoItems)
+		sortReviewFeedbackDraftItems(repoItems)
 		items = append(items, repoItems...)
 	}
 	return &ReviewFeedbackDraft{

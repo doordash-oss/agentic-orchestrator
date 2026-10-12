@@ -286,14 +286,26 @@ func TestUsagePreservedOnErrorResult(t *testing.T) {
 // produces a SystemInit SDK message carrying the captured ACP session id. The
 // session layer's PID-file session-id update is gated on a provider init
 // message, so without this the OpenCode session id never reaches the PID file.
+// The session/new request id is read from the frame the fake harness received.
 func TestSessionNewEmitsInitMessageWithSessionID(t *testing.T) {
-	buf := &syncBuffer{}
-	p := NewProtocol(llm.ProtocolOpts{Model: "opencode:anthropic/claude-sonnet-4-5"})
-	p.SetStdin(buf)
-	const sessionNewID = 201
-	p.SetRequestIDsForTest(0, sessionNewID, 0, 0)
+	h := newHandshakeHarness(t, llm.ProtocolOpts{
+		Model:         "opencode:anthropic/claude-sonnet-4-5",
+		InitialPrompt: "phase prompt",
+	})
+	errCh := make(chan error, 1)
+	go func() { errCh <- h.p.Handshake(context.Background()) }()
 
-	msgs := mustParse(t, p, responseLine(t, sessionNewID, map[string]any{"sessionId": "ses_new"}))
+	initReq := h.nextRequest(t)
+	if initReq.Method != "initialize" {
+		t.Fatalf("first request = %q, want initialize", initReq.Method)
+	}
+	h.feed(t, responseLine(t, mustID(t, initReq.ID), initResultWithLoadSession(false)))
+
+	newReq := h.nextRequest(t)
+	if newReq.Method != "session/new" {
+		t.Fatalf("second request = %q, want session/new", newReq.Method)
+	}
+	msgs := h.feed(t, responseLine(t, mustID(t, newReq.ID), map[string]any{"sessionId": "ses_new"}))
 	if len(msgs) != 1 || msgs[0].Init == nil {
 		t.Fatalf("session/new produced %+v, want one system-init message", msgs)
 	}
@@ -304,27 +316,43 @@ func TestSessionNewEmitsInitMessageWithSessionID(t *testing.T) {
 	if msgs[0].Init.Model != "anthropic/claude-sonnet-4-5" {
 		t.Fatalf("init model = %q, want anthropic/claude-sonnet-4-5", msgs[0].Init.Model)
 	}
-	if got := p.SessionID(); got != "ses_new" {
+	if err := <-errCh; err != nil {
+		t.Fatalf("Handshake() error: %v", err)
+	}
+	if got := h.p.SessionID(); got != "ses_new" {
 		t.Fatalf("SessionID() = %q, want ses_new", got)
 	}
 }
 
 // TestSessionLoadEmitsInitMessageWithResumedID proves a resumed session also
 // emits an init message carrying the resumed session id, so a resumed run's PID
-// file records the identity the next prompt is delivered to.
+// file records the identity the next prompt is delivered to. The session/load
+// request id is read from the frame the fake harness received.
 func TestSessionLoadEmitsInitMessageWithResumedID(t *testing.T) {
-	buf := &syncBuffer{}
-	p := NewProtocol(llm.ProtocolOpts{Model: "opencode:anthropic/claude-sonnet-4-5", ResumeSessionID: "ses_prior"})
-	p.SetStdin(buf)
-	const sessionLoadID = 202
-	p.SetRequestIDsForTest(0, 0, sessionLoadID, 0)
+	h := newHandshakeHarness(t, llm.ProtocolOpts{
+		Model:           "opencode:anthropic/claude-sonnet-4-5",
+		InitialPrompt:   "phase prompt",
+		ResumeSessionID: "ses_prior",
+	})
+	errCh := make(chan error, 1)
+	go func() { errCh <- h.p.Handshake(context.Background()) }()
 
-	msgs := mustParse(t, p, responseLine(t, sessionLoadID, map[string]any{}))
+	initReq := h.nextRequest(t)
+	h.feed(t, responseLine(t, mustID(t, initReq.ID), initResultWithLoadSession(true)))
+
+	loadReq := h.nextRequest(t)
+	if loadReq.Method != sessionLoadMethod {
+		t.Fatalf("second request = %q, want session/load", loadReq.Method)
+	}
+	msgs := h.feed(t, responseLine(t, mustID(t, loadReq.ID), map[string]any{}))
 	if len(msgs) != 1 || msgs[0].Init == nil {
 		t.Fatalf("session/load produced %+v, want one system-init message", msgs)
 	}
 	if msgs[0].Init.SessionID != "ses_prior" {
 		t.Fatalf("init session id = %q, want ses_prior (resumed identity)", msgs[0].Init.SessionID)
+	}
+	if err := <-errCh; err != nil {
+		t.Fatalf("Handshake() error: %v", err)
 	}
 }
 
@@ -361,7 +389,7 @@ func TestHandshake_ResumeUsesSessionLoad(t *testing.T) {
 	if loadReq.Method != sessionLoadMethod {
 		t.Fatalf("second request = %q, want session/load", loadReq.Method)
 	}
-	var lp SessionLoadParams
+	var lp sessionLoadParams
 	if err := json.Unmarshal(loadReq.Params, &lp); err != nil {
 		t.Fatalf("unmarshal session/load params: %v", err)
 	}
@@ -374,7 +402,7 @@ func TestHandshake_ResumeUsesSessionLoad(t *testing.T) {
 	if promptReq.Method != "session/prompt" {
 		t.Fatalf("third request = %q, want session/prompt", promptReq.Method)
 	}
-	var pp PromptParams
+	var pp promptParams
 	if err := json.Unmarshal(promptReq.Params, &pp); err != nil {
 		t.Fatalf("unmarshal session/prompt params: %v", err)
 	}
@@ -514,5 +542,69 @@ func TestInterrupt_CancelledPromptIsNonSuccessAndSticky(t *testing.T) {
 	// A late end_turn after the sealed cancellation must not emit a success.
 	if late := mustParse(t, p, responseLine(t, promptID, map[string]any{"stopReason": "end_turn"})); len(late) != 0 {
 		t.Fatalf("late end_turn after cancellation produced %+v, want no messages", late)
+	}
+}
+
+// TestZeroCostAmountWithTokensAndNoPriceMarksCostUnavailable mirrors the
+// portkey/modal wire shape: usage_update reports cost amount 0 while the
+// prompt result carries tokens. Tokens are kept, cost stays 0, and the cost is
+// marked unavailable rather than passed off as a free session.
+func TestZeroCostAmountWithTokensAndNoPriceMarksCostUnavailable(t *testing.T) {
+	p, _, promptID := newPostHandshakeProtocol(t)
+	p.price = &llm.ModelCost{} // configured as cost 0 in opencode.json
+	mustParse(t, p, usageUpdateLine(t, map[string]any{
+		"used": 49084, "size": 1048576,
+		"cost": map[string]any{"amount": 0, "currency": "USD"},
+	}))
+	r := terminalResult(t, mustParse(t, p, promptResultLine(t, promptID, "end_turn", map[string]any{
+		"inputTokens": 188, "outputTokens": 282, "totalTokens": 49366, "cachedReadTokens": 48896,
+	})))
+	if r.Usage == nil || r.Usage.InputTokens != 188 || r.Usage.OutputTokens != 282 || r.Usage.CacheReadInputTokens != 48896 {
+		t.Fatalf("terminal usage = %+v, want 188/282/48896", r.Usage)
+	}
+	if r.TotalCostUSD != 0 || r.Usage.CostUSD != 0 {
+		t.Fatalf("cost = %v / %v, want 0 (no price)", r.TotalCostUSD, r.Usage.CostUSD)
+	}
+	if r.Usage.CostSource != costSourceUnavailable {
+		t.Fatalf("cost source = %q, want %q", r.Usage.CostSource, costSourceUnavailable)
+	}
+}
+
+// TestZeroCostAmountWithTokensEstimatesFromCatalogPrice proves a catalog price
+// is used to estimate cost when OpenCode reports tokens but zero cost.
+func TestZeroCostAmountWithTokensEstimatesFromCatalogPrice(t *testing.T) {
+	p, _, promptID := newPostHandshakeProtocol(t)
+	cacheRead := 0.1
+	p.price = &llm.ModelCost{Input: 1, Output: 4, CacheRead: &cacheRead}
+	mustParse(t, p, usageUpdateLine(t, map[string]any{
+		"used": 1_001_000, "size": 1048576,
+		"cost": map[string]any{"amount": 0, "currency": "USD"},
+	}))
+	r := terminalResult(t, mustParse(t, p, promptResultLine(t, promptID, "end_turn", map[string]any{
+		"inputTokens": 1_000_000, "outputTokens": 500_000, "cachedReadTokens": 2_000_000, "cachedWriteTokens": 1_000_000,
+	})))
+	// 1M*$1 + 0.5M*$4 + 2M*$0.1 + 1M*$1 (cache write falls back to input) = $4.2
+	if r.TotalCostUSD < 4.1999 || r.TotalCostUSD > 4.2001 {
+		t.Fatalf("estimated cost = %v, want 4.2", r.TotalCostUSD)
+	}
+	if r.Usage == nil || r.Usage.CostSource != costSourceTokenEstimate || r.Usage.CostUSD != r.TotalCostUSD {
+		t.Fatalf("usage = %+v, want token_estimate matching result cost", r.Usage)
+	}
+}
+
+// TestReportedCostWinsOverCatalogEstimate proves a positive OpenCode cost
+// stays authoritative even when a catalog price is known.
+func TestReportedCostWinsOverCatalogEstimate(t *testing.T) {
+	p, _, promptID := newPostHandshakeProtocol(t)
+	p.price = &llm.ModelCost{Input: 100, Output: 100}
+	mustParse(t, p, usageUpdateLine(t, map[string]any{
+		"used": 1000, "size": 200000,
+		"cost": map[string]any{"amount": 0.05, "currency": "USD"},
+	}))
+	r := terminalResult(t, mustParse(t, p, promptResultLine(t, promptID, "end_turn", map[string]any{
+		"inputTokens": 1000, "outputTokens": 100,
+	})))
+	if r.TotalCostUSD != 0.05 || r.Usage == nil || r.Usage.CostSource != "" {
+		t.Fatalf("result cost = %v usage = %+v, want provider-reported 0.05 with empty source", r.TotalCostUSD, r.Usage)
 	}
 }

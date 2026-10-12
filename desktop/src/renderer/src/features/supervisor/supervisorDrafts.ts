@@ -31,6 +31,7 @@ limitations under the License.
 import { createContext, useContext, useRef, useSyncExternalStore } from 'react';
 import type { ErrorReference } from '../../../../shared/ipc';
 import type { ComposerUploadItem } from '../stagedItems';
+import { defined } from '../../../../shared/defined';
 
 /** The composer's attachment items: local paths and staged uploads. */
 export interface SupervisorDraftItems {
@@ -51,7 +52,7 @@ export interface SupervisorQueuedMessage {
 }
 
 /** One server's composer draft. */
-export interface SupervisorDraftEntry {
+interface SupervisorDraftEntry {
   /** The conversation the draft and queue belong to; null until a state loads. */
   conversationId: string | null;
   text: string;
@@ -60,14 +61,14 @@ export interface SupervisorDraftEntry {
   queue: readonly SupervisorQueuedMessage[];
 }
 
-export const EMPTY_SUPERVISOR_DRAFT_ITEMS: SupervisorDraftItems = Object.freeze({
+const EMPTY_SUPERVISOR_DRAFT_ITEMS: SupervisorDraftItems = Object.freeze({
   images: Object.freeze([]) as readonly string[],
   attachments: Object.freeze([]) as readonly string[],
   imageUploads: Object.freeze([]) as readonly ComposerUploadItem[],
   attachmentUploads: Object.freeze([]) as readonly ComposerUploadItem[],
 });
 
-export const EMPTY_SUPERVISOR_DRAFT: SupervisorDraftEntry = Object.freeze({
+const EMPTY_SUPERVISOR_DRAFT: SupervisorDraftEntry = Object.freeze({
   conversationId: null,
   text: '',
   errorReference: null,
@@ -96,7 +97,7 @@ export function draftItemCount(items: SupervisorDraftItems): number {
 }
 
 /** The union of two item sets, keeping order and dropping repeated paths or chips. */
-export function mergeDraftItems(
+function mergeDraftItems(
   current: SupervisorDraftItems,
   added: SupervisorDraftItems,
 ): SupervisorDraftItems {
@@ -120,7 +121,7 @@ export function mergeDraftItems(
 }
 
 /** Sets an empty composer to the draft; otherwise appends it after a blank line. */
-export function appendDraftText(current: string, draft: string): string {
+function appendDraftText(current: string, draft: string): string {
   return current.trim() === '' ? draft : `${current.trimEnd()}\n\n${draft}`;
 }
 
@@ -186,8 +187,8 @@ export class SupervisorDraftsStore {
   appendDraft(serverKey: string, draft?: string, errorReference?: ErrorReference): void {
     this.update(serverKey, (entry) => ({
       ...entry,
-      ...(draft === undefined ? {} : { text: appendDraftText(entry.text, draft) }),
-      ...(errorReference === undefined ? {} : { errorReference }),
+      ...defined('text', draft === undefined ? undefined : appendDraftText(entry.text, draft)),
+      ...defined('errorReference', errorReference),
     }));
   }
 

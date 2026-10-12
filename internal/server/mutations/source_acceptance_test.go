@@ -416,7 +416,7 @@ func newCreateFeatureRESTHandler(runtimeDir string, cfg *config.Config) (*featur
 		Features:              store,
 		FeatureStore:          store,
 		Config:                cfg,
-		Mutations:             &target,
+		Mutations:             target,
 	})
 	return store, handler
 }

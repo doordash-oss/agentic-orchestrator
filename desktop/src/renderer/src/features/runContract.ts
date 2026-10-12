@@ -26,7 +26,7 @@ export type Pipeline = 'medium' | 'large' | 'moonshot';
 
 export type CheckpointState = Checkpoints & { draftPublish: boolean };
 
-export const PIPELINE_PROFILES: Record<
+const PIPELINE_PROFILES: Record<
   Pipeline,
   { title: string; note: string; checkpoints: CheckpointState }
 > = {

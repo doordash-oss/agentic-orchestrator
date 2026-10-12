@@ -26,6 +26,7 @@ import (
 	"github.com/doordash-oss/agentic-orchestrator/internal/llm"
 	"github.com/doordash-oss/agentic-orchestrator/internal/ports"
 	"github.com/doordash-oss/agentic-orchestrator/internal/session"
+	"github.com/doordash-oss/agentic-orchestrator/test/testutil/mocks"
 )
 
 // raceSafeActiveSessionView overrides fakeSessionView.IsActive with an
@@ -42,7 +43,12 @@ func (s *raceSafeActiveSessionView) IsActive() bool { return s.active.Load() }
 func TestSessionOutputStreamEmitsIndexedTranscriptRecordsAndTerminates(t *testing.T) {
 	t.Parallel()
 
-	sess := &fakeSessionView{id: fixtureSessionID, status: ports.SessionDone}
+	sess := &fakeSessionView{
+		MockSessionView: &mocks.MockSessionView{
+			IDVal:     fixtureSessionID,
+			StatusVal: ports.SessionDone,
+		},
+	}
 	sess.log = session.NewMessageLog()
 	sess.log.Append(llm.SDKMessage{Type: roleAssistant, Assistant: &llm.AssistantMessage{
 		Type:    roleAssistant,
@@ -76,19 +82,23 @@ func TestSessionOutputStreamEmitsIndexedTranscriptRecordsAndTerminates(t *testin
 }
 
 // TestSessionOutputStreamReincludesMutatingTailRow guards the poll loop's
-// "re-include the previously-sent tail index every tick" behavior: UpdateLast
-// can mutate the last message in place without growing Len(), so a client
-// resuming from the row it already has must still receive that row again
-// once it changes, not be starved of the update.
+// "re-include the previously-sent tail index every tick" behavior: a final
+// assistant message can replace the last streaming partial in place without
+// growing Len(), so a client resuming from the row it already has must still
+// receive that row again once it changes, not be starved of the update.
 func TestSessionOutputStreamReincludesMutatingTailRow(t *testing.T) {
 	t.Parallel()
 
 	log := session.NewMessageLog()
-	log.Append(llm.SDKMessage{Type: roleAssistant, Assistant: &llm.AssistantMessage{
+	log.Append(llm.SDKMessage{Type: roleAssistant, Subtype: "partial", Assistant: &llm.AssistantMessage{
 		Type:    roleAssistant,
 		Message: llm.ConversationMsg{Role: roleAssistant, Content: []llm.ContentBlock{{Type: blockTypeText, Text: "partial"}}},
 	}})
-	sess := &raceSafeActiveSessionView{fakeSessionView: &fakeSessionView{id: fixtureSessionID}}
+	sess := &raceSafeActiveSessionView{fakeSessionView: &fakeSessionView{
+		MockSessionView: &mocks.MockSessionView{
+			IDVal: fixtureSessionID,
+		},
+	}}
 	sess.log = log
 	sess.active.Store(true)
 	handler := NewHandler(HandlerOptions{
@@ -106,9 +116,11 @@ func TestSessionOutputStreamReincludesMutatingTailRow(t *testing.T) {
 	}()
 
 	// Give the handler time to emit the first (partial) row, then mutate the
-	// tail in place and mark the session finished so the handler terminates.
+	// tail in place (the production path: a final assistant message replaces
+	// the in-flight streaming partial) and mark the session finished so the
+	// handler terminates.
 	time.Sleep(300 * time.Millisecond)
-	log.UpdateLast(llm.SDKMessage{Type: roleAssistant, Assistant: &llm.AssistantMessage{
+	log.UpdateLastAssistantPartial(llm.SDKMessage{Type: roleAssistant, Assistant: &llm.AssistantMessage{
 		Type:    roleAssistant,
 		Message: llm.ConversationMsg{Role: roleAssistant, Content: []llm.ContentBlock{{Type: blockTypeText, Text: "final"}}},
 	}})
@@ -137,8 +149,10 @@ func TestSessionOutputStreamErrorIsRetriableForActiveSession(t *testing.T) {
 
 	handler := NewHandler(HandlerOptions{
 		Sessions: fakeSessionManager{views: []ports.SessionView{&fakeSessionView{
-			id:     fixtureSessionID,
-			status: ports.SessionRunning,
+			MockSessionView: &mocks.MockSessionView{
+				IDVal:     fixtureSessionID,
+				StatusVal: ports.SessionRunning,
+			},
 		}}},
 		DisableHostValidation: true,
 	})

@@ -27,41 +27,35 @@ func NormalizeVersion(v string) string {
 	return strings.TrimPrefix(strings.TrimSpace(v), "v")
 }
 
-// SameVersion reports whether two version strings are equal after
-// normalization. A "dev" current never equals a release tag.
-func SameVersion(a, b string) bool {
-	return NormalizeVersion(a) == NormalizeVersion(b)
-}
-
-// IsRealModuleVersion reports whether a build-info Main.Version is a genuine
+// isRealModuleVersion reports whether a build-info Main.Version is a genuine
 // module version. The Go toolchain only sets Main.Version to a tag or a
 // pseudo-version when the binary was installed from the module proxy; local
 // builds report "(devel)" (and tests/older toolchains may report ""). Trusting
 // the toolchain here means commit-pinned `go install` (a pseudo-version) is
 // correctly treated as go-install.
-func IsRealModuleVersion(v string) bool {
+func isRealModuleVersion(v string) bool {
 	return v != "" && v != "(devel)"
 }
 
-// IsReleaseVersion reports whether v is a clean MAJOR.MINOR.PATCH release
+// isReleaseVersion reports whether v is a clean MAJOR.MINOR.PATCH release
 // version after trimming surrounding whitespace and a single leading "v". It
 // is deliberately conservative: any git-describe suffix (v1.2.3-5-gabc1234),
 // -dirty marker, bare SHA, "dev", or empty string is NOT a release, so
 // classifiers refuse rather than risk a wrong comparison. It delegates to
-// ParseReleaseVersion so every caller shares one definition of "clean release
+// parseReleaseVersion so every caller shares one definition of "clean release
 // version".
-func IsReleaseVersion(v string) bool {
-	_, ok := ParseReleaseVersion(v)
+func isReleaseVersion(v string) bool {
+	_, ok := parseReleaseVersion(v)
 	return ok
 }
 
-// ParseReleaseVersion parses a clean MAJOR.MINOR.PATCH version into its three
+// parseReleaseVersion parses a clean MAJOR.MINOR.PATCH version into its three
 // numeric components after trimming surrounding whitespace and a single
 // leading "v". ok is false for anything that is not exactly three all-digit
 // fields (a git-describe suffix, -dirty marker, bare SHA, "dev", go-install
 // pseudo-version, or empty string) and for a field too large to fit an int,
 // so callers never attempt to order versions they cannot reason about.
-func ParseReleaseVersion(v string) (parts [3]int, ok bool) {
+func parseReleaseVersion(v string) (parts [3]int, ok bool) {
 	v = strings.TrimPrefix(strings.TrimSpace(v), "v")
 	fields := strings.Split(v, ".")
 	if len(fields) != 3 {
@@ -87,8 +81,8 @@ func ParseReleaseVersion(v string) (parts [3]int, ok bool) {
 // ordered is false and the caller falls back to plain inequality rather than
 // guessing an order.
 func CompareReleaseVersions(a, b string) (cmp int, ordered bool) {
-	pa, oka := ParseReleaseVersion(a)
-	pb, okb := ParseReleaseVersion(b)
+	pa, oka := parseReleaseVersion(a)
+	pb, okb := parseReleaseVersion(b)
 	if !oka || !okb {
 		return 0, false
 	}
@@ -116,25 +110,25 @@ func isAllDigits(s string) bool {
 	return true
 }
 
-// SameDir reports whether two directories refer to the same location after
+// sameDir reports whether two directories refer to the same location after
 // path normalization. It is pure (filepath.Clean does no I/O); any symlink
 // resolution must already have happened in the caller. An empty goBinDir
 // never matches, so a binary with no resolvable directory is not mistaken for
 // a go-install.
-func SameDir(binaryDir, goBinDir string) bool {
+func sameDir(binaryDir, goBinDir string) bool {
 	if binaryDir == "" || goBinDir == "" {
 		return false
 	}
 	return filepath.Clean(binaryDir) == filepath.Clean(goBinDir)
 }
 
-// IsHomebrewPath reports whether the symlink-resolved binary path sits inside
+// isHomebrewPath reports whether the symlink-resolved binary path sits inside
 // a Homebrew Cellar (<prefix>/Cellar/..., formula pours) or Caskroom
 // (<prefix>/Caskroom/..., cask binary stanzas). Both segments are
 // prefix-agnostic, covering /opt/homebrew, /usr/local, and Linuxbrew.
 // Symlink resolution must already have happened in the caller so this stays
 // pure and table-testable.
-func IsHomebrewPath(resolvedBinaryPath string) bool {
+func isHomebrewPath(resolvedBinaryPath string) bool {
 	if resolvedBinaryPath == "" {
 		return false
 	}

@@ -18,12 +18,15 @@ package agent
 
 import (
 	"context"
+	"fmt"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 
 	"github.com/doordash-oss/agentic-orchestrator/internal/ports"
+	"github.com/doordash-oss/agentic-orchestrator/test/testutil"
 )
 
 func TestReadOnlySandboxProfile_DeniesWorktreeWritesAllowsRest(t *testing.T) {
@@ -69,6 +72,7 @@ func TestWriteRestrictedSandboxProfile_DeniesWritesOutsideRoots(t *testing.T) {
 }
 
 func TestWrapVerificationSandbox_BlocksWritesOutsideRoots(t *testing.T) {
+	testutil.RequireSandboxExec(t)
 	if !sandboxExecAvailable() {
 		t.Skip("sandbox-exec not available on this host")
 	}
@@ -92,5 +96,64 @@ func TestWrapVerificationSandbox_BlocksWritesOutsideRoots(t *testing.T) {
 	// allow-listed — the deny-by-default must still block it.
 	if err := run("touch " + filepath.Join(protected, "outside")); err == nil {
 		t.Fatalf("write outside writable roots succeeded, want denial")
+	}
+}
+
+type sandboxProbeRunner struct {
+	stderr string
+	err    error
+	name   string
+	args   []string
+}
+
+func (r *sandboxProbeRunner) Run(_ context.Context, name string, args []string, opts ports.CommandOpts) ([]byte, error) {
+	r.name, r.args = name, args
+	if opts.Stderr != nil {
+		_, _ = opts.Stderr.Write([]byte(r.stderr))
+	}
+	return nil, r.err
+}
+
+type exitCodeError int
+
+func (e exitCodeError) Error() string { return fmt.Sprintf("exit status %d", int(e)) }
+func (e exitCodeError) ExitCode() int { return int(e) }
+
+func TestProbeSandboxExecClassifiesOutcomes(t *testing.T) {
+	cases := []struct {
+		name        string
+		runner      *sandboxProbeRunner
+		unavailable bool
+		reason      string
+	}{
+		{"available", &sandboxProbeRunner{}, false, ""},
+		{"missing binary", &sandboxProbeRunner{err: &fs.PathError{Op: "fork/exec", Path: sandboxExecPath, Err: fs.ErrNotExist}}, true, "is not installed"},
+		{"nested", &sandboxProbeRunner{err: exitCodeError(71), stderr: "sandbox-exec: sandbox_apply: Operation not permitted\n"}, true, "nested sandbox-exec is not permitted"},
+		{"exit 71 other", &sandboxProbeRunner{err: exitCodeError(71), stderr: "boom"}, true, "sandbox-exec probe failed: exit status 71: boom"},
+		{"other", &sandboxProbeRunner{err: exitCodeError(1)}, true, "sandbox-exec probe failed: exit status 1"},
+	}
+	for _, tc := range cases {
+		got := probeSandboxExec(tc.runner)
+		if got.Unavailable != tc.unavailable || !strings.Contains(got.Reason, tc.reason) {
+			t.Errorf("%s: probe = %+v; want unavailable=%v reason containing %q", tc.name, got, tc.unavailable, tc.reason)
+		}
+		if tc.runner.name != sandboxExecPath || strings.Join(tc.runner.args, " ") != "-p (version 1)(allow default) /usr/bin/true" {
+			t.Errorf("%s: probe ran %s %v", tc.name, tc.runner.name, tc.runner.args)
+		}
+	}
+}
+
+func TestWrapSandboxesPassThroughWhenProbeFails(t *testing.T) {
+	stubSandboxUnavailable(t, "nested")
+	command := []string{"/bin/echo", "hi"}
+	if got, sandboxed, cleanup := wrapVerificationSandbox(command, []string{t.TempDir()}); sandboxed || got[0] != "/bin/echo" {
+		t.Fatalf("wrapVerificationSandbox = (%v, %v); want passthrough", got, sandboxed)
+	} else {
+		cleanup()
+	}
+	if got, sandboxed, cleanup := maybeWrapHelperSandbox(command, true, filepath.Join(t.TempDir(), "state")); sandboxed || got[0] != "/bin/echo" {
+		t.Fatalf("maybeWrapHelperSandbox = (%v, %v); want passthrough", got, sandboxed)
+	} else {
+		cleanup()
 	}
 }

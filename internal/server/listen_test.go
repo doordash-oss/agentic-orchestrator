@@ -201,7 +201,7 @@ func TestStartRejectsBusyListenAddr(t *testing.T) {
 
 	srv, err := Start(context.Background(), Options{
 		AllowUnauthenticated: true,
-		AuthToken:            "token",
+		HandlerOptions:       HandlerOptions{AuthToken: "token"},
 		ListenAddr:           ln.Addr().String(),
 	})
 	if err == nil {
@@ -226,7 +226,7 @@ func TestStartHonorsExplicitLoopbackPin(t *testing.T) {
 
 	srv, err := Start(context.Background(), Options{
 		AllowUnauthenticated: true,
-		AuthToken:            "token",
+		HandlerOptions:       HandlerOptions{AuthToken: "token"},
 		ListenAddr:           "127.0.0.1:" + strconv.Itoa(port),
 	})
 	if err != nil {
@@ -264,7 +264,7 @@ func TestStartWildcardAdvertisesPrimaryAddress(t *testing.T) {
 
 	srv, err := Start(context.Background(), Options{
 		AllowUnauthenticated: true,
-		AuthToken:            "token",
+		HandlerOptions:       HandlerOptions{AuthToken: "token"},
 		ListenAddr:           "0.0.0.0:" + strconv.Itoa(port),
 	})
 	if err != nil {

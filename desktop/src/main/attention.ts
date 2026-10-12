@@ -61,6 +61,7 @@ import {
 import { CanonicalErrorException } from '../shared/errors';
 import type { ApiRequestInit } from './gateway/runtimeGateway';
 import { serverRequest, type ServerTransport } from './serverClient';
+import { defined } from '../shared/defined';
 
 const fallbackTime = '1970-01-01T00:00:00.000Z';
 
@@ -87,7 +88,7 @@ function toTestingContractItem(item: ServerTestingContractItem): TestingContract
     itemId: item.item_id,
     source: item.source,
     owner: item.owner,
-    ...(item.repo === undefined ? {} : { repo: item.repo }),
+    ...defined('repo', item.repo),
     name: item.name,
     command: item.command,
     required: item.required,
@@ -99,10 +100,8 @@ function toTestingContractItem(item: ServerTestingContractItem): TestingContract
       : {
           disposition: {
             status: item.disposition.status,
-            ...(item.disposition.reason === undefined ? {} : { reason: item.disposition.reason }),
-            ...(item.disposition.changed_by === undefined
-              ? {}
-              : { changedBy: item.disposition.changed_by }),
+            ...defined('reason', item.disposition.reason),
+            ...defined('changedBy', item.disposition.changed_by),
           },
         }),
     capabilities: item.capabilities,
@@ -148,7 +147,7 @@ type AttentionQuestionsItem = Extract<AttentionItem, { kind: 'questions' }>;
  * Who owns a control-request item: a feature tab (optionally through its
  * refactor parent) or, for the supervisor conversation, the Supervisor page.
  */
-export type ControlRequestOwner =
+type ControlRequestOwner =
   { featureId?: string; parentFeatureId?: string } | { target: 'supervisor' };
 
 /**
@@ -157,7 +156,7 @@ export type ControlRequestOwner =
  * feature id is the reserved `__supervisor__`. Such requests are never
  * dropped as orphans even though no listed feature owns them.
  */
-export function isSupervisorControlRequest(request: {
+function isSupervisorControlRequest(request: {
   feature_id?: string;
   session_id?: string;
 }): boolean {
@@ -180,7 +179,7 @@ function supervisorOriginFields(
 }
 
 /** Maps one pending server permission request to its attention item. */
-export function controlRequestPermissionItem(
+function controlRequestPermissionItem(
   request: ServerControlRequest,
   owner: ControlRequestOwner,
 ): AttentionPermissionItem {
@@ -188,21 +187,22 @@ export function controlRequestPermissionItem(
     kind: 'permission' as const,
     id: request.request_id,
     ...owner,
-    ...(request.session_id === undefined ? {} : { sessionId: request.session_id }),
-    ...(request.phase === undefined ? {} : { phase: request.phase }),
+    ...defined('sessionId', request.session_id),
+    ...defined('phase', request.phase),
     toolName: request.tool_name,
-    ...(request.summary === undefined ? {} : { summary: request.summary }),
-    ...(request.input === undefined ? {} : { input: request.input }),
+    ...defined('summary', request.summary),
+    ...defined('input', request.input),
     waitingSince: request.waiting_since ?? fallbackTime,
-    ...(request.remember === undefined
-      ? {}
-      : {
-          remember: {
+    ...defined(
+      'remember',
+      request.remember === undefined
+        ? undefined
+        : {
             pattern: request.remember.pattern,
             scope: request.remember.scope,
             scopeDisplay: request.remember.scope_display,
           },
-        }),
+    ),
     ...(request.automatic_review === undefined
       ? {}
       : {
@@ -212,20 +212,21 @@ export function controlRequestPermissionItem(
             outcome: request.automatic_review.outcome,
             reason: request.automatic_review.reason,
             paused: request.automatic_review.paused,
-            ...(request.automatic_review.retry_at === undefined
-              ? {}
-              : { retryAt: request.automatic_review.retry_at }),
+            ...defined('retryAt', request.automatic_review.retry_at),
           },
         }),
-    ...(request.auto_approve === undefined
-      ? {}
-      : { autoApprove: { wouldFastPath: request.auto_approve.would_fast_path } }),
+    ...defined(
+      'autoApprove',
+      request.auto_approve === undefined
+        ? undefined
+        : { wouldFastPath: request.auto_approve.would_fast_path },
+    ),
     ...supervisorOriginFields(request, owner),
   };
 }
 
 /** Maps one pending AskUser request to its attention item; null without questions. */
-export function controlRequestQuestionsItem(
+function controlRequestQuestionsItem(
   request: ServerControlRequest,
   owner: ControlRequestOwner,
 ): AttentionQuestionsItem | null {
@@ -235,8 +236,8 @@ export function controlRequestQuestionsItem(
     kind: 'questions' as const,
     id: request.request_id,
     ...owner,
-    ...(request.session_id === undefined ? {} : { sessionId: request.session_id }),
-    ...(request.phase === undefined ? {} : { phase: request.phase }),
+    ...defined('sessionId', request.session_id),
+    ...defined('phase', request.phase),
     waitingSince: request.waiting_since ?? fallbackTime,
     questions: questions.map((question) => ({
       index: question.index,
@@ -249,8 +250,8 @@ export function controlRequestQuestionsItem(
           : [
               {
                 label: option.label,
-                ...(option.description === undefined ? {} : { description: option.description }),
-                ...(option.confidence === undefined ? {} : { confidence: option.confidence }),
+                ...defined('description', option.description),
+                ...defined('confidence', option.confidence),
               },
             ],
       ),
@@ -307,7 +308,7 @@ export class AttentionService {
       featureID !== undefined && (featureIDs.has(featureID) || parentByChild.has(featureID));
     const parentOf = (featureID: string | undefined): { parentFeatureId: string } | object => {
       const parent = featureID === undefined ? undefined : parentByChild.get(featureID);
-      return parent === undefined ? {} : { parentFeatureId: parent };
+      return defined('parentFeatureId', parent);
     };
     // Supervisor requests belong to no feature: they keep their session id for
     // answering and are targeted at the Supervisor page instead of a tab.
@@ -315,7 +316,7 @@ export class AttentionService {
       isSupervisorControlRequest(request)
         ? { target: 'supervisor' }
         : {
-            ...(request.feature_id === undefined ? {} : { featureId: request.feature_id }),
+            ...defined('featureId', request.feature_id),
             ...parentOf(request.feature_id),
           };
     // One attention item per owned error on every listed feature's summary
@@ -338,11 +339,11 @@ export class AttentionService {
             ref: {
               scope: entry.ref.scope,
               code: entry.ref.code,
-              ...(entry.ref.feature_id === undefined ? {} : { featureId: entry.ref.feature_id }),
-              ...(entry.ref.repository === undefined ? {} : { repository: entry.ref.repository }),
-              ...(entry.ref.task_key === undefined ? {} : { taskKey: entry.ref.task_key }),
-              ...(entry.ref.snapshot_id === undefined ? {} : { snapshotId: entry.ref.snapshot_id }),
-              ...(entry.ref.key === undefined ? {} : { key: entry.ref.key }),
+              ...defined('featureId', entry.ref.feature_id),
+              ...defined('repository', entry.ref.repository),
+              ...defined('taskKey', entry.ref.task_key),
+              ...defined('snapshotId', entry.ref.snapshot_id),
+              ...defined('key', entry.ref.key),
             },
             class: entry.error.class,
             code: entry.error.code,
@@ -385,8 +386,8 @@ export class AttentionService {
             id: `${help.feature_id}:${help.session_id ?? ''}`,
             featureId: help.feature_id,
             ...parentOf(help.feature_id),
-            ...(sessionId === undefined ? {} : { sessionId }),
-            ...(session?.phase === undefined ? {} : { phase: session.phase }),
+            ...defined('sessionId', sessionId),
+            ...defined('phase', session?.phase === undefined ? undefined : session.phase),
             waitingSince: help.time ?? fallbackTime,
             prompt: help.question,
             waitingKind: helpWaitingKind(help),
@@ -401,10 +402,10 @@ export class AttentionService {
           featureId: gate.feature_id!,
           ...parentOf(gate.feature_id),
           waitingSince: gate.waiting_since ?? fallbackTime,
-          ...(gate.scope === undefined ? {} : { scope: gate.scope }),
-          ...(gate.repo_name === undefined ? {} : { repoName: gate.repo_name }),
-          ...(gate.iteration === undefined ? {} : { iteration: gate.iteration }),
-          ...(gate.summary === undefined ? {} : { summary: gate.summary }),
+          ...defined('scope', gate.scope),
+          ...defined('repoName', gate.repo_name),
+          ...defined('iteration', gate.iteration),
+          ...defined('summary', gate.summary),
           ...(gate.verification === undefined
             ? {}
             : {
@@ -412,7 +413,7 @@ export class AttentionService {
                   blockers: gate.verification.blockers.map((blocker) => ({
                     itemId: blocker.item_id,
                     name: blocker.name,
-                    ...(blocker.repo_name === undefined ? {} : { repoName: blocker.repo_name }),
+                    ...defined('repoName', blocker.repo_name),
                     command: blocker.command,
                     reason: blocker.reason,
                     capabilities: blocker.capabilities,
@@ -467,43 +468,41 @@ export class AttentionService {
     const input = validateWithSchema(request, PermissionDecisionRequestSchema);
     return this.mutate('/api/v1/permissions/answer', {
       request_id: input.requestId,
-      ...(input.sessionId === undefined ? {} : { session_id: input.sessionId }),
+      ...defined('session_id', input.sessionId),
       decision: input.decision,
       ...(input.decision === 'allow_remember'
         ? { remember_pattern: input.rememberPattern, remember_scope: input.rememberScope }
         : {}),
-      ...(input.autoApproveScope === undefined
-        ? {}
-        : { auto_approve_scope: input.autoApproveScope }),
+      ...defined('auto_approve_scope', input.autoApproveScope),
     });
   }
   async answerQuestions(request: AskUserAnswerRequest): Promise<AttentionActionResult> {
     const input = validateWithSchema(request, AskUserAnswerRequestSchema);
     return this.mutate('/api/v1/prompts/ask-user/answer', {
       request_id: input.requestId,
-      ...(input.sessionId === undefined ? {} : { session_id: input.sessionId }),
+      ...defined('session_id', input.sessionId),
       answers: input.answers,
     });
   }
   async sendHelp(request: HelpAnswerRequest): Promise<AttentionActionResult> {
     const input = validateWithSchema(request, HelpAnswerRequestSchema);
     return this.mutate('/api/v1/prompts/help/send', {
-      ...(input.featureId === undefined ? {} : { feature_id: input.featureId }),
-      ...(input.sessionId === undefined ? {} : { session_id: input.sessionId }),
+      ...defined('feature_id', input.featureId),
+      ...defined('session_id', input.sessionId),
       message: input.message,
     });
   }
   async saveGateDraft(request: GateDraftRequest): Promise<AttentionActionResult> {
     const input = validateWithSchema(request, GateDraftRequestSchema);
     return this.mutate(`/api/v1/features/${input.featureId}/actions/need-user-input-draft`, {
-      ...(input.repoName === undefined ? {} : { repo_name: input.repoName }),
+      ...defined('repo_name', input.repoName),
       answers: input.answers,
     });
   }
   async resolveGate(request: GateResumeRequest): Promise<AttentionActionResult> {
     const input = validateWithSchema(request, GateResumeRequestSchema);
     return this.mutate(`/api/v1/features/${input.featureId}/actions/need-user-input`, {
-      ...(input.repoName === undefined ? {} : { repo_name: input.repoName }),
+      ...defined('repo_name', input.repoName),
     });
   }
   async waiveTestingContract(

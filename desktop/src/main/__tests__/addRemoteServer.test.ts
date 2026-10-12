@@ -139,20 +139,6 @@ function registryCandidate(serverKey: string, stateDir: string) {
 }
 
 describe('addRemoteServer', () => {
-  it('accepts a legacy server only after a runtime endpoint 404', async () => {
-    const harness = makeHarness();
-    scriptHappyPath(harness);
-    harness.answers.set(`${BASE_URL}/api/v1/readiness/runtime`, () => ({ status: 404, body: {} }));
-    let legacyCalls = 0;
-    harness.answers.set(`${BASE_URL}/api/v1/readiness`, ({ token }) => {
-      legacyCalls += 1;
-      expect(token).toBe(TOKEN);
-      return { status: 200, body: {} };
-    });
-    expect(await harness.run()).toEqual({ status: 'added', serverKey: SERVER_KEY });
-    expect(legacyCalls).toBe(1);
-  });
-
   it('happy path: probe name wins, entry + token blob persisted, added returned', async () => {
     const harness = makeHarness();
     scriptHappyPath(harness, { name: 'buildbox' });

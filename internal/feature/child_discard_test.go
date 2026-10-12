@@ -16,7 +16,6 @@ package feature_test
 
 import (
 	"testing"
-	"time"
 
 	"github.com/doordash-oss/agentic-orchestrator/internal/feature"
 )
@@ -45,42 +44,6 @@ func TestDiscardDomainTypes(t *testing.T) {
 		}
 		if f.IsDiscarding() {
 			t.Fatal("expected IsDiscarding false")
-		}
-	})
-
-	t.Run("DiscardClosureTailPending true when worktree path remains", func(t *testing.T) {
-		now := time.Now()
-		f := &feature.Feature{
-			Parent: &feature.ChildRelationship{
-				ParentID:     "p",
-				CloseOutcome: feature.ChildCloseOutcomeDiscarded,
-				ClosedAt:     &now,
-			},
-			DiscardIntent: &feature.DiscardIntent{Step: feature.DiscardStepCleanupDone},
-			Repos: []feature.FeatureRepo{
-				{Name: "repo", WorktreePath: "/wt/child"},
-			},
-		}
-		if !f.DiscardClosureTailPending() {
-			t.Fatal("expected DiscardClosureTailPending true")
-		}
-	})
-
-	t.Run("DiscardClosureTailPending false when all clean", func(t *testing.T) {
-		now := time.Now()
-		f := &feature.Feature{
-			Parent: &feature.ChildRelationship{
-				ParentID:     "p",
-				CloseOutcome: feature.ChildCloseOutcomeDiscarded,
-				ClosedAt:     &now,
-			},
-			DiscardIntent: &feature.DiscardIntent{Step: feature.DiscardStepCleanupDone},
-			Repos: []feature.FeatureRepo{
-				{Name: "repo", WorktreePath: ""},
-			},
-		}
-		if f.DiscardClosureTailPending() {
-			t.Fatal("expected DiscardClosureTailPending false")
 		}
 	})
 

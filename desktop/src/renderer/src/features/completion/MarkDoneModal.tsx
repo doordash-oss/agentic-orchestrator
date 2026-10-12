@@ -18,7 +18,7 @@ import { useCallback } from 'react';
 import type { CompletionPreflightResult } from '../../../../shared/ipc';
 import { ResultBox, useCompletionAction, type CompletionAction } from './completionShared';
 
-export interface MarkDoneModalProps {
+interface MarkDoneModalProps {
   featureId: string;
   preflight: CompletionPreflightResult;
   dispatchAction: (

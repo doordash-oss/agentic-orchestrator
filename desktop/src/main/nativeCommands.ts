@@ -32,7 +32,7 @@ import {
 import { buildApplicationMenuTemplate } from './menuTemplate';
 import type { SupervisorGrade } from './quitCoordinator';
 
-export interface NativeCommandControllerDeps {
+interface NativeCommandControllerDeps {
   app: App;
   showWindow(): void;
   route(event: AppRouteEvent): void;
@@ -41,7 +41,7 @@ export interface NativeCommandControllerDeps {
   startLocalRuntime(): void;
 }
 
-export interface BackgroundStatus {
+interface BackgroundStatus {
   attentionCount: number;
   /** The supervisor lifecycle in three grades: working, waiting on the user, or idle. */
   supervisorGrade: SupervisorGrade;
@@ -180,7 +180,7 @@ export function supervisorGradeLabel(grade: SupervisorGrade): string {
   return 'Supervisor idle';
 }
 
-export interface TrayMenuHandlers {
+interface TrayMenuHandlers {
   showWindow(): void;
   route(event: AppRouteEvent): void;
   quit(): void;

@@ -22,15 +22,15 @@ import (
 	"time"
 )
 
-// HeadProbeTimeout bounds HasHead invocations.
-var HeadProbeTimeout = 5 * time.Second
+// headProbeTimeout bounds HasHead invocations.
+var headProbeTimeout = 5 * time.Second
 
 // HasHead reports whether the git repository at dir has at least one
 // commit on HEAD. A repository without commits (an unborn branch, e.g.
 // right after cloning an empty remote) is still a valid repository but
 // cannot start feature work.
 func HasHead(dir string) bool {
-	ctx, cancel := context.WithTimeout(context.Background(), HeadProbeTimeout)
+	ctx, cancel := context.WithTimeout(context.Background(), headProbeTimeout)
 	defer cancel()
 	cmd := exec.CommandContext(ctx, "git", "-C", dir, "rev-parse", "--verify", "HEAD")
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}

@@ -27,7 +27,7 @@ var inquirerRoleSpec = roleSpec{
 	Role:      RoleInquirer,
 	SkillName: "inquire",
 	OutputRoots: []outputRootSpec{
-		singleShotPhaseDirOutputRoot("Inquire phase artifact directory."),
+		iterationOutputRoot("phase_dir", "Inquire phase artifact directory."),
 	},
 	Artifacts: []roleArtifactSpec{
 		phaseMarkdownRoleArtifact("inquire markdown artifact", validateInquiryQuestionsArtifact),

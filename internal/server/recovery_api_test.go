@@ -172,7 +172,7 @@ func TestRecoverySnapshotItemsCarryCanonicalOrphanError(t *testing.T) {
 		t.Fatalf("live item repositories block = %+v; want repo-a", live.Context)
 	}
 	if live.Remediation == nil || len(live.Remediation.Actions) != 1 ||
-		string(live.Remediation.Actions[0]) != actionResume {
+		string(live.Remediation.Actions[0]) != string(FeatureActionResume) {
 		t.Fatalf("live item remediation = %+v; want the resume action", live.Remediation)
 	}
 	if live.Diagnostics != "" {
@@ -199,7 +199,7 @@ func TestRecoverySnapshotItemsCarryCanonicalOrphanError(t *testing.T) {
 		t.Fatalf("stale item repositories block = %+v; want none for a feature-scoped orphan", stale.Context.Repositories)
 	}
 	if stale.Remediation == nil || len(stale.Remediation.Actions) != 1 ||
-		string(stale.Remediation.Actions[0]) != actionResume {
+		string(stale.Remediation.Actions[0]) != string(FeatureActionResume) {
 		t.Fatalf("stale item remediation = %+v; want the resume action", stale.Remediation)
 	}
 }
@@ -281,10 +281,10 @@ func TestRecoveryItemDTOOffersOnlyResumeAndKill(t *testing.T) {
 		RepoName: "repo-a",
 	}
 	dto := recoveryItemDTO(item)
-	if dto.DefaultAction != actionResume {
-		t.Fatalf("default action = %q; want %q", dto.DefaultAction, actionResume)
+	if dto.DefaultAction != string(FeatureActionResume) {
+		t.Fatalf("default action = %q; want %q", dto.DefaultAction, string(FeatureActionResume))
 	}
-	if len(dto.AllowedActions) != 2 || dto.AllowedActions[0] != actionResume || dto.AllowedActions[1] != recoveryActionKill {
+	if len(dto.AllowedActions) != 2 || dto.AllowedActions[0] != string(FeatureActionResume) || dto.AllowedActions[1] != recoveryActionKill {
 		t.Fatalf("allowed actions = %v; want [resume kill]", dto.AllowedActions)
 	}
 }
@@ -296,7 +296,7 @@ func TestDecodeRecoveryActionsRejectsLegacySkip(t *testing.T) {
 		RepoName: "repo-a",
 	}
 	key := ports.RecoveryActionKey(fixtureFeatureID, "repo-a")
-	if _, err := decodeRecoveryActions([]ports.RecoveryItem{item}, map[string]string{key: recoveryActionSkip}); err == nil {
+	if _, err := decodeRecoveryActions([]ports.RecoveryItem{item}, map[string]string{key: "skip"}); err == nil {
 		t.Fatal("decode legacy skip action succeeded; want fail-closed rejection")
 	}
 }

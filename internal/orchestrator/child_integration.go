@@ -47,7 +47,7 @@ import (
 // Feature-lookup failures propagate so the gate can never be silently
 // skipped.
 func (o *Orchestrator) checkChildExecution(featureID string) error {
-	f, err := o.deps.Lifecycle.Get(featureID)
+	f, err := o.deps.Store.Load(featureID)
 	if err != nil {
 		return fmt.Errorf("loading feature: %w", err)
 	}
@@ -63,15 +63,15 @@ func (o *Orchestrator) checkChildExecution(featureID string) error {
 	return f.ChildExecutionCapability()
 }
 
-// ErrChildIntegrationRefused marks the durable refusal conditions under
+// errChildIntegrationRefused marks the durable refusal conditions under
 // which integration never mutates the parent: closed relationship, parent
 // record or repository mismatch, or a final review that is not durably
 // approved.
-var ErrChildIntegrationRefused = errors.New("child integration refused")
+var errChildIntegrationRefused = errors.New("child integration refused")
 
-// ErrChildDiscardInProgress is returned when an integration or closure
+// errChildDiscardInProgress is returned when an integration or closure
 // attempt is rejected because the child has a durable discard intent.
-var ErrChildDiscardInProgress = errors.New("child discard in progress")
+var errChildDiscardInProgress = errors.New("child discard in progress")
 
 // RunChildIntegration carries an approved child through local integration,
 // closure, cleanup, and the parent's publish decision. It acquires the
@@ -91,12 +91,12 @@ func (o *Orchestrator) RunChildIntegration(childID string) error {
 // Callers must hold the relationship read lock. restartPhaseLocked, which already
 // holds the read lock, calls this directly to avoid a recursive RLock.
 func (o *Orchestrator) runChildIntegrationLocked(childID string) error {
-	child, err := o.deps.Lifecycle.Get(childID)
+	child, err := o.deps.Store.Load(childID)
 	if err != nil {
 		return fmt.Errorf("load child: %w", err)
 	}
 	if child == nil || !child.IsChild() {
-		return fmt.Errorf("%w: feature is not a child feature", ErrChildIntegrationRefused)
+		return fmt.Errorf("%w: feature is not a child feature", errChildIntegrationRefused)
 	}
 	if owned, ownershipErr := o.cascadeOwnsRelationship(child.Parent.ParentID); ownershipErr != nil {
 		return ownershipErr
@@ -104,23 +104,23 @@ func (o *Orchestrator) runChildIntegrationLocked(childID string) error {
 		return fmt.Errorf("%w: cascade delete owns child %s", feature.ErrParentMutationLocked, child.ID)
 	}
 	if child.IsDiscarding() {
-		return fmt.Errorf("%w: child %s has discard in progress", ErrChildDiscardInProgress, child.ID)
+		return fmt.Errorf("%w: child %s has discard in progress", errChildDiscardInProgress, child.ID)
 	}
 	if child.Parent.CloseOutcome != "" {
 		if child.Parent.CloseOutcome != feature.ChildCloseOutcomeCompleted {
-			return fmt.Errorf("%w: child relationship %s already closed (%s)", ErrChildIntegrationRefused, child.ID, child.Parent.CloseOutcome)
+			return fmt.Errorf("%w: child relationship %s already closed (%s)", errChildIntegrationRefused, child.ID, child.Parent.CloseOutcome)
 		}
 		if child.Parent.Transaction != nil && child.Parent.Transaction.Phase == feature.TransactionPhaseMerged {
 			return o.settleChildClosureTail(childID, child.Parent.ParentID)
 		}
-		return fmt.Errorf("%w: child relationship %s already closed (%s)", ErrChildIntegrationRefused, child.ID, child.Parent.CloseOutcome)
+		return fmt.Errorf("%w: child relationship %s already closed (%s)", errChildIntegrationRefused, child.ID, child.Parent.CloseOutcome)
 	}
 	if err := validateChildForIntegration(child); err != nil {
 		return err
 	}
-	parent, err := o.deps.Lifecycle.Get(child.Parent.ParentID)
+	parent, err := o.deps.Store.Load(child.Parent.ParentID)
 	if err != nil {
-		return fmt.Errorf("%w: parent %s unreadable: %v", ErrChildIntegrationRefused, child.Parent.ParentID, err)
+		return fmt.Errorf("%w: parent %s unreadable: %v", errChildIntegrationRefused, child.Parent.ParentID, err)
 	}
 
 	return o.runTransactionIntegration(childID, child, parent)
@@ -130,10 +130,10 @@ func (o *Orchestrator) runChildIntegrationLocked(childID string) error {
 // local integration may touch an open child relationship.
 func validateChildForIntegration(child *feature.Feature) error {
 	if len(child.Repos) == 0 {
-		return fmt.Errorf("%w: child %s has no repositories", ErrChildIntegrationRefused, child.ID)
+		return fmt.Errorf("%w: child %s has no repositories", errChildIntegrationRefused, child.ID)
 	}
 	if child.Status != feature.StatusReviewPassed {
-		return fmt.Errorf("%w: final review is not durably approved for child %s (status %s)", ErrChildIntegrationRefused, child.ID, child.Status)
+		return fmt.Errorf("%w: final review is not durably approved for child %s (status %s)", errChildIntegrationRefused, child.ID, child.Status)
 	}
 	return nil
 }
@@ -234,7 +234,7 @@ func (o *Orchestrator) runTransactionIntegration(childID string, child, parent *
 			return err
 		}
 		var err error
-		child, err = o.deps.Lifecycle.Get(childID)
+		child, err = o.deps.Store.Load(childID)
 		if err != nil {
 			return fmt.Errorf("reload child after rollback resume: %w", err)
 		}
@@ -262,7 +262,7 @@ func (o *Orchestrator) runTransactionIntegration(childID string, child, parent *
 			return err
 		}
 		var err error
-		child, err = o.deps.Lifecycle.Get(childID)
+		child, err = o.deps.Store.Load(childID)
 		if err != nil {
 			return fmt.Errorf("reload child after apply: %w", err)
 		}
@@ -338,12 +338,12 @@ func (o *Orchestrator) invalidateFinalReview(childID string, journal *feature.Tr
 // sees all refs at candidates and finishes closure exactly once.
 // Idempotent: repeated entry is a no-op for finished steps.
 func (o *Orchestrator) closeTransactionAfterApply(childID, parentID string) error {
-	child, err := o.deps.Lifecycle.Get(childID)
+	child, err := o.deps.Store.Load(childID)
 	if err != nil {
 		return fmt.Errorf("reload child for closure: %w", err)
 	}
 	if child.IsDiscarding() {
-		return fmt.Errorf("%w: refusing to close child %s as completed while discard is in progress", ErrChildDiscardInProgress, childID)
+		return fmt.Errorf("%w: refusing to close child %s as completed while discard is in progress", errChildDiscardInProgress, childID)
 	}
 	journal := child.Parent.Transaction
 	if journal == nil {
@@ -354,7 +354,7 @@ func (o *Orchestrator) closeTransactionAfterApply(childID, parentID string) erro
 	if o.deps.Worktrees == nil {
 		return fmt.Errorf("transaction: ref CAS operations are not configured")
 	}
-	parent, err := o.deps.Lifecycle.Get(parentID)
+	parent, err := o.deps.Store.Load(parentID)
 	if err != nil {
 		return fmt.Errorf("reload parent for closure: %w", err)
 	}
@@ -404,7 +404,7 @@ func (o *Orchestrator) closeTransactionAfterApply(childID, parentID string) erro
 
 	// Parent → CodeReady first (failure leaves child open, retryable).
 	if parent.Status != feature.StatusCodeReady {
-		if err := o.deps.Lifecycle.MarkCodeReady(parentID); err != nil {
+		if err := o.deps.Manager.MarkCodeReady(parentID); err != nil {
 			return fmt.Errorf("mark parent code ready: %w", err)
 		}
 	}
@@ -435,7 +435,7 @@ func (o *Orchestrator) closeTransactionAfterApply(childID, parentID string) erro
 // failure is returned so callers never observe a settled closure tail whose
 // durable state was not written.
 func (o *Orchestrator) settleChildClosureTail(childID, parentID string) error {
-	child, err := o.deps.Lifecycle.Get(childID)
+	child, err := o.deps.Store.Load(childID)
 	if err != nil {
 		return fmt.Errorf("reload child: %w", err)
 	}
@@ -481,8 +481,8 @@ func (o *Orchestrator) settleChildClosureTail(childID, parentID string) error {
 	// is still pending, the workspace is preserved for recovery.
 	baseDir := o.stateDir()
 	if baseDir != "" && child.EffectivePipeline().HasPhase(feature.PhaseKnowledgeBase) {
-		if store, ok := o.deps.Store.(promotionStore); ok {
-			journal, jerr := store.LoadPromotion(childID)
+		{
+			journal, jerr := o.deps.Store.LoadPromotion(childID)
 			if jerr != nil {
 				return fmt.Errorf("loading promotion journal for cleanup: %w", jerr)
 			}
@@ -499,7 +499,7 @@ func (o *Orchestrator) settleChildClosureTail(childID, parentID string) error {
 						warnings[repo.Name] = fmt.Sprintf("removing child KB workspace for %s: %v", repo.Name, err)
 					}
 				}
-				if err := store.DeletePromotion(childID); err != nil && !os.IsNotExist(err) {
+				if err := o.deps.Store.DeletePromotion(childID); err != nil && !os.IsNotExist(err) {
 					return fmt.Errorf("deleting settled promotion journal for %s: %w", childID, err)
 				}
 			}
@@ -520,7 +520,7 @@ func (o *Orchestrator) settleChildClosureTail(childID, parentID string) error {
 		Message:   child.Parent.Kind + " child integrated and closed",
 	})
 
-	parent, err := o.deps.Lifecycle.Get(parentID)
+	parent, err := o.deps.Store.Load(parentID)
 	if err != nil {
 		return fmt.Errorf("reload parent: %w", err)
 	}
@@ -538,7 +538,7 @@ func (o *Orchestrator) settleChildClosureTail(childID, parentID string) error {
 			// The failing repository's stored record owns the condition; the
 			// event carries its rendered canonical error so the SSE
 			// projection matches the feature-failure shape.
-			if freshParent, getErr := o.deps.Lifecycle.Get(parentID); getErr == nil {
+			if freshParent, getErr := o.deps.Store.Load(parentID); getErr == nil {
 				if rendered, ok := firstFailedRepoError(freshParent); ok {
 					event.CanonicalError = &rendered
 				}
@@ -582,10 +582,7 @@ func (o *Orchestrator) reviewFeedbackIntegrationTail(child, parent *feature.Feat
 	// Load the outcomes artifact (tolerant: missing/malformed → empty map).
 	outcomes := feature.LoadReviewFeedbackOutcomes(o.stateDir(), child)
 
-	// The ledger store capability (load + append). Production wiring always
-	// uses *feature.Store; test doubles may not implement it — in that case
-	// the nil-ledger path silently skips both the load and the appends.
-	ledger, _ := o.deps.Store.(reviewFeedbackLedger)
+	ledger := o.deps.Store
 
 	incomplete := false
 	warn := func(repoName, cause string) {
@@ -642,21 +639,14 @@ func (o *Orchestrator) reviewFeedbackIntegrationTail(child, parent *feature.Feat
 			continue
 		}
 		// The PR carries the merged work again; clear any stored publish failure.
-		if err := o.deps.Lifecycle.SetRepoPublished(parent.ID, repo.Name, repoState.PRURL); err != nil {
+		if err := o.deps.Manager.SetRepoPublished(parent.ID, repo.Name, repoState.PRURL); err != nil {
 			warn(repo.Name, fmt.Sprintf("clear publish failure: %v", err))
 		}
 
 		// Load addressed ledger for recovery dedup.
-		var addressed map[int]bool
-		if ledger != nil {
-			addr, err := ledger.LoadAddressedReviewFeedbackIDs(parent.ID, repo.Name)
-			if err != nil {
-				warn(repo.Name, fmt.Sprintf("load addressed IDs: %v", err))
-				addressed = make(map[int]bool)
-			} else {
-				addressed = addr
-			}
-		} else {
+		addressed, err := ledger.LoadAddressedReviewFeedbackIDs(parent.ID, repo.Name)
+		if err != nil {
+			warn(repo.Name, fmt.Sprintf("load addressed IDs: %v", err))
 			addressed = make(map[int]bool)
 		}
 
@@ -685,10 +675,8 @@ func (o *Orchestrator) reviewFeedbackIntegrationTail(child, parent *feature.Feat
 			replied[comment.ID] = true
 			// Append to the addressed ledger immediately so a resumed tail
 			// skips already-replied comments.
-			if ledger != nil {
-				if err := ledger.AppendAddressedReviewFeedbackIDs(parent.ID, repo.Name, []int{comment.ID}); err != nil {
-					warn(repo.Name, fmt.Sprintf("record addressed ID %d: %v", comment.ID, err))
-				}
+			if err := ledger.AppendAddressedReviewFeedbackIDs(parent.ID, repo.Name, []int{comment.ID}); err != nil {
+				warn(repo.Name, fmt.Sprintf("record addressed ID %d: %v", comment.ID, err))
 			}
 		}
 
@@ -715,12 +703,12 @@ func (o *Orchestrator) reviewFeedbackIntegrationTail(child, parent *feature.Feat
 
 	// The parent ends Published whether or not any step failed. A retried
 	// tail finds it Published already.
-	current, err := o.deps.Lifecycle.Get(parent.ID)
+	current, err := o.deps.Store.Load(parent.ID)
 	if err != nil {
 		return fmt.Errorf("reload review-feedback parent: %w", err)
 	}
 	if current.Status != feature.StatusPublished {
-		if err := o.deps.Lifecycle.MarkPublished(parent.ID, parent.FirstRepoPRURL()); err != nil {
+		if err := o.deps.Manager.MarkPublished(parent.ID, parent.FirstRepoPRURL()); err != nil {
 			return fmt.Errorf("returning review-feedback parent to published: %w", err)
 		}
 	}
@@ -783,13 +771,6 @@ func childRepoBranch(f *feature.Feature, repoName string) string {
 		}
 	}
 	return ""
-}
-
-// reviewFeedbackLedger is the store capability for reading and writing the
-// durable addressed-ID ledger. Production wiring always uses *feature.Store.
-type reviewFeedbackLedger interface {
-	LoadAddressedReviewFeedbackIDs(parentID, repoName string) (map[int]bool, error)
-	AppendAddressedReviewFeedbackIDs(parentID, repoName string, ids []int) error
 }
 
 // clearTransactionTailWarning drops the stored tail record for repoName so
@@ -898,12 +879,6 @@ func (o *Orchestrator) childHeadSHA(worktreePath string) (string, error) {
 	return o.deps.Worktrees.CurrentHeadSHA(worktreePath)
 }
 
-// closedChildDiffSetter is the store capability that persists the preserved
-// diff summary on an already-closed child.
-type closedChildDiffSetter interface {
-	SetClosedChildDiffSummary(childID, summary string) error
-}
-
 // preserveChildDiffSummary best-effort captures and records the closed child's
 // per-repository diff — stat header plus body bounded at
 // feature.DiffSummaryBudget; the merge commit remains the full record —
@@ -911,11 +886,7 @@ type closedChildDiffSetter interface {
 // never fails the closure: missing capabilities, empty diffs, or store errors
 // simply leave the recorded summary empty.
 func (o *Orchestrator) preserveChildDiffSummary(childID string) {
-	setter, ok := o.deps.Store.(closedChildDiffSetter)
-	if !ok {
-		return
-	}
-	child, err := o.deps.Lifecycle.Get(childID)
+	child, err := o.deps.Store.Load(childID)
 	if err != nil || child == nil || child.Parent == nil {
 		return
 	}
@@ -926,7 +897,7 @@ func (o *Orchestrator) preserveChildDiffSummary(childID string) {
 	if summary == "" {
 		return
 	}
-	_ = setter.SetClosedChildDiffSummary(childID, feature.ComposeBoundedDiffSummary(summary))
+	_ = o.deps.Store.SetClosedChildDiffSummary(childID, feature.ComposeBoundedDiffSummary(summary))
 }
 
 // captureChildDiffSummary computes the child's preserved diff per repository

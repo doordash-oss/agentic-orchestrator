@@ -64,7 +64,7 @@ func TestImplementPromptBranchBehavior(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got := ImplementUserPrompt(tt.input)
+			got := MustRender(TemplateImplementUser, tt.input)
 			for _, want := range tt.wantContains {
 				requireContains(t, got, want)
 			}
@@ -104,7 +104,7 @@ func TestReviewPromptBranchBehavior(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got := ReviewUserPrompt(tt.input)
+			got := MustRender(templateReviewUser, tt.input)
 			for _, want := range tt.wantContains {
 				requireContains(t, got, want)
 			}
@@ -147,7 +147,7 @@ func TestFinalFixPromptBranches(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got := FinalFixUserPrompt(tt.input)
+			got := MustRender(TemplateFinalFixUser, tt.input)
 			for _, want := range tt.wantContains {
 				requireContains(t, got, want)
 			}
@@ -188,7 +188,7 @@ func TestPRDescriptionPromptPopulationBranches(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got := PRDescriptionUserPrompt(tt.input)
+			got := MustRender(TemplatePRDescriptionUser, tt.input)
 			for _, want := range tt.wantContains {
 				requireContains(t, got, want)
 			}
@@ -256,7 +256,7 @@ func TestValidateSpecializedPromptBranches(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got := ValidateSpecializedUserPrompt(tt.input)
+			got := MustRender(TemplateValidateSpecializedUser, tt.input)
 			for _, want := range tt.wantContains {
 				requireContains(t, got, want)
 			}

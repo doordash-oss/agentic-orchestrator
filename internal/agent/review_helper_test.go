@@ -36,7 +36,7 @@ import (
 	"github.com/doordash-oss/agentic-orchestrator/test/testutil/mocks"
 )
 
-func TestRunReadOnlyReviewHelper_UsesBoundedHelperArtifactHandler(t *testing.T) {
+func TestRunReviewHelper_ReadOnlyUsesBoundedHelperArtifactHandler(t *testing.T) {
 	root := t.TempDir()
 	helperDir := filepath.Join(root, "review")
 	if err := os.MkdirAll(helperDir, 0o755); err != nil {
@@ -58,6 +58,7 @@ func TestRunReadOnlyReviewHelper_UsesBoundedHelperArtifactHandler(t *testing.T) 
 		BuildSessionFn: func(opts BuildSessionOpts) ([]string, []string, *ports.SessionOpts, error) {
 			got = opts
 			return []string{"bash", script}, nil, &ports.SessionOpts{
+				Protocol:          testSessionProtocol(opts.Prompt),
 				PermHandler:       opts.PermHandler,
 				DebugSystemPrompt: opts.SystemPrompt,
 				ProviderName:      testMockIdentifier,
@@ -66,7 +67,7 @@ func TestRunReadOnlyReviewHelper_UsesBoundedHelperArtifactHandler(t *testing.T) 
 	}
 	t.Cleanup(func() { pr.SessionManager.Shutdown() })
 
-	_, err := pr.RunReadOnlyReviewHelper(context.Background(), ReviewHelperConfig{
+	_, err := pr.runReviewHelper(context.Background(), reviewHelperConfig{
 		SessionID:              "review-helper-1",
 		FeatureID:              "feature-1",
 		Phase:                  feature.PhaseReview,
@@ -84,7 +85,7 @@ func TestRunReadOnlyReviewHelper_UsesBoundedHelperArtifactHandler(t *testing.T) 
 		EffortLevel:            llm.EffortMedium,
 	})
 	if err != nil {
-		t.Fatalf("RunReadOnlyReviewHelper() error = %v", err)
+		t.Fatalf("runReviewHelper() error = %v", err)
 	}
 	if !permissionHandlerIncludesBoundedArtifacts(got.PermHandler) {
 		t.Fatalf("PermHandler = %T, want bounded artifact handler", got.PermHandler)
@@ -100,7 +101,7 @@ func TestRunReadOnlyReviewHelper_UsesBoundedHelperArtifactHandler(t *testing.T) 
 	}
 }
 
-func TestRunLiveRunReviewHelper_ConfiguresScratchRootsEnvAndPermissions(t *testing.T) {
+func TestRunReviewHelper_LiveRunConfiguresScratchRootsEnvAndPermissions(t *testing.T) {
 	root := t.TempDir()
 	stateDir := filepath.Join(root, "state")
 	helperDir := filepath.Join(stateDir, "review", "iteration-01", "qa")
@@ -117,7 +118,7 @@ func TestRunLiveRunReviewHelper_ConfiguresScratchRootsEnvAndPermissions(t *testi
 	tempRoot := filepath.Join(helperDir, "tmp")
 
 	sess := newUtilityTestSession()
-	sess.result = &llm.ResultMessage{Type: "result", Subtype: "success", StopReason: "end_turn"}
+	sess.CostVal = &llm.ResultMessage{Type: "result", Subtype: "success", StopReason: "end_turn"}
 	sm := mocks.NewMockSessionManager()
 	var startEnv []string
 	var startOpts *ports.SessionOpts
@@ -149,7 +150,7 @@ func TestRunLiveRunReviewHelper_ConfiguresScratchRootsEnvAndPermissions(t *testi
 			t.Errorf("write evidence: %v", err)
 		}
 		sess.setRootIntent(validSuccessCompletionIntent())
-		sess.statusCh <- "SUCCESS"
+		sess.StatusChVal <- "SUCCESS"
 		return sess, nil
 	}
 
@@ -168,7 +169,8 @@ func TestRunLiveRunReviewHelper_ConfiguresScratchRootsEnvAndPermissions(t *testi
 		},
 	}
 
-	result, err := pr.RunLiveRunReviewHelper(context.Background(), ReviewHelperConfig{
+	result, err := pr.runReviewHelper(context.Background(), reviewHelperConfig{
+		Posture:       reviewPostureLiveRun,
 		SessionID:     "qa-live-run",
 		FeatureID:     "feature-1",
 		Phase:         feature.PhaseReview,
@@ -186,7 +188,7 @@ func TestRunLiveRunReviewHelper_ConfiguresScratchRootsEnvAndPermissions(t *testi
 		ParentSpanCtx: observe.SpanContext{FeatureID: "feature-1", RunNumber: 4},
 	})
 	if err != nil {
-		t.Fatalf("RunLiveRunReviewHelper() error = %v", err)
+		t.Fatalf("runReviewHelper(live-run) error = %v", err)
 	}
 	if result.Status != ReviewApproved {
 		t.Fatalf("result.Status = %s, want APPROVED", result.Status)
@@ -229,7 +231,7 @@ func TestRunLiveRunReviewHelper_ConfiguresScratchRootsEnvAndPermissions(t *testi
 	requirePermissionDecision(t, startOpts.PermHandler, "Write", `{"file_path":"`+filepath.Join(workDir, "main.go")+`"}`, "deny")
 }
 
-func TestRunReadOnlyReviewHelper_NarrowsWritableRootsToDeclaredArtifacts(t *testing.T) {
+func TestRunReviewHelper_ReadOnlyNarrowsWritableRootsToDeclaredArtifacts(t *testing.T) {
 	root := t.TempDir()
 	helperDir := filepath.Join(root, "attempt-01", "validate-scope")
 	parentAttemptDir := filepath.Dir(helperDir)
@@ -259,6 +261,7 @@ func TestRunReadOnlyReviewHelper_NarrowsWritableRootsToDeclaredArtifacts(t *test
 			got.AdditionalDirs = append([]string(nil), opts.AdditionalDirs...)
 			got.WritableRoots = append([]string(nil), opts.WritableRoots...)
 			return []string{"bash", script}, nil, &ports.SessionOpts{
+				Protocol:          testSessionProtocol(opts.Prompt),
 				PermHandler:       opts.PermHandler,
 				DebugSystemPrompt: opts.SystemPrompt,
 				ProviderName:      testMockIdentifier,
@@ -267,7 +270,7 @@ func TestRunReadOnlyReviewHelper_NarrowsWritableRootsToDeclaredArtifacts(t *test
 	}
 	t.Cleanup(func() { pr.SessionManager.Shutdown() })
 
-	_, err := pr.RunReadOnlyReviewHelper(context.Background(), ReviewHelperConfig{
+	_, err := pr.runReviewHelper(context.Background(), reviewHelperConfig{
 		SessionID:              "validator-helper-1",
 		FeatureID:              "feature-1",
 		Phase:                  feature.PhasePlan,
@@ -277,7 +280,7 @@ func TestRunReadOnlyReviewHelper_NarrowsWritableRootsToDeclaredArtifacts(t *test
 		ResponsePath:           filepath.Join(helperDir, "validation-scope-output.txt"),
 		FeedbackPath:           feedbackPath,
 		HelperIterDir:          helperDir,
-		Role:                   RoleValidateRoadmapScope,
+		Role:                   roleValidateRoadmapScope,
 		AllowedPaths:           []string{notesPath},
 		WorkDir:                workDir,
 		RepoName:               "repo",
@@ -288,7 +291,7 @@ func TestRunReadOnlyReviewHelper_NarrowsWritableRootsToDeclaredArtifacts(t *test
 		EffortLevel:            llm.EffortMedium,
 	})
 	if err != nil {
-		t.Fatalf("RunReadOnlyReviewHelper() error = %v", err)
+		t.Fatalf("runReviewHelper() error = %v", err)
 	}
 	if !reflect.DeepEqual(got.WritableRoots, wantRoots) {
 		t.Fatalf("WritableRoots = %#v, want %#v", got.WritableRoots, wantRoots)
@@ -300,7 +303,7 @@ func TestRunReadOnlyReviewHelper_NarrowsWritableRootsToDeclaredArtifacts(t *test
 	}
 }
 
-func TestRunReadOnlyReviewHelper_MissingRootOutcomeOverridesApprovedFeedback(t *testing.T) {
+func TestRunReviewHelper_ReadOnlyMissingRootOutcomeOverridesApprovedFeedback(t *testing.T) {
 	root := t.TempDir()
 	helperDir := filepath.Join(root, "review")
 	workDir := filepath.Join(root, "work")
@@ -320,6 +323,7 @@ echo '{"type":"result","subtype":"success","session_id":"mock","total_cost_usd":
 		SessionManager: session.NewManager(make(chan interface{}, 10)),
 		BuildSessionFn: func(opts BuildSessionOpts) ([]string, []string, *ports.SessionOpts, error) {
 			return []string{"bash", script}, nil, &ports.SessionOpts{
+				Protocol:          testSessionProtocol(opts.Prompt),
 				PermHandler:       opts.PermHandler,
 				DebugSystemPrompt: opts.SystemPrompt,
 				ProviderName:      testMockIdentifier,
@@ -329,7 +333,7 @@ echo '{"type":"result","subtype":"success","session_id":"mock","total_cost_usd":
 	t.Cleanup(func() { pr.SessionManager.Shutdown() })
 
 	feedbackPath := filepath.Join(helperDir, "review-feedback.md")
-	result, err := pr.RunReadOnlyReviewHelper(context.Background(), ReviewHelperConfig{
+	result, err := pr.runReviewHelper(context.Background(), reviewHelperConfig{
 		SessionID:              "review-helper-no-marker",
 		FeatureID:              "feature-1",
 		Phase:                  feature.PhaseReview,
@@ -347,16 +351,16 @@ echo '{"type":"result","subtype":"success","session_id":"mock","total_cost_usd":
 		EffortLevel:            llm.EffortMedium,
 	})
 	if err == nil {
-		t.Fatal("RunReadOnlyReviewHelper() error = nil, want protocol violation")
+		t.Fatal("runReviewHelper() error = nil, want protocol violation")
 	}
 	if !isProtocolViolationError(err) {
-		t.Fatalf("RunReadOnlyReviewHelper() error = %T %v, want protocol violation", err, err)
+		t.Fatalf("runReviewHelper() error = %T %v, want protocol violation", err, err)
 	}
 	if result == nil {
-		t.Fatal("RunReadOnlyReviewHelper() result = nil, want synthesized feedback")
+		t.Fatal("runReviewHelper() result = nil, want synthesized feedback")
 	}
-	if result.Status != ReviewChangesRequested {
-		t.Fatalf("result.Status = %s, want %s", result.Status, ReviewChangesRequested)
+	if result.Status != reviewChangesRequested {
+		t.Fatalf("result.Status = %s, want %s", result.Status, reviewChangesRequested)
 	}
 	if !strings.Contains(result.Feedback, "agentico-outcome") {
 		t.Fatalf("result.Feedback missing root-outcome violation:\n%s", result.Feedback)
@@ -425,6 +429,21 @@ func requirePermissionDecision(t *testing.T, handler ports.PermissionHandler, to
 	}
 }
 
+func TestRunReviewHelper_ErrorPrefixPerPosture(t *testing.T) {
+	for _, tt := range []struct {
+		posture reviewExecutionPosture
+		want    string
+	}{
+		{posture: reviewPostureReadOnly, want: "running review helper: missing session id"},
+		{posture: reviewPostureLiveRun, want: "running live-run review helper: missing session id"},
+	} {
+		_, err := (&PhaseRunner{}).runReviewHelper(context.Background(), reviewHelperConfig{Posture: tt.posture})
+		if err == nil || err.Error() != tt.want {
+			t.Errorf("posture %s error = %v, want %q", tt.posture, err, tt.want)
+		}
+	}
+}
+
 func TestReviewHelpersUseActualModelProtocol(t *testing.T) {
 	t.Parallel()
 	for _, live := range []bool{false, true} {
@@ -438,8 +457,8 @@ func TestReviewHelpersUseActualModelProtocol(t *testing.T) {
 			t.Run(fmt.Sprintf("%s/live=%t", tt.name, live), func(t *testing.T) {
 				t.Parallel()
 				registry := llm.NewRegistry()
-				registry.Register(&claude.Provider{})
-				registry.Register(&codex.Provider{})
+				registry.Register(claude.NewProvider(""))
+				registry.Register(codex.NewProvider(""))
 				root := t.TempDir()
 				stop := errors.New("stop after capturing helper launch")
 				var captured BuildSessionOpts
@@ -447,18 +466,16 @@ func TestReviewHelpersUseActualModelProtocol(t *testing.T) {
 					captured = opts
 					return nil, nil, nil, stop
 				}}
-				cfg := ReviewHelperConfig{
+				cfg := reviewHelperConfig{
 					SessionID: "review-model-protocol", Model: tt.model, Prompt: "Review repository behavior.",
 					Phase: feature.PhaseReview, Role: RoleImplementationReviewCraft,
 					WorkDir: root, HelperIterDir: root, FeedbackPath: filepath.Join(root, "review-feedback.md"),
 					CompletionTool: tt.inheritedTool, CompletionAskingClause: "PARENT PROVIDER ASKING CONTRACT",
 				}
-				var err error
 				if live {
-					_, err = pr.RunLiveRunReviewHelper(context.Background(), cfg)
-				} else {
-					_, err = pr.RunReadOnlyReviewHelper(context.Background(), cfg)
+					cfg.Posture = reviewPostureLiveRun
 				}
+				_, err := pr.runReviewHelper(context.Background(), cfg)
 				if !errors.Is(err, stop) {
 					t.Fatalf("helper error = %v, want capture stop", err)
 				}
@@ -492,13 +509,13 @@ func TestPlanValidatorUsesReviewProviderProtocol(t *testing.T) {
 			t.Parallel()
 			root := t.TempDir()
 			registry := llm.NewRegistry()
-			registry.Register(&claude.Provider{})
-			registry.Register(&codex.Provider{})
+			registry.Register(claude.NewProvider(""))
+			registry.Register(codex.NewProvider(""))
 			parent := &PhaseRunner{Registry: registry}
 			f := &feature.Feature{ID: "mixed-provider-plan"}
 			f.Models.Planning, f.Models.Review = tt.planner, tt.reviewer
 			var captured BuildSessionOpts
-			cfg := PlanLoopConfig{
+			cfg := planLoopConfig{
 				Registry: registry, Feature: f, StateDir: root, WorkDir: root,
 				AskingClause:   parent.askingQuestionsClauseForModel(tt.planner),
 				CompletionTool: parent.completionToolForModel(tt.planner),
@@ -507,7 +524,7 @@ func TestPlanValidatorUsesReviewProviderProtocol(t *testing.T) {
 					return nil, nil, nil, errors.New("stop after validator launch capture")
 				},
 			}
-			_, _, _, _ = runSpecializedPlanValidation(cfg, mocks.NewMockSessionManager(), 1, root, filepath.Join(root, "plan.md"), validatorDomain{Name: "Architecture", Template: "validate-roadmap-architecture"}, observe.SpanContext{})
+			_, _, _, _ = runSpecializedPlanValidationForArtifact(cfg, mocks.NewMockSessionManager(), 1, root, filepath.Join(root, "plan.md"), testPlanValidatorAxis(t, "validate-roadmap-architecture"), validationArtifactPhasePlan, planValidationExtras{}, observe.SpanContext{})
 			if captured.Model != tt.reviewer {
 				t.Fatalf("model=%q, want %q", captured.Model, tt.reviewer)
 			}

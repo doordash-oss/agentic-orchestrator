@@ -49,7 +49,7 @@ func TestManagerSetupFailureStoresCanonicalRecord(t *testing.T) {
 		t.Fatal("RunSetup succeeded, want worktree failure")
 	}
 
-	loaded, err := mgr.Get(f.ID)
+	loaded, err := mgr.Store.Load(f.ID)
 	if err != nil {
 		t.Fatalf("get: %v", err)
 	}
@@ -124,7 +124,7 @@ func TestManagerRetrySetupClearsFailureRecord(t *testing.T) {
 	if err := mgr.RunSetup(f.ID); err == nil {
 		t.Fatal("initial RunSetup succeeded, want worktree failure")
 	}
-	failed, err := mgr.Get(f.ID)
+	failed, err := mgr.Store.Load(f.ID)
 	if err != nil {
 		t.Fatalf("get failed feature: %v", err)
 	}
@@ -136,7 +136,7 @@ func TestManagerRetrySetupClearsFailureRecord(t *testing.T) {
 	if err := mgr.RetrySetup(f.ID); err != nil {
 		t.Fatalf("retry setup: %v", err)
 	}
-	reloaded, err := mgr.Get(f.ID)
+	reloaded, err := mgr.Store.Load(f.ID)
 	if err != nil {
 		t.Fatalf("get reloaded feature: %v", err)
 	}
@@ -178,7 +178,7 @@ func TestManagerFailActiveSetupAbandonedBetweenTasks(t *testing.T) {
 	if !outcome.Marked {
 		t.Fatal("FailActiveSetup marked = false, want true for a running setup")
 	}
-	loaded, err := mgr.Get(f.ID)
+	loaded, err := mgr.Store.Load(f.ID)
 	if err != nil {
 		t.Fatalf("get: %v", err)
 	}
@@ -215,7 +215,7 @@ func TestManagerRunSetupLogDirectoryFailureOwnsFirstUnfinishedTask(t *testing.T)
 	if err := mgr.RunSetup(f.ID); err == nil {
 		t.Fatal("RunSetup succeeded, want log directory failure")
 	}
-	loaded, err := mgr.Get(f.ID)
+	loaded, err := mgr.Store.Load(f.ID)
 	if err != nil {
 		t.Fatalf("get: %v", err)
 	}
@@ -245,7 +245,7 @@ func TestManagerRetryPhaseClearsFailureRecord(t *testing.T) {
 	if err := mgr.MarkFailed(f.ID, record); err != nil {
 		t.Fatalf("mark failed: %v", err)
 	}
-	failed, err := mgr.Get(f.ID)
+	failed, err := mgr.Store.Load(f.ID)
 	if err != nil {
 		t.Fatalf("get failed feature: %v", err)
 	}
@@ -256,7 +256,7 @@ func TestManagerRetryPhaseClearsFailureRecord(t *testing.T) {
 	if err := mgr.RetryPhase(f.ID, []string{"test-repo"}); err != nil {
 		t.Fatalf("retry phase: %v", err)
 	}
-	loaded, err := mgr.Get(f.ID)
+	loaded, err := mgr.Store.Load(f.ID)
 	if err != nil {
 		t.Fatalf("get reloaded feature: %v", err)
 	}

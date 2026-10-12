@@ -130,32 +130,15 @@ func (r *Registry) DetectedProviders() []LLMProvider {
 	return detected
 }
 
-// PromptAdapterForModel returns the PromptAdapter for the given model.
-// Returns an error if no provider matches or the provider doesn't implement PromptAdapter.
-func (r *Registry) PromptAdapterForModel(model string) (PromptAdapter, error) {
+// AskingQuestionsClauseForModel resolves the given model to its provider
+// and returns the provider's AskingQuestionsClause. Returns an error if no
+// provider matches the model.
+func (r *Registry) AskingQuestionsClauseForModel(model string) (string, error) {
 	p, _, err := r.ResolveModel(model)
 	if err != nil {
-		return nil, err
+		return "", err
 	}
-	pa, ok := p.(PromptAdapter)
-	if !ok {
-		return nil, fmt.Errorf("provider %q does not implement PromptAdapter", p.Name())
-	}
-	return pa, nil
-}
-
-// CostCalculatorForModel returns the CostCalculator for the given model.
-// Returns an error if no provider matches or the provider doesn't implement CostCalculator.
-func (r *Registry) CostCalculatorForModel(model string) (CostCalculator, error) {
-	p, err := r.ForModel(model)
-	if err != nil {
-		return nil, err
-	}
-	cc, ok := p.(CostCalculator)
-	if !ok {
-		return nil, fmt.Errorf("provider %q does not implement CostCalculator", p.Name())
-	}
-	return cc, nil
+	return p.AskingQuestionsClause(), nil
 }
 
 // ResolveModel resolves a model string to a provider and the bare model name.
@@ -239,25 +222,8 @@ func canonicalModelForProvider(p LLMProvider, model string) (string, bool) {
 	if model == "" {
 		return "", false
 	}
-	if cp, ok := p.(CatalogProvider); ok {
-		if cat := cp.ModelCatalog(); len(cat) > 0 {
-			for _, entry := range cat {
-				if strings.EqualFold(entry.ID, model) {
-					return entry.ID, true
-				}
-				for _, alias := range entry.Aliases {
-					if strings.EqualFold(alias, model) {
-						return entry.ID, true
-					}
-				}
-			}
-			return "", false
-		}
-	}
-	for _, candidate := range p.AvailableModels() {
-		if strings.EqualFold(candidate, model) {
-			return candidate, true
-		}
+	if entry, ok := LookupModel(p.ModelCatalog(), model); ok {
+		return entry.ID, true
 	}
 	return "", false
 }
@@ -287,26 +253,8 @@ func stripContextAnnotation(model string) string {
 
 // --- Catalog-based methods ---
 
-// catalogForProvider returns the ModelInfo catalog for a provider.
-// If the provider implements CatalogProvider, returns its catalog.
-// Otherwise, creates synthetic ModelInfo entries from AvailableModels().
-func catalogForProvider(p LLMProvider) []ModelInfo {
-	if cp, ok := p.(CatalogProvider); ok {
-		if cat := cp.ModelCatalog(); len(cat) > 0 {
-			return cat
-		}
-	}
-	// Synthetic fallback
-	models := p.AvailableModels()
-	infos := make([]ModelInfo, len(models))
-	for i, m := range models {
-		infos[i] = ModelInfo{ID: m}
-	}
-	return infos
-}
-
 // ModelsForProvider returns the catalog models for a specific provider.
-// Returns nil if the provider is not found or not detected.
+// Returns nil if the provider is not found, not detected, or has no catalog.
 func (r *Registry) ModelsForProvider(name string) []ModelInfo {
 	p := r.ByName(name)
 	r.mu.RLock()
@@ -315,7 +263,7 @@ func (r *Registry) ModelsForProvider(name string) []ModelInfo {
 	if p == nil || !p.DetectCLI() || !active {
 		return nil
 	}
-	return catalogForProvider(p)
+	return p.ModelCatalog()
 }
 
 func formatCatalogDefault(provider string, model ModelInfo, multi bool) string {
@@ -327,23 +275,11 @@ func formatCatalogDefault(provider string, model ModelInfo, multi bool) string {
 
 // CatalogDefaultModels recommends technically compatible models using explicit
 // role preferences and deterministic metadata ordering. Existing configured
-// selections are preserved by the startup reconciliation layer.
+// selections are preserved by the startup reconciliation layer. Roles with no
+// eligible candidate resolve to the empty string.
 func (r *Registry) CatalogDefaultModels() config.ModelConfig {
 	detected := r.DetectedProviders()
 	if len(detected) == 0 {
-		return config.ModelConfig{}
-	}
-
-	hasCatalog := false
-	for _, p := range detected {
-		if cp, ok := p.(CatalogProvider); ok {
-			if cat := cp.ModelCatalog(); len(cat) > 0 {
-				hasCatalog = true
-				break
-			}
-		}
-	}
-	if !hasCatalog {
 		return config.ModelConfig{}
 	}
 
@@ -385,15 +321,10 @@ func (r *Registry) EligibleModelsForPhase(role PhaseRole) map[string][]string {
 func (r *Registry) eligibleAutomaticReviewModels() map[string][]string {
 	result := make(map[string][]string)
 	for _, p := range r.DetectedProviders() {
-		reviewer, ok := p.(NativeToollessReviewer)
-		if !ok || !reviewer.SupportsNativeToollessReview() {
+		if !p.SupportsNativeToollessReview() {
 			continue
 		}
-		catalogProvider, ok := p.(CatalogProvider)
-		if !ok {
-			continue
-		}
-		catalog := catalogProvider.ModelCatalog()
+		catalog := p.ModelCatalog()
 		if len(catalog) == 0 {
 			continue
 		}

@@ -61,6 +61,25 @@ describe('activityLabel', () => {
     ).toBe('Using read');
   });
 
+  it('labels tool_progress rows with their summary like tool_use rows', () => {
+    expect(
+      activityLabel(
+        row({
+          index: 0,
+          type: 'tool_progress',
+          tool: 'Read',
+          redacted: true,
+          toolCall: { summary: 'README.md' },
+        }),
+      ),
+    ).toBe('read · README.md');
+    expect(
+      activityLabel(
+        row({ index: 1, type: 'tool_use', tool: 'Read', toolCall: { summary: 'README.md' } }),
+      ),
+    ).toBe('read · README.md');
+  });
+
   it('returns a label-less activity for hidden reasoning without exposing text', () => {
     expect(
       activityLabel(row({ index: 0, type: 'thinking', text: 'secret chain of thought' })),

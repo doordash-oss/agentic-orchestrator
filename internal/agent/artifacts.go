@@ -24,9 +24,9 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
-// RunDir returns the absolute directory for a specific run of a feature.
+// runDir returns the absolute directory for a specific run of a feature.
 // e.g., filepath.Join(stateDir, featureID, "runs", "run-003").
-func RunDir(stateDir, featureID string, runNumber int) string {
+func runDir(stateDir, featureID string, runNumber int) string {
 	if runNumber <= 0 {
 		runNumber = 1
 	}
@@ -45,7 +45,7 @@ func ActiveRunDir(stateDir string, f *feature.Feature) string {
 	if rn <= 0 {
 		rn = 1
 	}
-	return RunDir(stateDir, f.ID, rn)
+	return runDir(stateDir, f.ID, rn)
 }
 
 // PhaseDir returns the base directory for a roadmap phase's artifacts within
@@ -60,23 +60,17 @@ func PhasePlanDir(stateDir string, f *feature.Feature, phase int) string {
 	return filepath.Join(PhaseDir(stateDir, f, phase), "plan")
 }
 
-// PhaseImplementDir returns the implement subdirectory for a roadmap phase.
-// e.g., runs/run-001/phase-01/implement/.
-func PhaseImplementDir(stateDir string, f *feature.Feature, phase int) string {
-	return filepath.Join(PhaseDir(stateDir, f, phase), "implement")
-}
-
-// PhaseTestingContractDir returns the base directory for a roadmap phase's
+// phaseTestingContractDir returns the base directory for a roadmap phase's
 // testing contract artifact. The contract lives at the phase root so
 // implementation and review share one binding file.
-func PhaseTestingContractDir(stateDir string, f *feature.Feature, phase int) string {
+func phaseTestingContractDir(stateDir string, f *feature.Feature, phase int) string {
 	return PhaseDir(stateDir, f, phase)
 }
 
 // PhaseTestingContractPath returns the absolute path to a roadmap phase's
 // compiled testing contract artifact.
 func PhaseTestingContractPath(stateDir string, f *feature.Feature, phase int) string {
-	return filepath.Join(PhaseTestingContractDir(stateDir, f, phase), "testing-contract.yaml")
+	return filepath.Join(phaseTestingContractDir(stateDir, f, phase), "testing-contract.yaml")
 }
 
 // RoadmapDir returns the roadmap artifacts directory within the active run.
@@ -85,7 +79,7 @@ func RoadmapDir(stateDir string, f *feature.Feature) string {
 	return filepath.Join(ActiveRunDir(stateDir, f), "roadmap")
 }
 
-type IterationMeta struct {
+type iterationMeta struct {
 	Iteration    int           `yaml:"iteration"`
 	StartedAt    time.Time     `yaml:"started_at"`
 	Duration     time.Duration `yaml:"duration"`
@@ -94,10 +88,10 @@ type IterationMeta struct {
 	ReviewStatus string        `yaml:"review_status"`
 	MadeProgress bool          `yaml:"made_progress"`
 	CostUSD      float64       `yaml:"cost_usd,omitempty"`
-	Context      *ContextMeta  `yaml:"context,omitempty"`
+	Context      *contextMeta  `yaml:"context,omitempty"`
 }
 
-type ContextMeta struct {
+type contextMeta struct {
 	Provider           string `yaml:"provider,omitempty"`
 	ThresholdPct       int    `yaml:"threshold_pct,omitempty"`
 	FinalPct           int    `yaml:"final_pct,omitempty"`
@@ -109,16 +103,16 @@ type ContextMeta struct {
 	HandoffTotalTokens int    `yaml:"handoff_total_tokens,omitempty"`
 }
 
-// ArtifactManager handles iteration directory creation and file writing.
-type ArtifactManager struct {
+// artifactManager handles iteration directory creation and file writing.
+type artifactManager struct {
 	BaseDir string
 }
 
-func NewArtifactManager(baseDir string) *ArtifactManager {
-	return &ArtifactManager{BaseDir: baseDir}
+func newArtifactManager(baseDir string) *artifactManager {
+	return &artifactManager{BaseDir: baseDir}
 }
 
-func (am *ArtifactManager) CreateIterationDir(n int) (string, error) {
+func (am *artifactManager) createIterationDir(n int) (string, error) {
 	dir := filepath.Join(am.BaseDir, fmt.Sprintf("iteration-%02d", n))
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return "", fmt.Errorf("creating iteration directory: %w", err)
@@ -126,11 +120,7 @@ func (am *ArtifactManager) CreateIterationDir(n int) (string, error) {
 	return dir, nil
 }
 
-func (am *ArtifactManager) WriteResponse(iterDir string, response string) error {
-	return os.WriteFile(filepath.Join(iterDir, "response.txt"), []byte(response), 0o644)
-}
-
-func (am *ArtifactManager) WriteMeta(iterDir string, meta IterationMeta) error {
+func (am *artifactManager) writeMeta(iterDir string, meta iterationMeta) error {
 	data, err := yaml.Marshal(meta)
 	if err != nil {
 		return fmt.Errorf("marshaling meta: %w", err)
@@ -138,22 +128,22 @@ func (am *ArtifactManager) WriteMeta(iterDir string, meta IterationMeta) error {
 	return os.WriteFile(filepath.Join(iterDir, "meta.yaml"), data, 0o644)
 }
 
-// WriteDebugPrompts writes the system and user prompts to files for debugging.
-func WriteDebugPrompts(dir, systemPrompt, userPrompt string) {
+// writeDebugPrompts writes the system and user prompts to files for debugging.
+func writeDebugPrompts(dir, systemPrompt, userPrompt string) {
 	_ = os.WriteFile(filepath.Join(dir, "system-prompt.md"), []byte(systemPrompt), 0o644)
 	_ = os.WriteFile(filepath.Join(dir, "user-prompt.md"), []byte(userPrompt), 0o644)
 }
 
-// WriteValidatorSystemPrompt writes only the system prompt for a validator session.
+// writeValidatorSystemPrompt writes only the system prompt for a validator session.
 // The user prompt is already saved separately as validation-{domain}-prompt.md.
-func WriteValidatorSystemPrompt(dir, prefix, systemPrompt string) {
+func writeValidatorSystemPrompt(dir, prefix, systemPrompt string) {
 	_ = os.WriteFile(filepath.Join(dir, prefix+"-system-prompt.md"), []byte(systemPrompt), 0o644)
 }
 
-// LatestIteration returns the highest iteration number that completed
+// latestIteration returns the highest iteration number that completed
 // (has a meta.yaml file), or 0 if none exist. Directories without
 // meta.yaml are incomplete iterations that should be re-run.
-func (am *ArtifactManager) LatestIteration() int {
+func (am *artifactManager) latestIteration() int {
 	entries, err := os.ReadDir(am.BaseDir)
 	if err != nil {
 		return 0
@@ -174,20 +164,20 @@ func (am *ArtifactManager) LatestIteration() int {
 	return latest
 }
 
-// ReadMeta reads and parses the meta.yaml file from an iteration directory.
-func (am *ArtifactManager) ReadMeta(iterDir string) (IterationMeta, error) {
+// readMeta reads and parses the meta.yaml file from an iteration directory.
+func (am *artifactManager) readMeta(iterDir string) (iterationMeta, error) {
 	data, err := os.ReadFile(filepath.Join(iterDir, "meta.yaml"))
 	if err != nil {
-		return IterationMeta{}, err
+		return iterationMeta{}, err
 	}
-	var meta IterationMeta
+	var meta iterationMeta
 	if err := yaml.Unmarshal(data, &meta); err != nil {
-		return IterationMeta{}, err
+		return iterationMeta{}, err
 	}
 	return meta, nil
 }
 
-func (am *ArtifactManager) WriteSummary(summaryPath string, meta IterationMeta) error {
+func (am *artifactManager) writeSummary(summaryPath string, meta iterationMeta) error {
 	f, err := os.OpenFile(summaryPath, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644)
 	if err != nil {
 		return fmt.Errorf("opening summary file: %w", err)

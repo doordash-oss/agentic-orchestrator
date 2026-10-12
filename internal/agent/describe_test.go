@@ -26,7 +26,7 @@ import (
 )
 
 func TestBuildPRDescriptionPrompt(t *testing.T) {
-	prompt := BuildPRDescriptionPrompt(PRContext{
+	prompt := buildPRDescriptionPrompt(PRContext{
 		FeatureName:        "my-feature",
 		FeatureDescription: "feature desc",
 		Roadmap:            "plan content",
@@ -54,7 +54,7 @@ func TestBuildPRDescriptionPrompt(t *testing.T) {
 }
 
 func TestBuildPRDescriptionPrompt_EmitsOnlyPopulatedSections(t *testing.T) {
-	prompt := BuildPRDescriptionPrompt(PRContext{Roadmap: "plan only"})
+	prompt := buildPRDescriptionPrompt(PRContext{Roadmap: "plan only"})
 	if !strings.Contains(prompt, "plan only") {
 		t.Error("expected roadmap content in prompt")
 	}
@@ -69,7 +69,7 @@ func TestRunDescriptionGenerationCommand(t *testing.T) {
 	// We can't run the actual claude CLI in tests, but we can verify the
 	// prompt construction and parsing work end-to-end with known output.
 	sampleOutput := "TITLE: Add feature X\nBODY:\n## Summary\n\n- Added X\n\n## Test plan\n\n- [ ] Test X\n"
-	title, body := ParsePRDescription(sampleOutput)
+	title, body := parsePRDescription(sampleOutput)
 	if title != "Add feature X" {
 		t.Errorf("title = %q, want 'Add feature X'", title)
 	}
@@ -128,7 +128,7 @@ func TestParsePRDescription(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			title, body := ParsePRDescription(tt.output)
+			title, body := parsePRDescription(tt.output)
 			if title != tt.wantTitle {
 				t.Errorf("title = %q, want %q", title, tt.wantTitle)
 			}
@@ -139,54 +139,16 @@ func TestParsePRDescription(t *testing.T) {
 	}
 }
 
-func TestExtractTextFromStreamJSON(t *testing.T) {
-	tests := []struct {
-		name   string
-		output string
-		want   string
-	}{
-		{
-			name:   "assistant text blocks",
-			output: `{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"TITLE: Fix bug"}]}}` + "\n" + `{"type":"result","subtype":"success","session_id":"s1","total_cost_usd":0.01}`,
-			want:   "TITLE: Fix bug",
-		},
-		{
-			name:   "result text fallback",
-			output: `{"type":"result","subtype":"success","session_id":"s1","total_cost_usd":0.01,"result":"Final answer"}`,
-			want:   "Final answer",
-		},
-		{
-			name:   "plain text fallback",
-			output: "Not JSON at all",
-			want:   "Not JSON at all",
-		},
-		{
-			name:   "empty",
-			output: "",
-			want:   "",
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			got := extractTextFromStreamJSON(tt.output)
-			if got != tt.want {
-				t.Errorf("extractTextFromStreamJSON() = %q, want %q", got, tt.want)
-			}
-		})
-	}
-}
-
-func TestPhaseRunnerRunDescriptionGeneration_UsesUtilitySession(t *testing.T) {
+func TestPhaseRunnerRunDescriptionGeneration_UsesBoundedHelper(t *testing.T) {
 	sess := newUtilityTestSession()
-	sess.msgLog.Append(mocks.AssistantTextMessage("TITLE: Test PR\nBODY:\n## Summary\n- Test change"))
-	sess.result = &llm.ResultMessage{
+	sess.MessageLogVal.Append(mocks.AssistantTextMessage("TITLE: Test PR\nBODY:\n## Summary\n- Test change"))
+	sess.CostVal = &llm.ResultMessage{
 		Type:       testResultMessageType,
 		Subtype:    testResultSuccessValue,
 		Result:     "done",
 		StopReason: testStopReasonEndTurn,
 	}
-	sess.statusCh <- agentStatusSuccess
+	sess.StatusChVal <- agentStatusSuccess
 
 	runner := newUtilityTestPhaseRunner(t, sess)
 	prCtx := PRContext{FeatureName: "test", Roadmap: "plan content"}
@@ -210,6 +172,12 @@ func TestPhaseRunnerRunDescriptionGeneration_UsesUtilitySession(t *testing.T) {
 	if opts.Phase != feature.PhasePublish {
 		t.Errorf("BuildSessionOpts.Phase = %v, want %v", opts.Phase, feature.PhasePublish)
 	}
+	if opts.EffortLevel != llm.EffortLow {
+		t.Errorf("BuildSessionOpts.EffortLevel = %q, want low", opts.EffortLevel)
+	}
+	if opts.WorkDir != runner.pr.StateDir {
+		t.Errorf("BuildSessionOpts.WorkDir = %q, want state dir %q", opts.WorkDir, runner.pr.StateDir)
+	}
 	if !strings.Contains(opts.SystemPrompt, "complete using only the context supplied") {
 		t.Errorf("BuildSessionOpts.SystemPrompt missing tool-free completion instruction: %q", opts.SystemPrompt)
 	}
@@ -231,17 +199,17 @@ func TestPhaseRunnerRunDescriptionGeneration_UsesUtilitySession(t *testing.T) {
 			t.Errorf("CanUseTool(%q) reason = %q, want supplied-context direction", toolName, decision.Reason)
 		}
 	}
-	if sess.featureID != "feat-publish" {
-		t.Errorf("session featureID = %q, want %q", sess.featureID, "feat-publish")
+	if sess.FeatureIDVal != "feat-publish" {
+		t.Errorf("session featureID = %q, want %q", sess.FeatureIDVal, "feat-publish")
 	}
-	if sess.phase != feature.PhasePublish {
-		t.Errorf("session phase = %v, want %v", sess.phase, feature.PhasePublish)
+	if sess.PhaseVal != feature.PhasePublish {
+		t.Errorf("session phase = %v, want %v", sess.PhaseVal, feature.PhasePublish)
 	}
 }
 
 func TestPhaseRunnerRunDescriptionGeneration_ReturnsHelperErrorWithoutFallback(t *testing.T) {
 	sess := newUtilityTestSession()
-	sess.attachCh <- mocks.ControlRequestMsg("perm-1", "Bash")
+	sess.AttachChVal <- mocks.ControlRequestMsg("perm-1", "Bash")
 
 	runner := newUtilityTestPhaseRunner(t, sess)
 	prCtx := PRContext{
@@ -258,16 +226,39 @@ func TestPhaseRunnerRunDescriptionGeneration_ReturnsHelperErrorWithoutFallback(t
 	}
 }
 
-func TestPhaseRunnerRunDescriptionGeneration_RejectsIncompleteOutput(t *testing.T) {
+func TestPhaseRunnerRunDescriptionGeneration_RequiresText(t *testing.T) {
 	sess := newUtilityTestSession()
-	sess.msgLog.Append(mocks.AssistantTextMessage("TITLE: Test PR\nBODY:\n"))
-	sess.result = &llm.ResultMessage{
+	sess.CostVal = &llm.ResultMessage{
 		Type:       testResultMessageType,
 		Subtype:    testResultSuccessValue,
 		Result:     "done",
 		StopReason: testStopReasonEndTurn,
 	}
-	sess.statusCh <- agentStatusSuccess
+	sess.StatusChVal <- agentStatusSuccess
+
+	runner := newUtilityTestPhaseRunner(t, sess)
+	_, _, err := runner.pr.RunDescriptionGeneration(context.Background(), "feat-publish", "sonnet", PRContext{FeatureName: "test"})
+	if err == nil {
+		t.Fatal("RunDescriptionGeneration() error = nil, want empty-output failure")
+	}
+	if !strings.HasPrefix(err.Error(), "generating description: running description generation session: ") {
+		t.Errorf("RunDescriptionGeneration() error = %q, want description-generation session prefix", err)
+	}
+	if !strings.Contains(err.Error(), "without output") {
+		t.Errorf("RunDescriptionGeneration() error = %q, want empty-output failure", err)
+	}
+}
+
+func TestPhaseRunnerRunDescriptionGeneration_RejectsIncompleteOutput(t *testing.T) {
+	sess := newUtilityTestSession()
+	sess.MessageLogVal.Append(mocks.AssistantTextMessage("TITLE: Test PR\nBODY:\n"))
+	sess.CostVal = &llm.ResultMessage{
+		Type:       testResultMessageType,
+		Subtype:    testResultSuccessValue,
+		Result:     "done",
+		StopReason: testStopReasonEndTurn,
+	}
+	sess.StatusChVal <- agentStatusSuccess
 
 	runner := newUtilityTestPhaseRunner(t, sess)
 	title, body, err := runner.pr.RunDescriptionGeneration(

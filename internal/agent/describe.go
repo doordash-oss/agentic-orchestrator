@@ -16,8 +16,8 @@ package agent
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
+	"os"
 	"strings"
 	"time"
 
@@ -53,53 +53,13 @@ type PRContext struct {
 	DiffStat           string // `git diff --stat base...HEAD`
 }
 
-// extractTextFromStreamJSON parses JSONL stream-json output from the claude CLI
-// and returns the concatenated assistant text content. Falls back to the raw
-// input if no assistant messages are found (e.g., if the output format changed).
-func extractTextFromStreamJSON(output string) string {
-	var b strings.Builder
-	var resultText string
-	foundAssistant := false
-
-	for _, line := range strings.Split(output, "\n") {
-		line = strings.TrimSpace(line)
-		if line == "" {
-			continue
-		}
-		var msg llm.SDKMessage
-		if err := json.Unmarshal([]byte(line), &msg); err != nil {
-			continue
-		}
-		if msg.Assistant != nil {
-			for _, block := range msg.Assistant.Message.Content {
-				if block.IsText() {
-					b.WriteString(block.Text)
-					foundAssistant = true
-				}
-			}
-		}
-		if msg.Result != nil && msg.Result.Result != "" {
-			resultText = msg.Result.Result
-		}
-	}
-
-	if foundAssistant {
-		return b.String()
-	}
-	if resultText != "" {
-		return resultText
-	}
-	// Fallback: return raw output (handles non-JSON output gracefully)
-	return output
-}
-
-// BuildPRDescriptionPrompt constructs the prompt for generating a PR description
+// buildPRDescriptionPrompt constructs the prompt for generating a PR description
 // from a lean PRContext. Empty sections are omitted so the model is not asked to
 // reason about them.
 //
 // The prose lives in internal/agent/prompts/templates/pr_description.user.tmpl.
-func BuildPRDescriptionPrompt(ctx PRContext) string {
-	return prompts.PRDescriptionUserPrompt(prompts.PRDescriptionUserInput{
+func buildPRDescriptionPrompt(ctx PRContext) string {
+	return prompts.MustRender(prompts.TemplatePRDescriptionUser, prompts.PRDescriptionUserInput{
 		FeatureName:        ctx.FeatureName,
 		FeatureDescription: ctx.FeatureDescription,
 		Roadmap:            ctx.Roadmap,
@@ -116,39 +76,50 @@ func truncateTitle(s string, n int) string {
 	return strings.TrimRight(string(runes[:n-1]), " ") + "…"
 }
 
-// RunDescriptionGeneration runs the bounded utility helper to generate a PR
-// title/body from a structured PRContext. It is tool-free and returns errors
-// without synthesizing replacement content.
+// RunDescriptionGeneration runs a bounded helper to generate a PR title/body
+// from a structured PRContext. It is tool-free and returns errors without
+// synthesizing replacement content.
 func (pr *PhaseRunner) RunDescriptionGeneration(ctx context.Context, featureID, model string, prCtx PRContext) (title, body string, err error) {
-	result, runErr := pr.RunUtilitySession(ctx, UtilityRunConfig{
-		SessionID:    fmt.Sprintf("publish-description-%d", time.Now().UnixNano()),
-		FeatureID:    featureID,
-		Label:        "description generation",
-		Model:        model,
-		Prompt:       BuildPRDescriptionPrompt(prCtx),
-		SystemPrompt: prDescriptionSystemPrompt,
-		Phase:        feature.PhasePublish,
-		PermHandler:  &prDescriptionPermissionHandler{},
-		RequireText:  true,
+	// The helper reads no repository, so it runs in the state directory.
+	workDir := pr.StateDir
+	if workDir == "" {
+		if workDir, err = os.Getwd(); err != nil {
+			return "", "", fmt.Errorf("generating description: running utility session: determining work dir: %w", err)
+		}
+	}
+	result, runErr := pr.runBoundedHelper(ctx, boundedHelperConfig{
+		SessionID:     fmt.Sprintf("publish-description-%d", time.Now().UnixNano()),
+		FeatureID:     featureID,
+		Phase:         feature.PhasePublish,
+		Model:         model,
+		Prompt:        buildPRDescriptionPrompt(prCtx),
+		SystemPrompt:  prDescriptionSystemPrompt,
+		WorkDir:       workDir,
+		EffortLevel:   llm.EffortLow,
+		PermHandler:   &prDescriptionPermissionHandler{},
+		RequireOutput: true,
 	})
 	if runErr != nil {
+		if result != nil {
+			runErr = fmt.Errorf("running description generation session: %w", runErr)
+		}
 		return "", "", fmt.Errorf("generating description: %w", runErr)
 	}
 
-	title, body = ParsePRDescription(result.Text)
+	title, body = parsePRDescription(result.Output)
 	if title == "" || body == "" {
 		return "", "", fmt.Errorf("generating description: model returned an incomplete title or body")
 	}
 	return title, body, nil
 }
 
-// ParsePRDescription extracts title and body from the generation output. The
+// parsePRDescription extracts title and body from the generation output. The
 // parser is intentionally lenient: output need not contain explicit TITLE:/BODY:
 // markers. When markers are absent it treats the first markdown heading (or the
 // first non-empty line) as the title and the rest as the body. Returns empty
 // strings for whichever field cannot be extracted so callers can decide to
 // fall back deterministically.
-func ParsePRDescription(output string) (title, body string) {
+func parsePRDescription(output string) (title, body string) {
 	output = strings.TrimSpace(output)
 	if output == "" {
 		return "", ""

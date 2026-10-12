@@ -23,13 +23,13 @@ import (
 // A single Cache instance is shared across all sessions in the process.
 type Cache struct {
 	mu    sync.RWMutex
-	rules []Rule
+	rules []rule
 	store *Store // nil = no persistence (in-memory only, for tests)
 }
 
-// NewCache creates an empty permission cache.
+// newCache creates an empty permission cache.
 // If store is non-nil, rules are persisted to disk.
-func NewCache(store *Store) *Cache {
+func newCache(store *Store) *Cache {
 	return &Cache{store: store}
 }
 
@@ -38,7 +38,7 @@ func (c *Cache) StoreRef() *Store {
 	return c.store
 }
 
-type RememberResult struct {
+type rememberResult struct {
 	Pattern        string
 	Scope          string
 	Persisted      bool
@@ -46,15 +46,15 @@ type RememberResult struct {
 }
 
 // Check looks up a matching rule for the given tool request.
-// Returns the matching rule and true if found, or zero Rule and false if not.
+// Returns the matching rule and true if found, or zero rule and false if not.
 // Deny rules are checked first (deny wins over allow).
-func (c *Cache) Check(toolName, toolInput, repoName string) (Rule, bool) {
+func (c *Cache) check(toolName, toolInput, repoName string) (rule, bool) {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
 	// First pass: deny rules (global + repo-scoped)
 	for _, r := range c.rules {
-		if r.Effect == DecisionDeny && (r.RepoName == "" || r.RepoName == repoName) {
-			if r.Match(toolName, toolInput) {
+		if r.Effect == decisionDeny && (r.RepoName == "" || r.RepoName == repoName) {
+			if r.match(toolName, toolInput) {
 				return r, true
 			}
 		}
@@ -62,28 +62,28 @@ func (c *Cache) Check(toolName, toolInput, repoName string) (Rule, bool) {
 	// Second pass: allow rules
 	for _, r := range c.rules {
 		if r.Effect == DecisionAllow && (r.RepoName == "" || r.RepoName == repoName) {
-			if r.Match(toolName, toolInput) {
+			if r.match(toolName, toolInput) {
 				return r, true
 			}
 		}
 	}
-	return Rule{}, false
+	return rule{}, false
 }
 
 // RememberAllow adds an allow rule to the cache and persists to disk.
 func (c *Cache) RememberAllow(toolName, toolInput, repoName string) {
 	pattern := InferBashPattern(toolName, toolInput)
-	if _, err := c.RememberAllowPattern(pattern, repoName); err != nil {
+	if _, err := c.rememberAllowPattern(pattern, repoName); err != nil {
 		log.Printf("warning: persisting permission rule: %v", err)
 	}
 }
 
-func (c *Cache) RememberAllowPattern(pattern, repoName string) (RememberResult, error) {
-	rule := Rule{ToolPattern: pattern, Effect: DecisionAllow, RepoName: repoName}
-	result := RememberResult{Pattern: pattern, Scope: repoName}
+func (c *Cache) rememberAllowPattern(pattern, repoName string) (rememberResult, error) {
+	rule := rule{ToolPattern: pattern, Effect: DecisionAllow, RepoName: repoName}
+	result := rememberResult{Pattern: pattern, Scope: repoName}
 
 	if c.store != nil {
-		c.LoadAndMergeScope(repoName)
+		c.loadAndMergeScope(repoName)
 	}
 
 	c.mu.RLock()
@@ -95,7 +95,7 @@ func (c *Cache) RememberAllowPattern(pattern, repoName string) (RememberResult, 
 	}
 
 	if c.store != nil {
-		inserted, err := c.store.AppendRule(scopeFor(repoName), rule)
+		inserted, err := c.store.appendRule(scopeFor(repoName), rule)
 		if err != nil {
 			return result, err
 		}
@@ -118,10 +118,10 @@ func (c *Cache) RememberAllowPattern(pattern, repoName string) (RememberResult, 
 }
 
 // Rules returns a snapshot of all rules (for testing).
-func (c *Cache) Rules() []Rule {
+func (c *Cache) Rules() []rule {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
-	out := make([]Rule, len(c.rules))
+	out := make([]rule, len(c.rules))
 	copy(out, c.rules)
 	return out
 }
@@ -132,12 +132,12 @@ func (c *Cache) LoadAndMerge(repoName string) {
 	if c.store == nil {
 		return
 	}
-	var diskRules []Rule
-	if globalRules, err := c.store.Load(globalScope); err == nil && len(globalRules) > 0 {
+	var diskRules []rule
+	if globalRules, err := c.store.load(globalScope); err == nil && len(globalRules) > 0 {
 		diskRules = append(diskRules, globalRules...)
 	}
 	if repoName != "" {
-		if repoRules, err := c.store.Load(scopeFor(repoName)); err == nil && len(repoRules) > 0 {
+		if repoRules, err := c.store.load(scopeFor(repoName)); err == nil && len(repoRules) > 0 {
 			diskRules = append(diskRules, repoRules...)
 		}
 	}
@@ -150,11 +150,11 @@ func (c *Cache) LoadAndMerge(repoName string) {
 	}
 }
 
-func (c *Cache) LoadAndMergeScope(repoName string) {
+func (c *Cache) loadAndMergeScope(repoName string) {
 	if c.store == nil {
 		return
 	}
-	rules, err := c.store.Load(scopeFor(repoName))
+	rules, err := c.store.load(scopeFor(repoName))
 	if err != nil || len(rules) == 0 {
 		return
 	}
@@ -168,6 +168,6 @@ func (c *Cache) LoadAndMergeScope(repoName string) {
 }
 
 // hasRuleLocked checks if a rule already exists in the cache. Must be called with mu held.
-func (c *Cache) hasRuleLocked(r Rule) bool {
+func (c *Cache) hasRuleLocked(r rule) bool {
 	return ruleExists(c.rules, r.ToolPattern, r.Effect, r.RepoName)
 }

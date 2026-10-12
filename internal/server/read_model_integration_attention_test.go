@@ -131,13 +131,13 @@ func assertCanonicalMergeConflict(t *testing.T, attention map[string]any) {
 	sawRetryAction := false
 	if actions, ok := remediation["actions"].([]any); ok {
 		for _, raw := range actions {
-			if raw == actionRetry {
+			if raw == string(FeatureActionRetry) {
 				sawRetryAction = true
 			}
 		}
 	}
 	if !sawRetryAction {
-		t.Fatalf("attention remediation actions = %#v, want %q", remediation["actions"], actionRetry)
+		t.Fatalf("attention remediation actions = %#v, want %q", remediation["actions"], string(FeatureActionRetry))
 	}
 	diagnostics, _ := attention["diagnostics"].(string)
 	if len(diagnostics) > attentionDiagnosticsBudget || !strings.HasSuffix(diagnostics, "...") {
@@ -307,7 +307,7 @@ func TestRelationshipProjectionCarriesNoAttentionItemStrings(t *testing.T) {
 		if warning["code"] != string(errcat.ChildCleanupIncomplete) {
 			t.Fatalf("active_child warning code = %#v, want %s", warning["code"], errcat.ChildCleanupIncomplete)
 		}
-		if warning["class"] != string(errcat.ClassWarning) {
+		if warning["class"] != "warning" {
 			t.Fatalf("active_child warning class = %#v, want warning", warning["class"])
 		}
 		if !strings.Contains(warning["summary"].(string), repoNameSelf) {
@@ -386,7 +386,7 @@ func TestChildRetryActionTracksParkedIntegration(t *testing.T) {
 				Transaction: tt.journal,
 			}
 
-			retry := actionDTOByID(t, actionCatalogDTOs(f), actionRetry)
+			retry := actionDTOByID(t, actionCatalogDTOsWithChildGuard(f, false), string(FeatureActionRetry))
 			if retry.Enabled != tt.wantEnabled {
 				t.Fatalf("retry enabled = %v, want %v (reasons %+v)", retry.Enabled, tt.wantEnabled, retry.DisabledReasons)
 			}
@@ -421,7 +421,7 @@ func TestParentActionsKeepIntegrationAttentionReasonWhileParked(t *testing.T) {
 	}
 	for _, raw := range actions {
 		action := raw.(map[string]any)
-		if action["id"] == actionDelete {
+		if action["id"] == string(FeatureActionDelete) {
 			if action["enabled"] != true {
 				t.Fatalf("parent delete enabled = %v, want cascade delete available while attention is parked", action["enabled"])
 			}

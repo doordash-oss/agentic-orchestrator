@@ -61,7 +61,7 @@ func fixtureReleasePrivateKey(t *testing.T) ed25519.PrivateKey {
 func signFixturePayload(t *testing.T, payload []byte) string {
 	t.Helper()
 	sig := ed25519.Sign(fixtureReleasePrivateKey(t), payload)
-	return SignaturePrefix + base64.StdEncoding.EncodeToString(sig)
+	return signaturePrefix + base64.StdEncoding.EncodeToString(sig)
 }
 
 // releaseFixtureServer serves GitHub-shaped release metadata plus release
@@ -173,13 +173,13 @@ type fixtureReleaseOptions struct {
 	extraAssets []string
 }
 
-func (f *releaseFixtureServer) publishRelease(t *testing.T, opts fixtureReleaseOptions) ResolvedRelease {
+func (f *releaseFixtureServer) publishRelease(t *testing.T, opts fixtureReleaseOptions) resolvedRelease {
 	t.Helper()
 	f.mu.Lock()
 	defer f.mu.Unlock()
 
 	version := strings.TrimPrefix(opts.tag, "v")
-	tarballName := ReleaseTarballName(version, opts.goos, opts.goarch)
+	tarballName := releaseTarballName(version, opts.goos, opts.goarch)
 	tarball := opts.tarballBytes
 	if tarball == nil {
 		tarball = []byte("fake tarball bytes for " + tarballName)
@@ -215,7 +215,7 @@ func (f *releaseFixtureServer) publishRelease(t *testing.T, opts fixtureReleaseO
 		if err != nil {
 			t.Fatal(err)
 		}
-		signature = SignaturePrefix + base64.StdEncoding.EncodeToString(ed25519.Sign(priv, manifest))
+		signature = signaturePrefix + base64.StdEncoding.EncodeToString(ed25519.Sign(priv, manifest))
 	}
 	f.assets["/assets/"+checksumSignatureName] = []byte(signature + "\n")
 	if opts.postSignMutate != nil {
@@ -267,15 +267,15 @@ func (f *releaseFixtureServer) publishRelease(t *testing.T, opts fixtureReleaseO
 	}
 	f.releases = string(raw)
 
-	resolved := ResolvedRelease{
+	resolved := resolvedRelease{
 		Version:   version,
 		TagName:   opts.tag,
-		Tarball:   ReleaseAsset{Name: tarballName, URL: f.server.URL + "/assets/" + tarballName},
-		Manifest:  ReleaseAsset{Name: checksumManifestName, URL: f.server.URL + "/assets/" + checksumManifestName},
-		Signature: ReleaseAsset{Name: checksumSignatureName, URL: f.server.URL + "/assets/" + checksumSignatureName},
+		Tarball:   releaseAsset{Name: tarballName, URL: f.server.URL + "/assets/" + tarballName},
+		Manifest:  releaseAsset{Name: checksumManifestName, URL: f.server.URL + "/assets/" + checksumManifestName},
+		Signature: releaseAsset{Name: checksumSignatureName, URL: f.server.URL + "/assets/" + checksumSignatureName},
 	}
 	if envelopeBody != nil {
-		resolved.Envelope = &ReleaseAsset{Name: releaseEnvelopeName, URL: f.server.URL + "/assets/" + releaseEnvelopeName}
+		resolved.Envelope = &releaseAsset{Name: releaseEnvelopeName, URL: f.server.URL + "/assets/" + releaseEnvelopeName}
 	}
 	return resolved
 }
@@ -333,7 +333,7 @@ func TestReleaseResolveAndVerifyRoundTrip(t *testing.T) {
 	if err != nil {
 		t.Fatalf("resolve: %v", err)
 	}
-	if resolved.Tarball.Name != ReleaseTarballName("1.4.0", "darwin", "arm64") {
+	if resolved.Tarball.Name != releaseTarballName("1.4.0", "darwin", "arm64") {
 		t.Fatalf("tarball name = %q", resolved.Tarball.Name)
 	}
 	if resolved.Manifest.Name != checksumManifestName || resolved.Signature.Name != checksumSignatureName {
@@ -347,10 +347,10 @@ func TestReleaseResolveAndVerifyRoundTrip(t *testing.T) {
 	if err != nil {
 		t.Fatalf("verify: %v", err)
 	}
-	tarball := []byte("fake tarball bytes for " + ReleaseTarballName("1.4.0", "darwin", "arm64"))
+	tarball := []byte("fake tarball bytes for " + releaseTarballName("1.4.0", "darwin", "arm64"))
 	sum := sha256.Sum256(tarball)
-	if verified.TarballDigest() != hex.EncodeToString(sum[:]) {
-		t.Fatalf("tarball digest = %q, want the signed manifest entry", verified.TarballDigest())
+	if verified.signedTarballDigest() != hex.EncodeToString(sum[:]) {
+		t.Fatalf("tarball digest = %q, want the signed manifest entry", verified.signedTarballDigest())
 	}
 	if verified.Envelope() == nil {
 		t.Fatal("verified envelope is missing")
@@ -371,7 +371,7 @@ func TestReleaseResolveAndVerifyRoundTrip(t *testing.T) {
 	f.mu.Lock()
 	f.releases = `[{"tag_name":"v9.9.9","draft":false,"prerelease":false,"assets":[]}]`
 	f.mu.Unlock()
-	if verified.Resolved().Version != "1.4.0" || verified.TarballDigest() != hex.EncodeToString(sum[:]) {
+	if verified.Resolved().Version != "1.4.0" || verified.signedTarballDigest() != hex.EncodeToString(sum[:]) {
 		t.Fatal("verified release identity mutated after a later feed check")
 	}
 }
@@ -392,7 +392,7 @@ func TestReleaseVerifyWithoutEnvelope(t *testing.T) {
 	if verified.Envelope() != nil || verified.EnvelopeDigest() != "" || verified.ServerContract() != nil {
 		t.Fatal("absent envelope must succeed with no envelope and no contract")
 	}
-	if verified.TarballDigest() == "" {
+	if verified.signedTarballDigest() == "" {
 		t.Fatal("tarball digest binding missing")
 	}
 }
@@ -661,12 +661,12 @@ func TestReleaseProductionDestinationPolicy(t *testing.T) {
 
 	// Asset destinations on production clients obey the closed host
 	// allowlist; a disallowed host is rejected before any request.
-	resolved := ResolvedRelease{
+	resolved := resolvedRelease{
 		Version:   "1.0.0",
 		TagName:   "v1.0.0",
-		Tarball:   ReleaseAsset{Name: "t.tar.gz", URL: "https://objects.githubusercontent.com/t"},
-		Manifest:  ReleaseAsset{Name: checksumManifestName, URL: "https://evil.example.com/checksums.txt"},
-		Signature: ReleaseAsset{Name: checksumSignatureName, URL: "https://github.com/checksums.txt.sig"},
+		Tarball:   releaseAsset{Name: "t.tar.gz", URL: "https://objects.githubusercontent.com/t"},
+		Manifest:  releaseAsset{Name: checksumManifestName, URL: "https://evil.example.com/checksums.txt"},
+		Signature: releaseAsset{Name: checksumSignatureName, URL: "https://github.com/checksums.txt.sig"},
 	}
 	if _, err := client.VerifyResolvedRelease(context.Background(), resolved); err == nil || !strings.Contains(err.Error(), "not allowed") {
 		t.Fatalf("expected production host-policy rejection, got %v", err)
@@ -676,12 +676,12 @@ func TestReleaseProductionDestinationPolicy(t *testing.T) {
 	// transport records the requests without live GitHub traffic.
 	capture := &releaseCapturingTransport{body: "digest  name\n"}
 	client.client.Transport = capture
-	apiResolved := ResolvedRelease{
+	apiResolved := resolvedRelease{
 		Version:   "1.0.0",
 		TagName:   "v1.0.0",
-		Tarball:   ReleaseAsset{Name: "t.tar.gz", URL: "https://objects.githubusercontent.com/t"},
-		Manifest:  ReleaseAsset{Name: checksumManifestName, URL: "https://api.github.com/repos/o/r/releases/assets/1"},
-		Signature: ReleaseAsset{Name: checksumSignatureName, URL: "https://objects.githubusercontent.com/s"},
+		Tarball:   releaseAsset{Name: "t.tar.gz", URL: "https://objects.githubusercontent.com/t"},
+		Manifest:  releaseAsset{Name: checksumManifestName, URL: "https://api.github.com/repos/o/r/releases/assets/1"},
+		Signature: releaseAsset{Name: checksumSignatureName, URL: "https://objects.githubusercontent.com/s"},
 	}
 	_, err := client.VerifyResolvedRelease(context.Background(), apiResolved)
 	if err == nil || !strings.Contains(err.Error(), "signature") {

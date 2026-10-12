@@ -29,8 +29,8 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
-// Fingerprint computes SHA256 of a file's contents.
-func Fingerprint(path string) (string, error) {
+// fingerprint computes SHA256 of a file's contents.
+func fingerprint(path string) (string, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
 		if os.IsNotExist(err) {
@@ -42,7 +42,7 @@ func Fingerprint(path string) (string, error) {
 	return fmt.Sprintf("%x", h), nil
 }
 
-// ProgressFingerprint computes a stable fingerprint over progress.md. The
+// progressFingerprint computes a stable fingerprint over progress.md. The
 // fingerprint covers just the `## Iteration Handoff` section — the agent's claimed
 // completed/remaining/where-stopped narrative — which is what should
 // converge across iterations when no real progress is being made.
@@ -50,7 +50,7 @@ func Fingerprint(path string) (string, error) {
 // Falls back to whole-file hashing when the file cannot be parsed (e.g.,
 // pre-handoff-contract progress.md that lacks the structured section); a
 // full-file fingerprint is still better than no detection.
-func ProgressFingerprint(path string) (string, error) {
+func progressFingerprint(path string) (string, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
 		if os.IsNotExist(err) {
@@ -66,10 +66,8 @@ func ProgressFingerprint(path string) (string, error) {
 	return fmt.Sprintf("%x", h), nil
 }
 
-// ProgressTracker tracks consecutive no-progress iterations.
-type ProgressTracker struct {
-	lastFingerprint string
-	hasChecked      bool
+// progressTracker tracks consecutive no-progress iterations.
+type progressTracker struct {
 	noProgressCount int
 	hasOutcome      bool
 	bestBlockers    int
@@ -83,53 +81,20 @@ type ProgressTracker struct {
 	lastRetryWorktree   string
 }
 
-func NewProgressTracker() *ProgressTracker {
-	return &ProgressTracker{}
+func newProgressTracker() *progressTracker {
+	return &progressTracker{}
 }
 
-// Check compares the current progress file fingerprint with the last one.
-// Returns true if progress was made (fingerprint changed). Uses the
-// handoff-narrative-scoped fingerprint so iteration-specific paths in
-// progress.md don't mask a stalled agent.
-func (pt *ProgressTracker) Check(progressPath string) (bool, error) {
-	fp, err := ProgressFingerprint(progressPath)
-	if err != nil {
-		return false, err
-	}
-
-	if !pt.hasChecked {
-		pt.lastFingerprint = fp
-		pt.hasChecked = true
-		return true, nil
-	}
-
-	if fp == pt.lastFingerprint {
-		pt.noProgressCount++
-		return false, nil
-	}
-
-	pt.lastFingerprint = fp
-	pt.noProgressCount = 0
-	return true, nil
-}
-
-// NoProgressCount returns the number of consecutive no-progress iterations.
-func (pt *ProgressTracker) NoProgressCount() int {
+// consecutiveNoProgress returns the number of consecutive no-progress iterations.
+func (pt *progressTracker) consecutiveNoProgress() int {
 	return pt.noProgressCount
 }
 
-// ObserveVerifiedOutcome records a deterministic outcome when no repository
-// fingerprint is available. Progress is credited when the verified blocker
-// count reaches a new low.
-func (pt *ProgressTracker) ObserveVerifiedOutcome(blockers int) bool {
-	return pt.ObserveVerifiedOutcomeWithWorktree(blockers, "")
-}
-
-// ObserveVerifiedOutcomeWithWorktree records a deterministic verifier/reviewer
+// observeVerifiedOutcomeWithWorktree records a deterministic verifier/reviewer
 // outcome together with the repository state that produced it. Fewer blockers
 // or a changed worktree is progress; an empty fingerprint cannot disarm the
 // safety rail.
-func (pt *ProgressTracker) ObserveVerifiedOutcomeWithWorktree(blockers int, worktreeFP string) bool {
+func (pt *progressTracker) observeVerifiedOutcomeWithWorktree(blockers int, worktreeFP string) bool {
 	if blockers < 0 {
 		blockers = 0
 	}
@@ -155,14 +120,14 @@ func (pt *ProgressTracker) ObserveVerifiedOutcomeWithWorktree(blockers int, work
 	return false
 }
 
-// ObserveUnverifiedOutcome records an iteration that did not produce a
+// observeUnverifiedOutcome records an iteration that did not produce a
 // verifier/reviewer outcome, such as a protocol violation.
-func (pt *ProgressTracker) ObserveUnverifiedOutcome() bool {
+func (pt *progressTracker) observeUnverifiedOutcome() bool {
 	pt.noProgressCount++
 	return false
 }
 
-// ObserveRetryOutcome records a self-declared partial (RETRY) iteration.
+// observeRetryOutcome records a self-declared partial (RETRY) iteration.
 // A RETRY produces no review verdict, but absence of a verdict is not
 // evidence of a stall: a short-turn model legitimately splits one task
 // across many partial iterations. The iteration counts as no-progress only
@@ -172,7 +137,7 @@ func (pt *ProgressTracker) ObserveUnverifiedOutcome() bool {
 // cannot disarm the rail. A progressing RETRY does not reset the counter
 // accumulated by non-improving verified outcomes — it only declines to add
 // to it — so review churn without fewer blockers still trips the rail.
-func (pt *ProgressTracker) ObserveRetryOutcome(narrativeFP, worktreeFP string) bool {
+func (pt *progressTracker) observeRetryOutcome(narrativeFP, worktreeFP string) bool {
 	first := !pt.hasRetryObservation
 	narrativeChanged := narrativeFP != "" && narrativeFP != pt.lastRetryNarrative
 	worktreeChanged := worktreeFP != "" && worktreeFP != pt.lastRetryWorktree
@@ -186,12 +151,12 @@ func (pt *ProgressTracker) ObserveRetryOutcome(narrativeFP, worktreeFP string) b
 	return false
 }
 
-// WorktreeStateFingerprint hashes each repo worktree's HEAD, porcelain
+// worktreeStateFingerprint hashes each repo worktree's HEAD, porcelain
 // status, tracked diff, and untracked-file stats (path, size, mtime — new
 // files stay untracked for the whole phase, so their edits never appear in
 // `git diff HEAD`). Returns "" when no signal could be gathered so callers
 // treat it as unchanged. A nil runner falls back to direct execution.
-func WorktreeStateFingerprint(ctx context.Context, runner ports.CommandRunner, paths []string) string {
+func worktreeStateFingerprint(ctx context.Context, runner ports.CommandRunner, paths []string) string {
 	h := sha256.New()
 	gotSignal := false
 	for _, p := range paths {
@@ -229,18 +194,18 @@ func WorktreeStateFingerprint(ctx context.Context, runner ports.CommandRunner, p
 
 var blockingReviewFindingRE = regexp.MustCompile(`(?im)^\s*[-*]\s+\*\*\[?(critical|high)(?:\]|\b)`)
 
-func CountBlockingReviewFindings(feedback string) int {
+func countBlockingReviewFindings(feedback string) int {
 	return len(blockingReviewFindingRE.FindAllString(feedback, -1))
 }
 
-func CountOpenVerificationBlockers(report *VerificationReport) int {
+func countOpenVerificationBlockers(report *verificationReport) int {
 	if report == nil {
 		return 0
 	}
 	count := 0
 	for _, result := range report.Results {
-		switch NormalizeStatus(result.Status) {
-		case VerificationStatusPassed, VerificationStatusWaived:
+		switch normalizeStatus(result.Status) {
+		case verificationStatusPassed, verificationStatusWaived:
 			continue
 		default:
 			count++
@@ -249,58 +214,58 @@ func CountOpenVerificationBlockers(report *VerificationReport) int {
 	return count
 }
 
-func CountOpenVerificationOutcomeBlockers(out *VerificationExecutionOutcome) int {
+func countOpenVerificationOutcomeBlockers(out *verificationExecutionOutcome) int {
 	if out == nil {
 		return 0
 	}
-	return CountOpenVerificationBlockers(out.Report)
+	return countOpenVerificationBlockers(out.Report)
 }
 
-// IterationState is the harness-recognised terminal state the agent declares
+// iterationState is the harness-recognised terminal state the agent declares
 // in progress.md's `## Iteration State` section. StateInvalid is reserved for
 // cases where parsing failed or the body did not match one of the two
 // canonical tokens — callers must treat StateInvalid as a protocol violation,
 // not as one of the valid routes.
-type IterationState int
+type iterationState int
 
 const (
-	StateInvalid IterationState = iota
-	StateSuccess
-	StateRetry
+	stateInvalid iterationState = iota
+	stateSuccess
+	stateRetry
 )
 
-func (s IterationState) String() string {
+func (s iterationState) String() string {
 	switch s {
-	case StateSuccess:
+	case stateSuccess:
 		return agentStatusSuccess
-	case StateRetry:
+	case stateRetry:
 		return "RETRY"
 	default:
 		return "INVALID"
 	}
 }
 
-// ParsedProgress is the structured view of a progress.md the implement
+// parsedProgress is the structured view of a progress.md the implement
 // harness uses for routing. Fields populated only when the corresponding
 // section parsed cleanly; on failure the defect is appended to
 // ProtocolViolations and the field is left zero. Callers MUST check
 // ProtocolViolations before trusting any non-State field — a malformed
 // Deferrals YAML, for example, leaves Deferrals nil but the whole struct
 // otherwise looks valid.
-type ParsedProgress struct {
-	State              IterationState
+type parsedProgress struct {
+	State              iterationState
 	Deferrals          []feature.IncomingDeferral
 	ClosedDeferrals    []string
 	HandoffSections    map[string]string // sub-section heading -> body (Iteration Handoff children)
 	ProtocolViolations []string
 }
 
-// OK reports whether the parsed progress.md satisfies the contract: a valid
+// ok reports whether the parsed progress.md satisfies the contract: a valid
 // terminal state, all required sections present, deferrals YAML parsed, and
-// no other protocol violations. Callers route on State only when OK() is
+// no other protocol violations. Callers route on State only when ok() is
 // true; otherwise they short-circuit to a structured CHANGES_REQUESTED.
-func (p *ParsedProgress) OK() bool {
-	return p != nil && p.State != StateInvalid && len(p.ProtocolViolations) == 0
+func (p *parsedProgress) ok() bool {
+	return p != nil && p.State != stateInvalid && len(p.ProtocolViolations) == 0
 }
 
 // progressRequiredSections lists the three `## ` sections the agent MUST emit
@@ -330,9 +295,9 @@ var progressHandoffSubsections = []string{
 // route on. Anything else under `## Iteration State` is a protocol
 // violation — the canonical token must appear on its own line as the first
 // non-blank content of the section.
-var validIterationStateTokens = map[string]IterationState{
-	agentStatusSuccess: StateSuccess,
-	"RETRY":            StateRetry,
+var validIterationStateTokens = map[string]iterationState{
+	agentStatusSuccess: stateSuccess,
+	"RETRY":            stateRetry,
 }
 
 // progressYAMLBlockRE matches a fenced YAML code block; capture group 1 is
@@ -350,20 +315,20 @@ type deferralsYAMLDoc struct {
 	ClosedDeferrals *[]string                   `yaml:"closed_deferrals"`
 }
 
-// ParseProgressMd parses progress.md at path under the iteration-handoff
+// parseProgressMd parses progress.md at path under the iteration-handoff
 // contract spelled out in skills/implement/SKILL.md.
 // The function is conservative: every defect it can name deterministically
 // becomes a separate ProtocolViolations entry so the synthesized feedback
-// enumerates all of them in one pass — same shape as the grounding gate.
+// enumerates all of them in one pass.
 // Callers MUST inspect ProtocolViolations before trusting State.
-func ParseProgressMd(path string) (*ParsedProgress, error) {
+func parseProgressMd(path string) (*parsedProgress, error) {
 	if path == "" {
 		return nil, fmt.Errorf("ParseProgressMd: empty path")
 	}
 	data, err := os.ReadFile(path)
 	if err != nil {
 		if os.IsNotExist(err) {
-			return &ParsedProgress{
+			return &parsedProgress{
 				ProtocolViolations: []string{
 					fmt.Sprintf("progress.md not found at %s — the implement iteration must emit it before declaring a completion outcome", path),
 				},
@@ -372,7 +337,7 @@ func ParseProgressMd(path string) (*ParsedProgress, error) {
 		return nil, fmt.Errorf("reading progress.md at %s: %w", path, err)
 	}
 
-	parsed := &ParsedProgress{HandoffSections: map[string]string{}}
+	parsed := &parsedProgress{HandoffSections: map[string]string{}}
 	body := string(data)
 
 	// Required-section presence + order. Missing or reordered headings are
@@ -462,35 +427,6 @@ func ParseProgressMd(path string) (*ParsedProgress, error) {
 	}
 
 	return parsed, nil
-}
-
-// FormatProtocolViolationFeedback renders a deterministic CHANGES_REQUESTED
-// feedback document for a malformed progress.md, conforming to the file-based
-// review handoff schema (## Findings / ## Suggestions / ## Verdict) so
-// ParseReviewFeedback can re-parse it cleanly when the implement loop short-
-// circuits ahead of the LLM reviewer. Callers persist this to
-// review-feedback.md.
-func FormatProtocolViolationFeedback(parsed *ParsedProgress) string {
-	var b strings.Builder
-	b.WriteString("This iteration's `progress.md` did not satisfy the harness contract spelled out in `skills/implement/SKILL.md`. The deterministic handoff parser ran ahead of the LLM reviewer; every defect listed below was decided mechanically (no model judgment), so the list is exhaustive and fixing every item will let the next iteration's handoff parse cleanly.\n\n")
-	if parsed != nil {
-		for _, v := range parsed.ProtocolViolations {
-			fmt.Fprintf(&b, "- **Critical**: %s\n", v)
-		}
-	}
-	if parsed == nil || len(parsed.ProtocolViolations) == 0 {
-		b.WriteString("- (none)\n")
-	}
-	b.WriteString("\nRe-emit `progress.md` with these sections in order:\n")
-	b.WriteString("1. `## Iteration Handoff` (with the four `### ` sub-sections)\n")
-	b.WriteString("2. `## Deferrals` (fenced YAML block with `deferrals:` and `closed_deferrals:` keys)\n")
-	b.WriteString("3. `## Iteration State` (one of `SUCCESS`, `RETRY` on its own line)\n")
-	return FormatStructuredReviewFeedback(
-		"Implementation Review — Iteration Handoff Protocol Violation",
-		strings.TrimRight(b.String(), "\n"),
-		"",
-		ReviewChangesRequested,
-	)
 }
 
 // findSectionHeadings returns the byte offset of each heading in the

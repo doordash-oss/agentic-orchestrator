@@ -403,16 +403,16 @@ func TestInstallStopWorkJourneySuccessStopsAndReplaces(t *testing.T) {
 		t.Fatalf("stream.reset epoch = %q, want new discovery epoch %q", resetEpoch, disc2.Epoch)
 	}
 
-	receipt := j.waitReceiptOutcome(selfupdate.OutcomeConfirmed, 30*time.Second)
+	receipt := j.waitReceiptOutcome(string(selfupdate.OutcomeConfirmed), 30*time.Second)
 	if receipt.FromVersion != releaseInstallLower || receipt.ToVersion != releaseInstallTarget {
 		t.Fatalf("receipt versions = %q -> %q", receipt.FromVersion, receipt.ToVersion)
 	}
-	j.waitPathGone(filepath.Join(selfupdate.LeaseDir(j.installPath), "tx-"+receipt.TransactionID), "install transaction dir", 15*time.Second)
+	j.waitPathGone(filepath.Join(selfupdateLeaseDir(j.installPath), "tx-"+receipt.TransactionID), "install transaction dir", 15*time.Second)
 	releaseWaitNoStaging(t, j, 15*time.Second)
-	if _, err := os.Stat(selfupdate.LeasePath(j.installPath)); err != nil {
+	if _, err := os.Stat(selfupdateLeaseLockPath(j.installPath)); err != nil {
 		t.Fatalf("lease file must never be unlinked: %v", err)
 	}
-	if _, err := os.Stat(selfupdate.OwnershipRecordPath(j.installPath)); err != nil {
+	if _, err := os.Stat(selfupdateOwnershipRecordPath(j.installPath)); err != nil {
 		t.Fatalf("ownership record must never be unlinked: %v", err)
 	}
 	if got := j.installDigest(); got != bins.higherDigest {

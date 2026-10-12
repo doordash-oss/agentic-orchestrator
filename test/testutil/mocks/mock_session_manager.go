@@ -114,16 +114,6 @@ func (m *MockSessionManager) FeatureSessions(featureID string) []ports.SessionVi
 	return nil
 }
 
-func (m *MockSessionManager) SendInput(sessionID string, data []byte) error {
-	return m.DefaultError
-}
-
-func (m *MockSessionManager) Attach(sessionID string) (ports.SessionView, error) {
-	return nil, m.DefaultError
-}
-
-func (m *MockSessionManager) Detach() {}
-
 func (m *MockSessionManager) Shutdown() {}
 
 func (m *MockSessionManager) IsShuttingDown() bool {

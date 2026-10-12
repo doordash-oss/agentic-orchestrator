@@ -54,19 +54,16 @@ type implementationReviewGateMembership struct {
 	Applies func(implementationReviewAxisSelection) bool
 }
 
-type implementationReviewExecutionPosture string
-
-const (
-	implementationReviewPostureReadOnly implementationReviewExecutionPosture = "read_only"
-	implementationReviewPostureLiveRun  implementationReviewExecutionPosture = "live_run"
-)
-
+// implementationReviewAxis declares one implementation-review axis. Slug
+// names the axis helper directory, session id and system-prompt prefix in the
+// per-phase and final review loops.
 type implementationReviewAxis struct {
 	Name             string
 	ShortName        string
+	Slug             string
 	SkillName        string
 	Role             Role
-	ExecutionPosture implementationReviewExecutionPosture
+	ExecutionPosture reviewExecutionPosture
 	Memberships      []implementationReviewGateMembership
 }
 
@@ -80,9 +77,10 @@ var implementationReviewAxisRegistry = []implementationReviewAxis{
 	{
 		Name:             "Craft",
 		ShortName:        "Craft",
+		Slug:             "craft",
 		SkillName:        "review-implementation-craft",
 		Role:             RoleImplementationReviewCraft,
-		ExecutionPosture: implementationReviewPostureReadOnly,
+		ExecutionPosture: reviewPostureReadOnly,
 		Memberships: []implementationReviewGateMembership{
 			{Gate: implementationReviewGatePerPhase, Order: 10, Applies: moonshotImplementationReviewAxis},
 			{Gate: implementationReviewGateFinal, Order: 10, Applies: allImplementationReviewProfiles},
@@ -91,9 +89,10 @@ var implementationReviewAxisRegistry = []implementationReviewAxis{
 	{
 		Name:             "Functionality/Evidence",
 		ShortName:        "Func",
+		Slug:             "functionality-evidence",
 		SkillName:        "review-implementation-functionality-evidence",
-		Role:             RoleImplementationReviewFunctionalityEvidence,
-		ExecutionPosture: implementationReviewPostureReadOnly,
+		Role:             roleImplementationReviewFunctionalityEvidence,
+		ExecutionPosture: reviewPostureReadOnly,
 		Memberships: []implementationReviewGateMembership{
 			{Gate: implementationReviewGatePerPhase, Order: 20, Applies: moonshotImplementationReviewAxis},
 		},
@@ -101,9 +100,10 @@ var implementationReviewAxisRegistry = []implementationReviewAxis{
 	{
 		Name:             "Cleanliness",
 		ShortName:        "Clean",
+		Slug:             "cleanliness",
 		SkillName:        "review-implementation-cleanliness",
-		Role:             RoleImplementationReviewCleanliness,
-		ExecutionPosture: implementationReviewPostureReadOnly,
+		Role:             roleImplementationReviewCleanliness,
+		ExecutionPosture: reviewPostureReadOnly,
 		Memberships: []implementationReviewGateMembership{
 			{Gate: implementationReviewGatePerPhase, Order: 30, Applies: moonshotImplementationReviewAxis},
 			{Gate: implementationReviewGateFinal, Order: 20, Applies: allImplementationReviewProfiles},
@@ -112,9 +112,10 @@ var implementationReviewAxisRegistry = []implementationReviewAxis{
 	{
 		Name:             "QA",
 		ShortName:        "QA",
+		Slug:             "qa",
 		SkillName:        "review-implementation-qa",
-		Role:             RoleImplementationReviewQA,
-		ExecutionPosture: implementationReviewPostureLiveRun,
+		Role:             roleImplementationReviewQA,
+		ExecutionPosture: reviewPostureLiveRun,
 		Memberships: []implementationReviewGateMembership{
 			{Gate: implementationReviewGateFinal, Order: 30, Applies: allImplementationReviewProfiles},
 		},
@@ -122,9 +123,10 @@ var implementationReviewAxisRegistry = []implementationReviewAxis{
 	{
 		Name:             "Design",
 		ShortName:        "Design",
+		Slug:             "design",
 		SkillName:        "review-implementation-design",
-		Role:             RoleImplementationReviewDesign,
-		ExecutionPosture: implementationReviewPostureLiveRun,
+		Role:             roleImplementationReviewDesign,
+		ExecutionPosture: reviewPostureLiveRun,
 		Memberships: []implementationReviewGateMembership{
 			{Gate: implementationReviewGatePerPhase, Order: 40, Applies: moonshotFrontendImplementationReviewAxis},
 			{Gate: implementationReviewGateFinal, Order: 40, Applies: frontendFinalImplementationReviewAxis},
@@ -171,7 +173,7 @@ func implementationReviewAxesForGate(gate implementationReviewGate, selection im
 
 type reviewAxisResult = multiAxisReviewResult
 
-func runImplementationReviewAxes(cfg ImplementConfig, sm ports.SessionManager, iteration int, iterDir, reviewDir string, reviewCtx observe.SpanContext, input implementationReviewInput) (ReviewStatus, string, error) {
+func runImplementationReviewAxes(cfg ImplementConfig, sm ports.SessionManager, iteration int, iterDir, reviewDir string, reviewCtx observe.SpanContext, input implementationReviewInput) (reviewStatus, string, error) {
 	profile := feature.PipelineMoonshot
 	var currentPhaseFrontend bool
 	var anyPhaseFrontend bool
@@ -186,7 +188,7 @@ func runImplementationReviewAxes(cfg ImplementConfig, sm ports.SessionManager, i
 		AnyPhaseFrontend:     anyPhaseFrontend,
 	})
 	if len(axes) == 0 {
-		feedback := FormatStructuredReviewFeedback("Implementation Review", "", "", ReviewApproved)
+		feedback := formatStructuredReviewFeedback("Implementation Review", "", "", ReviewApproved)
 		return ReviewApproved, feedback, nil
 	}
 
@@ -228,34 +230,34 @@ type implementationReviewInput struct {
 	ProgressPath           string
 	ContractPath           string
 	VerificationReportPath string
-	RequiredVerification   []RequiredVerificationItem
-	KnownCaveatsGateResult ReportGateResult
+	RequiredVerification   []requiredVerificationItem
+	KnownCaveatsGateResult reportGateResult
 }
 
-func runImplementationReviewAxis(cfg ImplementConfig, sm ports.SessionManager, iteration int, iterDir, reviewDir string, axis implementationReviewAxis, parentCtx observe.SpanContext, input implementationReviewInput) (ReviewStatus, string, error) {
-	axisSlug := implementationReviewAxisSlug(axis.Name)
+func runImplementationReviewAxis(cfg ImplementConfig, sm ports.SessionManager, iteration int, iterDir, reviewDir string, axis implementationReviewAxis, parentCtx observe.SpanContext, input implementationReviewInput) (reviewStatus, string, error) {
+	axisSlug := axis.Slug
 	axisDir := filepath.Join(reviewDir, axisSlug)
 	if err := os.MkdirAll(axisDir, 0o755); err != nil {
-		return ReviewFailed, "", fmt.Errorf("creating %s implementation review helper directory: %w", axis.Name, err)
+		return reviewFailed, "", fmt.Errorf("creating %s implementation review helper directory: %w", axis.Name, err)
 	}
 	feedbackPath := filepath.Join(axisDir, "review-feedback.md")
 	// Stop/restart resume: an axis that already completed its verdict for
 	// this iteration is reused instead of re-running the helper. Helper
 	// Failure stubs never receive a harness completion receipt, so they are
 	// never reused.
-	if HasCommittedPhaseOutcome(axisDir, feature.PhaseReview, axis.Role) {
-		if cached, err := ParseReviewFeedback(feedbackPath); err == nil && len(cached.ProtocolViolations) == 0 {
+	if hasCommittedPhaseOutcome(axisDir, feature.PhaseReview, axis.Role) {
+		if cached, err := parseReviewFeedback(feedbackPath); err == nil && len(cached.ProtocolViolations) == 0 {
 			return cached.Verdict, cached.Body, nil
 		}
 	}
-	RemoveCompletionReceipt(axisDir)
+	removeCompletionReceipt(axisDir)
 	intent := resolvePromptIntent(cfg.Feature)
-	reviewPrompt := BuildImplementationReviewAxisPromptWithOpts(ImplementationReviewAxisPromptOpts{
+	reviewPrompt := buildImplementationReviewAxisPromptWithOpts(implementationReviewAxisPromptOpts{
 		Gate:                   implementationReviewGatePerPhase,
 		AxisLabel:              axis.Name,
 		FeatureDescription:     intent.Description,
 		DesignArtifactPath:     designArtifactPathForImplementationReview(cfg.Feature),
-		LiveRunAxis:            axis.ExecutionPosture == implementationReviewPostureLiveRun,
+		LiveRunAxis:            axis.ExecutionPosture == reviewPostureLiveRun,
 		RefactorPassForkPoint:  refactorPassForkPoint(cfg.Feature),
 		PlanPath:               cfg.PlanPath,
 		ExitCriteria:           cfg.ExitCriteria,
@@ -282,7 +284,7 @@ func runImplementationReviewAxis(cfg ImplementConfig, sm ports.SessionManager, i
 			}
 		}
 	}
-	if addendum := KnownCaveatsReviewAddendum(input.KnownCaveatsGateResult); addendum != "" {
+	if addendum := knownCaveatsReviewAddendum(input.KnownCaveatsGateResult); addendum != "" {
 		reviewPrompt = addendum + "\n\n" + reviewPrompt
 	}
 
@@ -300,7 +302,7 @@ func runImplementationReviewAxis(cfg ImplementConfig, sm ports.SessionManager, i
 	if cfg.Feature != nil {
 		featureID = cfg.Feature.ID
 	}
-	helperCfg := ReviewHelperConfig{
+	helperCfg := reviewHelperConfig{
 		SessionID:              reviewID,
 		FeatureID:              featureID,
 		Phase:                  feature.PhaseReview,
@@ -323,31 +325,30 @@ func runImplementationReviewAxis(cfg ImplementConfig, sm ports.SessionManager, i
 		EffortSource:           cfg.ReviewEffortSource,
 		Kind:                   ports.KindValidator,
 		Label:                  axis.Name,
+		Posture:                axis.ExecutionPosture,
+		OnRetry: func(_ int, err error) {
+			if cfg.Feature != nil {
+				markMultiAxisValidatorRetrying(cfg.FeatureStore, cfg.Feature.ID, axis.Name, err)
+			}
+		},
 	}
-	var helperResult *ReviewHelperResult
-	var err error
-	switch axis.ExecutionPosture {
-	case implementationReviewPostureLiveRun:
-		helperResult, err = helper.RunLiveRunReviewHelper(context.Background(), helperCfg)
-	default:
-		helperResult, err = helper.RunReadOnlyReviewHelper(context.Background(), helperCfg)
-	}
+	helperResult, err := helper.runReviewHelper(context.Background(), helperCfg)
 	if err != nil {
 		feedback := ""
 		if helperResult != nil {
 			feedback = helperResult.Feedback
 		}
 		if _, statErr := os.Stat(feedbackPath); os.IsNotExist(statErr) {
-			stub := FormatStructuredReviewFeedback(
+			stub := formatStructuredReviewFeedback(
 				fmt.Sprintf("%s Implementation Review — Helper Failed", axis.Name),
 				fmt.Sprintf("- **Critical**: %s implementation review axis terminated before writing review-feedback.md: %v", axis.Name, err),
 				"",
-				ReviewChangesRequested,
+				reviewChangesRequested,
 			)
 			_ = os.WriteFile(feedbackPath, []byte(stub), 0o644)
 			feedback = stub
 		}
-		return ReviewChangesRequested, feedback, err
+		return reviewChangesRequested, feedback, err
 	}
 	return helperResult.Status, helperResult.Feedback, nil
 }
@@ -371,13 +372,6 @@ func designArtifactPathForImplementationReview(f *feature.Feature) string {
 	return f.DesignArtifactPath()
 }
 
-func implementationReviewAxisSlug(name string) string {
-	slug := strings.ToLower(name)
-	slug = strings.ReplaceAll(slug, "/", "-")
-	slug = strings.ReplaceAll(slug, " ", "-")
-	return slug
-}
-
 func setImplementationReviewAxisStatuses(cfg ImplementConfig, axes []implementationReviewAxis) {
 	if cfg.Feature == nil {
 		return
@@ -389,7 +383,7 @@ func setImplementationReviewAxisStatuses(cfg ImplementConfig, axes []implementat
 	setMultiAxisValidatorStatuses(cfg.FeatureStore, cfg.Feature.ID, names)
 }
 
-func updateImplementationReviewAxisStatus(cfg ImplementConfig, axisName string, status ReviewStatus, err error) {
+func updateImplementationReviewAxisStatus(cfg ImplementConfig, axisName string, status reviewStatus, err error) {
 	if cfg.Feature == nil {
 		return
 	}
@@ -403,11 +397,11 @@ func clearImplementationReviewAxisStatuses(cfg ImplementConfig) {
 	clearMultiAxisValidatorStatuses(cfg.FeatureStore, cfg.Feature.ID)
 }
 
-func composeImplementationReviewFeedback(results []reviewAxisResult, selectedCount int) (ReviewStatus, string, error) {
+func composeImplementationReviewFeedback(results []reviewAxisResult, selectedCount int) (reviewStatus, string, error) {
 	return composeMultiAxisReviewFeedback("Multi-Axis Implementation Review", results, selectedCount)
 }
 
-func composeMultiAxisReviewFeedback(title string, results []reviewAxisResult, selectedCount int) (ReviewStatus, string, error) {
+func composeMultiAxisReviewFeedback(title string, results []reviewAxisResult, selectedCount int) (reviewStatus, string, error) {
 	status := strictMultiAxisReviewStatus(results, selectedCount)
 	firstErr := firstMultiAxisReviewError(results)
 	var findings strings.Builder
@@ -431,7 +425,7 @@ func composeMultiAxisReviewFeedback(title string, results []reviewAxisResult, se
 			fmt.Fprintf(&suggestions, "%s\n\n", axisSuggestions)
 		}
 	}
-	return status, FormatStructuredReviewFeedback(
+	return status, formatStructuredReviewFeedback(
 		title,
 		strings.TrimRight(findings.String(), "\n"),
 		strings.TrimRight(suggestions.String(), "\n"),

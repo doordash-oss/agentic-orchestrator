@@ -103,7 +103,7 @@ func (p *stubRecommendingProvider) RecommendedModels(role llm.PhaseRole) []strin
 // builtinProvider wraps a real provider's built-in catalog and nominations in a
 // detectable stub so the test needs no CLI on PATH.
 func builtinProvider(name string, real interface {
-	llm.CatalogProvider
+	llm.LLMProvider
 	llm.RoleModelRecommender
 }) *stubRecommendingProvider {
 	return &stubRecommendingProvider{
@@ -114,8 +114,8 @@ func builtinProvider(name string, real interface {
 
 func TestProviderNominationsAreNotOutrankedByRicherMetadata(t *testing.T) {
 	r := llm.NewRegistry()
-	r.Register(builtinProvider("claude", &claude.Provider{}))
-	r.Register(builtinProvider("codex", &codex.Provider{}))
+	r.Register(builtinProvider("claude", claude.NewProvider("")))
+	r.Register(builtinProvider("codex", codex.NewProvider("")))
 	defaults := r.CatalogDefaultModels()
 	for role, got := range map[string]string{
 		"inquiry": defaults.Inquiry, "research": defaults.Research, "planning": defaults.Planning,

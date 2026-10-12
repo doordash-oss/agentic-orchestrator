@@ -31,13 +31,12 @@ import {
   FeatureDetailResponseSchema,
   FeatureListResponseSchema,
   PublishDescriptionResponseSchema,
-  RuntimeConfigCreationSchema,
+  RuntimeConfigResponseSchema,
   RepositorySourcesResponseSchema,
   RepositoryOriginStatusResponseSchema,
   RepositoryUpdateSourceResponseSchema,
   RepositorySourceReconcileResponseSchema,
-  RebaseFeatureResponseSchema,
-  RefactorFeatureResponseSchema,
+  ChildLaunchResponseSchema,
   DiscardChildResponseSchema,
   DeleteFeatureResponseSchema,
   ReviewFeedbackFetchResponseSchema,
@@ -110,9 +109,10 @@ import type { ApiRequestInit } from './gateway/runtimeGateway';
 import { alwaysLocal, assertNoLocalPathsRemotely, type LocalitySource } from './locality';
 import { serverRequest, type ServerTransport } from './serverClient';
 import { fencedServerRequest, type ServerIdentitySource } from './serverFence';
+import { defined, definedNonEmpty } from '../shared/defined';
 
 /** The authenticated transport surface the gateway provides. */
-export type FeatureTransport = ServerTransport;
+type FeatureTransport = ServerTransport;
 
 export interface FeatureServiceDeps {
   transport: FeatureTransport;
@@ -207,7 +207,7 @@ export class FeatureService {
       this.api('/api/v1/config/runtime'),
       this.deps.readReadiness(),
     ]);
-    const config = validateWithSchema(configBody, RuntimeConfigCreationSchema);
+    const config = validateWithSchema(configBody, RuntimeConfigResponseSchema);
     const models = PHASE_MODEL_LABELS.flatMap(([key, label]) => {
       const model =
         config.feature_defaults.models[key as keyof typeof config.feature_defaults.models];
@@ -272,7 +272,7 @@ export class FeatureService {
         },
         mode: repository.mode,
         kind: repository.kind,
-        ...(repository.branch === undefined ? {} : { branch: repository.branch }),
+        ...defined('branch', repository.branch),
         observedSha: repository.observed_sha,
       })),
     };
@@ -344,7 +344,7 @@ export class FeatureService {
     const parsed = validateWithSchema(body, RepositoryUpdateSourceResponseSchema);
     return {
       result: parsed.result,
-      ...(parsed.reason === undefined ? {} : { reason: parsed.reason }),
+      ...defined('reason', parsed.reason),
       repoKey: parsed.repo_key,
       identity: {
         path: parsed.identity.path,
@@ -356,10 +356,13 @@ export class FeatureService {
       mode: parsed.mode,
       branch: parsed.branch,
       originBranch: parsed.origin_branch,
-      ...(parsed.previous_sha === undefined ? {} : { previousSha: parsed.previous_sha }),
-      ...(parsed.local_sha === undefined ? {} : { localSha: parsed.local_sha }),
-      ...(parsed.fetched_sha === undefined ? {} : { fetchedSha: parsed.fetched_sha }),
-      ...(parsed.status === undefined ? {} : { status: toOriginStatusSnapshot(parsed.status) }),
+      ...defined('previousSha', parsed.previous_sha),
+      ...defined('localSha', parsed.local_sha),
+      ...defined('fetchedSha', parsed.fetched_sha),
+      ...defined(
+        'status',
+        parsed.status === undefined ? undefined : toOriginStatusSnapshot(parsed.status),
+      ),
     };
   }
 
@@ -389,12 +392,8 @@ export class FeatureService {
         origin_branch: request.originBranch,
         expected_local_sha: request.expectedLocalSha,
         expected_origin_sha: request.expectedOriginSha,
-        ...(request.checkoutHeadRef === undefined
-          ? {}
-          : { checkout_head_ref: request.checkoutHeadRef }),
-        ...(request.checkoutHeadSha === undefined
-          ? {}
-          : { checkout_head_sha: request.checkoutHeadSha }),
+        ...defined('checkout_head_ref', request.checkoutHeadRef),
+        ...defined('checkout_head_sha', request.checkoutHeadSha),
       },
     });
     const parsed = validateWithSchema(body, RepositorySourceReconcileResponseSchema);
@@ -411,7 +410,7 @@ export class FeatureService {
       mode: parsed.mode,
       branch: parsed.branch,
       originBranch: parsed.origin_branch,
-      ...(parsed.local_sha === undefined ? {} : { localSha: parsed.local_sha }),
+      ...defined('localSha', parsed.local_sha),
       ...(parsed.selection === undefined
         ? {}
         : {
@@ -426,7 +425,7 @@ export class FeatureService {
               },
               mode: parsed.selection.mode,
               kind: parsed.selection.kind,
-              ...(parsed.selection.branch === undefined ? {} : { branch: parsed.selection.branch }),
+              ...defined('branch', parsed.selection.branch),
               observedSha: parsed.selection.observed_sha,
             },
           }),
@@ -435,12 +434,8 @@ export class FeatureService {
         : {
             checkout: {
               state: parsed.checkout.state,
-              ...(parsed.checkout.head_ref === undefined
-                ? {}
-                : { headRef: parsed.checkout.head_ref }),
-              ...(parsed.checkout.head_sha === undefined
-                ? {}
-                : { headSha: parsed.checkout.head_sha }),
+              ...defined('headRef', parsed.checkout.head_ref),
+              ...defined('headSha', parsed.checkout.head_sha),
             },
           }),
     };
@@ -472,7 +467,10 @@ export class FeatureService {
       timeoutMs: COORDINATED_MUTATION_TIMEOUT_MS,
       body: {
         name: validated.name.trim(),
-        ...(validated.description.trim() === '' ? {} : { description: validated.description }),
+        ...definedNonEmpty(
+          'description',
+          validated.description.trim() === '' ? undefined : validated.description,
+        ),
         repos: validated.repoKeys,
         ...(validated.useCurrentBranch ? { use_current_branch: true } : {}),
         repository_sources: validated.repositorySources.map((source) => ({
@@ -486,7 +484,7 @@ export class FeatureService {
           },
           mode: source.mode,
           kind: source.kind,
-          ...(source.branch === undefined ? {} : { branch: source.branch }),
+          ...defined('branch', source.branch),
           observed_sha: source.observedSha,
         })),
         images: validated.images,
@@ -500,9 +498,7 @@ export class FeatureService {
         pipeline: validated.pipeline,
         risk_level: validated.riskLevel,
         inquireness: validated.inquireness,
-        ...(validated.exitCriteria.trim() === ''
-          ? {}
-          : { exit_criteria: validated.exitCriteria.trim() }),
+        ...definedNonEmpty('exit_criteria', validated.exitCriteria.trim()),
         models: validated.models,
         effort: validated.effort,
         checkpoints: {
@@ -520,9 +516,10 @@ export class FeatureService {
     const response = validateWithSchema(body, FeatureActionResponseSchema);
     return {
       featureId: validateWithSchema(response.feature_id, FeatureIdSchema),
-      ...(response.warnings === undefined
-        ? {}
-        : { warnings: response.warnings.map(redactedCanonicalError) }),
+      ...defined(
+        'warnings',
+        response.warnings === undefined ? undefined : response.warnings.map(redactedCanonicalError),
+      ),
     };
   }
 
@@ -572,25 +569,25 @@ export class FeatureService {
         createdAt: feature.created_at,
         activeRun: feature.active_run,
         runCount: feature.run_count,
-        ...(feature.progress.current_phase_status === undefined
-          ? {}
-          : { phaseStatus: feature.progress.current_phase_status }),
+        ...defined('phaseStatus', feature.progress.current_phase_status),
         // Canonical warning objects cross IPC intact except diagnostics,
         // which pass through the same redaction as every other raw text.
         warnings: (feature.warnings ?? []).map(redactedCanonicalError),
         errors: (feature.errors ?? []).map(toOwnedErrorView),
-        ...(feature.active_child === undefined
-          ? {}
-          : { activeChild: toRelationshipChildView(feature.active_child) }),
-        ...(feature.child_history === undefined
-          ? {}
-          : { childHistory: feature.child_history.map(toRelationshipChildView) }),
-        ...(feature.child_history_total === undefined
-          ? {}
-          : { childHistoryTotal: feature.child_history_total }),
-        ...(feature.child_history_truncated === undefined
-          ? {}
-          : { childHistoryTruncated: feature.child_history_truncated }),
+        ...defined(
+          'activeChild',
+          feature.active_child === undefined
+            ? undefined
+            : toRelationshipChildView(feature.active_child),
+        ),
+        ...defined(
+          'childHistory',
+          feature.child_history === undefined
+            ? undefined
+            : feature.child_history.map(toRelationshipChildView),
+        ),
+        ...defined('childHistoryTotal', feature.child_history_total),
+        ...defined('childHistoryTruncated', feature.child_history_truncated),
       })),
       warnings: (response.warnings ?? []).map(redactedCanonicalError),
     };
@@ -638,7 +635,7 @@ export class FeatureService {
       method: 'POST',
       body: {},
     });
-    const response = validateWithSchema(body, RebaseFeatureResponseSchema);
+    const response = validateWithSchema(body, ChildLaunchResponseSchema);
     return {
       childId: validateWithSchema(response.feature_id, FeatureIdSchema),
       parentId: validateWithSchema(response.parent_id, FeatureIdSchema),
@@ -668,22 +665,21 @@ export class FeatureService {
       method: 'POST',
       body: {
         name: input.name,
-        ...(input.description === undefined ? {} : { description: input.description }),
-        ...(remote || input.images === undefined ? {} : { images: input.images }),
+        ...defined('description', input.description),
+        ...defined('images', remote ? undefined : input.images),
         ...(attachments.length === 0 ? {} : { attachments }),
         ...(remote
           ? {
-              ...(input.imageUploads === undefined ? {} : { image_uploads: input.imageUploads }),
-              ...(input.attachmentUploads === undefined
-                ? {}
-                : { attachment_uploads: input.attachmentUploads }),
+              ...defined('image_uploads', input.imageUploads),
+              ...defined('attachment_uploads', input.attachmentUploads),
             }
           : {}),
-        ...(input.pipeline === undefined ? {} : { pipeline: input.pipeline }),
-        ...(input.checkpoints === undefined
-          ? {}
-          : {
-              checkpoints: {
+        ...defined('pipeline', input.pipeline),
+        ...defined(
+          'checkpoints',
+          input.checkpoints === undefined
+            ? undefined
+            : {
                 inquiry_review: input.checkpoints.inquiryReview,
                 research_review: input.checkpoints.researchReview,
                 design_review: input.checkpoints.designReview,
@@ -692,15 +688,15 @@ export class FeatureService {
                 manual_publish: input.checkpoints.manualPublish,
                 draft_publish: input.checkpoints.draftPublish,
               },
-            }),
-        ...(input.effort === undefined ? {} : { effort: input.effort }),
-        ...(input.models === undefined ? {} : { models: input.models }),
-        ...(input.riskLevel === undefined ? {} : { risk_level: input.riskLevel }),
-        ...(input.exitCriteria === undefined ? {} : { exit_criteria: input.exitCriteria }),
-        ...(input.inquireness === undefined ? {} : { inquireness: input.inquireness }),
+        ),
+        ...defined('effort', input.effort),
+        ...defined('models', input.models),
+        ...defined('risk_level', input.riskLevel),
+        ...defined('exit_criteria', input.exitCriteria),
+        ...defined('inquireness', input.inquireness),
       },
     });
-    const response = validateWithSchema(body, RefactorFeatureResponseSchema);
+    const response = validateWithSchema(body, ChildLaunchResponseSchema);
     return {
       childId: validateWithSchema(response.feature_id, FeatureIdSchema),
       parentId: validateWithSchema(response.parent_id, FeatureIdSchema),
@@ -785,7 +781,7 @@ export class FeatureService {
       method: 'POST',
       body: {
         expected_revision: input.expectedRevision,
-        ...(input.gate === undefined ? {} : { gate: input.gate }),
+        ...defined('gate', input.gate),
       },
     });
     const response = validateWithSchema(body, ReviewFeedbackFeatureResponseSchema);
@@ -793,9 +789,9 @@ export class FeatureService {
       childId: validateWithSchema(response.child_id ?? response.feature_id, FeatureIdSchema),
       parentId: validateWithSchema(response.parent_id, FeatureIdSchema),
       result: response.result,
-      ...(response.changed === undefined ? {} : { changed: response.changed }),
-      ...(response.omitted === undefined ? {} : { omitted: response.omitted }),
-      ...(response.deferred === undefined ? {} : { deferred: response.deferred }),
+      ...defined('changed', response.changed),
+      ...defined('omitted', response.omitted),
+      ...defined('deferred', response.deferred),
     };
   }
 
@@ -813,8 +809,11 @@ export class FeatureService {
       operationId: response.operation_id,
       status: response.status,
       diagnostics: (response.diagnostics ?? []).map((diagnostic) => ({
-        ...(diagnostic.code === undefined ? {} : { code: diagnostic.code }),
-        ...(diagnostic.message === undefined ? {} : { message: redactText(diagnostic.message) }),
+        ...defined('code', diagnostic.code),
+        ...defined(
+          'message',
+          diagnostic.message === undefined ? undefined : redactText(diagnostic.message),
+        ),
       })),
     };
   }
@@ -854,8 +853,6 @@ export class FeatureService {
         featureId: validateWithSchema(response.feature_id, FeatureIdSchema),
         action: input.action,
         result: response.result,
-        ...(response.phase === undefined || response.phase === '' ? {} : { phase: response.phase }),
-        sessionIds: response.session_ids ?? [],
       };
     } catch (error) {
       // Re-read eligibility after a structured rejection. Keep the original
@@ -868,14 +865,6 @@ export class FeatureService {
       throw error;
     }
   }
-}
-
-/** Spreads `{ [key]: value }` only when the value is present and non-empty. */
-function spreadDefined<K extends string, V extends string | number>(
-  key: K,
-  value: V | undefined,
-): Partial<Record<K, V>> {
-  return value === undefined || value === '' ? {} : ({ [key]: value } as Record<K, V>);
 }
 
 /**
@@ -897,20 +886,21 @@ function toOriginStatusSnapshot(
     },
     mode: repository.mode,
     kind: repository.kind,
-    ...(repository.branch === undefined ? {} : { branch: repository.branch }),
-    ...(repository.commit === undefined ? {} : { commit: repository.commit }),
-    ...(repository.local_sha === undefined ? {} : { localSha: repository.local_sha }),
-    ...(repository.origin_branch === undefined ? {} : { originBranch: repository.origin_branch }),
-    ...(repository.fetched_sha === undefined ? {} : { fetchedSha: repository.fetched_sha }),
-    ...(repository.checked_at === undefined ? {} : { checkedAt: repository.checked_at }),
+    ...defined('branch', repository.branch),
+    ...defined('commit', repository.commit),
+    ...defined('localSha', repository.local_sha),
+    ...defined('originBranch', repository.origin_branch),
+    ...defined('fetchedSha', repository.fetched_sha),
+    ...defined('checkedAt', repository.checked_at),
     status: repository.status,
-    ...(repository.ahead_count === undefined ? {} : { aheadCount: repository.ahead_count }),
-    ...(repository.behind_count === undefined ? {} : { behindCount: repository.behind_count }),
-    ...(repository.issue === undefined ? {} : { issue: repository.issue }),
-    ...(repository.stale_comparison === undefined
-      ? {}
-      : {
-          staleComparison: {
+    ...defined('aheadCount', repository.ahead_count),
+    ...defined('behindCount', repository.behind_count),
+    ...defined('issue', repository.issue),
+    ...defined(
+      'staleComparison',
+      repository.stale_comparison === undefined
+        ? undefined
+        : {
             status: repository.stale_comparison.status,
             localSha: repository.stale_comparison.local_sha,
             fetchedSha: repository.stale_comparison.fetched_sha,
@@ -919,19 +909,11 @@ function toOriginStatusSnapshot(
             behindCount: repository.stale_comparison.behind_count,
             checkedAt: repository.stale_comparison.checked_at,
           },
-        }),
-    ...(repository.update_eligible === undefined
-      ? {}
-      : { updateEligible: repository.update_eligible }),
-    ...(repository.update_blockers === undefined
-      ? {}
-      : { updateBlockers: repository.update_blockers }),
-    ...(repository.checkout_head_ref === undefined
-      ? {}
-      : { checkoutHeadRef: repository.checkout_head_ref }),
-    ...(repository.checkout_head_sha === undefined
-      ? {}
-      : { checkoutHeadSha: repository.checkout_head_sha }),
+    ),
+    ...defined('updateEligible', repository.update_eligible),
+    ...defined('updateBlockers', repository.update_blockers),
+    ...defined('checkoutHeadRef', repository.checkout_head_ref),
+    ...defined('checkoutHeadSha', repository.checkout_head_sha),
   };
 }
 
@@ -943,13 +925,16 @@ function toReviewFeedbackCommentView(
     repo: comment.repo,
     id: comment.id,
     type: comment.type,
-    ...spreadDefined('path', comment.path),
-    ...spreadDefined('line', comment.line),
-    ...spreadDefined('author', comment.author),
-    ...(comment.body === undefined ? {} : { body: redactText(comment.body) }),
-    ...(comment.diff_hunk === undefined ? {} : { diffHunk: redactText(comment.diff_hunk) }),
-    ...spreadDefined('inReplyToId', comment.in_reply_to_id),
-    ...spreadDefined('createdAt', comment.created_at),
+    ...definedNonEmpty('path', comment.path),
+    ...definedNonEmpty('line', comment.line),
+    ...definedNonEmpty('author', comment.author),
+    ...defined('body', comment.body === undefined ? undefined : redactText(comment.body)),
+    ...defined(
+      'diffHunk',
+      comment.diff_hunk === undefined ? undefined : redactText(comment.diff_hunk),
+    ),
+    ...definedNonEmpty('inReplyToId', comment.in_reply_to_id),
+    ...definedNonEmpty('createdAt', comment.created_at),
   };
 }
 
@@ -1004,19 +989,19 @@ function toSnapshot(feature: ServerFeatureDetail): FeatureSnapshot {
     repos: feature.repos,
     createdAt: feature.created_at,
     activeRun: feature.active_run,
-    ...spreadDefined(
+    ...definedNonEmpty(
       'currentRoadmapPhase',
       feature.active_run_detail?.roadmap_phase ?? feature.progress.current_roadmap_phase,
     ),
-    ...spreadDefined(
+    ...definedNonEmpty(
       'totalRoadmapPhases',
       feature.active_run_detail?.roadmap_total ?? feature.progress.total_roadmap_phases,
     ),
-    ...spreadDefined(
+    ...definedNonEmpty(
       'currentIteration',
       feature.active_run_detail?.iteration ?? feature.progress.current_iteration,
     ),
-    ...spreadDefined(
+    ...definedNonEmpty(
       'phaseStatus',
       feature.active_run_detail?.phase_status ?? feature.progress.current_phase_status,
     ),
@@ -1042,13 +1027,14 @@ function toSnapshot(feature: ServerFeatureDetail): FeatureSnapshot {
         : {
             inputs: action.required_inputs.map((input) => ({
               name: input.name,
-              ...(input.options === undefined ? {} : { options: input.options }),
+              ...defined('options', input.options),
             })),
           }),
-      ...(action.impact_preview === undefined
-        ? {}
-        : {
-            impactPreview: {
+      ...defined(
+        'impactPreview',
+        action.impact_preview === undefined
+          ? undefined
+          : {
               kind: action.impact_preview.kind,
               subject: {
                 id: validateWithSchema(action.impact_preview.subject.id, FeatureIdSchema),
@@ -1061,29 +1047,34 @@ function toSnapshot(feature: ServerFeatureDetail): FeatureSnapshot {
               })),
               retained: action.impact_preview.retained,
             },
-          }),
+      ),
     })),
-    ...(feature.active_child === undefined
-      ? {}
-      : { activeChild: toRelationshipChildView(feature.active_child) }),
-    ...(feature.child_history === undefined
-      ? {}
-      : { childHistory: feature.child_history.map(toRelationshipChildView) }),
-    ...(feature.child_history_total === undefined
-      ? {}
-      : { childHistoryTotal: feature.child_history_total }),
-    ...(feature.child_history_truncated === undefined
-      ? {}
-      : { childHistoryTruncated: feature.child_history_truncated }),
-    ...spreadDefined('parentId', feature.parent_id),
-    ...spreadDefined('parentKind', feature.parent_kind),
-    ...(feature.active === undefined ? {} : { active: feature.active }),
-    ...(feature.setup_complete === undefined ? {} : { setupComplete: feature.setup_complete }),
-    ...spreadDefined('closeOutcome', feature.close_outcome),
-    ...spreadDefined('closedAt', feature.closed_at),
-    ...(feature.relationship === undefined
-      ? {}
-      : { relationship: toRelationshipChildView(feature.relationship) }),
+    ...defined(
+      'activeChild',
+      feature.active_child === undefined
+        ? undefined
+        : toRelationshipChildView(feature.active_child),
+    ),
+    ...defined(
+      'childHistory',
+      feature.child_history === undefined
+        ? undefined
+        : feature.child_history.map(toRelationshipChildView),
+    ),
+    ...defined('childHistoryTotal', feature.child_history_total),
+    ...defined('childHistoryTruncated', feature.child_history_truncated),
+    ...definedNonEmpty('parentId', feature.parent_id),
+    ...definedNonEmpty('parentKind', feature.parent_kind),
+    ...defined('active', feature.active),
+    ...defined('setupComplete', feature.setup_complete),
+    ...definedNonEmpty('closeOutcome', feature.close_outcome),
+    ...definedNonEmpty('closedAt', feature.closed_at),
+    ...defined(
+      'relationship',
+      feature.relationship === undefined
+        ? undefined
+        : toRelationshipChildView(feature.relationship),
+    ),
     ...(feature.review_feedback === undefined || feature.review_feedback.length === 0
       ? {}
       : {
@@ -1093,7 +1084,7 @@ function toSnapshot(feature: ServerFeatureDetail): FeatureSnapshot {
       ? {}
       : {
           transaction: {
-            ...spreadDefined('phase', feature.transaction.phase),
+            ...definedNonEmpty('phase', feature.transaction.phase),
             ...(feature.transaction.attention === undefined
               ? {}
               : {
@@ -1112,12 +1103,10 @@ function toSnapshot(feature: ServerFeatureDetail): FeatureSnapshot {
               ? {}
               : {
                   entries: feature.transaction.entries.map((entry) => ({
-                    ...spreadDefined('repo', entry.repo),
-                    ...spreadDefined('prepState', entry.prep_state),
-                    ...spreadDefined('applyState', entry.apply_state),
-                    ...(entry.pending_sync === undefined
-                      ? {}
-                      : { pendingSync: entry.pending_sync }),
+                    ...definedNonEmpty('repo', entry.repo),
+                    ...definedNonEmpty('prepState', entry.prep_state),
+                    ...definedNonEmpty('applyState', entry.apply_state),
+                    ...defined('pendingSync', entry.pending_sync),
                   })),
                 }),
           },
@@ -1128,8 +1117,8 @@ function toSnapshot(feature: ServerFeatureDetail): FeatureSnapshot {
           repoStatus: feature.repo_status.map((repo) => ({
             name: repo.name,
             publishable: repo.publishable,
-            ...(repo.touched === undefined ? {} : { touched: repo.touched }),
-            ...(repo.pr_url === undefined || repo.pr_url === '' ? {} : { prUrl: repo.pr_url }),
+            ...defined('touched', repo.touched),
+            ...definedNonEmpty('prUrl', repo.pr_url),
             ...(repo.freshness === undefined || repo.freshness === ''
               ? {}
               : { freshness: repo.freshness }),
@@ -1163,18 +1152,26 @@ function toSnapshot(feature: ServerFeatureDetail): FeatureSnapshot {
       reviewFixing: feature.review_gate.review_fixing,
       validatingPlan: feature.review_gate.validating_plan,
       validatorStatuses: { ...(feature.review_gate.validator_statuses ?? {}) },
+      ...defined(
+        'validatorErrors',
+        feature.review_gate.validator_errors === undefined
+          ? undefined
+          : { ...feature.review_gate.validator_errors },
+      ),
     },
-    ...(feature.verification_items === undefined
-      ? {}
-      : {
-          verificationItems: feature.verification_items.map((item) => ({
+    ...defined(
+      'verificationItems',
+      feature.verification_items === undefined
+        ? undefined
+        : feature.verification_items.map((item) => ({
             name: item.name,
             state: item.state,
           })),
-        }),
-    ...(feature.timing === undefined
-      ? {}
-      : { timing: { totalSeconds: feature.timing.total_seconds } }),
+    ),
+    ...defined(
+      'timing',
+      feature.timing === undefined ? undefined : { totalSeconds: feature.timing.total_seconds },
+    ),
     ...(feature.failure === undefined
       ? {}
       : {
@@ -1203,11 +1200,11 @@ function toOwnedErrorView(entry: ServerOwnedError): OwnedError {
     ref: {
       scope: entry.ref.scope,
       code: entry.ref.code,
-      ...(entry.ref.feature_id === undefined ? {} : { featureId: entry.ref.feature_id }),
-      ...(entry.ref.repository === undefined ? {} : { repository: entry.ref.repository }),
-      ...(entry.ref.task_key === undefined ? {} : { taskKey: entry.ref.task_key }),
-      ...(entry.ref.snapshot_id === undefined ? {} : { snapshotId: entry.ref.snapshot_id }),
-      ...(entry.ref.key === undefined ? {} : { key: entry.ref.key }),
+      ...defined('featureId', entry.ref.feature_id),
+      ...defined('repository', entry.ref.repository),
+      ...defined('taskKey', entry.ref.task_key),
+      ...defined('snapshotId', entry.ref.snapshot_id),
+      ...defined('key', entry.ref.key),
     },
     error: entry.error,
   };
@@ -1223,11 +1220,11 @@ function toRelationshipChildView(child: ServerRelationshipChild) {
     displayState: child.display_state,
     pipeline: child.pipeline,
     status: child.status,
-    ...spreadDefined('setupStatus', child.setup_status),
-    ...spreadDefined('relationshipState', child.relationship_state),
-    ...(child.outcome === undefined ? {} : { outcome: child.outcome }),
+    ...definedNonEmpty('setupStatus', child.setup_status),
+    ...definedNonEmpty('relationshipState', child.relationship_state),
+    ...defined('outcome', child.outcome),
     startedAt: child.started_at,
-    ...spreadDefined('closedAt', child.closed_at),
+    ...definedNonEmpty('closedAt', child.closed_at),
     cost: { totalUsd: child.cost.total_usd, byPhase: child.cost.by_phase },
     integrationState: child.integration_state,
     ...(child.attention === undefined
@@ -1247,8 +1244,8 @@ function toRelationshipChildView(child: ServerRelationshipChild) {
     // Canonical warning objects cross IPC intact except diagnostics, which
     // pass through the same redaction as every other raw text.
     warnings: child.warnings.map(redactedCanonicalError),
-    ...spreadDefined('diffSummary', child.diff_summary),
-    ...(hasDiffSummary === undefined ? {} : { hasDiffSummary }),
+    ...definedNonEmpty('diffSummary', child.diff_summary),
+    ...defined('hasDiffSummary', hasDiffSummary),
   };
 }
 
@@ -1294,9 +1291,9 @@ function toSetupView(setup: ServerSetup | undefined): FeatureSetupView | null {
       key: task.key === '' ? key : task.key,
       kind: task.kind,
       label: task.label === undefined || task.label === '' ? key : task.label,
-      ...(task.repo === undefined || task.repo === '' ? {} : { repo: task.repo }),
+      ...definedNonEmpty('repo', task.repo),
       status: taskStatus.data,
-      ...(task.branch === undefined || task.branch === '' ? {} : { branch: task.branch }),
+      ...definedNonEmpty('branch', task.branch),
       attempt: task.attempt ?? 0,
       ...(task.error === undefined
         ? {}

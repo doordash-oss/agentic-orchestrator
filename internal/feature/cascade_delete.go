@@ -33,35 +33,35 @@ const (
 	CascadeDeleteAttentionRequired CascadeDeleteStatus = "attention_required"
 )
 
-// CascadeDeleteStep is the last durable state-machine boundary.
-type CascadeDeleteStep string
+// cascadeDeleteStep is the last durable state-machine boundary.
+type cascadeDeleteStep string
 
 const (
-	CascadeStepIntentPersisted  CascadeDeleteStep = "intent_persisted"
-	CascadeStepSessionsQuiesced CascadeDeleteStep = "sessions_quiesced"
-	CascadeStepAttentionSettled CascadeDeleteStep = "attention_settled"
-	CascadeStepRefsSafe         CascadeDeleteStep = "refs_safe"
-	CascadeStepResourcesCleaned CascadeDeleteStep = "resources_cleaned"
-	CascadeStepChildrenDeleted  CascadeDeleteStep = "children_deleted"
+	CascadeStepIntentPersisted  cascadeDeleteStep = "intent_persisted"
+	CascadeStepSessionsQuiesced cascadeDeleteStep = "sessions_quiesced"
+	CascadeStepAttentionSettled cascadeDeleteStep = "attention_settled"
+	CascadeStepRefsSafe         cascadeDeleteStep = "refs_safe"
+	CascadeStepResourcesCleaned cascadeDeleteStep = "resources_cleaned"
+	CascadeStepChildrenDeleted  cascadeDeleteStep = "children_deleted"
 )
 
-// CascadeResourceKind classifies one disposable resource in the manifest.
-type CascadeResourceKind string
+// cascadeResourceKind classifies one disposable resource in the manifest.
+type cascadeResourceKind string
 
 const (
-	CascadeResourceCopiedInput CascadeResourceKind = "copied_input"
-	CascadeResourceWorktree    CascadeResourceKind = "worktree"
-	CascadeResourceBranch      CascadeResourceKind = "branch"
-	CascadeResourceOverlay     CascadeResourceKind = "overlay"
-	CascadeResourceRecord      CascadeResourceKind = "record"
-	CascadeResourceKBWorkspace CascadeResourceKind = "kb_workspace"
-	CascadeResourcePromotion   CascadeResourceKind = "promotion"
+	CascadeResourceCopiedInput cascadeResourceKind = "copied_input"
+	CascadeResourceWorktree    cascadeResourceKind = "worktree"
+	CascadeResourceBranch      cascadeResourceKind = "branch"
+	CascadeResourceOverlay     cascadeResourceKind = "overlay"
+	CascadeResourceRecord      cascadeResourceKind = "record"
+	CascadeResourceKBWorkspace cascadeResourceKind = "kb_workspace"
+	CascadeResourcePromotion   cascadeResourceKind = "promotion"
 )
 
 // CascadeResource is one independently retryable manifest item.
 type CascadeResource struct {
 	ID       string              `yaml:"id" json:"id"`
-	Kind     CascadeResourceKind `yaml:"kind" json:"kind"`
+	Kind     cascadeResourceKind `yaml:"kind" json:"kind"`
 	OwnerID  string              `yaml:"owner_id" json:"owner_id"`
 	Repo     string              `yaml:"repo,omitempty" json:"repo,omitempty"`
 	Path     string              `yaml:"path,omitempty" json:"path,omitempty"`
@@ -109,7 +109,7 @@ type CascadeDeleteIntent struct {
 	ParentID    string              `yaml:"parent_id" json:"parent_id"`
 	RequestedAt time.Time           `yaml:"requested_at" json:"requested_at"`
 	Status      CascadeDeleteStatus `yaml:"status" json:"status"`
-	Step        CascadeDeleteStep   `yaml:"step" json:"step"`
+	Step        cascadeDeleteStep   `yaml:"step" json:"step"`
 	ChildIDs    []string            `yaml:"child_ids" json:"child_ids"`
 	Resources   []CascadeResource   `yaml:"resources" json:"resources"`
 	Refs        []CascadeRef        `yaml:"refs,omitempty" json:"refs,omitempty"`

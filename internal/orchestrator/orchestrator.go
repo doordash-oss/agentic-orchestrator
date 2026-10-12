@@ -148,10 +148,10 @@ func (e *PublishConflictError) Is(target error) bool {
 // ErrPublishConflict is the sentinel used with errors.Is for publish conflicts.
 var ErrPublishConflict = &PublishConflictError{}
 
-// Deps holds all port interface dependencies for the orchestrator.
+// Deps holds the orchestrator's feature dependencies and external ports.
 type Deps struct {
-	Lifecycle   ports.FeatureLifecycle
-	Store       ports.FeatureStore
+	Manager     *feature.Manager
+	Store       *feature.Store
 	Sessions    ports.SessionManager
 	Remote      RemoteOps
 	Worktrees   feature.WorktreeOps
@@ -163,13 +163,13 @@ type Deps struct {
 	Admission *workadmission.Coordinator
 }
 
-// PhaseStartOutcome enumerates the possible results of starting a phase.
-type PhaseStartOutcome int
+// phaseStartOutcome enumerates the possible results of starting a phase.
+type phaseStartOutcome int
 
 const (
 	// PhaseStarted — the starter actually launched phase work. startPhase
 	// emits a PhaseStarted event and fires OnPhaseStarted.
-	PhaseStarted PhaseStartOutcome = iota
+	PhaseStarted phaseStartOutcome = iota
 
 	// PhaseSkipped — the phase was skipped in favor of advancing to a
 	// different phase. startPhase recursively dispatches to NextPhase and
@@ -183,15 +183,15 @@ const (
 	PhaseNoOp
 )
 
-// PhaseStartResult communicates whether a phase starter actually launched
+// phaseStartResult communicates whether a phase starter actually launched
 // work (PhaseStarted), should skip forward to another phase (PhaseSkipped →
 // NextPhase), or short-circuited with no work and no next phase (PhaseNoOp).
-type PhaseStartResult struct {
-	Outcome   PhaseStartOutcome
+type phaseStartResult struct {
+	Outcome   phaseStartOutcome
 	NextPhase feature.Phase // meaningful only when Outcome == PhaseSkipped
 }
 
-// Orchestrator coordinates feature lifecycle through port interfaces.
+// Orchestrator coordinates feature lifecycle and external operations.
 type Orchestrator struct {
 	deps    Deps
 	hooks   Hooks
@@ -411,13 +411,14 @@ func (o *Orchestrator) SetRunMultiRepoFinalReviewFn(fn func(
 	o.runMultiRepoFinalReviewFn = fn
 }
 
-// CreateFeature delegates to FeatureLifecycle.Create, fires the
+// CreateFeature delegates creation to the feature manager and emits the
+// resulting feature event.
 func (o *Orchestrator) CreateFeature(
 	name, description string, repos []string,
 	models config.ModelConfig, exitCriteria, inquireness string,
 	images []string, opts ...feature.CreateOptions,
 ) (*feature.Feature, error) {
-	f, err := o.deps.Lifecycle.Create(
+	f, err := o.deps.Manager.Create(
 		name, description, repos, models,
 		exitCriteria, inquireness, images, opts...,
 	)
@@ -521,7 +522,7 @@ func (o *Orchestrator) startFeatureLocked(featureID string) error {
 	if err := o.checkChildExecution(featureID); err != nil {
 		return err
 	}
-	f, err := o.deps.Lifecycle.Get(featureID)
+	f, err := o.deps.Store.Load(featureID)
 	if err != nil {
 		return fmt.Errorf("loading feature: %w", err)
 	}
@@ -529,7 +530,7 @@ func (o *Orchestrator) startFeatureLocked(featureID string) error {
 		if err := o.runSetupWith(false, featureID); err != nil {
 			return err
 		}
-		f, err = o.deps.Lifecycle.Get(featureID)
+		f, err = o.deps.Store.Load(featureID)
 		if err != nil {
 			return fmt.Errorf("loading feature after setup: %w", err)
 		}
@@ -619,7 +620,7 @@ func (o *Orchestrator) startPhase(featureID string, phase feature.Phase) (featur
 		return 0, false, err
 	}
 	var (
-		result PhaseStartResult
+		result phaseStartResult
 		err    error
 	)
 	switch phase {
@@ -692,17 +693,17 @@ func (o *Orchestrator) startPhase(featureID string, phase feature.Phase) (featur
 // Interrupted as successors of BuildingKB). CompleteKnowledgeBase moves
 // BuildingKB → Created, so StartInquire's subsequent Created → Inquiring
 // transition stays legal.
-func (o *Orchestrator) startKB(featureID string) (PhaseStartResult, error) {
-	f, err := o.deps.Lifecycle.Get(featureID)
+func (o *Orchestrator) startKB(featureID string) (phaseStartResult, error) {
+	f, err := o.deps.Store.Load(featureID)
 	if err != nil {
-		return PhaseStartResult{}, fmt.Errorf("loading feature: %w", err)
+		return phaseStartResult{}, fmt.Errorf("loading feature: %w", err)
 	}
 
 	if len(f.Repos) == 0 {
 		if err := o.finalizeKBForSkip(f); err != nil {
-			return PhaseStartResult{}, err
+			return phaseStartResult{}, err
 		}
-		return PhaseStartResult{Outcome: PhaseSkipped, NextPhase: feature.PhaseInquire}, nil
+		return phaseStartResult{Outcome: PhaseSkipped, NextPhase: feature.PhaseInquire}, nil
 	}
 
 	// Child features use disposable KB workspaces; ordinary features use the
@@ -746,26 +747,20 @@ func (o *Orchestrator) startKB(featureID string) (PhaseStartResult, error) {
 	}
 
 	if allFresh {
-		// Refresh codebase indexes for all repos, then skip to Inquire.
-		if o.deps.PhaseRunner != nil {
-			for _, repo := range f.Repos {
-				_ = o.deps.PhaseRunner.RunCodebaseIndexForRepo(repo)
-			}
-		}
 		if err := o.finalizeKBForSkip(f); err != nil {
-			return PhaseStartResult{}, err
+			return phaseStartResult{}, err
 		}
-		return PhaseStartResult{Outcome: PhaseSkipped, NextPhase: feature.PhaseInquire}, nil
+		return phaseStartResult{Outcome: PhaseSkipped, NextPhase: feature.PhaseInquire}, nil
 	}
 
 	// Mixed case: transition, init tracking, fan out. Skip the transition and
 	// per-repo-status init when already in StatusBuildingKB (recovery resume).
 	if f.Status != feature.StatusBuildingKB {
-		if err := o.deps.Lifecycle.StartKnowledgeBase(featureID); err != nil {
-			return PhaseStartResult{}, fmt.Errorf("start knowledge base: %w", err)
+		if err := o.deps.Manager.StartPhase(featureID, feature.PhaseKnowledgeBase); err != nil {
+			return phaseStartResult{}, fmt.Errorf("start knowledge base: %w", err)
 		}
-		if err := o.deps.Lifecycle.InitKBStatus(featureID); err != nil {
-			return PhaseStartResult{}, fmt.Errorf("init KB status: %w", err)
+		if err := o.deps.Manager.InitKBStatus(featureID); err != nil {
+			return phaseStartResult{}, fmt.Errorf("init KB status: %w", err)
 		}
 	}
 
@@ -776,16 +771,15 @@ func (o *Orchestrator) startKB(featureID string) (PhaseStartResult, error) {
 				continue
 			}
 			if freshness[repo.Name] {
-				// Fresh repo in the mixed case: refresh codebase index,
-				// immediately mark completed in per-repo tracking.
-				_ = o.deps.PhaseRunner.RunCodebaseIndexForRepo(repo)
-				_ = o.deps.Lifecycle.MarkRepoKBCompleted(featureID, repo.Name)
+				// Fresh repo in the mixed case: immediately mark completed in
+				// per-repo tracking.
+				_ = o.deps.Manager.MarkRepoKBCompleted(featureID, repo.Name)
 				continue
 			}
 			if baseDir != "" && !isChild {
 				kbDir := agent.KBStateDir(baseDir, repo.Name)
 				if err := agent.RecordReadOnlyRepoBaseline(context.Background(), o.deps.CmdRunner, f, kbDir, repo.Name); err != nil {
-					return PhaseStartResult{}, fmt.Errorf("record KB read-only repo baseline for %s: %w", repo.Name, err)
+					return phaseStartResult{}, fmt.Errorf("record KB read-only repo baseline for %s: %w", repo.Name, err)
 				}
 			}
 			var sessionID string
@@ -798,13 +792,13 @@ func (o *Orchestrator) startKB(featureID string) (PhaseStartResult, error) {
 			if err != nil {
 				if errors.Is(err, agent.ErrKBLocked) {
 					o.markKBWaiting(featureID, baseDir, repo.Name)
-					return PhaseStartResult{Outcome: PhaseStarted}, nil
+					return phaseStartResult{Outcome: PhaseStarted}, nil
 				}
 				errMsg := fmt.Sprintf("run KB for repo %s: %v", repo.Name, err)
 				if markErr := o.markFailedWithEvent(featureID, failureRecordWithRepos(errcat.InfrastructureFailure, feature.PhaseKnowledgeBase, []string{repo.Name}, errMsg)); markErr != nil {
-					return PhaseStartResult{}, fmt.Errorf("%s (also failed to mark feature failed: %w)", errMsg, markErr)
+					return phaseStartResult{}, fmt.Errorf("%s (also failed to mark feature failed: %w)", errMsg, markErr)
 				}
-				return PhaseStartResult{}, errors.New(errMsg)
+				return phaseStartResult{}, errors.New(errMsg)
 			}
 			o.superviseSingleShotPhaseSession(featureID, sessionID, feature.PhaseKnowledgeBase)
 		}
@@ -813,7 +807,7 @@ func (o *Orchestrator) startKB(featureID string) (PhaseStartResult, error) {
 	// Started cleanly (or already in progress) — clear any stale wait message
 	// from a prior locked attempt.
 	o.clearKBWaitMessage(featureID)
-	return PhaseStartResult{Outcome: PhaseStarted}, nil
+	return phaseStartResult{Outcome: PhaseStarted}, nil
 }
 
 func (o *Orchestrator) activeKBSessionRepos(featureID string) map[string]string {
@@ -860,17 +854,14 @@ func (o *Orchestrator) markKBWaiting(featureID, baseDir, repoName string) {
 		owner = agent.ReadKBLockOwner(agent.KBStateDir(baseDir, repoName))
 	}
 	ownerLabel := owner
-	if owner != "" && o.deps.Lifecycle != nil {
-		if other, err := o.deps.Lifecycle.Get(owner); err == nil && other != nil && other.Name != "" {
+	if owner != "" {
+		if other, err := o.deps.Store.Load(owner); err == nil && other != nil && other.Name != "" {
 			ownerLabel = other.Name
 		}
 	}
 	msg := fmt.Sprintf("Waiting for KB build on repo %q", repoName)
 	if ownerLabel != "" {
 		msg = fmt.Sprintf("Waiting for KB build on repo %q by feature %q", repoName, ownerLabel)
-	}
-	if o.deps.Store == nil {
-		return
 	}
 	_ = o.deps.Store.Modify(featureID, func(ff *feature.Feature) error {
 		ff.KBWaitMessage = msg
@@ -882,9 +873,6 @@ func (o *Orchestrator) markKBWaiting(featureID, baseDir, repoName string) {
 // successfully fanned out (or determined no work remains) so the dashboard
 // stops advertising a wait that no longer applies.
 func (o *Orchestrator) clearKBWaitMessage(featureID string) {
-	if o.deps.Store == nil {
-		return
-	}
 	_ = o.deps.Store.Modify(featureID, func(ff *feature.Feature) error {
 		if ff.KBWaitMessage == "" {
 			return nil
@@ -908,10 +896,7 @@ func (o *Orchestrator) clearKBWaitMessage(featureID string) {
 // (Inquire) instead of stranding the waiter in StatusCreated/PhaseKnowledgeBase
 // after finalizeKBForSkip's BuildingKB → Created transition.
 func (o *Orchestrator) wakeKBWaiters(skipFeatureID string) {
-	if o.deps.Lifecycle == nil {
-		return
-	}
-	features, err := o.deps.Lifecycle.List()
+	features, err := o.deps.Store.List()
 	if err != nil {
 		// PartialLoadError carries the features that DID load alongside the
 		// per-ID load warnings. Treat it as soft: a single malformed feature
@@ -956,7 +941,7 @@ func (o *Orchestrator) finalizeKBForSkip(f *feature.Feature) error {
 	if f == nil || f.Status != feature.StatusBuildingKB {
 		return nil
 	}
-	if err := o.deps.Lifecycle.CompleteKnowledgeBase(f.ID); err != nil {
+	if err := o.deps.Manager.Transition(f.ID, feature.StatusCreated); err != nil {
 		return fmt.Errorf("complete knowledge base: %w", err)
 	}
 	return nil
@@ -975,42 +960,42 @@ func (o *Orchestrator) runSingleShotArtifactPhase(
 	phaseKey string,
 	resolve func() error,
 	run func() (string, error),
-) (PhaseStartResult, error) {
+) (phaseStartResult, error) {
 	if o.deps.PhaseRunner == nil {
-		return PhaseStartResult{Outcome: PhaseStarted}, nil
+		return phaseStartResult{Outcome: PhaseStarted}, nil
 	}
 	if sessionID := o.activePhaseSessionID(featureID, phase); sessionID != "" {
 		o.superviseSingleShotPhaseSession(featureID, sessionID, phase)
-		return PhaseStartResult{Outcome: PhaseStarted}, nil
+		return phaseStartResult{Outcome: PhaseStarted}, nil
 	}
 	if resolve != nil {
 		if err := resolve(); err != nil {
-			return PhaseStartResult{}, err
+			return phaseStartResult{}, err
 		}
 	}
 	if err := agent.RecordReadOnlyRepoBaseline(context.Background(), o.deps.CmdRunner, f, o.artifactReadOnlyGuardDir(f, phaseKey)); err != nil {
-		return PhaseStartResult{}, fmt.Errorf("record %s read-only repo baseline: %w", phaseKey, err)
+		return phaseStartResult{}, fmt.Errorf("record %s read-only repo baseline: %w", phaseKey, err)
 	}
 	sessionID, err := run()
 	if err != nil {
-		return PhaseStartResult{}, err
+		return phaseStartResult{}, err
 	}
 	o.superviseSingleShotPhaseSession(featureID, sessionID, phase)
-	return PhaseStartResult{Outcome: PhaseStarted}, nil
+	return phaseStartResult{Outcome: PhaseStarted}, nil
 }
 
 // startInquire starts the Inquire phase. Idempotent for recovery resume: when
 // the feature is already StatusInquiring, StartInquire is skipped because the
 // StatusInquiring → StatusInquiring self-transition is invalid
 // (feature/feature.go:489).
-func (o *Orchestrator) startInquire(featureID string) (PhaseStartResult, error) {
-	f, err := o.deps.Lifecycle.Get(featureID)
+func (o *Orchestrator) startInquire(featureID string) (phaseStartResult, error) {
+	f, err := o.deps.Store.Load(featureID)
 	if err != nil {
-		return PhaseStartResult{}, fmt.Errorf("loading feature: %w", err)
+		return phaseStartResult{}, fmt.Errorf("loading feature: %w", err)
 	}
 	if f.Status != feature.StatusInquiring {
-		if err := o.deps.Lifecycle.StartInquire(featureID); err != nil {
-			return PhaseStartResult{}, fmt.Errorf("start inquire: %w", err)
+		if err := o.deps.Manager.StartPhase(featureID, feature.PhaseInquire); err != nil {
+			return phaseStartResult{}, fmt.Errorf("start inquire: %w", err)
 		}
 	}
 	kbInfos := o.computeKBInfos(f)
@@ -1032,14 +1017,14 @@ func (o *Orchestrator) startInquire(featureID string) (PhaseStartResult, error) 
 // StatusResearching, StartResearch is skipped because the
 // StatusResearching → StatusResearching self-transition is invalid
 // (feature/feature.go:487).
-func (o *Orchestrator) startResearch(featureID string) (PhaseStartResult, error) {
-	f, err := o.deps.Lifecycle.Get(featureID)
+func (o *Orchestrator) startResearch(featureID string) (phaseStartResult, error) {
+	f, err := o.deps.Store.Load(featureID)
 	if err != nil {
-		return PhaseStartResult{}, fmt.Errorf("loading feature: %w", err)
+		return phaseStartResult{}, fmt.Errorf("loading feature: %w", err)
 	}
 	if f.Status != feature.StatusResearching {
-		if err := o.deps.Lifecycle.StartResearch(featureID); err != nil {
-			return PhaseStartResult{}, fmt.Errorf("start research: %w", err)
+		if err := o.deps.Manager.StartPhase(featureID, feature.PhaseResearch); err != nil {
+			return phaseStartResult{}, fmt.Errorf("start research: %w", err)
 		}
 	}
 	kbInfos := o.computeKBInfos(f)
@@ -1067,19 +1052,19 @@ func (o *Orchestrator) startResearch(featureID string) (PhaseStartResult, error)
 // StartDesign is skipped because the
 // StatusDesigning → StatusDesigning self-transition is invalid
 // (feature/feature.go:492).
-func (o *Orchestrator) startDesign(featureID string) (PhaseStartResult, error) {
-	f, err := o.deps.Lifecycle.Get(featureID)
+func (o *Orchestrator) startDesign(featureID string) (phaseStartResult, error) {
+	f, err := o.deps.Store.Load(featureID)
 	if err != nil {
-		return PhaseStartResult{}, fmt.Errorf("loading feature: %w", err)
+		return phaseStartResult{}, fmt.Errorf("loading feature: %w", err)
 	}
 	if f.Status != feature.StatusDesigning {
-		if err := o.deps.Lifecycle.StartDesign(featureID); err != nil {
-			return PhaseStartResult{}, fmt.Errorf("start design: %w", err)
+		if err := o.deps.Manager.StartPhase(featureID, feature.PhaseDesign); err != nil {
+			return phaseStartResult{}, fmt.Errorf("start design: %w", err)
 		}
 	}
 	researchPath := o.resolveArtifactPath(f, "research")
 	if researchPath == "" {
-		return PhaseStartResult{}, errors.New("research phase did not produce an artifact; cannot proceed to design")
+		return phaseStartResult{}, errors.New("research phase did not produce an artifact; cannot proceed to design")
 	}
 	// QA file paths from inquire/research specifically (design's own qa
 	// does not exist yet).
@@ -1111,17 +1096,17 @@ func (o *Orchestrator) startDesign(featureID string) (PhaseStartResult, error) {
 // StartPlanning is skipped because the StatusPlanning → StatusPlanning
 // self-transition is invalid (feature/feature.go:494). Matches the
 // idempotent guard in startRoadmapPhasePlan.
-func (o *Orchestrator) startPlan(featureID string) (PhaseStartResult, error) {
-	f, err := o.deps.Lifecycle.Get(featureID)
+func (o *Orchestrator) startPlan(featureID string) (phaseStartResult, error) {
+	f, err := o.deps.Store.Load(featureID)
 	if err != nil {
-		return PhaseStartResult{}, fmt.Errorf("loading feature: %w", err)
+		return phaseStartResult{}, fmt.Errorf("loading feature: %w", err)
 	}
 	if f.CurrentRoadmapPhase > 0 {
 		return o.startRoadmapPhasePlan(featureID, f)
 	}
 	if f.Status != feature.StatusPlanning {
-		if err := o.deps.Lifecycle.StartPlanning(featureID); err != nil {
-			return PhaseStartResult{}, fmt.Errorf("start planning: %w", err)
+		if err := o.deps.Manager.StartPlanning(featureID); err != nil {
+			return phaseStartResult{}, fmt.Errorf("start planning: %w", err)
 		}
 	}
 
@@ -1130,52 +1115,52 @@ func (o *Orchestrator) startPlan(featureID string) (PhaseStartResult, error) {
 		inputArtifactPath = o.resolveArtifactPath(f, "research")
 	}
 	if inputArtifactPath == "" && f.EffectivePipeline() != feature.PipelineMedium {
-		return PhaseStartResult{}, errors.New("no design doc or research artifact found; cannot proceed to planning")
+		return phaseStartResult{}, errors.New("no design doc or research artifact found; cannot proceed to planning")
 	}
 
 	qaFilePaths := o.collectQAFilePaths(f)
 	kbInfos := o.computeKBInfos(f)
 	if o.deps.PhaseRunner != nil {
 		if err := agent.RecordReadOnlyRepoBaseline(context.Background(), o.deps.CmdRunner, f, o.planReadOnlyGuardDir(f)); err != nil {
-			return PhaseStartResult{}, fmt.Errorf("record plan read-only repo baseline: %w", err)
+			return phaseStartResult{}, fmt.Errorf("record plan read-only repo baseline: %w", err)
 		}
 		resultCh, err := o.deps.PhaseRunner.RunPlanningWithValidation(f, inputArtifactPath, qaFilePaths, kbInfos...)
 		if err != nil {
-			return PhaseStartResult{}, fmt.Errorf("run planning: %w", err)
+			return phaseStartResult{}, fmt.Errorf("run planning: %w", err)
 		}
 		o.phaseSupervisor().supervisePlanLoop(featureID, resultCh)
 	}
-	return PhaseStartResult{Outcome: PhaseStarted}, nil
+	return phaseStartResult{Outcome: PhaseStarted}, nil
 }
 
 // startRoadmapPhasePlan starts per-phase planning for the current roadmap
 // phase. It conditionally transitions via
 // StartPlanning only if the feature is not already StatusPlanning.
-func (o *Orchestrator) startRoadmapPhasePlan(featureID string, f *feature.Feature) (PhaseStartResult, error) {
+func (o *Orchestrator) startRoadmapPhasePlan(featureID string, f *feature.Feature) (phaseStartResult, error) {
 	if f.Status != feature.StatusPlanning {
-		if err := o.deps.Lifecycle.StartPlanning(featureID); err != nil {
-			return PhaseStartResult{}, fmt.Errorf("start planning: %w", err)
+		if err := o.deps.Manager.StartPlanning(featureID); err != nil {
+			return phaseStartResult{}, fmt.Errorf("start planning: %w", err)
 		}
 		// Re-load feature after transition
-		reloaded, err := o.deps.Lifecycle.Get(featureID)
+		reloaded, err := o.deps.Store.Load(featureID)
 		if err != nil {
-			return PhaseStartResult{}, fmt.Errorf("reload feature: %w", err)
+			return phaseStartResult{}, fmt.Errorf("reload feature: %w", err)
 		}
 		f = reloaded
 	}
 
 	roadmapPath := o.resolveArtifactPath(f, "roadmap")
 	if roadmapPath == "" {
-		return PhaseStartResult{}, errors.New("no roadmap artifact found")
+		return phaseStartResult{}, errors.New("no roadmap artifact found")
 	}
 
 	roadmapData, readErr := os.ReadFile(roadmapPath)
 	if readErr != nil {
-		return PhaseStartResult{}, fmt.Errorf("read roadmap: %w", readErr)
+		return phaseStartResult{}, fmt.Errorf("read roadmap: %w", readErr)
 	}
 	phases, parseErr := agent.ParseRoadmap(string(roadmapData))
 	if parseErr != nil {
-		return PhaseStartResult{}, fmt.Errorf("parse roadmap: %w", parseErr)
+		return phaseStartResult{}, fmt.Errorf("parse roadmap: %w", parseErr)
 	}
 
 	var currentPhase agent.RoadmapPhase
@@ -1186,7 +1171,7 @@ func (o *Orchestrator) startRoadmapPhasePlan(featureID string, f *feature.Featur
 		}
 	}
 	if currentPhase.Number == 0 {
-		return PhaseStartResult{}, fmt.Errorf("phase %d not found in roadmap", f.CurrentRoadmapPhase)
+		return phaseStartResult{}, fmt.Errorf("phase %d not found in roadmap", f.CurrentRoadmapPhase)
 	}
 
 	qaFilePaths := o.collectQAFilePaths(f)
@@ -1202,15 +1187,15 @@ func (o *Orchestrator) startRoadmapPhasePlan(featureID string, f *feature.Featur
 	kbInfos := o.computeKBInfos(f)
 	if o.deps.PhaseRunner != nil {
 		if err := agent.RecordReadOnlyRepoBaseline(context.Background(), o.deps.CmdRunner, f, o.planReadOnlyGuardDir(f)); err != nil {
-			return PhaseStartResult{}, fmt.Errorf("record phase plan read-only repo baseline: %w", err)
+			return phaseStartResult{}, fmt.Errorf("record phase plan read-only repo baseline: %w", err)
 		}
 		resultCh, err := o.deps.PhaseRunner.RunPhasePlanning(f, roadmapPath, currentPhase, qaFilePaths, priorPhasePlanPaths, kbInfos...)
 		if err != nil {
-			return PhaseStartResult{}, fmt.Errorf("run phase planning: %w", err)
+			return phaseStartResult{}, fmt.Errorf("run phase planning: %w", err)
 		}
 		o.phaseSupervisor().supervisePlanLoop(featureID, resultCh)
 	}
-	return PhaseStartResult{Outcome: PhaseStarted}, nil
+	return phaseStartResult{Outcome: PhaseStarted}, nil
 }
 
 // startImplement starts the Implementation phase. Resolves plan path through
@@ -1228,26 +1213,26 @@ func (o *Orchestrator) startRoadmapPhasePlan(featureID string, f *feature.Featur
 // preserve across the crash. Crash recovery re-runs the interrupted unit
 // from scratch with a fresh Claude session; durable state on disk is the
 // resume scaffolding.
-func (o *Orchestrator) startImplement(featureID string) (PhaseStartResult, error) {
-	f, err := o.deps.Lifecycle.Get(featureID)
+func (o *Orchestrator) startImplement(featureID string) (phaseStartResult, error) {
+	f, err := o.deps.Store.Load(featureID)
 	if err != nil {
-		return PhaseStartResult{}, fmt.Errorf("loading feature: %w", err)
+		return phaseStartResult{}, fmt.Errorf("loading feature: %w", err)
 	}
 
 	if f.Status != feature.StatusImplementing {
-		if err := o.deps.Lifecycle.StartImplementation(featureID); err != nil {
-			return PhaseStartResult{}, fmt.Errorf("start implementation: %w", err)
+		if err := o.deps.Manager.StartImplementation(featureID); err != nil {
+			return phaseStartResult{}, fmt.Errorf("start implementation: %w", err)
 		}
-		reloaded, err := o.deps.Lifecycle.Get(featureID)
+		reloaded, err := o.deps.Store.Load(featureID)
 		if err != nil {
-			return PhaseStartResult{}, fmt.Errorf("loading feature: %w", err)
+			return phaseStartResult{}, fmt.Errorf("loading feature: %w", err)
 		}
 		f = reloaded
 	}
 
 	planPath := o.resolvePlanPath(f)
 	if planPath == "" {
-		return PhaseStartResult{}, errors.New("plan phase did not produce an artifact; cannot proceed to implementation")
+		return phaseStartResult{}, errors.New("plan phase did not produce an artifact; cannot proceed to implementation")
 	}
 
 	// Persist the resolved plan so restarts reuse it.
@@ -1258,46 +1243,46 @@ func (o *Orchestrator) startImplement(featureID string) (PhaseStartResult, error
 		ff.Artifacts["plan"] = planPath
 		return nil
 	}); err != nil {
-		return PhaseStartResult{}, fmt.Errorf("persist plan path: %w", err)
+		return phaseStartResult{}, fmt.Errorf("persist plan path: %w", err)
 	}
 
 	// Init repo impl tracking unconditionally; crash recovery re-runs the
 	// interrupted unit from scratch.
-	if err := o.deps.Lifecycle.InitRepoImpl(featureID); err != nil {
-		return PhaseStartResult{}, fmt.Errorf("init repo impl: %w", err)
+	if err := o.deps.Manager.InitRepoImpl(featureID); err != nil {
+		return phaseStartResult{}, fmt.Errorf("init repo impl: %w", err)
 	}
 
 	// The unified phase-implement loop derives its repo set from PhaseScope
 	// (per-Task `**Repo:** <name>` tags); per-phase execution-order.yaml is
 	// gone in SchemaVersionCurrent = 4.
 	if err := o.startMultiRepoImplementation(featureID); err != nil {
-		return PhaseStartResult{}, fmt.Errorf("run implementation: %w", err)
+		return phaseStartResult{}, fmt.Errorf("run implementation: %w", err)
 	}
-	return PhaseStartResult{Outcome: PhaseStarted}, nil
+	return phaseStartResult{Outcome: PhaseStarted}, nil
 }
 
 // startPublish is a thin dispatcher. It returns
 // PhaseNoOp when the feature is not publishable or auto-publish is disabled;
 // delegates to o.publish otherwise.
-func (o *Orchestrator) startPublish(featureID string) (PhaseStartResult, error) {
-	f, err := o.deps.Lifecycle.Get(featureID)
+func (o *Orchestrator) startPublish(featureID string) (phaseStartResult, error) {
+	f, err := o.deps.Store.Load(featureID)
 	if err != nil {
-		return PhaseStartResult{}, fmt.Errorf("loading feature: %w", err)
+		return phaseStartResult{}, fmt.Errorf("loading feature: %w", err)
 	}
 	if !f.IsPublishable() {
-		return PhaseStartResult{Outcome: PhaseNoOp}, nil
+		return phaseStartResult{Outcome: PhaseNoOp}, nil
 	}
 	if !f.Checkpoints.AutoPublish() {
-		return PhaseStartResult{Outcome: PhaseNoOp}, nil
+		return phaseStartResult{Outcome: PhaseNoOp}, nil
 	}
 	publishFn := o.publishFn
 	if publishFn == nil {
 		publishFn = o.publish
 	}
 	if err := publishFn(featureID); err != nil {
-		return PhaseStartResult{}, err
+		return phaseStartResult{}, err
 	}
-	return PhaseStartResult{Outcome: PhaseStarted}, nil
+	return phaseStartResult{Outcome: PhaseStarted}, nil
 }
 
 // startFinalReview re-enters the deferred end-of-feature Final Review pass.
@@ -1307,25 +1292,25 @@ func (o *Orchestrator) startPublish(featureID string) (PhaseStartResult, error) 
 // On FR success, the post-FR advancement (MarkCodeReady or auto-publish)
 // runs via advanceAfterFinalReview so the feature reaches the same terminal
 // state the original onMultiReposPassed path produces.
-func (o *Orchestrator) startFinalReview(featureID string) (PhaseStartResult, error) {
-	f, err := o.deps.Lifecycle.Get(featureID)
+func (o *Orchestrator) startFinalReview(featureID string) (phaseStartResult, error) {
+	f, err := o.deps.Store.Load(featureID)
 	if err != nil {
-		return PhaseStartResult{}, fmt.Errorf("loading feature: %w", err)
+		return phaseStartResult{}, fmt.Errorf("loading feature: %w", err)
 	}
 	if f.Status == feature.StatusFinalReviewing {
-		return PhaseStartResult{Outcome: PhaseNoOp}, nil
+		return phaseStartResult{Outcome: PhaseNoOp}, nil
 	}
 
 	// The deferred FR run and its background tail are one continuation:
 	// reserve admission before any of it launches so no idle window opens
 	// between this dispatch and the tail's own work.
 	if err := o.admissionBeginAsync(featureID); err != nil {
-		return PhaseStartResult{}, err
+		return phaseStartResult{}, err
 	}
 	resultCh, err := o.startDeferredFinalReview(featureID)
 	if err != nil {
 		o.admissionEndAsync(featureID)
-		return PhaseStartResult{}, err
+		return phaseStartResult{}, err
 	}
 	o.cycleWG.Go(func() {
 		defer o.admissionEndAsync(featureID)
@@ -1338,7 +1323,7 @@ func (o *Orchestrator) startFinalReview(featureID string) (PhaseStartResult, err
 			o.surfaceDispatchCompletionError(featureID, err)
 		}
 	})
-	return PhaseStartResult{Outcome: PhaseStarted}, nil
+	return phaseStartResult{Outcome: PhaseStarted}, nil
 }
 
 func (o *Orchestrator) featureStartControl(featureID string) *sync.Mutex {
@@ -1358,7 +1343,7 @@ func (o *Orchestrator) featureStartControl(featureID string) *sync.Mutex {
 // as failure_type=session_crash and beat FeatureInterrupted to emission.
 func (o *Orchestrator) interruptFeature(featureID string) error {
 	featureInterrupted := false
-	f, getErr := o.deps.Lifecycle.Get(featureID)
+	f, getErr := o.deps.Store.Load(featureID)
 	switch {
 	case getErr == nil && isSettledFeatureStatus(f.Status):
 		// Stop is idempotent when work completed after the caller's activity
@@ -1367,7 +1352,7 @@ func (o *Orchestrator) interruptFeature(featureID string) error {
 		// Transition to interrupted FIRST so racing completion handlers
 		// (onKBCompleted, onPhaseCompletedDefault, …) observe the terminal
 		// state and skip their failure paths.
-		if err := o.deps.Lifecycle.Transition(featureID, feature.StatusInterrupted); err != nil {
+		if err := o.deps.Manager.Transition(featureID, feature.StatusInterrupted); err != nil {
 			return fmt.Errorf("transition to interrupted: %w", err)
 		}
 		featureInterrupted = true
@@ -1506,21 +1491,21 @@ func (o *Orchestrator) HandlePhaseCompletion(featureID string, input PhaseComple
 	// Fence late completion callbacks from mutating a child whose
 	// relationship is closed (discarded or completed) or whose discard
 	// intent is in flight. The discard flow owns the terminal transition.
-	if f, err := o.deps.Lifecycle.Get(featureID); err == nil && isTerminalForCompletion(f) {
+	if f, err := o.deps.Store.Load(featureID); err == nil && isTerminalForCompletion(f) {
 		return nil
 	}
 	switch input.Phase {
 	case feature.PhaseKnowledgeBase:
 		return o.onKBCompleted(featureID, input)
 	case feature.PhaseInquire:
-		return o.onArtifactPhaseCompleted(featureID, input, "inquire", o.deps.Lifecycle.CompleteInquire)
+		return o.onArtifactPhaseCompleted(featureID, input, "inquire", func(id string) error { return o.deps.Manager.Transition(id, feature.StatusInquireReady) })
 	case feature.PhaseResearch:
-		return o.onArtifactPhaseCompleted(featureID, input, "research", o.deps.Lifecycle.CompleteResearch)
+		return o.onArtifactPhaseCompleted(featureID, input, "research", func(id string) error { return o.deps.Manager.Transition(id, feature.StatusDesignReady) })
 	case feature.PhaseDesign:
 		// Validate against the legacy "design" on-disk subdirectory but
 		// persist the canonical Design artifact key so downstream consumers
 		// resolve it through feature.Feature.DesignArtifactPath().
-		return o.onArtifactPhaseCompletedWithKey(featureID, input, "design", feature.DesignArtifactKey, o.deps.Lifecycle.CompleteDesign)
+		return o.onArtifactPhaseCompletedWithKey(featureID, input, "design", feature.DesignArtifactKey, func(id string) error { return o.deps.Manager.Transition(id, feature.StatusPlanReady) })
 	case feature.PhasePlan:
 		return o.onPlanLoopDone(featureID, input.PlanResult)
 	case feature.PhaseImplement:
@@ -1535,7 +1520,7 @@ func (o *Orchestrator) HandlePhaseCompletion(featureID string, input PhaseComple
 // transitions, rewind, execution-plan population) and then dispatches the
 // target phase starter via startPhase. Emits FeatureAdvanced.
 func (o *Orchestrator) HandleReviewDecision(featureID string, d ReviewDecision) error {
-	f, err := o.deps.Lifecycle.Get(featureID)
+	f, err := o.deps.Store.Load(featureID)
 	if err != nil {
 		return fmt.Errorf("loading feature %s: %w", featureID, err)
 	}
@@ -1593,14 +1578,14 @@ func (o *Orchestrator) reviewProceed(featureID string, f *feature.Feature, d Rev
 	// read fresh from disk by startMultiRepoImplementation; no pre-flight
 	// populate step is needed (per SchemaVersionCurrent = 3).
 	if d.PhasePlan {
-		if err := o.deps.Lifecycle.StartRoadmapPhaseImplementation(featureID); err != nil {
+		if err := o.deps.Manager.Transition(featureID, feature.StatusImplementReady); err != nil {
 			return fmt.Errorf("start roadmap phase implementation: %w", err)
 		}
 		// Persist the resolved plan path so subsequent implementation reuses it.
 		// Mirrors startImplement's persistence (orchestrator.go:770-779). The
 		// fallback cascade in resolvePlanPath (phasePlanDirForFeature) locates
 		// the phase-plan dir the planner writes to.
-		if reloaded, err := o.deps.Lifecycle.Get(featureID); err == nil && reloaded != nil {
+		if reloaded, err := o.deps.Store.Load(featureID); err == nil && reloaded != nil {
 			if planPath := o.resolvePlanPath(reloaded); planPath != "" {
 				_ = o.deps.Store.Modify(featureID, func(ff *feature.Feature) error {
 					if ff.Artifacts == nil {
@@ -1626,7 +1611,7 @@ func (o *Orchestrator) reviewProceed(featureID string, f *feature.Feature, d Rev
 		// (CurrentRoadmapPhase < TotalRoadmapPhases checks, phase-plan vs legacy
 		// plan routing) would be wrong.
 		o.persistRoadmapPhaseCount(featureID, f)
-		if err := o.deps.Lifecycle.AdvanceRoadmapPhase(featureID); err != nil {
+		if err := o.deps.Manager.AdvanceRoadmapPhase(featureID); err != nil {
 			return fmt.Errorf("advance roadmap phase: %w", err)
 		}
 		_, _, err := o.startPhase(featureID, feature.PhasePlan)
@@ -1636,7 +1621,7 @@ func (o *Orchestrator) reviewProceed(featureID string, f *feature.Feature, d Rev
 	// Gate dispatch. Special-case PhaseImplement: roadmap pending vs. legacy plan.
 	if d.TargetPhase == feature.PhaseImplement {
 		if f.TotalRoadmapPhases > 0 && f.CurrentRoadmapPhase == 0 {
-			if err := o.deps.Lifecycle.AdvanceRoadmapPhase(featureID); err != nil {
+			if err := o.deps.Manager.AdvanceRoadmapPhase(featureID); err != nil {
 				return fmt.Errorf("advance roadmap phase: %w", err)
 			}
 			_, _, err := o.startPhase(featureID, feature.PhasePlan)
@@ -1645,7 +1630,7 @@ func (o *Orchestrator) reviewProceed(featureID string, f *feature.Feature, d Rev
 		// Non-roadmap legacy plan review approval. The legacy plan dir's
 		// execution-order.yaml (if any) is read fresh by
 		// startMultiRepoImplementation; no pre-flight populate is needed.
-		if err := o.deps.Lifecycle.CompletePlanning(featureID); err != nil {
+		if err := o.deps.Manager.Transition(featureID, feature.StatusImplementReady); err != nil {
 			return fmt.Errorf("complete planning: %w", err)
 		}
 		_, _, err := o.startPhase(featureID, feature.PhaseImplement)
@@ -1715,7 +1700,7 @@ func (o *Orchestrator) reviewIterate(featureID string, f *feature.Feature, d Rev
 }
 
 // proceedFromRewindReview confirms a rewind that has already been performed
-// and dispatches the target phase. The caller invokes Lifecycle.RewindToPhase
+// and dispatches the target phase. The caller invokes Manager.RewindWithRequest
 // before opening the rewind-artifact-review session, so
 // by the time the user picks "Proceed with rewind" the active run is already
 // the freshly forked one with PendingReviewPhase=&target and IsRewind=true.
@@ -1728,13 +1713,13 @@ func (o *Orchestrator) reviewIterate(featureID string, f *feature.Feature, d Rev
 // `target` MUST be the effective target phase returned to the caller after
 // escalation. Escalation
 // (e.g. Medium-upgraded features escalating pre-plan rewinds to KB) was
-// resolved by the original RewindToPhase call and persisted onto the new run.
+// resolved by the original RewindWithRequest call and persisted onto the new run.
 //
 // Replaces the previously-incorrect HandleReviewDecision({Decision:"rewind"})
-// path, which redundantly called RewindToPhase a second time and produced an
+// path, which redundantly called RewindWithRequest a second time and produced an
 // extra phantom run on every confirm.
 func (o *Orchestrator) proceedFromRewindReview(featureID string, target feature.Phase) error {
-	f, err := o.deps.Lifecycle.Get(featureID)
+	f, err := o.deps.Store.Load(featureID)
 	if err != nil {
 		return fmt.Errorf("loading feature %s: %w", featureID, err)
 	}
@@ -1749,7 +1734,7 @@ func (o *Orchestrator) proceedFromRewindReview(featureID string, target feature.
 	// Read description-review.md and overwrite f.Description when the user
 	// proceeds from a rewind-to-first-phase review. Large/Moonshot write
 	// the file on PhaseInquire rewind; Medium writes it on PhasePlan rewind
-	// (Plan is Medium's first phase). feature/manager.go RewindToPhase is
+	// (Plan is Medium's first phase). feature/manager.go RewindWithRequest is
 	// the writer for both cases.
 	if target == feature.PhaseInquire ||
 		(target == feature.PhasePlan && f != nil && f.EffectivePipeline() == feature.PipelineMedium) {
@@ -1766,7 +1751,7 @@ func (o *Orchestrator) proceedFromRewindReview(featureID string, target feature.
 
 	// Rewind-to-implement: mark planning complete. CompletePlanning must fire
 	// on every rewind-to-implement path — not only the non-roadmap case.
-	// After RewindToPhase, the feature's Status is
+	// After RewindWithRequest, the feature's Status is
 	// NeedsReviewForPhase(PhaseImplement) == StatusPlanNeedsReview
 	// (feature/manager.go:1241-1242). startImplement immediately calls
 	// StartImplementation (orchestrator.go:562), which transitions to
@@ -1781,11 +1766,11 @@ func (o *Orchestrator) proceedFromRewindReview(featureID string, target feature.
 	// pre-flight populate step is needed on rewind.
 	if target == feature.PhaseImplement {
 		if pendingPartialImplementReview {
-			if err := o.deps.Lifecycle.StartRoadmapPhaseImplementation(featureID); err != nil {
+			if err := o.deps.Manager.Transition(featureID, feature.StatusImplementReady); err != nil {
 				return fmt.Errorf("start roadmap phase implementation: %w", err)
 			}
 		} else {
-			if err := o.deps.Lifecycle.CompletePlanning(featureID); err != nil {
+			if err := o.deps.Manager.Transition(featureID, feature.StatusImplementReady); err != nil {
 				return fmt.Errorf("complete planning: %w", err)
 			}
 		}
@@ -1848,14 +1833,14 @@ func (o *Orchestrator) persistRoadmapPhaseCount(featureID string, f *feature.Fea
 // overwrite its meta.yaml with a CHANGES_REQUESTED entry.
 //
 // The planner's resume logic short-circuits when the latest attempt has
-// ReviewStatus == "APPROVED" (in RunRoadmapPlanningLoop and
-// RunPhasePlanningLoop). Writing a new meta with empty AgentStatus causes
+// ReviewStatus == "APPROVED" (in the agent's planning loop, for roadmaps
+// and phase plans alike). Writing a new meta with empty AgentStatus causes
 // LatestCompletedPlanAttempt to skip that attempt entirely, forcing a fresh
 // attempt. Without this, "iterate" on an approved plan would return approved
 // immediately and never re-plan.
 //
 // For the non-phase-plan case the helper invalidates both the roadmap/
-// directory (where RunRoadmapPlanningLoop writes) and the legacy plan/
+// directory (where roadmap planning writes) and the legacy plan/
 // directory left over from the removed RunPlanningLoop (features carried
 // forward from older builds may still have APPROVED metadata there). Either
 // directory may be empty or absent on any given feature, in which case
@@ -1872,13 +1857,13 @@ func (o *Orchestrator) writePlanAttemptChangesRequested(f *feature.Feature, phas
 	}
 	var candidates []string
 	if phasePlan && f.CurrentRoadmapPhase > 0 {
-		// RunPhasePlanningLoop writes attempt-NN/meta.yaml under the
+		// Phase planning writes attempt-NN/meta.yaml under the
 		// phase-plan dir (plan_validation.go). Targeting any other dir here
 		// would leave the APPROVED attempt untouched in the real attempt tree,
 		// and the next plan run would short-circuit via the attempt cache.
 		candidates = append(candidates, o.phasePlanDirForFeature(f, f.CurrentRoadmapPhase))
 	} else {
-		// Roadmap dir: matches the path RunRoadmapPlanningLoop reads from.
+		// Roadmap dir: matches the path roadmap planning reads from.
 		roadmapDir := agent.RoadmapDir(baseDir, f)
 		// Legacy plan dir: features carried forward from a build that ran the
 		// (now-removed) RunPlanningLoop may have APPROVED metadata at
@@ -1904,7 +1889,7 @@ func (o *Orchestrator) writePlanAttemptChangesRequested(f *feature.Feature, phas
 // terminal-phase short-circuits. NEVER emits FeatureCompleted — that event is
 // owned exclusively by tryCompleteAndEmit.
 func (o *Orchestrator) advanceToNextPhase(featureID string, completedPhase feature.Phase) error {
-	f, err := o.deps.Lifecycle.Get(featureID)
+	f, err := o.deps.Store.Load(featureID)
 	if err != nil {
 		return fmt.Errorf("loading feature %s: %w", featureID, err)
 	}
@@ -1974,14 +1959,14 @@ func (o *Orchestrator) advanceToNextPhase(featureID string, completedPhase featu
 //
 // Source-scan regression Test 73a enforces this invariant.
 func (o *Orchestrator) tryCompleteAndEmit(featureID string) (bool, error) {
-	published, err := o.deps.Lifecycle.TryCompletePublish(featureID)
+	published, err := o.deps.Manager.TryCompletePublish(featureID)
 	if err != nil {
 		return false, fmt.Errorf("try complete publish: %w", err)
 	}
 	if !published {
 		return false, nil
 	}
-	f, getErr := o.deps.Lifecycle.Get(featureID)
+	f, getErr := o.deps.Store.Load(featureID)
 	if getErr != nil {
 		// The transition already happened on disk; we just can't read the
 		// fresh feature. Emit the event without feature payload rather than
@@ -2039,7 +2024,7 @@ func (o *Orchestrator) publishWithOptionsLocked(featureID string, opts PublishOp
 	if err := o.relationshipGuard(featureID, mutationPublish); err != nil {
 		return err
 	}
-	f, err := o.deps.Lifecycle.Get(featureID)
+	f, err := o.deps.Store.Load(featureID)
 	if err != nil {
 		return fmt.Errorf("loading feature %s: %w", featureID, err)
 	}
@@ -2070,7 +2055,7 @@ func (o *Orchestrator) publishWithOptionsLocked(featureID string, opts PublishOp
 		}
 		// Skip repos already published (sibling goroutines may have updated)
 		// or untouched (no phase ever touched them, no PR to open).
-		freshF, freshErr := o.deps.Lifecycle.Get(featureID)
+		freshF, freshErr := o.deps.Store.Load(featureID)
 		if freshErr == nil {
 			if st, ok := freshF.RepoStates[repo.Name]; ok && st != nil {
 				if st.PRURL != "" {
@@ -2128,7 +2113,7 @@ func (o *Orchestrator) publishWithOptionsLocked(featureID string, opts PublishOp
 	// event carries the first failed repository's rendered canonical error
 	// so its SSE projection matches the feature-failure shape.
 	if finalErr != nil {
-		if freshF, getErr := o.deps.Lifecycle.Get(featureID); getErr == nil {
+		if freshF, getErr := o.deps.Store.Load(featureID); getErr == nil {
 			if rendered, ok := firstFailedRepoError(freshF); ok {
 				publishCompleted.CanonicalError = &rendered
 			}

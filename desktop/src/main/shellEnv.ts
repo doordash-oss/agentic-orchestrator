@@ -31,14 +31,14 @@ limitations under the License.
  */
 import { execFile } from 'node:child_process';
 
-export interface ShellEnvOptions {
+interface ShellEnvOptions {
   env: NodeJS.ProcessEnv;
   platform?: NodeJS.Platform;
   runShell?: (shell: string, args: readonly string[]) => Promise<string>;
   timeoutMs?: number;
 }
 
-export interface ShellEnvOutcome {
+interface ShellEnvOutcome {
   applied: boolean;
   /** Entries appended to PATH (empty when nothing was missing). */
   added: string[];

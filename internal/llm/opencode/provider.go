@@ -30,7 +30,6 @@ import (
 	"errors"
 	"fmt"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -42,11 +41,11 @@ import (
 // providerName is the Agentico routing identifier for OpenCode.
 const providerName = "opencode"
 
-// RoutingPrefix is the Agentico-only model prefix that explicitly selects the
+// routingPrefix is the Agentico-only model prefix that explicitly selects the
 // OpenCode provider, e.g. "opencode:anthropic/claude-sonnet-4-5". It is purely
 // a routing artifact: the prefix is stripped before the backend model string
 // is handed to OpenCode.
-const RoutingPrefix = providerName + ":"
+const routingPrefix = providerName + ":"
 
 // configContentEnvVar is OpenCode's inline-config environment variable. Setting
 // it lets the provider pin the backend model for one launch without writing to
@@ -57,15 +56,12 @@ const configContentEnvVar = "OPENCODE_CONFIG_CONTENT"
 //
 // runner is injectable so version/readiness/discovery probes can be exercised in
 // tests without a real OpenCode binary; production code falls back to clirun
-// helpers. catalog holds the model catalog discovered at startup (empty until
-// discovery runs); rates holds the per-model pricing parsed alongside it. Both
-// are guarded by mu because discovery, startup enrichment, and routing lookups
-// touch them from different goroutines.
+// helpers. The embedded llm.Catalog holds the model catalog discovered at
+// startup (empty until discovery runs; no default entries are fabricated).
 type Provider struct {
-	mu      sync.RWMutex
-	catalog []llm.ModelInfo
-	rates   map[string]modelRate
-	runner  clirun.CommandRunner
+	llm.Catalog
+	mu     sync.RWMutex
+	runner clirun.CommandRunner
 	// binary overrides the CLI executable name; empty means defaultBinary.
 	binary string
 }
@@ -83,31 +79,23 @@ func (p *Provider) cliBinary() string {
 	return defaultBinary
 }
 
-// modelRate holds the per-million-token pricing discovered for one backend
-// model. Pricing is not part of llm.ModelInfo (and so is not persisted in the
-// version-keyed catalog cache); it lives here only for the lifetime of a
-// discovered catalog and drives ComputeCost when present.
-type modelRate struct {
-	inputPerMToken  float64
-	outputPerMToken float64
+// newProvider builds a Provider around the injectable command runner and the
+// CLI binary override, binding the embedded catalog (no default entries) to
+// the resolved CLI name.
+func newProvider(binary string, runner clirun.CommandRunner) *Provider {
+	p := &Provider{runner: runner, binary: binary}
+	p.Catalog = llm.NewCatalog(p.cliBinary(), nil)
+	return p
 }
 
-// New returns a Provider with the default (production) command runner and the
-// default CLI binary name.
-func New() *Provider { return &Provider{} }
-
-// NewWithBinary returns a Provider that invokes the supplied CLI binary name
-// (or the default when empty). It is the constructor used by the FX module to
-// honor the providers.opencode.cli config override.
-func NewWithBinary(binary string) *Provider { return &Provider{binary: binary} }
-
-// NewWithRunner returns a Provider that uses the supplied command runner for its
-// version, readiness, and model-discovery probes instead of shelling out to the
-// real OpenCode binary. It is a dependency-injection seam for tests that drive
-// the provider through the shared startup discovery and cache path; production
-// code uses New.
-func NewWithRunner(runner clirun.CommandRunner) *Provider {
-	return &Provider{runner: runner}
+// New returns a Provider that invokes the supplied CLI binary name (or the
+// default when empty) through the supplied command runner for its version,
+// readiness, and model-discovery probes. A nil runner means the default
+// (production) runner. It is the constructor used by the FX module to honor
+// the providers.opencode.cli config override and by tests that inject a fake
+// runner.
+func New(binary string, runner clirun.CommandRunner) *Provider {
+	return newProvider(binary, runner)
 }
 
 func (p *Provider) Name() string { return providerName }
@@ -124,12 +112,6 @@ func (p *Provider) EnablesPendingToolWatchdog() bool { return true }
 // permission denials.
 func (p *Provider) UsesBoundedHelperSandbox() bool { return true }
 
-// SupportsSessionResume reports that a prior ACP session can be resumed via
-// ProtocolOpts.ResumeSessionID (session/load). Agents that do not advertise
-// the loadSession capability fail the resume handshake with a clear error,
-// which callers treat as "resume unavailable" and fall back.
-func (p *Provider) SupportsSessionResume() bool { return true }
-
 // SupportsNativeToollessReview attests that the provider's isolated managed
 // configuration and ACP protocol implement Agentico's complete hidden-review
 // contract. BuildCommand activates that boundary only when all three native
@@ -145,46 +127,22 @@ func (p *Provider) SupportsNativeToollessReview() bool { return true }
 // are slash-form "provider/model" values, so a ready OpenCode never captures a
 // bare name (e.g. "sonnet", "gpt-5.4") meant for another provider.
 func (p *Provider) MatchesModel(model string) bool {
-	if strings.HasPrefix(model, RoutingPrefix) {
+	if strings.HasPrefix(model, routingPrefix) {
 		return BackendModel(model) != ""
 	}
 	return p.catalogContains(model)
 }
 
 // catalogContains reports whether model names an effective-catalog entry by its
-// canonical id or one of its aliases (case-insensitive).
+// canonical id or one of its aliases (case-insensitive). Unlike the shared
+// MatchesModel, a bare OpenCode selection is trimmed first.
 func (p *Provider) catalogContains(model string) bool {
 	model = strings.TrimSpace(model)
 	if model == "" {
 		return false
 	}
-	for _, entry := range p.catalogSnapshot() {
-		if strings.EqualFold(entry.ID, model) {
-			return true
-		}
-		for _, alias := range entry.Aliases {
-			if strings.EqualFold(alias, model) {
-				return true
-			}
-		}
-	}
-	return false
-}
-
-// DetectCLI reports whether the OpenCode CLI binary is available in PATH.
-func (p *Provider) DetectCLI() bool {
-	_, err := exec.LookPath(p.cliBinary())
-	return err == nil
-}
-
-// AvailableModels returns only discovered or cached model IDs.
-func (p *Provider) AvailableModels() []string {
-	cat := p.catalogSnapshot()
-	ids := make([]string, len(cat))
-	for i, m := range cat {
-		ids[i] = m.ID
-	}
-	return ids
+	_, ok := llm.LookupModel(p.ModelCatalog(), model)
+	return ok
 }
 
 // BuildCommand returns the args and environment needed to launch OpenCode in
@@ -361,7 +319,7 @@ func isSafeModelRune(r rune) bool {
 // tag such as an ollama "model:tag" — is preserved verbatim.
 func BackendModel(model string) string {
 	model = strings.TrimSpace(model)
-	model = strings.TrimPrefix(model, RoutingPrefix)
+	model = strings.TrimPrefix(model, routingPrefix)
 	model = strings.TrimSpace(model)
 	model = llm.StripModelContextWindow(model)
 	return strings.TrimSpace(model)
@@ -369,7 +327,28 @@ func BackendModel(model string) string {
 
 // NewProtocol creates a per-session ACP protocol handler.
 func (p *Provider) NewProtocol(opts llm.ProtocolOpts) llm.Protocol {
-	return NewProtocol(opts)
+	proto := NewProtocol(opts)
+	proto.price = p.ModelCostForModel(opts.Model)
+	return proto
+}
+
+// ModelCostForModel returns the per-million-token prices OpenCode advertised
+// for model in the discovered catalog, or nil when the catalog has no price.
+// It is the fallback the protocol uses to estimate cost when OpenCode reports
+// tokens but a zero cost amount.
+func (p *Provider) ModelCostForModel(model string) *llm.ModelCost {
+	model = strings.TrimSpace(strings.TrimPrefix(strings.TrimSpace(model), routingPrefix))
+	if model == "" {
+		return nil
+	}
+	catalog := p.ModelCatalog()
+	for _, candidate := range []string{model, strings.TrimSpace(llm.StripModelContextWindow(model))} {
+		if entry, ok := llm.LookupModel(catalog, candidate); ok && entry.Cost != nil {
+			cost := *entry.Cost
+			return &cost
+		}
+	}
+	return nil
 }
 
 // InstallHint returns the supported OpenCode install command.
@@ -387,16 +366,12 @@ func (p *Provider) InstallHint() string {
 // error that does not echo the raw output, so no untrusted content reaches the
 // startup version diagnostic either. It shares the same runner seam as discovery.
 func (p *Provider) VersionInfo() (string, error) {
-	runner := p.runner
-	if runner == nil {
-		runner = clirun.DefaultRunner()
-	}
 	bin := p.cliBinary()
-	out, err := runner(context.Background(), bin, []string{"--version"}, nil)
+	raw, err := clirun.VersionProbe(p.runner, bin)
 	if err != nil {
 		return "", fmt.Errorf("failed to run '%s --version': %w", bin, err)
 	}
-	version, err := clirun.ParseVersionOutput(out)
+	version, err := clirun.ParseVersionOutput([]byte(raw))
 	if err != nil {
 		// Deliberately do not wrap the parser error: it echoes the raw output,
 		// which an attacker-influenced version line could use to inject
@@ -422,42 +397,6 @@ func (p *Provider) EnforcesMinVersion() bool { return true }
 // EnvVarsToExclude returns nil — OpenCode needs no env stripping.
 func (p *Provider) EnvVarsToExclude() []string { return nil }
 
-// ComputeCost computes token cost from the pricing parsed during catalog
-// discovery. When pricing was exposed for the model in a stable numeric shape it
-// is applied (per million tokens); otherwise — unknown model, no pricing, or a
-// a catalog without advertised pricing — it returns 0 so the
-// session falls back to the cost OpenCode reports over ACP without corrupting
-// usage summaries.
-func (p *Provider) ComputeCost(model string, inputTokens, outputTokens int64) float64 {
-	rate, ok := p.lookupRate(model)
-	if !ok {
-		return 0
-	}
-	return (float64(inputTokens)/1_000_000)*rate.inputPerMToken +
-		(float64(outputTokens)/1_000_000)*rate.outputPerMToken
-}
-
-// lookupRate returns the discovered pricing for a model, trying the selection as
-// given and then with the Agentico context-window suffix removed (rates are
-// keyed under both forms during discovery).
-func (p *Provider) lookupRate(model string) (modelRate, bool) {
-	model = strings.TrimSpace(model)
-	if model == "" {
-		return modelRate{}, false
-	}
-	p.mu.RLock()
-	defer p.mu.RUnlock()
-	if r, ok := p.rates[strings.ToLower(model)]; ok {
-		return r, true
-	}
-	if stripped := llm.StripModelContextWindow(model); stripped != model {
-		if r, ok := p.rates[strings.ToLower(stripped)]; ok {
-			return r, true
-		}
-	}
-	return modelRate{}, false
-}
-
 // ContextWindowForModel returns the context window for a model from the
 // discovered or cached catalog, matching by canonical id or alias (so suffixed IDs, unsuffixed
 // aliases, and the canonicalized form of an explicit "opencode:" selection all
@@ -465,24 +404,26 @@ func (p *Provider) lookupRate(model string) (modelRate, bool) {
 // which callers treat as "unknown" without corrupting behavior.
 func (p *Provider) ContextWindowForModel(model string) int {
 	model = strings.TrimSpace(model)
-	model = strings.TrimPrefix(model, RoutingPrefix)
+	model = strings.TrimPrefix(model, routingPrefix)
 	model = strings.TrimSpace(model)
 	if model == "" {
 		return 0
 	}
 	suffixWindow := llm.ParseModelContextWindow(model)
 	strippedModel := strings.TrimSpace(llm.StripModelContextWindow(model))
-	for _, entry := range p.catalogSnapshot() {
+	for _, entry := range p.ModelCatalog() {
 		if entry.ContextWindow <= 0 {
 			continue
 		}
-		if strings.EqualFold(entry.ID, model) || strings.EqualFold(entry.ID, strippedModel) {
+		// Each positive-window entry is probed through the shared lookup
+		// individually: a whole-catalog lookup would stop at the first
+		// matching entry even when its window is zero, which this
+		// override must skip.
+		if _, ok := llm.LookupModel([]llm.ModelInfo{entry}, model); ok {
 			return entry.ContextWindow
 		}
-		for _, alias := range entry.Aliases {
-			if strings.EqualFold(alias, model) || strings.EqualFold(alias, strippedModel) {
-				return entry.ContextWindow
-			}
+		if _, ok := llm.LookupModel([]llm.ModelInfo{entry}, strippedModel); ok {
+			return entry.ContextWindow
 		}
 	}
 	if suffixWindow > 0 {
@@ -491,22 +432,10 @@ func (p *Provider) ContextWindowForModel(model string) int {
 	return 0
 }
 
-// ModelCatalog returns an isolated snapshot of discovered or cached metadata.
-// No models or capabilities are fabricated when discovery is unavailable.
-func (p *Provider) ModelCatalog() []llm.ModelInfo {
-	return p.catalogSnapshot()
-}
-
 // ReviewPreferenceBand admits discovered text models for native toolless
 // review without guessing quality or cost from family names.
 func (p *Provider) ReviewPreferenceBand(model llm.ModelInfo) (int, bool) {
 	return 0, model.Capabilities == nil || model.Capabilities.TextOutput == nil || *model.Capabilities.TextOutput
-}
-
-func (p *Provider) catalogSnapshot() []llm.ModelInfo {
-	p.mu.RLock()
-	defer p.mu.RUnlock()
-	return cloneCatalog(p.catalog)
 }
 
 // RefreshCatalogOnStartup prevents a CLI-version cache from hiding changes to
@@ -514,27 +443,10 @@ func (p *Provider) catalogSnapshot() []llm.ModelInfo {
 // cache with the startup warning, but no model catalog is fabricated.
 func (p *Provider) RefreshCatalogOnStartup() bool { return true }
 
-// SetModelCatalog installs an isolated metadata snapshot and restores its
-// advertised pricing, including when the catalog was loaded from cache.
+// SetModelCatalog installs an isolated metadata snapshot (the shared catalog
+// semantics), including when the catalog was loaded from cache.
 func (p *Provider) SetModelCatalog(models []llm.ModelInfo) {
-	p.mu.Lock()
-	p.catalog = cloneCatalog(models)
-	p.rates = make(map[string]modelRate)
-	for _, m := range models {
-		if m.Cost != nil {
-			p.rates[strings.ToLower(m.ID)] = modelRate{inputPerMToken: m.Cost.Input, outputPerMToken: m.Cost.Output}
-			p.rates[strings.ToLower(BackendModel(m.ID))] = modelRate{inputPerMToken: m.Cost.Input, outputPerMToken: m.Cost.Output}
-		}
-	}
-	p.mu.Unlock()
-}
-
-// setRates replaces the discovered pricing table. Called by discovery before the
-// catalog is installed via SetModelCatalog.
-func (p *Provider) setRates(rates map[string]modelRate) {
-	p.mu.Lock()
-	p.rates = rates
-	p.mu.Unlock()
+	p.Catalog.SetModelCatalog(models)
 }
 
 // CheckReadiness probes whether OpenCode is configured with usable provider

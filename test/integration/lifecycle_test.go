@@ -80,7 +80,7 @@ func TestFeatureLifecycleStateMachine(t *testing.T) {
 	}
 
 	// Verify persistence
-	loaded, err := fm.Get(f.ID)
+	loaded, err := fm.Store.Load(f.ID)
 	if err != nil {
 		t.Fatalf("Get: %v", err)
 	}
@@ -89,10 +89,10 @@ func TestFeatureLifecycleStateMachine(t *testing.T) {
 	}
 
 	// Step 2: Build knowledge base
-	if err := fm.StartKnowledgeBase(f.ID); err != nil {
+	if err := fm.StartPhase(f.ID, feature.PhaseKnowledgeBase); err != nil {
 		t.Fatalf("StartKnowledgeBase: %v", err)
 	}
-	f, _ = fm.Get(f.ID)
+	f, _ = fm.Store.Load(f.ID)
 	if f.Status != feature.StatusBuildingKB {
 		t.Errorf("expected StatusBuildingKB, got %s", f.Status)
 	}
@@ -101,40 +101,40 @@ func TestFeatureLifecycleStateMachine(t *testing.T) {
 	}
 
 	// Step 2b: Complete KB → back to Created
-	if err := fm.CompleteKnowledgeBase(f.ID); err != nil {
+	if err := fm.Transition(f.ID, feature.StatusCreated); err != nil {
 		t.Fatalf("CompleteKnowledgeBase: %v", err)
 	}
-	f, _ = fm.Get(f.ID)
+	f, _ = fm.Store.Load(f.ID)
 	if f.Status != feature.StatusCreated {
 		t.Errorf("expected StatusCreated after KB, got %s", f.Status)
 	}
 
 	// Step 3: Start research
-	if err := fm.StartResearch(f.ID); err != nil {
+	if err := fm.StartPhase(f.ID, feature.PhaseResearch); err != nil {
 		t.Fatalf("StartResearch: %v", err)
 	}
-	f, _ = fm.Get(f.ID)
+	f, _ = fm.Store.Load(f.ID)
 	if f.Status != feature.StatusResearching {
 		t.Errorf("expected StatusResearching, got %s", f.Status)
 	}
 
 	// Step 3: Complete research → DesignReady
-	if err := fm.CompleteResearch(f.ID); err != nil {
+	if err := fm.Transition(f.ID, feature.StatusDesignReady); err != nil {
 		t.Fatalf("CompleteResearch: %v", err)
 	}
-	f, _ = fm.Get(f.ID)
+	f, _ = fm.Store.Load(f.ID)
 	if f.Status != feature.StatusDesignReady {
 		t.Errorf("expected StatusDesignReady, got %s", f.Status)
 	}
 
 	// Step 3b: Start and complete design → PlanReady
-	if err := fm.StartDesign(f.ID); err != nil {
+	if err := fm.StartPhase(f.ID, feature.PhaseDesign); err != nil {
 		t.Fatalf("StartDesign: %v", err)
 	}
-	if err := fm.CompleteDesign(f.ID); err != nil {
+	if err := fm.Transition(f.ID, feature.StatusPlanReady); err != nil {
 		t.Fatalf("CompleteDesign: %v", err)
 	}
-	f, _ = fm.Get(f.ID)
+	f, _ = fm.Store.Load(f.ID)
 	if f.Status != feature.StatusPlanReady {
 		t.Errorf("expected StatusPlanReady, got %s", f.Status)
 	}
@@ -143,7 +143,7 @@ func TestFeatureLifecycleStateMachine(t *testing.T) {
 	if err := fm.StartPlanning(f.ID); err != nil {
 		t.Fatalf("StartPlanning: %v", err)
 	}
-	f, _ = fm.Get(f.ID)
+	f, _ = fm.Store.Load(f.ID)
 	if f.Status != feature.StatusPlanning {
 		t.Errorf("expected StatusPlanning, got %s", f.Status)
 	}
@@ -152,10 +152,10 @@ func TestFeatureLifecycleStateMachine(t *testing.T) {
 	}
 
 	// Step 5: Complete planning → ImplementReady
-	if err := fm.CompletePlanning(f.ID); err != nil {
+	if err := fm.Transition(f.ID, feature.StatusImplementReady); err != nil {
 		t.Fatalf("CompletePlanning: %v", err)
 	}
-	f, _ = fm.Get(f.ID)
+	f, _ = fm.Store.Load(f.ID)
 	if f.Status != feature.StatusImplementReady {
 		t.Errorf("expected StatusImplementReady, got %s", f.Status)
 	}
@@ -164,7 +164,7 @@ func TestFeatureLifecycleStateMachine(t *testing.T) {
 	if err := fm.StartImplementation(f.ID); err != nil {
 		t.Fatalf("StartImplementation: %v", err)
 	}
-	f, _ = fm.Get(f.ID)
+	f, _ = fm.Store.Load(f.ID)
 	if f.Status != feature.StatusImplementing {
 		t.Errorf("expected StatusImplementing, got %s", f.Status)
 	}
@@ -176,10 +176,10 @@ func TestFeatureLifecycleStateMachine(t *testing.T) {
 	}
 
 	// Step 7: Complete implementation → ReviewPassed → CodeReady.
-	if err := fm.CompleteImplementation(f.ID); err != nil {
+	if err := fm.Transition(f.ID, feature.StatusReviewPassed); err != nil {
 		t.Fatalf("CompleteImplementation: %v", err)
 	}
-	f, _ = fm.Get(f.ID)
+	f, _ = fm.Store.Load(f.ID)
 	if f.Status != feature.StatusReviewPassed {
 		t.Errorf("expected StatusReviewPassed, got %s", f.Status)
 	}
@@ -187,7 +187,7 @@ func TestFeatureLifecycleStateMachine(t *testing.T) {
 	if err := fm.MarkCodeReady(f.ID); err != nil {
 		t.Fatalf("MarkCodeReady: %v", err)
 	}
-	f, _ = fm.Get(f.ID)
+	f, _ = fm.Store.Load(f.ID)
 	if f.Status != feature.StatusCodeReady {
 		t.Errorf("expected StatusCodeReady, got %s", f.Status)
 	}
@@ -199,13 +199,13 @@ func TestFeatureLifecycleStateMachine(t *testing.T) {
 	if err := fm.MarkPublished(f.ID, "https://github.com/example/repo/pull/1"); err != nil {
 		t.Fatalf("MarkPublished: %v", err)
 	}
-	f, _ = fm.Get(f.ID)
+	f, _ = fm.Store.Load(f.ID)
 	if f.Status != feature.StatusPublished {
 		t.Errorf("expected StatusPublished, got %s", f.Status)
 	}
 
 	// Verify feature list includes our feature
-	features, err := fm.List()
+	features, err := fm.Store.List()
 	if err != nil {
 		t.Fatalf("List: %v", err)
 	}
@@ -251,6 +251,7 @@ echo '`+resultJSON+`'
 		[]string{"bash", script},
 		tmpDir,
 		nil,
+		&session.SessionOpts{Protocol: testutil.SessionProtocol("")},
 	)
 	if err != nil {
 		t.Fatalf("StartSession: %v", err)
@@ -353,11 +354,11 @@ func TestSessionManagerMultipleSessions(t *testing.T) {
 	sm := session.NewManager(eventCh)
 	defer sm.Shutdown()
 
-	sess1, err := sm.StartSession("sess-1", "feat-1", feature.PhaseResearch, []string{"bash", script1}, tmpDir, nil)
+	sess1, err := sm.StartSession("sess-1", "feat-1", feature.PhaseResearch, []string{"bash", script1}, tmpDir, nil, &session.SessionOpts{Protocol: testutil.SessionProtocol("")})
 	if err != nil {
 		t.Fatalf("StartSession 1: %v", err)
 	}
-	sess2, err := sm.StartSession("sess-2", "feat-2", feature.PhaseResearch, []string{"bash", script2}, tmpDir, nil)
+	sess2, err := sm.StartSession("sess-2", "feat-2", feature.PhaseResearch, []string{"bash", script2}, tmpDir, nil, &session.SessionOpts{Protocol: testutil.SessionProtocol("")})
 	if err != nil {
 		t.Fatalf("StartSession 2: %v", err)
 	}
@@ -451,8 +452,7 @@ func TestConfigAndFeatureRoundTrip(t *testing.T) {
 
 	// Create a new store pointing to the same directory and verify we can load
 	store2 := feature.NewStore(stateDir)
-	fm2 := feature.NewManager(store2, loaded)
-	f2, err := fm2.Get(f.ID)
+	f2, err := store2.Load(f.ID)
 	if err != nil {
 		t.Fatalf("Get from new store: %v", err)
 	}
@@ -489,7 +489,7 @@ func TestSessionWithLogFile(t *testing.T) {
 		[]string{"bash", script},
 		tmpDir,
 		nil,
-		&session.SessionOpts{LogPath: logPath},
+		&session.SessionOpts{LogPath: logPath, Protocol: testutil.SessionProtocol("")},
 	)
 	if err != nil {
 		t.Fatalf("StartSession: %v", err)
@@ -552,7 +552,7 @@ func TestPIDFileLifecycle(t *testing.T) {
 		[]string{"bash", script},
 		tmpDir,
 		nil,
-		&session.SessionOpts{PIDDir: pidDir, Iteration: 1, RepoName: "pid-repo"},
+		&session.SessionOpts{PIDDir: pidDir, Iteration: 1, RepoName: "pid-repo", Protocol: testutil.SessionProtocol("")},
 	)
 	if err != nil {
 		t.Fatalf("StartSession: %v", err)

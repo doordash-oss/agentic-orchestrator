@@ -20,77 +20,52 @@ import (
 	"strings"
 )
 
-// MergeNoFF merges ref into the checked-out branch of the worktree at
-// worktreePath with an explicit two-parent --no-ff merge commit, even when a
-// fast-forward would be possible. Callers (child-to-parent integration) use
-// this to create a durable merge boundary on an already checked-out parent
-// branch — unlike MergeFeatureBranch, no checkout dance happens, so the
-// parent worktree, branch, and HEAD are never moved except by the merge
-// commit itself. ref may be a branch name or a full commit SHA; integration
-// passes the recorded child head SHA so the merge applies exactly the
-// durable anchor regardless of later child-branch movement.
-//
-// On failure any recorded in-progress merge (conflicts) is aborted so HEAD
-// and the worktree return to the exact pre-merge state; a pre-apply refusal
-// (dirty working tree blocking the merge) needs no abort because git never
-// started one. Either way the branch ref is guaranteed unchanged when an
-// error is returned.
-func MergeNoFF(worktreePath, ref, message string) error {
-	mergeCmd := exec.Command("git", "-C", worktreePath, "merge", "--no-ff", "-m", message, ref)
-	out, err := mergeCmd.CombinedOutput()
-	if err == nil {
-		return nil
-	}
-	failure := strings.TrimSpace(string(out))
-	return fmt.Errorf("merge failed (aborted: %v): %s: %w", abortMerge(worktreePath), failure, err)
-}
-
-// MergeIntoOutcome categorises the result of a MergeInto operation.
-type MergeIntoOutcome int
+// mergeIntoOutcome categorises the result of a MergeInto operation.
+type mergeIntoOutcome int
 
 const (
 	// MergeIntoSuccess means the merge completed (or ref was already merged).
-	MergeIntoSuccess MergeIntoOutcome = iota
+	MergeIntoSuccess mergeIntoOutcome = iota
 	// MergeIntoConflict means conflicts remain in the worktree.
 	MergeIntoConflict
-	// MergeIntoFailed means a non-conflict failure occurred and the merge was aborted.
-	MergeIntoFailed
+	// mergeIntoFailed means a non-conflict failure occurred and the merge was aborted.
+	mergeIntoFailed
 )
 
-// MergeIntoResult is the outcome, conflict files, and error from MergeInto.
-type MergeIntoResult struct {
-	Outcome       MergeIntoOutcome
+// mergeIntoResult is the outcome, conflict files, and error from MergeInto.
+type mergeIntoResult struct {
+	Outcome       mergeIntoOutcome
 	ConflictFiles []string
 	Err           error
 }
 
 // MergeInto merges ref into the branch checked out in the worktree with an
-// explicit --no-ff merge commit. Unlike MergeNoFF, on conflict the merge is
+// explicit --no-ff merge commit. On conflict the merge is
 // NOT aborted — MERGE_HEAD and conflict markers are left in place so an agent
 // can resolve them and commit. Re-entry while a merge is already in progress
 // returns Conflict again; a ref already reachable from HEAD returns Success
 // without a new commit.
-func MergeInto(worktreePath, ref, message string) MergeIntoResult {
+func MergeInto(worktreePath, ref, message string) mergeIntoResult {
 	if MergeInProgress(worktreePath) {
-		return MergeIntoResult{
+		return mergeIntoResult{
 			Outcome:       MergeIntoConflict,
 			ConflictFiles: listConflictFiles(worktreePath),
 			Err:           fmt.Errorf("merge already in progress in %s", worktreePath),
 		}
 	}
 	if IsAncestor(worktreePath, ref, "HEAD") {
-		return MergeIntoResult{Outcome: MergeIntoSuccess}
+		return mergeIntoResult{Outcome: MergeIntoSuccess}
 	}
 
 	args := append([]string{"-C", worktreePath}, identityFallbackArgs(worktreePath)...)
 	args = append(args, "merge", "--no-ff", "-m", message, ref)
 	out, err := exec.Command("git", args...).CombinedOutput()
 	if err == nil {
-		return MergeIntoResult{Outcome: MergeIntoSuccess}
+		return mergeIntoResult{Outcome: MergeIntoSuccess}
 	}
 
 	if MergeInProgress(worktreePath) {
-		return MergeIntoResult{
+		return mergeIntoResult{
 			Outcome:       MergeIntoConflict,
 			ConflictFiles: listConflictFiles(worktreePath),
 			Err:           fmt.Errorf("merge conflicts: %s", strings.TrimSpace(string(out))),
@@ -98,8 +73,8 @@ func MergeInto(worktreePath, ref, message string) MergeIntoResult {
 	}
 
 	_ = abortMerge(worktreePath)
-	return MergeIntoResult{
-		Outcome: MergeIntoFailed,
+	return mergeIntoResult{
+		Outcome: mergeIntoFailed,
 		Err:     fmt.Errorf("merge failed: %s: %w", strings.TrimSpace(string(out)), err),
 	}
 }
@@ -117,10 +92,4 @@ func abortMerge(worktreePath string) error {
 // can reach it through a narrow structural interface.
 func (m *WorktreeManager) CurrentBranch(worktreePath string) string {
 	return CurrentBranch(worktreePath)
-}
-
-// MergeNoFF exposes the package-level merge on the manager so the
-// orchestrator can reach it through a narrow structural interface.
-func (m *WorktreeManager) MergeNoFF(worktreePath, ref, message string) error {
-	return MergeNoFF(worktreePath, ref, message)
 }

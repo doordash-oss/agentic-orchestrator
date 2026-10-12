@@ -120,7 +120,7 @@ func TestPhaseImplementUnified_3Repo_ScopedVerification(t *testing.T) {
 		t.Fatalf("PhaseScope: %v", err)
 	}
 	if !scope.ScopeOK() {
-		t.Fatalf("PhaseScope issues: %s", scope.IssueSummary())
+		t.Fatalf("PhaseScope issues: %+v", scope.Issues)
 	}
 	wantRepos := []string{"repo-a", "repo-b", "repo-c"}
 	if !reflect.DeepEqual(scope.Repos, wantRepos) {

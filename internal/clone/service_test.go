@@ -30,20 +30,20 @@ func TestStartAcceptsDurablyBeforeSpawn(t *testing.T) {
 	t.Parallel()
 	spawnGate := make(chan struct{})
 	fx := newServiceFixture(t, succeedScript)
-	fx.runner.setOnStart(func(spec RunSpec) { <-spawnGate })
+	fx.runner.setOnStart(func(spec runSpec) { <-spawnGate })
 
 	rec := fx.start("key-1")
-	if rec.State != StateAccepted {
+	if rec.State != stateAccepted {
 		t.Fatalf("initial state = %s, want accepted", rec.State)
 	}
-	if rec.Stage != StagePreparing {
+	if rec.Stage != stagePreparing {
 		t.Fatalf("initial stage = %s, want preparing", rec.Stage)
 	}
 	// Durable acceptance precedes any git process.
-	if _, err := os.Stat(filepath.Join(fx.stateDir, StoreDirName, rec.ID+".json")); err != nil {
+	if _, err := os.Stat(filepath.Join(fx.stateDir, storeDirName, rec.ID+".json")); err != nil {
 		t.Fatalf("accepted record not durable before spawn: %v", err)
 	}
-	if _, err := os.Lstat(filepath.Join(fx.root, stagingName(rec.ID))); err != nil {
+	if _, err := os.Lstat(filepath.Join(fx.root, stagingNameFor(kindClone, rec.ID))); err != nil {
 		t.Fatalf("staging not created before spawn: %v", err)
 	}
 	close(spawnGate)
@@ -110,7 +110,7 @@ func TestStartIdempotencyAndReservations(t *testing.T) {
 	running := fxRunning.start("key-running")
 	for {
 		snapshot, _ := fxRunning.svc.Snapshot(running.ID)
-		if snapshot.State == StateRunning {
+		if snapshot.State == stateRunning {
 			break
 		}
 		time.Sleep(2 * time.Millisecond)
@@ -123,7 +123,7 @@ func TestStartIdempotencyAndReservations(t *testing.T) {
 	if _, err := fxRunning.svc.Cancel(running.ID); err != nil {
 		t.Fatal(err)
 	}
-	fxRunning.waitForState(running.ID, StateCancelled)
+	fxRunning.waitForState(running.ID, stateCancelled)
 }
 
 func TestStartRejectsExistingDestinations(t *testing.T) {
@@ -257,8 +257,8 @@ func TestFailureBecomesTerminalOnlyAfterOwnedCleanup(t *testing.T) {
 	t.Parallel()
 	fx := newServiceFixture(t, failAuthScript)
 	rec := fx.start("key-auth")
-	final := fx.waitForState(rec.ID, StateFailed)
-	if final.Error == nil || final.Error.Code != FailureAuthentication {
+	final := fx.waitForState(rec.ID, stateFailed)
+	if final.Error == nil || final.Error.Code != failureAuthentication {
 		t.Fatalf("error = %+v, want authentication failure", final.Error)
 	}
 	if _, err := os.Lstat(final.StagingPath); !errors.Is(err, os.ErrNotExist) {
@@ -271,7 +271,7 @@ func TestFailureBecomesTerminalOnlyAfterOwnedCleanup(t *testing.T) {
 	if err != nil {
 		t.Fatalf("destination still reserved after failed cleanup-complete attempt: %v", err)
 	}
-	fx.waitForState(rerecord.ID, StateFailed)
+	fx.waitForState(rerecord.ID, stateFailed)
 }
 
 func TestCleanupPendingWhenStagingOwnershipCannotBeProved(t *testing.T) {
@@ -280,7 +280,7 @@ func TestCleanupPendingWhenStagingOwnershipCannotBeProved(t *testing.T) {
 	rec := fx.start("key-tamper")
 	// Tamper with the staging ownership marker so cleanup cannot prove
 	// ownership: the unowned tree must never be deleted.
-	fx.runner.setOnStart(func(spec RunSpec) {
+	fx.runner.setOnStart(func(spec runSpec) {
 		_ = os.WriteFile(filepath.Join(filepath.Dir(spec.Staging), ownershipMarkerName), []byte(`{"operation_id":"someone-else","nonce":"nope"}`), 0o600)
 	})
 	rec2, err := fx.svc.Start(context.Background(), func() StartInput {
@@ -292,7 +292,7 @@ func TestCleanupPendingWhenStagingOwnershipCannotBeProved(t *testing.T) {
 		t.Fatalf("second start: %v", err)
 	}
 	final := fx.waitForState(rec2.ID, StateCleanupPending)
-	if final.PendingOutcome != StateFailed {
+	if final.PendingOutcome != stateFailed {
 		t.Errorf("pending outcome = %s, want failed", final.PendingOutcome)
 	}
 	if final.CleanupIssue == "" {
@@ -317,12 +317,12 @@ func TestCleanupResolvesAfterFirstFailureThenSuccess(t *testing.T) {
 	t.Parallel()
 	fx := newServiceFixture(t, failAuthScript)
 	rec := fx.start("key-cleanup")
-	failed := fx.waitForState(rec.ID, StateFailed)
+	failed := fx.waitForState(rec.ID, stateFailed)
 	_ = failed
 	// Now craft a cleanup-pending attempt by removing write access to the
 	// root during cleanup, then restoring it.
 	tampered := make(chan struct{})
-	fx.runner.setOnStart(func(spec RunSpec) {
+	fx.runner.setOnStart(func(spec runSpec) {
 		<-tampered
 	})
 	rec2, err := fx.svc.Start(context.Background(), func() StartInput {
@@ -341,7 +341,7 @@ func TestCleanupResolvesAfterFirstFailureThenSuccess(t *testing.T) {
 		}
 		close(tampered)
 	}()
-	fx.waitForState(rec2.ID, StateCleanupPending, StateFailed)
+	fx.waitForState(rec2.ID, StateCleanupPending, stateFailed)
 
 	cur, _ := fx.svc.Snapshot(rec2.ID)
 	if cur.State != StateCleanupPending {
@@ -354,7 +354,7 @@ func TestCleanupResolvesAfterFirstFailureThenSuccess(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Cleanup: %v", err)
 	}
-	if resolved.State != StateFailed {
+	if resolved.State != stateFailed {
 		t.Errorf("resolved state = %s, want failed (underlying outcome preserved)", resolved.State)
 	}
 	if resolved.PendingOutcome != "" || resolved.CleanupIssue != "" {
@@ -365,7 +365,7 @@ func TestCleanupResolvesAfterFirstFailureThenSuccess(t *testing.T) {
 	}
 	// Repeated cleanup is a harmless no-op.
 	again, err := fx.svc.Cleanup(rec2.ID)
-	if err != nil || again.State != StateFailed {
+	if err != nil || again.State != stateFailed {
 		t.Errorf("repeated cleanup = %v %+v, want no-op", err, again)
 	}
 }
@@ -379,7 +379,7 @@ func TestCancelDuringTransferShowsCancellingThenCancelled(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for snapshot.State != StateRunning {
+	for snapshot.State != stateRunning {
 		snapshot, _ = fx.svc.Snapshot(rec.ID)
 		time.Sleep(2 * time.Millisecond)
 	}
@@ -388,7 +388,7 @@ func TestCancelDuringTransferShowsCancellingThenCancelled(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Cancel: %v", err)
 	}
-	if cancelling.State != StateCancelling {
+	if cancelling.State != stateCancelling {
 		t.Fatalf("cancel claimed %s immediately, want cancelling", cancelling.State)
 	}
 	if !cancelling.CancelRequested {
@@ -396,11 +396,11 @@ func TestCancelDuringTransferShowsCancellingThenCancelled(t *testing.T) {
 	}
 	// Repeated cancellation is idempotent.
 	again, err := fx.svc.Cancel(rec.ID)
-	if err != nil || again.State != StateCancelling {
+	if err != nil || again.State != stateCancelling {
 		t.Errorf("repeated cancel = %v %+v", err, again)
 	}
 
-	final := fx.waitForState(rec.ID, StateCancelled)
+	final := fx.waitForState(rec.ID, stateCancelled)
 	if _, err := os.Lstat(final.StagingPath); !errors.Is(err, os.ErrNotExist) {
 		t.Errorf("cancelled attempt left staging: %v", err)
 	}
@@ -415,18 +415,18 @@ func TestCancelBeforeSpawn(t *testing.T) {
 	t.Parallel()
 	spawnGate := make(chan struct{})
 	fx := newServiceFixture(t, hangScript)
-	fx.runner.setOnStart(func(spec RunSpec) { <-spawnGate })
+	fx.runner.setOnStart(func(spec runSpec) { <-spawnGate })
 
 	rec := fx.start("key-early")
 	cancelling, err := fx.svc.Cancel(rec.ID)
 	if err != nil {
 		t.Fatalf("Cancel before spawn: %v", err)
 	}
-	if cancelling.State != StateCancelling {
+	if cancelling.State != stateCancelling {
 		t.Fatalf("state = %s, want cancelling", cancelling.State)
 	}
 	close(spawnGate)
-	final := fx.waitForState(rec.ID, StateCancelled)
+	final := fx.waitForState(rec.ID, stateCancelled)
 	if _, err := os.Lstat(final.StagingPath); !errors.Is(err, os.ErrNotExist) {
 		t.Errorf("staging not cleaned after pre-spawn cancel: %v", err)
 	}
@@ -453,11 +453,11 @@ func TestDelayedCancelNeverReclassifiesPublishedSuccess(t *testing.T) {
 func TestTimeoutClassification(t *testing.T) {
 	t.Parallel()
 	fx := newServiceFixture(t, func(h *fakeHandle) {
-		h.finish(RunResult{ExitCode: -1, TimedOut: true})
+		h.finish(runResult{ExitCode: -1, TimedOut: true})
 	})
 	rec := fx.start("key-timeout")
-	final := fx.waitForState(rec.ID, StateFailed)
-	if final.Error == nil || final.Error.Code != FailureTimeout {
+	final := fx.waitForState(rec.ID, stateFailed)
+	if final.Error == nil || final.Error.Code != failureTimeout {
 		t.Fatalf("error = %+v, want timeout", final.Error)
 	}
 }
@@ -465,10 +465,10 @@ func TestTimeoutClassification(t *testing.T) {
 func TestDiagnosticsRedaction(t *testing.T) {
 	t.Parallel()
 	fx := newServiceFixture(t, func(h *fakeHandle) {
-		h.finish(RunResult{ExitCode: 128, OutputTail: "fatal: Authentication failed for 'https://ci:supersecret99@example.com/acme/widget.git' token=abc123def456"})
+		h.finish(runResult{ExitCode: 128, OutputTail: "fatal: Authentication failed for 'https://ci:supersecret99@example.com/acme/widget.git' token=abc123def456"})
 	})
 	rec := fx.start("key-redact")
-	final := fx.waitForState(rec.ID, StateFailed)
+	final := fx.waitForState(rec.ID, stateFailed)
 	if final.Error == nil || final.Error.Diagnostics == "" {
 		t.Fatal("missing diagnostics")
 	}
@@ -486,7 +486,7 @@ func TestRetryGatingAndFreshAttempt(t *testing.T) {
 	t.Parallel()
 	fx := newServiceFixture(t, failAuthScript)
 	rec := fx.start("key-retryable")
-	failed := fx.waitForState(rec.ID, StateFailed)
+	failed := fx.waitForState(rec.ID, stateFailed)
 
 	retried, err := fx.svc.Retry(rec.ID)
 	if err != nil {
@@ -501,7 +501,7 @@ func TestRetryGatingAndFreshAttempt(t *testing.T) {
 	if retried.RemoteURL != failed.RemoteURL || retried.Destination != failed.Destination || retried.RootPath != failed.RootPath {
 		t.Error("retry did not reuse the prior validated inputs")
 	}
-	fx.waitForState(retried.ID, StateFailed)
+	fx.waitForState(retried.ID, stateFailed)
 	// Predecessor history is retained.
 	if _, err := fx.svc.Snapshot(rec.ID); err != nil {
 		t.Errorf("predecessor record dropped: %v", err)
@@ -526,7 +526,7 @@ func TestRetryGatingAndFreshAttempt(t *testing.T) {
 func TestRetryBlockedWhileCleanupPending(t *testing.T) {
 	t.Parallel()
 	fx := newServiceFixture(t, failAuthScript)
-	fx.runner.setOnStart(func(spec RunSpec) {
+	fx.runner.setOnStart(func(spec runSpec) {
 		_ = os.WriteFile(filepath.Join(filepath.Dir(spec.Staging), ownershipMarkerName), []byte(`{"operation_id":"other","nonce":"nope"}`), 0o600)
 	})
 	rec, err := fx.svc.Start(context.Background(), func() StartInput {
@@ -591,12 +591,12 @@ func TestShutdownInterruptsActiveWorkAndRefusesNewStarts(t *testing.T) {
 	if err := fx.svc.Shutdown(ctx); err != nil {
 		t.Fatalf("Shutdown: %v", err)
 	}
-	final := fx.waitForState(rec.ID, StateInterrupted)
+	final := fx.waitForState(rec.ID, stateInterrupted)
 	if _, err := os.Lstat(final.StagingPath); !errors.Is(err, os.ErrNotExist) {
 		t.Errorf("shutdown left owned staging behind: %v", err)
 	}
-	cancelledFinal := fx.waitForState(recCancel.ID, StateCancelled)
-	if cancelledFinal.State != StateCancelled {
+	cancelledFinal := fx.waitForState(recCancel.ID, stateCancelled)
+	if cancelledFinal.State != stateCancelled {
 		t.Errorf("explicit cancellation reclassified to %s by shutdown", cancelledFinal.State)
 	}
 

@@ -44,7 +44,7 @@ func (c *capturingConverter) CaptureCompaction(ctx context.Context, _ string) (j
 
 func codexCompactionCoordinator(t *testing.T, converter *capturingConverter) (*Coordinator, *fakeLauncher) {
 	t.Helper()
-	launcher := &fakeLauncher{init: func(LaunchRequest) *llm.SystemInitMessage {
+	launcher := &fakeLauncher{init: func(launchRequest) *llm.SystemInitMessage {
 		return &llm.SystemInitMessage{SessionID: "codex-thread", Model: "gpt-effective"}
 	}}
 	c := newTestCoordinator(t, t.TempDir(), launcher, func(o *Options) {

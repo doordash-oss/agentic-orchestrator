@@ -15,6 +15,7 @@
 package server
 
 import (
+	"context"
 	"encoding/json"
 	"strings"
 	"testing"
@@ -134,7 +135,7 @@ func TestEffortDriftWarnings(t *testing.T) {
 					if w.Code != tc.wantCode {
 						t.Errorf("warning code = %q, want %q", w.Code, tc.wantCode)
 					}
-					if w.Class != ErrorClass(errcat.ClassWarning) {
+					if w.Class != ErrorClassWarning {
 						t.Errorf("warning class = %q, want warning", w.Class)
 					}
 					if w.Remediation != nil && len(w.Remediation.Actions) != 0 {
@@ -166,6 +167,22 @@ func (m *mockCatalogProvider) VersionInfo() (string, error)                   { 
 func (m *mockCatalogProvider) MinVersion() [3]int                             { return [3]int{} }
 func (m *mockCatalogProvider) EnvVarsToExclude() []string                     { return nil }
 func (m *mockCatalogProvider) ModelCatalog() []llm.ModelInfo                  { return m.models }
+func (m *mockCatalogProvider) SetModelCatalog(models []llm.ModelInfo)         { m.models = models }
+func (m *mockCatalogProvider) DiscoverModelCatalog(context.Context) ([]llm.ModelInfo, error) {
+	return nil, nil
+}
+func (m *mockCatalogProvider) DiscoverModelCatalogWithProgress(context.Context, llm.ModelDiscoveryReporter) ([]llm.ModelInfo, error) {
+	return nil, nil
+}
+func (m *mockCatalogProvider) ContextWindowForModel(string) int { return 0 }
+func (m *mockCatalogProvider) AskingQuestionsClause() string    { return "" }
+func (m *mockCatalogProvider) SupportsNativeToollessReview() bool {
+	return false
+}
+func (m *mockCatalogProvider) CheckReadiness(context.Context) llm.ProviderReadiness {
+	return llm.ProviderReadiness{Ready: true}
+}
+func (m *mockCatalogProvider) ReviewPreferenceBand(llm.ModelInfo) (int, bool) { return 0, false }
 
 func testRegistryWithCaps(model string, caps []llm.EffortLevel) *llm.Registry {
 	reg := llm.NewRegistry()
@@ -201,7 +218,7 @@ func TestEffortDriftWarningsRenderCanonicallyOnListAndDetailRoutes(t *testing.T)
 		if warning.Code != string(errcat.EffortCapabilityDrift) {
 			t.Fatalf("warning code = %q; want %q", warning.Code, errcat.EffortCapabilityDrift)
 		}
-		if warning.Class != ErrorClass(errcat.ClassWarning) {
+		if warning.Class != ErrorClassWarning {
 			t.Fatalf("warning class = %q; want warning", warning.Class)
 		}
 		if warning.Remediation != nil && len(warning.Remediation.Actions) != 0 {

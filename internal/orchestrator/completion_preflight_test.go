@@ -71,7 +71,7 @@ func newCompletionFixture(t *testing.T) completionFixture {
 		t.Fatalf("save feature: %v", err)
 	}
 	return completionFixture{
-		orchestrator: New(Deps{Lifecycle: manager, Store: store}, Hooks{}),
+		orchestrator: New(Deps{Manager: manager, Store: store}, Hooks{}),
 		worktrees:    worktrees,
 	}
 }
@@ -355,7 +355,7 @@ func newPendingDeliveryOrchestrator(t *testing.T, status feature.Status, repo fe
 	if err := store.Save(f); err != nil {
 		t.Fatalf("save feature: %v", err)
 	}
-	return New(Deps{Lifecycle: manager, Store: store}, Hooks{})
+	return New(Deps{Manager: manager, Store: store}, Hooks{})
 }
 
 // newPendingDeliveryOrchestratorWithWorktrees is newPendingDeliveryOrchestrator
@@ -379,7 +379,7 @@ func newPendingDeliveryOrchestratorWithWorktrees(t *testing.T, status feature.St
 	if err := store.Save(f); err != nil {
 		t.Fatalf("save feature: %v", err)
 	}
-	return New(Deps{Lifecycle: manager, Store: store, Worktrees: git.NewWorktreeManager(t.TempDir())}, Hooks{})
+	return New(Deps{Manager: manager, Store: store, Worktrees: git.NewWorktreeManager(t.TempDir())}, Hooks{})
 }
 
 func pendingDeliveryRepo(t *testing.T, publishable bool) feature.FeatureRepo {

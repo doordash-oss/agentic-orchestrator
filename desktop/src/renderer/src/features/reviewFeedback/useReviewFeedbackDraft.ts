@@ -53,7 +53,7 @@ import {
   type ReviewFeedbackSelectionUpdate,
 } from './reviewFeedbackDraftApi';
 
-export type DraftLifecycle = LoadState<{ phase: 'ready' }>;
+type DraftLifecycle = LoadState<{ phase: 'ready' }>;
 
 /** One unacknowledged edit; the sequence number orders stacked edits per ref. */
 export interface PendingSelection {
@@ -70,7 +70,7 @@ export interface PendingSelection {
  * invalidated by the epoch bump; the reload must succeed before the
  * workspace is usable again.
  */
-export type DraftRecovery =
+type DraftRecovery =
   | { kind: 'saveFailed'; error: CanonicalError }
   | { kind: 'conflictReloading'; conflict: CanonicalError }
   | { kind: 'conflictReloadFailed'; conflict: CanonicalError; error: CanonicalError };
@@ -85,7 +85,7 @@ interface QueuedEdit extends ReviewFeedbackSelectionUpdate {
   seq: number;
 }
 
-export interface UseReviewFeedbackDraftOptions {
+interface UseReviewFeedbackDraftOptions {
   featureId: string;
   /**
    * Fires after every wholesale server-view adoption (fresh load, deliberate
@@ -95,7 +95,7 @@ export interface UseReviewFeedbackDraftOptions {
   onAdoptView(): void;
 }
 
-export interface UseReviewFeedbackDraft {
+interface UseReviewFeedbackDraft {
   lifecycle: DraftLifecycle;
   repos: ReviewFeedbackDraftRepoGroup[];
   pending: ReadonlyMap<string, PendingSelection>;

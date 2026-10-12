@@ -16,9 +16,12 @@ package server
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
 	"io/fs"
 	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
@@ -74,9 +77,9 @@ func waitForFeedCalls(t *testing.T, feed *fakeUpdateFeed, want int) {
 // fakeUpdateClock is the deterministic clock: Advance fires After channels
 // whose deadlines have passed.
 type fakeUpdateClock struct {
-	mu     sync.Mutex
-	now    time.Time
-	wakers []fakeWaker
+	mu      sync.Mutex
+	current time.Time
+	wakers  []fakeWaker
 }
 
 type fakeWaker struct {
@@ -85,30 +88,30 @@ type fakeWaker struct {
 }
 
 func newFakeUpdateClock() *fakeUpdateClock {
-	return &fakeUpdateClock{now: time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)}
+	return &fakeUpdateClock{current: time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)}
 }
 
-func (c *fakeUpdateClock) Now() time.Time {
+func (c *fakeUpdateClock) now() time.Time {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	return c.now
+	return c.current
 }
 
-func (c *fakeUpdateClock) After(d time.Duration) <-chan time.Time {
+func (c *fakeUpdateClock) after(d time.Duration) <-chan time.Time {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	ch := make(chan time.Time, 1)
-	c.wakers = append(c.wakers, fakeWaker{at: c.now.Add(d), ch: ch})
+	c.wakers = append(c.wakers, fakeWaker{at: c.current.Add(d), ch: ch})
 	return ch
 }
 
 func (c *fakeUpdateClock) Advance(d time.Duration) {
 	c.mu.Lock()
-	c.now = c.now.Add(d)
+	c.current = c.current.Add(d)
 	var due []fakeWaker
 	remaining := c.wakers[:0]
 	for _, w := range c.wakers {
-		if !w.at.After(c.now) {
+		if !w.at.After(c.current) {
 			due = append(due, w)
 			continue
 		}
@@ -118,7 +121,7 @@ func (c *fakeUpdateClock) Advance(d time.Duration) {
 	c.mu.Unlock()
 	for _, w := range due {
 		select {
-		case w.ch <- c.now:
+		case w.ch <- c.current:
 		default:
 		}
 	}
@@ -173,7 +176,7 @@ func newTestCoordinator(t *testing.T, opts UpdateOptions) (*updateCoordinator, *
 	t.Helper()
 	clock := newFakeUpdateClock()
 	recorder := &transitionRecorder{}
-	opts.Now = clock.Now
+	opts.Now = clock.now
 	opts.Rand = func(int64) int64 { return 0 }
 	opts.Log = recorder.log
 	opts.Observer = recorder
@@ -186,7 +189,7 @@ func newTestCoordinator(t *testing.T, opts UpdateOptions) (*updateCoordinator, *
 		opts.CurrentVersion = "1.0.0"
 	}
 	if opts.Eligibility.Install == "" {
-		opts.Eligibility = selfupdate.Eligibility{Supported: true, Install: selfupdate.InstallTarball}
+		opts.Eligibility = selfupdate.Eligibility{Supported: true, Install: "tarball"}
 	}
 	if opts.Policy == "" {
 		opts.Policy = selfupdate.PolicyNotify
@@ -204,12 +207,12 @@ func waitStatus(t *testing.T, c *updateCoordinator, status string) {
 	t.Helper()
 	deadline := time.Now().Add(5 * time.Second)
 	for time.Now().Before(deadline) {
-		if c.Snapshot().Status == UpdateSnapshotStatus(status) {
+		if c.snapshot().Status == UpdateSnapshotStatus(status) {
 			return
 		}
 		time.Sleep(time.Millisecond)
 	}
-	t.Fatalf("status = %q, want %q", c.Snapshot().Status, status)
+	t.Fatalf("status = %q, want %q", c.snapshot().Status, status)
 }
 
 func TestCoordinatorInitialCheckRunsAfterStartWithoutBlockingIt(t *testing.T) {
@@ -225,7 +228,7 @@ func TestCoordinatorInitialCheckRunsAfterStartWithoutBlockingIt(t *testing.T) {
 	waitStatus(t, coordinator, updateStatusChecking)
 	close(feed.block)
 	waitStatus(t, coordinator, updateStatusAvailable)
-	snapshot := coordinator.Snapshot()
+	snapshot := coordinator.snapshot()
 	if snapshot.LatestVersion == nil || *snapshot.LatestVersion != "2.0.0" {
 		t.Fatalf("latest_version = %v", snapshot.LatestVersion)
 	}
@@ -269,11 +272,11 @@ func TestCoordinatorShortIntervalsKeepPositiveDelays(t *testing.T) {
 	coordinator.start(context.Background())
 	waitForFeedCalls(t, feed, 1)
 	waitStatus(t, coordinator, updateStatusAvailable)
-	snapshot := coordinator.Snapshot()
+	snapshot := coordinator.snapshot()
 	if snapshot.NextCheckAt == nil {
 		t.Fatal("next_check_at missing")
 	}
-	delay := snapshot.NextCheckAt.Sub(clock.Now())
+	delay := snapshot.NextCheckAt.Sub(clock.now())
 	if delay <= 0 {
 		t.Fatalf("realized delay = %v, must stay positive", delay)
 	}
@@ -346,7 +349,7 @@ func TestCoordinatorFailedRefreshRetainsLastSuccessfulMetadata(t *testing.T) {
 	coordinator.start(context.Background())
 	waitForFeedCalls(t, feed, 1)
 	waitStatus(t, coordinator, updateStatusAvailable)
-	successSnapshot := coordinator.Snapshot()
+	successSnapshot := coordinator.snapshot()
 
 	feed.mu.Lock()
 	feed.err = fmt.Errorf("connection reset by peer")
@@ -354,7 +357,7 @@ func TestCoordinatorFailedRefreshRetainsLastSuccessfulMetadata(t *testing.T) {
 	coordinator.requestCheck()
 	waitStatus(t, coordinator, updateStatusFailed)
 
-	snapshot := coordinator.Snapshot()
+	snapshot := coordinator.snapshot()
 	if snapshot.LatestVersion == nil || *snapshot.LatestVersion != *successSnapshot.LatestVersion {
 		t.Fatalf("latest_version = %v, want retained %v", snapshot.LatestVersion, successSnapshot.LatestVersion)
 	}
@@ -372,7 +375,7 @@ func TestCoordinatorFailedRefreshRetainsLastSuccessfulMetadata(t *testing.T) {
 	freshFeed.err = fmt.Errorf("boom")
 	freshCoordinator.start(context.Background())
 	waitStatus(t, freshCoordinator, updateStatusFailed)
-	fresh := freshCoordinator.Snapshot()
+	fresh := freshCoordinator.snapshot()
 	if fresh.LatestVersion != nil || fresh.LastSuccessAt != nil {
 		t.Fatalf("no-prior-success failure must keep metadata unknown: %+v", fresh)
 	}
@@ -389,7 +392,7 @@ func TestCoordinatorRetryBackoffBoundedAndResetBySuccess(t *testing.T) {
 	coordinator.start(context.Background())
 	waitStatus(t, coordinator, updateStatusFailed)
 
-	firstRetry := coordinator.Snapshot().NextCheckAt.Sub(clock.Now())
+	firstRetry := coordinator.snapshot().NextCheckAt.Sub(clock.now())
 	if firstRetry != updateBackoffBase {
 		t.Fatalf("first backoff = %v, want %v", firstRetry, updateBackoffBase)
 	}
@@ -401,7 +404,7 @@ func TestCoordinatorRetryBackoffBoundedAndResetBySuccess(t *testing.T) {
 	clock.Advance(updateBackoffBase)
 	waitForFeedCalls(t, feed, 2)
 	waitStatus(t, coordinator, updateStatusFailed)
-	secondRetry := coordinator.Snapshot().NextCheckAt.Sub(clock.Now())
+	secondRetry := coordinator.snapshot().NextCheckAt.Sub(clock.now())
 	if secondRetry != 2*updateBackoffBase {
 		t.Fatalf("second backoff = %v, want %v", secondRetry, 2*updateBackoffBase)
 	}
@@ -416,7 +419,7 @@ func TestCoordinatorRetryBackoffBoundedAndResetBySuccess(t *testing.T) {
 	clock.Advance(2 * updateBackoffBase)
 	waitForFeedCalls(t, feed, 3)
 	waitStatus(t, coordinator, updateStatusAvailable)
-	next := coordinator.Snapshot().NextCheckAt.Sub(clock.Now())
+	next := coordinator.snapshot().NextCheckAt.Sub(clock.now())
 	if next < time.Hour-updateBackoffCap || next > time.Hour+updateBackoffCap {
 		t.Fatalf("post-success next check = %v, want the configured cadence", next)
 	}
@@ -426,14 +429,21 @@ func TestCoordinatorRetryBackoffBoundedAndResetBySuccess(t *testing.T) {
 func TestCoordinatorServerImposedDeadlineIsAFloor(t *testing.T) {
 	t.Parallel()
 	coordinator, clock, feed, _ := newTestCoordinator(t, UpdateOptions{})
-	notBefore := clock.Now().Add(2 * time.Hour)
+	// Rebase the fake clock at the real present: the server-imposed retry
+	// deadline the fixture feed client reports is floored at the feed
+	// client's real clock, and the coordinator's fake clock must be able to
+	// advance past it.
+	clock.mu.Lock()
+	clock.current = time.Now().UTC().Truncate(time.Second)
+	clock.mu.Unlock()
+	notBefore := clock.now().Add(2 * time.Hour).Truncate(time.Second)
 	feed.mu.Lock()
-	feed.err = &selfupdate.FeedError{Reason: "rate limited", Retry: true, NotBefore: notBefore}
+	feed.err = retryableFeedError(t, notBefore)
 	feed.mu.Unlock()
 	coordinator.start(context.Background())
 	waitStatus(t, coordinator, updateStatusFailed)
 
-	snapshot := coordinator.Snapshot()
+	snapshot := coordinator.snapshot()
 	if snapshot.RetryNotBefore == nil || !snapshot.RetryNotBefore.Equal(notBefore) {
 		t.Fatalf("retry_not_before = %v, want %v", snapshot.RetryNotBefore, notBefore)
 	}
@@ -489,7 +499,7 @@ func TestCoordinatorShutdownCancelsAndFences(t *testing.T) {
 	if recorder.eventCount() != eventsBefore {
 		t.Fatal("stale completion published a post-shutdown update")
 	}
-	snapshot := coordinator.Snapshot()
+	snapshot := coordinator.snapshot()
 	if snapshot.Status != updateStatusChecking {
 		t.Fatalf("post-shutdown status = %q, want the fenced checking state", snapshot.Status)
 	}
@@ -514,7 +524,7 @@ func TestCoordinatorStartupReceipts(t *testing.T) {
 		ResolvedAt:  time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC),
 	}
 	coordinator, _, _, _ := newTestCoordinator(t, UpdateOptions{StartupReceipt: &rolledBack})
-	snapshot := coordinator.Snapshot()
+	snapshot := coordinator.snapshot()
 	if snapshot.Status != updateStatusFailed {
 		t.Fatalf("status = %q, want failed for a validated rollback", snapshot.Status)
 	}
@@ -530,7 +540,7 @@ func TestCoordinatorStartupReceipts(t *testing.T) {
 
 	confirmed := selfupdate.Receipt{Outcome: selfupdate.OutcomeConfirmed, FromVersion: "1.0.0", ToVersion: "2.0.0", ResolvedAt: time.Now()}
 	coordinator2, _, _, _ := newTestCoordinator(t, UpdateOptions{StartupReceipt: &confirmed})
-	snapshot = coordinator2.Snapshot()
+	snapshot = coordinator2.snapshot()
 	if snapshot.Status != updateStatusConfirmed {
 		t.Fatalf("status = %q, want confirmed", snapshot.Status)
 	}
@@ -542,13 +552,13 @@ func TestCoordinatorStartupReceipts(t *testing.T) {
 	// settles to confirmed through confirmReceipt.
 	pending := selfupdate.Receipt{Outcome: selfupdate.OutcomePending, FromVersion: "1.0.0", ToVersion: "2.0.0"}
 	coordinator3, _, _, recorder := newTestCoordinator(t, UpdateOptions{StartupReceipt: &pending})
-	if snapshot := coordinator3.Snapshot(); snapshot.Status != updateStatusIdle {
+	if snapshot := coordinator3.snapshot(); snapshot.Status != updateStatusIdle {
 		t.Fatalf("status = %q, want idle while unconfirmed", snapshot.Status)
 	}
 	confirmedCopy := pending
 	confirmedCopy.Outcome = selfupdate.OutcomeConfirmed
 	coordinator3.confirmReceipt(confirmedCopy)
-	if snapshot := coordinator3.Snapshot(); snapshot.Status != updateStatusConfirmed {
+	if snapshot := coordinator3.snapshot(); snapshot.Status != updateStatusConfirmed {
 		t.Fatalf("status = %q, want confirmed after handoff confirmation", snapshot.Status)
 	}
 	logs, _, observed := recorder.snapshot()
@@ -576,11 +586,12 @@ func TestCoordinatorDurableSuppressionSurvivesChecks(t *testing.T) {
 		Outcome:       selfupdate.OutcomeRolledBack,
 		FromVersion:   "1.0.0",
 		ToVersion:     "2.0.0",
+		UpdatedAt:     time.Now(),
 		Error:         "target failed",
 	}
-	if err := selfupdate.SuppressTarget(binary, selfupdate.SuppressedTarget{
-		Version: "2.0.0", TransactionID: rolledBack.TransactionID, SuppressedAt: time.Now(),
-	}); err != nil {
+	// The rolled-back receipt settles through the exported reconciliation
+	// the recovery path itself calls, which suppresses the exact target.
+	if err := selfupdate.ReconcileSuppression(binary, rolledBack); err != nil {
 		t.Fatal(err)
 	}
 	opts := UpdateOptions{CurrentVersion: "1.0.0", ExecPath: binary}
@@ -593,7 +604,7 @@ func TestCoordinatorDurableSuppressionSurvivesChecks(t *testing.T) {
 
 	// The suppressed newest release stays visible with the durable rollback
 	// outcome explaining it.
-	snapshot := coordinator.Snapshot()
+	snapshot := coordinator.snapshot()
 	if snapshot.LatestVersion == nil || *snapshot.LatestVersion != "2.0.0" {
 		t.Fatalf("latest_version = %v, want the suppressed release to stay visible", snapshot.LatestVersion)
 	}
@@ -608,7 +619,7 @@ func TestCoordinatorDurableSuppressionSurvivesChecks(t *testing.T) {
 	feed.mu.Unlock()
 	coordinator.requestCheck()
 	waitStatus(t, coordinator, updateStatusAvailable)
-	snapshot = coordinator.Snapshot()
+	snapshot = coordinator.snapshot()
 	if snapshot.LatestVersion == nil || *snapshot.LatestVersion != "3.0.0" {
 		t.Fatalf("latest_version = %v, want 3.0.0", snapshot.LatestVersion)
 	}
@@ -624,7 +635,7 @@ func TestCoordinatorDurableSuppressionSurvivesChecks(t *testing.T) {
 	feed.mu.Unlock()
 	coordinator.requestCheck()
 	waitStatus(t, coordinator, updateStatusFailed)
-	snapshot = coordinator.Snapshot()
+	snapshot = coordinator.snapshot()
 	if snapshot.Error == nil || snapshot.Error.Code != "update_check_failed" {
 		t.Fatalf("error = %+v, want update_check_failed", snapshot.Error)
 	}
@@ -634,6 +645,19 @@ func TestCoordinatorDurableSuppressionSurvivesChecks(t *testing.T) {
 	coordinator.shutdown(context.Background())
 }
 
+// updateLeaseDirForTest and updateSuppressionPathForTest build the frozen
+// on-disk self-update lease layout next to the executable: the lease dir and
+// the per-executable suppression store keyed by the canonical path.
+func updateLeaseDirForTest(binary string) string {
+	return filepath.Join(filepath.Dir(binary), ".agentico-selfupdate")
+}
+
+func updateSuppressionPathForTest(binary string) string {
+	sum := sha256.Sum256([]byte(binary))
+	key := hex.EncodeToString(sum[:])[:16]
+	return filepath.Join(updateLeaseDirForTest(binary), "suppression-"+key+".json")
+}
+
 func TestCoordinatorSuppressionStoreUnreadableFailsCheck(t *testing.T) {
 	t.Parallel()
 	dir := t.TempDir()
@@ -641,17 +665,17 @@ func TestCoordinatorSuppressionStoreUnreadableFailsCheck(t *testing.T) {
 	if err := writeFileTest(binary, "#!/bin/sh\n", 0o755); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.MkdirAll(selfupdate.LeaseDir(binary), 0o700); err != nil {
+	if err := os.MkdirAll(updateLeaseDirForTest(binary), 0o700); err != nil {
 		t.Fatal(err)
 	}
-	suppressionPath := selfupdate.SuppressionPath(binary)
+	suppressionPath := updateSuppressionPathForTest(binary)
 	if err := writeFileTest(suppressionPath, "{not json", 0o600); err != nil {
 		t.Fatal(err)
 	}
 	coordinator, _, feed, _ := newTestCoordinator(t, UpdateOptions{ExecPath: binary})
 	coordinator.start(context.Background())
 	waitStatus(t, coordinator, updateStatusFailed)
-	snapshot := coordinator.Snapshot()
+	snapshot := coordinator.snapshot()
 	if snapshot.Error == nil || snapshot.Error.Code != "update_check_failed" {
 		t.Fatalf("error = %+v, want update_check_failed for an unreadable suppression store", snapshot.Error)
 	}
@@ -666,7 +690,7 @@ func TestCoordinatorNoEventsForNoOpReads(t *testing.T) {
 	t.Parallel()
 	coordinator, _, _, recorder := newTestCoordinator(t, UpdateOptions{})
 	before := recorder.eventCount()
-	snapshot := coordinator.Snapshot()
+	snapshot := coordinator.snapshot()
 	_ = snapshot
 	if recorder.eventCount() != before {
 		t.Fatal("reads must not invent transitions")
@@ -702,7 +726,7 @@ func TestCoordinatorSanitizesErrorText(t *testing.T) {
 	feed.mu.Unlock()
 	coordinator.start(context.Background())
 	waitStatus(t, coordinator, updateStatusFailed)
-	snapshot := coordinator.Snapshot()
+	snapshot := coordinator.snapshot()
 	if snapshot.Error == nil {
 		t.Fatal("error missing")
 	}
@@ -742,21 +766,21 @@ func TestCoordinatorDisabledAndUnsupportedNeverSchedule(t *testing.T) {
 	if offFeed.calls() != 0 {
 		t.Fatal("off policy must never schedule a check")
 	}
-	if snapshot := offCoordinator.Snapshot(); snapshot.Status != updateStatusDisabled {
+	if snapshot := offCoordinator.snapshot(); snapshot.Status != updateStatusDisabled {
 		t.Fatalf("status = %q, want disabled", snapshot.Status)
 	}
 	offCoordinator.shutdown(context.Background())
 
 	// Enabled but ineligible: unsupported, no feed traffic.
 	unsupported, _, unsupportedFeed, _ := newTestCoordinator(t, UpdateOptions{
-		Eligibility: selfupdate.Eligibility{Supported: false, Install: selfupdate.InstallHomebrew, Reason: selfupdate.UnsupportedHomebrew, Remediation: "brew"},
+		Eligibility: selfupdate.Eligibility{Supported: false, Install: "homebrew", Reason: "homebrew", Remediation: "brew"},
 	})
 	unsupported.start(context.Background())
 	time.Sleep(50 * time.Millisecond)
 	if unsupportedFeed.calls() != 0 {
 		t.Fatal("unsupported installation must make no feed requests")
 	}
-	if snapshot := unsupported.Snapshot(); snapshot.Status != updateStatusUnsupported {
+	if snapshot := unsupported.snapshot(); snapshot.Status != updateStatusUnsupported {
 		t.Fatalf("status = %q, want unsupported", snapshot.Status)
 	}
 	unsupported.shutdown(context.Background())

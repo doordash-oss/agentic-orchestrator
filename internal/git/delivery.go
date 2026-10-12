@@ -19,44 +19,44 @@ import (
 	"strings"
 )
 
-// PendingWork is local work measured against a delivery destination — the
+// pendingWork is local work measured against a delivery destination — the
 // remote branch behind a pull request, or the base branch of a local merge.
-type PendingWork struct {
+type pendingWork struct {
 	Commits          int
 	DestinationAhead int
 	Dirty            bool
 }
 
 // Pending reports whether local work has not reached the destination.
-func (w PendingWork) Pending() bool { return w.Commits > 0 || w.Dirty }
+func (w pendingWork) Pending() bool { return w.Commits > 0 || w.Dirty }
 
 // PendingAgainst measures work in worktreePath that has not reached dest. It
 // reads local refs only — never fetching, never mutating — so it is safe in a
 // side-effect-free preflight. ok is false when dest does not resolve, which is
 // the honest answer for a missing remote-tracking ref.
-func PendingAgainst(worktreePath, dest string) (PendingWork, bool) {
+func PendingAgainst(worktreePath, dest string) (pendingWork, bool) {
 	if worktreePath == "" || dest == "" {
-		return PendingWork{}, false
+		return pendingWork{}, false
 	}
 	verify := readGitCmd(worktreePath, "rev-parse", "--verify", "--quiet", dest+"^{commit}")
 	if err := verify.Run(); err != nil {
-		return PendingWork{}, false
+		return pendingWork{}, false
 	}
 	out, err := readGitCmd(worktreePath,
 		"rev-list", "--left-right", "--count", "HEAD..."+dest).Output()
 	if err != nil {
-		return PendingWork{}, false
+		return pendingWork{}, false
 	}
 	fields := strings.Fields(string(out))
 	if len(fields) != 2 {
-		return PendingWork{}, false
+		return pendingWork{}, false
 	}
 	ahead, errAhead := strconv.Atoi(fields[0])
 	behind, errBehind := strconv.Atoi(fields[1])
 	if errAhead != nil || errBehind != nil {
-		return PendingWork{}, false
+		return pendingWork{}, false
 	}
-	return PendingWork{
+	return pendingWork{
 		Commits:          ahead,
 		DestinationAhead: behind,
 		Dirty:            HasUncommittedChanges(worktreePath),

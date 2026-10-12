@@ -18,7 +18,7 @@ import "fmt"
 
 // ReviewThreadMap returns comment-database-ID → thread node ID for every
 // unresolved review thread on a PR (first 100 threads).
-func (c *Client) ReviewThreadMap(owner, repo string, number int) (map[int]string, error) {
+func (c *client) ReviewThreadMap(owner, repo string, number int) (map[int]string, error) {
 	var resp struct {
 		Repository struct {
 			PullRequest struct {
@@ -64,7 +64,7 @@ func (c *Client) ReviewThreadMap(owner, repo string, number int) (map[int]string
 }
 
 // ResolveReviewThread marks one review thread resolved.
-func (c *Client) ResolveReviewThread(threadNodeID string) error {
+func (c *client) ResolveReviewThread(threadNodeID string) error {
 	var resp struct {
 		ResolveReviewThread struct {
 			Thread struct {

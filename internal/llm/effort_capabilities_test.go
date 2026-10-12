@@ -25,7 +25,7 @@ import (
 )
 
 func TestClaudeOfflineCatalogDoesNotInventEffortCapabilities(t *testing.T) {
-	p := &claude.Provider{}
+	p := claude.NewProvider("")
 	for _, model := range p.ModelCatalog() {
 		if len(model.EffortCapabilities) != 0 {
 			t.Errorf("offline model %s advertises unverified effort levels: %v", model.ID, model.EffortCapabilities)
@@ -34,7 +34,7 @@ func TestClaudeOfflineCatalogDoesNotInventEffortCapabilities(t *testing.T) {
 }
 
 func TestCodexCatalogHasEffortCapabilities(t *testing.T) {
-	p := &codex.Provider{}
+	p := codex.NewProvider("")
 	catalog := p.ModelCatalog()
 	if len(catalog) == 0 {
 		t.Fatal("expected non-empty Codex catalog")
@@ -54,7 +54,7 @@ func TestCodexCatalogHasEffortCapabilities(t *testing.T) {
 }
 
 func TestOpenCodeUndiscoveredModelsAreAutoOnly(t *testing.T) {
-	p := opencode.New()
+	p := opencode.New("", nil)
 	for _, id := range []string{"openai/gpt-5", "portkey/custom"} {
 		if len(llm.EffortCapabilitiesForModel(p, id)) != 0 {
 			t.Fatal("effort support requires discovery")
@@ -64,9 +64,9 @@ func TestOpenCodeUndiscoveredModelsAreAutoOnly(t *testing.T) {
 
 func TestEffortCapabilitiesForModelViaRegistry(t *testing.T) {
 	reg := llm.NewRegistry()
-	claudeProv := &claude.Provider{}
-	codexProv := &codex.Provider{}
-	opencodeProv := opencode.New()
+	claudeProv := claude.NewProvider("")
+	codexProv := codex.NewProvider("")
+	opencodeProv := opencode.New("", nil)
 	reg.Register(claudeProv)
 	reg.Register(codexProv)
 	reg.Register(opencodeProv)
@@ -103,7 +103,7 @@ func TestEffortCapabilitiesForModelViaRegistry(t *testing.T) {
 }
 
 func TestEffortCapabilitiesForModelViaAlias(t *testing.T) {
-	p := &codex.Provider{}
+	p := codex.NewProvider("")
 	caps := llm.EffortCapabilitiesForModel(p, "gpt-5.4")
 	if len(caps) != 5 {
 		t.Errorf("alias gpt-5.4: expected 5 capabilities, got %d", len(caps))

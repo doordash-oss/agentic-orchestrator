@@ -76,7 +76,7 @@ func TestSessionLauncher_CarriesSupervisorPromptAndRuntimeDirEnv(t *testing.T) {
 		AgenticoBin:   "/opt/agentico/bin/agentico",
 	}
 	workDir := t.TempDir()
-	_, err := launcher.Launch(context.Background(), LaunchRequest{
+	_, err := launcher.Launch(context.Background(), launchRequest{
 		SessionID: "supervisor-1",
 		Settings:  Settings{Harness: "claude", Model: "haiku[200K]"},
 		WorkDir:   workDir,

@@ -18,10 +18,27 @@ import (
 	"testing"
 	"time"
 
+	"github.com/doordash-oss/agentic-orchestrator/internal/config"
 	"github.com/doordash-oss/agentic-orchestrator/internal/feature"
 	"github.com/doordash-oss/agentic-orchestrator/internal/ports"
-	"github.com/doordash-oss/agentic-orchestrator/test/testutil/mocks"
 )
+
+func storedFeatureDeps(t *testing.T, features ...*feature.Feature) Deps {
+	t.Helper()
+	return storedFeatureDepsAt(t, t.TempDir(), features...)
+}
+
+func storedFeatureDepsAt(t *testing.T, stateDir string, features ...*feature.Feature) Deps {
+	t.Helper()
+	store := feature.NewStore(stateDir)
+	for _, f := range features {
+		f.SchemaVersion = feature.SchemaVersionCurrent
+		if err := store.Save(f); err != nil {
+			t.Fatal(err)
+		}
+	}
+	return Deps{Manager: feature.NewManager(store, config.NewDefault()), Store: store}
+}
 
 func drainOrchestratorEvent(t *testing.T, o *Orchestrator) ports.Event {
 	t.Helper()
@@ -47,9 +64,7 @@ func TestChildCreatedEmitsCorrelatedEvent(t *testing.T) {
 				Status: feature.StatusSettingUpWorktrees,
 				Parent: &feature.ChildRelationship{ParentID: "parent-1", Kind: kind},
 			}
-			lc := mocks.NewMockFeatureLifecycle()
-			lc.GetFn = func(id string) (*feature.Feature, error) { return child, nil }
-			o := New(Deps{Lifecycle: lc}, Hooks{})
+			o := New(storedFeatureDeps(t, child), Hooks{})
 
 			o.childCreated(child)
 			ev := drainOrchestratorEvent(t, o)
@@ -60,7 +75,7 @@ func TestChildCreatedEmitsCorrelatedEvent(t *testing.T) {
 	}
 
 	// Nil and top-level features must not emit anything.
-	o := New(Deps{Lifecycle: mocks.NewMockFeatureLifecycle()}, Hooks{})
+	o := New(storedFeatureDeps(t), Hooks{})
 	o.childCreated(nil)
 	o.childCreated(&feature.Feature{ID: "top-level"})
 	select {
@@ -80,9 +95,7 @@ func TestEmitSetupEventStampsParentOnChildEvents(t *testing.T) {
 		Status: feature.StatusSettingUpWorktrees,
 		Parent: &feature.ChildRelationship{ParentID: "parent-1", Kind: feature.ChildKindRefactor},
 	}
-	lc := mocks.NewMockFeatureLifecycle()
-	lc.GetFn = func(id string) (*feature.Feature, error) { return child, nil }
-	o := New(Deps{Lifecycle: lc}, Hooks{})
+	o := New(storedFeatureDeps(t, child), Hooks{})
 
 	o.emitSetupEvent(feature.SetupEvent{Kind: feature.SetupEventStarted, FeatureID: child.ID})
 	ev := drainOrchestratorEvent(t, o)
@@ -94,9 +107,7 @@ func TestEmitSetupEventStampsParentOnChildEvents(t *testing.T) {
 func TestEmitSetupEventTopLevelHasNoRelatedFeature(t *testing.T) {
 	t.Parallel()
 	topLevel := &feature.Feature{ID: "top-1", Status: feature.StatusSettingUpWorktrees}
-	lc := mocks.NewMockFeatureLifecycle()
-	lc.GetFn = func(id string) (*feature.Feature, error) { return topLevel, nil }
-	o := New(Deps{Lifecycle: lc}, Hooks{})
+	o := New(storedFeatureDeps(t, topLevel), Hooks{})
 
 	o.emitSetupEvent(feature.SetupEvent{Kind: feature.SetupEventCompleted, FeatureID: topLevel.ID})
 	ev := drainOrchestratorEvent(t, o)

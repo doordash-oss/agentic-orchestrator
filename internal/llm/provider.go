@@ -19,14 +19,17 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
-	"strings"
 
 	"github.com/doordash-oss/agentic-orchestrator/internal/llm/askuser"
 )
 
 // LLMProvider defines the interface that each coding tool (Claude Code, Codex,
 // etc.) must implement to integrate with the orchestrator. One instance exists
-// per provider type and is registered in the global Registry.
+// per provider type and is registered in the global Registry. Every provider
+// implements the full capability set below; capabilities with a real split
+// (role-model recommendations, minimum-version enforcement, catalog refresh
+// policy, the structured completion tool, and every Protocol-level option)
+// stay behind their own optional interfaces.
 type LLMProvider interface {
 	// Name returns the provider identifier (e.g. "claude", "codex").
 	Name() string
@@ -39,6 +42,50 @@ type LLMProvider interface {
 
 	// AvailableModels returns the model strings this provider supports.
 	AvailableModels() []string
+
+	// ModelCatalog returns the provider's effective model catalog: the
+	// entries stored by SetModelCatalog, or the provider's built-in defaults
+	// when nothing is stored. The returned slice is a deep copy callers can
+	// freely mutate.
+	ModelCatalog() []ModelInfo
+
+	// SetModelCatalog stores a discovered catalog, replacing the stored
+	// entries. An empty (or nil) catalog restores the built-in defaults.
+	SetModelCatalog(models []ModelInfo)
+
+	// DiscoverModelCatalog refreshes the provider's model catalog from the
+	// local provider CLI. Discovery is best-effort: callers keep the
+	// built-in default catalog when it fails or returns nothing.
+	DiscoverModelCatalog(ctx context.Context) ([]ModelInfo, error)
+
+	// DiscoverModelCatalogWithProgress streams each discovered model to
+	// report as soon as the provider surfaces it, before returning the
+	// final catalog. report may be nil.
+	DiscoverModelCatalogWithProgress(ctx context.Context, report ModelDiscoveryReporter) ([]ModelInfo, error)
+
+	// ContextWindowForModel returns the context window of the first catalog
+	// entry matching model by ID or alias whose window is positive; entries
+	// without a usable window are skipped. Zero means unknown.
+	ContextWindowForModel(model string) int
+
+	// AskingQuestionsClause returns the provider-specific prompt content
+	// that teaches the agent how to ask the user questions.
+	AskingQuestionsClause() string
+
+	// SupportsNativeToollessReview reports whether the provider's automatic-
+	// review launch and protocol expose no native tool, question,
+	// child-session, customization, or persistence surface.
+	SupportsNativeToollessReview() bool
+
+	// CheckReadiness runs a provider-specific non-interactive readiness
+	// probe (typically an auth-status command) and reports whether the
+	// installed CLI is actually usable for Agentic startup.
+	CheckReadiness(ctx context.Context) ProviderReadiness
+
+	// ReviewPreferenceBand returns the provider-local preference band for an
+	// automatic-review model. Lower bands are preferred; false excludes the
+	// model from automatic selection.
+	ReviewPreferenceBand(model ModelInfo) (int, bool)
 
 	// BuildCommand returns the CLI command args and environment variables
 	// needed to start an interactive session with this provider.
@@ -75,34 +122,12 @@ type ProviderReadiness struct {
 	Remedy string
 }
 
-// ReadinessChecker is implemented by providers that can run a provider-specific
-// non-interactive readiness probe.
-type ReadinessChecker interface {
-	CheckReadiness(ctx context.Context) ProviderReadiness
-}
-
-// ReviewModelRanker is implemented by providers that define provider-local
-// preference bands for automatic-review models. Lower bands are preferred.
-// Returning false excludes the model from automatic selection.
-type ReviewModelRanker interface {
-	ReviewPreferenceBand(model ModelInfo) (int, bool)
-}
-
 // RoleModelRecommender is implemented by providers that know their own model
 // families well enough to nominate defaults per phase role. Entries are the
 // provider's own catalog IDs or aliases, most preferred first. Configured
 // model_recommendations always take precedence over these nominations.
 type RoleModelRecommender interface {
 	RecommendedModels(role PhaseRole) []string
-}
-
-// NativeToollessReviewer is implemented only by providers whose automatic-
-// review launch and protocol have been audited to expose no native tool,
-// question, child-session, customization, or persistence surface. General
-// provider support is deliberately insufficient: automatic review requires an
-// explicit positive attestation of the complete isolation contract.
-type NativeToollessReviewer interface {
-	SupportsNativeToollessReview() bool
 }
 
 // VersionEnforcer is implemented by providers whose installed CLI must meet
@@ -117,11 +142,6 @@ type VersionEnforcer interface {
 	EnforcesMinVersion() bool
 }
 
-// PromptAdapter provides provider-specific prompt content.
-type PromptAdapter interface {
-	AskingQuestionsClause() string
-}
-
 // RecommendationConfidenceClause is the provider-agnostic prose that teaches
 // agents to self-rate their confidence for every answer option they present.
 // The recommended option's score is included so downstream readers can tell
@@ -131,12 +151,6 @@ type PromptAdapter interface {
 // verbatim so the contract is identical across providers regardless of how the
 // question payload itself is wire-formatted.
 const RecommendationConfidenceClause = `For every multiple-choice question you construct, assign every answer option a confidence score as a decimal between 0.00 and 1.00. This score is a property of the answer itself: how sure you are that the option is the right answer given the context you have. Surface these confidence scores to the user in the question payload you emit. Mark exactly one recommended option, and that recommended option MUST be the single highest-confidence option. If your intended recommendation is not the highest-confidence option, revise either the recommendation label or the confidence scores before sending. When no option is recommended (e.g. free-text questions or genuinely undecidable choices), you do not need to produce confidence values.`
-
-// CostCalculator computes cost and context window for a provider's models.
-type CostCalculator interface {
-	ComputeCost(model string, inputTokens, outputTokens int64) float64
-	ContextWindowForModel(model string) int
-}
 
 // SessionCostAdjustment is provider-specific cost and usage that is not carried
 // by the primary session result. For example, OpenCode stores Task subagents as
@@ -161,20 +175,6 @@ type SessionUsageReconciler interface {
 	ReconciledUsage(ctx context.Context) *Usage
 }
 
-// CatalogProvider exposes the model catalog populated by discovery.
-// Providers implementing this interface allow the Registry to perform
-// capability-based model selection from the live catalog.
-type CatalogProvider interface {
-	ModelCatalog() []ModelInfo
-}
-
-// CatalogDiscoverer is implemented by providers that can refresh their model
-// catalog from the local provider CLI. Discovery is best-effort: callers should
-// fall back to CatalogProvider/default catalogs when it fails.
-type CatalogDiscoverer interface {
-	DiscoverModelCatalog(ctx context.Context) ([]ModelInfo, error)
-}
-
 // CatalogRefreshPolicy is implemented by providers whose catalog depends on
 // local configuration independently of CLI version. Version-keyed caches are
 // fallback evidence for these providers, not a substitute for discovery.
@@ -186,12 +186,6 @@ type CatalogRefreshPolicy interface {
 // It is best-effort and should be safe to call from provider discovery
 // goroutines.
 type ModelDiscoveryReporter func(ModelInfo)
-
-// CatalogProgressDiscoverer is implemented by providers that can stream
-// model discovery progress before returning the final catalog.
-type CatalogProgressDiscoverer interface {
-	DiscoverModelCatalogWithProgress(ctx context.Context, report ModelDiscoveryReporter) ([]ModelInfo, error)
-}
 
 // Protocol handles the wire-level communication with a provider's CLI process.
 // One instance is created per session. Implementations hold provider-specific
@@ -299,24 +293,20 @@ type CommandBuildOpts struct {
 	// Code's "auto" mode because it injects a "work without stopping for
 	// clarifying questions" system-reminder that overrides [grill-me].
 	PermissionMode string
-	// ZeroTools, when true, asks the provider to expose zero tools (e.g.
-	// Claude's --tools ""). This is stronger than DisallowedTools because it
-	// removes the entire native and MCP tool surface rather than denylisting
-	// known tool names. Providers that do not support it leave their behavior
-	// unchanged.
-	ZeroTools bool
-	// NoSessionPersistence, when true, asks the provider to disable native
-	// session persistence (e.g. Claude's --no-session-persistence) so no
-	// provider transcript or session identity is created. Providers that do
+	// NativeToollessReview, when true, asks the provider to launch its
+	// audited one-turn reviewer boundary: zero tools (e.g. Claude's
+	// --tools "") — stronger than DisallowedTools because it removes the
+	// entire native and MCP tool surface rather than denylisting known tool
+	// names — no native session persistence (e.g. Claude's
+	// --no-session-persistence) so no provider transcript or session
+	// identity is created, and no project/user customization — CLAUDE.md
+	// auto-discovery, hooks, LSP, plugin sync, settings, rules, skills, and
+	// local configuration (e.g. Claude's --safe-mode) — so the hidden
+	// reviewer's context contains only the static review policy and the
+	// declared execution-context fields, with no project-injected
+	// instructions that could alter the classification. Providers that do
 	// not support it leave their behavior unchanged.
-	NoSessionPersistence bool
-	// NoCustomization, when true, asks the provider to skip all project/user
-	// customization — CLAUDE.md auto-discovery, hooks, LSP, plugin sync,
-	// settings, rules, skills, and local configuration (e.g. Claude's
-	// --safe-mode). This ensures the hidden reviewer's context contains only the
-	// static review policy and the declared execution-context fields, with
-	// no project-injected instructions that could alter the classification.
-	NoCustomization bool
+	NativeToollessReview bool
 	// Interactive marks human-driven chat, mirroring ProtocolOpts.Interactive,
 	// so a provider can choose its interactive launch profile. Non-interactive
 	// sessions build exactly the orchestrated-phase command.
@@ -339,9 +329,10 @@ type ProtocolOpts struct {
 	// sessions governed by a phase contract.
 	StructuredCompletion bool
 	// NativeToollessReview selects the provider's audited one-turn reviewer
-	// protocol boundary. Providers that attest NativeToollessReviewer use this
-	// to omit every tool, question, child-session, continuation, and persistent
-	// session surface while leaving ordinary sessions unchanged.
+	// protocol boundary. Providers whose SupportsNativeToollessReview attests
+	// the isolation contract use this to omit every tool, question,
+	// child-session, continuation, and persistent session surface while
+	// leaving ordinary sessions unchanged.
 	NativeToollessReview bool
 	// ResumeSessionID, when non-empty, asks the protocol to resume a prior
 	// provider session identity rather than start a fresh one. Empty means a
@@ -421,19 +412,8 @@ func EffortCapabilitiesForModel(provider LLMProvider, model string) []EffortLeve
 	if provider == nil {
 		return nil
 	}
-	cp, ok := provider.(CatalogProvider)
-	if !ok {
-		return nil
-	}
-	for _, entry := range cp.ModelCatalog() {
-		if strings.EqualFold(entry.ID, model) {
-			return entry.EffortCapabilities
-		}
-		for _, alias := range entry.Aliases {
-			if strings.EqualFold(alias, model) {
-				return entry.EffortCapabilities
-			}
-		}
+	if entry, ok := LookupModel(provider.ModelCatalog(), model); ok {
+		return entry.EffortCapabilities
 	}
 	return nil
 }
@@ -487,27 +467,3 @@ const (
 	PhaseKBBuild         PhaseRole = "kb_build"
 	PhaseAutomaticReview PhaseRole = "automatic_review"
 )
-
-// ConfigFieldForRole maps a PhaseRole to the corresponding field name on
-// config.ModelConfig and config.EffortConfig. PhaseChat maps to "Utilities"
-// because the "chat" role uses the "utilities" model/effort field. Returns ""
-// for unrecognized roles.
-func ConfigFieldForRole(role PhaseRole) string {
-	switch role {
-	case PhaseInquiry:
-		return "Inquiry"
-	case PhaseResearch:
-		return "Research"
-	case PhasePlanning:
-		return "Planning"
-	case PhaseImplementation:
-		return "Implementation"
-	case PhaseReview:
-		return "Review"
-	case PhaseChat:
-		return "Utilities"
-	case PhaseKBBuild:
-		return "KBBuild"
-	}
-	return ""
-}

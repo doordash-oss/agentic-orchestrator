@@ -77,15 +77,15 @@ func TestTransitionValid(t *testing.T) {
 		{"ReviewPassed->ImplementReady", StatusReviewPassed, StatusImplementReady},
 		{"ReviewPassed->Failed", StatusReviewPassed, StatusFailed},
 		{"ReviewPassed->Planning", StatusReviewPassed, StatusPlanning},
-		{"ReviewPassed->Reviewing", StatusReviewPassed, StatusReviewing},
+		{"ReviewPassed->Reviewing", StatusReviewPassed, statusReviewing},
 		{"ReviewPassed->FinalReviewing", StatusReviewPassed, StatusFinalReviewing},
 		{"FinalReviewing->CodeReady", StatusFinalReviewing, StatusCodeReady},
 		{"FinalReviewing->ReviewPassed", StatusFinalReviewing, StatusReviewPassed},
 		{"FinalReviewing->Failed", StatusFinalReviewing, StatusFailed},
 		{"FinalReviewing->Interrupted", StatusFinalReviewing, StatusInterrupted},
-		{"Reviewing->CodeReady", StatusReviewing, StatusCodeReady},
-		{"Reviewing->Failed", StatusReviewing, StatusFailed},
-		{"Reviewing->Interrupted", StatusReviewing, StatusInterrupted},
+		{"Reviewing->CodeReady", statusReviewing, StatusCodeReady},
+		{"Reviewing->Failed", statusReviewing, StatusFailed},
+		{"Reviewing->Interrupted", statusReviewing, StatusInterrupted},
 		{"CodeReady->Published", StatusCodeReady, StatusPublished},
 		{"CodeReady->Done", StatusCodeReady, StatusDone},
 		{"CodeReady->Failed", StatusCodeReady, StatusFailed},
@@ -689,11 +689,11 @@ func TestAddPhaseCost(t *testing.T) {
 	if got := f.TotalCost(); got != 1.75 {
 		t.Errorf("TotalCost() = %v, want 1.75", got)
 	}
-	if got := f.PhaseCost("research"); got != 0.50 {
-		t.Errorf("PhaseCost(research) = %v, want 0.50", got)
+	if got := f.PhaseCosts["research"]; got != 0.50 {
+		t.Errorf("phase cost research) = %v, want 0.50", got)
 	}
-	if got := f.PhaseCost("implement"); got != 1.25 {
-		t.Errorf("PhaseCost(implement) = %v, want 1.25", got)
+	if got := f.PhaseCosts["implement"]; got != 1.25 {
+		t.Errorf("phase cost implement) = %v, want 1.25", got)
 	}
 }
 
@@ -703,8 +703,8 @@ func TestAddPhaseCostAccumulates(t *testing.T) {
 	f := &Feature{}
 	f.AddPhaseCost("implement", 0.50)
 	f.AddPhaseCost("implement", 0.75)
-	if got := f.PhaseCost("implement"); got != 1.25 {
-		t.Errorf("PhaseCost(implement) after two adds = %v, want 1.25", got)
+	if got := f.PhaseCosts["implement"]; got != 1.25 {
+		t.Errorf("phase cost implement) after two adds = %v, want 1.25", got)
 	}
 }
 
@@ -741,8 +741,8 @@ func TestRecordSessionCostPersistsAndAggregates(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Load: %v", err)
 	}
-	if got.PhaseCost("phase-1-plan") != 0.46 {
-		t.Errorf("PhaseCost(phase-1-plan) = %v, want 0.46", got.PhaseCost("phase-1-plan"))
+	if got.PhaseCosts["phase-1-plan"] != 0.46 {
+		t.Errorf("phase cost phase-1-plan) = %v, want 0.46", got.PhaseCosts["phase-1-plan"])
 	}
 	if got.TotalCost() != 0.46 {
 		t.Errorf("TotalCost() = %v, want 0.46", got.TotalCost())
@@ -771,18 +771,6 @@ func TestAddPhaseCostZeroNegativeNoop(t *testing.T) {
 	}
 	if f.TotalCost() != 0 {
 		t.Error("expected TotalCost() == 0")
-	}
-}
-
-func TestPhaseCostNilMap(t *testing.T) {
-	t.Parallel()
-	// parallel-candidate: pure value, table-driven, or per-test temp-dir assertions with no shared state.
-	f := &Feature{}
-	if got := f.PhaseCost("research"); got != 0 {
-		t.Errorf("PhaseCost on nil map = %v, want 0", got)
-	}
-	if got := f.TotalCost(); got != 0 {
-		t.Errorf("TotalCost on nil map = %v, want 0", got)
 	}
 }
 
@@ -815,8 +803,8 @@ func TestPhaseCostsYAMLRoundTrip(t *testing.T) {
 		t.Errorf("round-trip TotalCost: got %v, want %v", got.TotalCost(), f.TotalCost())
 	}
 	for _, key := range []string{"research", "plan", "implement"} {
-		if got.PhaseCost(key) != f.PhaseCost(key) {
-			t.Errorf("round-trip PhaseCost(%s): got %v, want %v", key, got.PhaseCost(key), f.PhaseCost(key))
+		if got.PhaseCosts[key] != f.PhaseCosts[key] {
+			t.Errorf("round-trip phase cost %s): got %v, want %v", key, got.PhaseCosts[key], f.PhaseCosts[key])
 		}
 	}
 }
@@ -901,8 +889,8 @@ func TestLogicalOrder(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.phase.String(), func(t *testing.T) {
-			if got := tt.phase.LogicalOrder(); got != tt.order {
-				t.Errorf("%s.LogicalOrder() = %d, want %d", tt.phase, got, tt.order)
+			if got := tt.phase.logicalOrder(); got != tt.order {
+				t.Errorf("%s.logicalOrder() = %d, want %d", tt.phase, got, tt.order)
 			}
 		})
 	}
@@ -1464,7 +1452,7 @@ func TestAllReposPublished(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			f := &Feature{Repos: tt.repos, RepoStates: tt.states}
-			if got := f.AllReposPublished(); got != tt.want {
+			if got := f.allReposPublished(); got != tt.want {
 				t.Errorf("AllReposPublished() = %v, want %v", got, tt.want)
 			}
 		})
@@ -1648,84 +1636,6 @@ func TestIsPublishable(t *testing.T) {
 	}
 }
 
-func TestEffectivePhases(t *testing.T) {
-	t.Parallel()
-	// parallel-candidate: pure value, table-driven, or per-test temp-dir assertions with no shared state.
-	tests := []struct {
-		name           string
-		pipeline       PipelineProfile
-		publishable    bool
-		wantHasPublish bool
-	}{
-		{
-			name:           "medium publishable includes Publish",
-			pipeline:       PipelineMedium,
-			publishable:    true,
-			wantHasPublish: true,
-		},
-		{
-			name:           "moonshot publishable includes Publish",
-			pipeline:       PipelineMoonshot,
-			publishable:    true,
-			wantHasPublish: true,
-		},
-		{
-			name:           "medium unpublishable excludes Publish",
-			pipeline:       PipelineMedium,
-			publishable:    false,
-			wantHasPublish: false,
-		},
-		{
-			name:           "moonshot unpublishable excludes Publish",
-			pipeline:       PipelineMoonshot,
-			publishable:    false,
-			wantHasPublish: false,
-		},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			var repos []FeatureRepo
-			if tt.publishable {
-				repos = []FeatureRepo{{Name: "a", Path: "/a", Publishable: boolPtr(true)}}
-			} else {
-				repos = []FeatureRepo{{Name: "a", Path: "/a", Publishable: boolPtr(false)}}
-			}
-			f := &Feature{
-				Pipeline: tt.pipeline,
-				Repos:    repos,
-			}
-			phases := f.EffectivePhases()
-			hasPublish := false
-			for _, p := range phases {
-				if p == PhasePublish {
-					hasPublish = true
-					break
-				}
-			}
-			if hasPublish != tt.wantHasPublish {
-				t.Errorf("EffectivePhases() hasPublish = %v, want %v (phases: %v)", hasPublish, tt.wantHasPublish, phases)
-			}
-			// Verify non-publish phases are preserved
-			basePhases := PhasesForProfile(tt.pipeline)
-			for _, bp := range basePhases {
-				if bp == PhasePublish {
-					continue
-				}
-				found := false
-				for _, p := range phases {
-					if p == bp {
-						found = true
-						break
-					}
-				}
-				if !found {
-					t.Errorf("EffectivePhases() missing expected phase %v", bp)
-				}
-			}
-		})
-	}
-}
-
 // TestIsReviewing covers the IsReviewing accessor under SchemaVersionCurrent = 4.
 // Per-repo "awaiting_final_review" was deleted; the unified flow uses the
 // feature-level StatusFinalReviewing instead.
@@ -1868,12 +1778,12 @@ func TestResolveAutomaticReview(t *testing.T) {
 		wantEnable bool
 		wantSource AutomaticReviewSource
 	}{
-		{"empty inherits disabled global", "", false, false, AutomaticReviewSourceGlobal},
-		{"default inherits enabled global", "default", true, true, AutomaticReviewSourceGlobal},
-		{"enabled overrides disabled global", "enabled", false, true, AutomaticReviewSourceFeature},
-		{"enabled overrides enabled global", "enabled", true, true, AutomaticReviewSourceFeature},
-		{"disabled overrides enabled global", "disabled", true, false, AutomaticReviewSourceFeature},
-		{"invalid inherits enabled global", "bogus", true, true, AutomaticReviewSourceGlobal},
+		{"empty inherits disabled global", "", false, false, automaticReviewSourceGlobal},
+		{"default inherits enabled global", "default", true, true, automaticReviewSourceGlobal},
+		{"enabled overrides disabled global", "enabled", false, true, automaticReviewSourceFeature},
+		{"enabled overrides enabled global", "enabled", true, true, automaticReviewSourceFeature},
+		{"disabled overrides enabled global", "disabled", true, false, automaticReviewSourceFeature},
+		{"invalid inherits enabled global", "bogus", true, true, automaticReviewSourceGlobal},
 	}
 
 	for _, tt := range tests {
@@ -1909,5 +1819,25 @@ func TestParseAutomaticReviewMode(t *testing.T) {
 
 	if got, err := ParseAutomaticReviewMode("bogus"); err == nil {
 		t.Fatalf("ParseAutomaticReviewMode(bogus) = %q, nil; want error", got)
+	}
+}
+
+func TestRecordSessionCostKeepsUnpricedTokenUsage(t *testing.T) {
+	t.Parallel()
+	// parallel-candidate: pure value, no shared state.
+	f := &Feature{PhaseCosts: map[string]float64{"plan": 0.03}}
+	f.RecordSessionCost(SessionCostRecord{SessionID: "empty", PhaseKey: "review"})
+	if _, ok := f.PhaseCosts["review"]; ok || len(f.SessionCosts) != 0 {
+		t.Fatalf("usage-free record persisted: costs=%v ledger=%+v", f.PhaseCosts, f.SessionCosts)
+	}
+	f.RecordSessionCost(SessionCostRecord{SessionID: "qa-03", PhaseKey: "review", CostSource: "unavailable", InputTokens: 188, OutputTokens: 282})
+	if got, ok := f.PhaseCosts["review"]; !ok || got != 0 {
+		t.Fatalf("PhaseCosts[review] = %v (present=%v), want present at 0", got, ok)
+	}
+	if len(f.SessionCosts) != 1 || f.SessionCosts[0].InputTokens != 188 || f.SessionCosts[0].CostSource != "unavailable" {
+		t.Fatalf("ledger = %+v, want one unavailable row with tokens", f.SessionCosts)
+	}
+	if got := f.TotalCost(); got != 0.03 {
+		t.Fatalf("TotalCost = %v, want 0.03 (unpriced tokens add no dollars)", got)
 	}
 }

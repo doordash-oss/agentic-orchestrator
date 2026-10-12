@@ -57,9 +57,10 @@ import {
   type CheckpointState,
   type Pipeline,
 } from '../runContract';
+import { definedNonEmpty } from '../../../../shared/defined';
 const STEPS = ['What', 'Pipeline', 'Review'] as const;
 
-export interface RefactorLauncherProps {
+interface RefactorLauncherProps {
   featureId: string;
   snapshot: FeatureSnapshot;
   onCancel(): void;
@@ -186,7 +187,7 @@ export function RefactorLauncher({
         const launched = await window.agentico.launchRefactorChild({
           parentId: featureId,
           name: name.trim(),
-          ...(description.trim() === '' ? {} : { description }),
+          ...definedNonEmpty('description', description.trim() === '' ? undefined : description),
           ...(images.length === 0 ? {} : { images: [...images] }),
           ...(attachments.length === 0 ? {} : { attachments: [...attachments] }),
           ...(imageRefs.length === 0 ? {} : { imageUploads: imageRefs }),
@@ -195,7 +196,7 @@ export function RefactorLauncher({
           pipeline,
           riskLevel,
           inquireness,
-          ...(exitCriteria.trim() === '' ? {} : { exitCriteria: exitCriteria.trim() }),
+          ...definedNonEmpty('exitCriteria', exitCriteria.trim()),
           models,
           effort,
           checkpoints: {

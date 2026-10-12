@@ -52,7 +52,7 @@ func TestUpdateRefCASRetriesTransientRefLock(t *testing.T) {
 	t.Cleanup(func() { <-released })
 
 	if err := gitpkg.UpdateRefCAS(repo, "refs/heads/main", oldSHA, newSHA); err != nil {
-		t.Fatalf("UpdateRefCAS() error = %v, want transient ref lock retried", err)
+		t.Fatalf("updateRefCAS() error = %v, want transient ref lock retried", err)
 	}
 	if got := runGitRefTest(t, repo, "rev-parse", "refs/heads/main"); got != newSHA {
 		t.Fatalf("main = %s, want %s", got, newSHA)
@@ -94,7 +94,7 @@ func TestCreateMergeCandidateProducesTwoParentCommit(t *testing.T) {
 
 	result, err := gitpkg.CreateMergeCandidate(repo, parentTip, childHead, "merge candidate")
 	if err != nil {
-		t.Fatalf("CreateMergeCandidate() error = %v", err)
+		t.Fatalf("createMergeCandidate() error = %v", err)
 	}
 	if result.CandidateSHA == "" {
 		t.Fatal("candidate SHA is empty")
@@ -141,7 +141,7 @@ func TestCreateMergeCandidateAcceptsCleanParentAdvancement(t *testing.T) {
 
 	result, err := gitpkg.CreateMergeCandidate(repo, parentTip, childHead, "merge candidate")
 	if err != nil {
-		t.Fatalf("CreateMergeCandidate() error = %v, want clean merge of advanced parent", err)
+		t.Fatalf("createMergeCandidate() error = %v, want clean merge of advanced parent", err)
 	}
 	parents := runGitRefTest(t, repo, "rev-list", "--parents", "-n", "1", result.CandidateSHA)
 	if fields := len(strings.Fields(parents)); fields != 3 {
@@ -184,7 +184,7 @@ func TestCreateMergeCandidateWithoutConfiguredIdentity(t *testing.T) {
 
 	result, err := gitpkg.CreateMergeCandidate(repo, parentTip, childHead, "merge candidate")
 	if err != nil {
-		t.Fatalf("CreateMergeCandidate() error = %v, want candidate without configured identity", err)
+		t.Fatalf("createMergeCandidate() error = %v, want candidate without configured identity", err)
 	}
 	if result.CandidateSHA == "" {
 		t.Fatal("candidate SHA is empty")
@@ -212,7 +212,7 @@ func TestCreateMergeCandidateConflictReturnsFiles(t *testing.T) {
 
 	result, err := gitpkg.CreateMergeCandidate(repo, parentTip, childHead, "merge candidate")
 	if err == nil {
-		t.Fatal("CreateMergeCandidate() error = nil, want conflict error")
+		t.Fatal("createMergeCandidate() error = nil, want conflict error")
 	}
 	if len(result.ConflictFiles) == 0 {
 		t.Fatal("conflict files empty, want at least one")
@@ -254,7 +254,7 @@ func TestCreateMergeCandidateWorktreeCleanAfter(t *testing.T) {
 
 	_, err := gitpkg.CreateMergeCandidate(repo, parentTip, childHead, "merge candidate")
 	if err != nil {
-		t.Fatalf("CreateMergeCandidate() error = %v", err)
+		t.Fatalf("createMergeCandidate() error = %v", err)
 	}
 
 	// No leftover worktrees.
@@ -288,7 +288,7 @@ func TestUpdateRefCASSuccess(t *testing.T) {
 	newSHA := runGitRefTest(t, repo, "rev-parse", "HEAD")
 
 	if err := gitpkg.UpdateRefCAS(repo, "refs/heads/feature/test", oldSHA, newSHA); err != nil {
-		t.Fatalf("UpdateRefCAS() error = %v", err)
+		t.Fatalf("updateRefCAS() error = %v", err)
 	}
 	got := runGitRefTest(t, repo, "rev-parse", "refs/heads/feature/test")
 	if got != newSHA {
@@ -312,7 +312,7 @@ func TestUpdateRefCASMismatch(t *testing.T) {
 	err := gitpkg.UpdateRefCAS(repo, "refs/heads/feature/test", wrongOldSHA, currentSHA)
 	var casErr *gitpkg.RefCASMismatchError
 	if err == nil {
-		t.Fatal("UpdateRefCAS() error = nil, want CAS mismatch")
+		t.Fatal("updateRefCAS() error = nil, want CAS mismatch")
 	}
 	if !strings.Contains(err.Error(), "expected") {
 		t.Fatalf("error = %v, want CAS mismatch detail", err)
@@ -372,13 +372,13 @@ func TestCreateMergeCandidateRejectsContainedChildHead(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			result, err := gitpkg.CreateMergeCandidate(repo, parentTip, tt.childHead, "merge candidate")
 			if !errors.Is(err, gitpkg.ErrMergeCandidateNoChanges) {
-				t.Fatalf("CreateMergeCandidate() error = %v, want ErrMergeCandidateNoChanges", err)
+				t.Fatalf("createMergeCandidate() error = %v, want errMergeCandidateNoChanges", err)
 			}
 			if result != nil {
-				t.Fatalf("CreateMergeCandidate() result = %+v, want nil", result)
+				t.Fatalf("createMergeCandidate() result = %+v, want nil", result)
 			}
 			if strings.Contains(err.Error(), "want 2") {
-				t.Fatalf("CreateMergeCandidate() error = %q leaks the parent-count diagnostic", err)
+				t.Fatalf("createMergeCandidate() error = %q leaks the parent-count diagnostic", err)
 			}
 			if got := runGitRefTest(t, repo, "rev-parse", "refs/heads/main"); got != parentTip {
 				t.Fatalf("parent ref moved to %s, want %s", got, parentTip)

@@ -33,7 +33,6 @@ const result: FeatureActionResult = {
   featureId,
   action: 'publish',
   result: 'published',
-  sessionIds: [],
 };
 
 const publishAction: FeatureActionView = { id: 'publish', enabled: true, disabledReasons: [] };

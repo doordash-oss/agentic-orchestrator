@@ -16,7 +16,7 @@ limitations under the License.
 
 import { useEffect, useRef } from 'react';
 
-export interface ConsentDialogProps {
+interface ConsentDialogProps {
   /** Absolute folder the server would initialize. */
   path: string;
   busy: boolean;

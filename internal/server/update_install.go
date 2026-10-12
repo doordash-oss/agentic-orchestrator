@@ -51,9 +51,9 @@ const installSettleTimeout = 30 * time.Second
 // accepting request's response to complete before shutdown begins.
 const installResponseDeadline = 10 * time.Second
 
-// InstallAdmission is the work-boundary surface the install coordinator
+// installAdmission is the work-boundary surface the install coordinator
 // drives; *workadmission.Coordinator satisfies it.
-type InstallAdmission interface {
+type installAdmission interface {
 	WaitForIdle(ctx context.Context) error
 	CloseIfQuiesced() bool
 	// CloseForStopping closes the boundary for the stopping interval while
@@ -66,11 +66,11 @@ type InstallAdmission interface {
 	Held() (int, map[workadmission.Category]int)
 }
 
-// ReleaseStager runs the signed-release candidate pipeline for one pinned
+// releaseStager runs the signed-release candidate pipeline for one pinned
 // version: resolve, verify, authenticated staging, the isolated probe, and
 // admission. The cmd layer implements it over the existing selfupdate
 // pipeline; progress reports classify failures and drive statuses.
-type ReleaseStager interface {
+type releaseStager interface {
 	// StageCandidate stages the pinned release version. progress reports
 	// the pipeline stage ("resolve", "download", "verify", "probe",
 	// "admit") and is called with the stage active when an error surfaces,
@@ -91,10 +91,10 @@ type InstallTransaction interface {
 	Cancel() error
 }
 
-// InstallLifecycle owns the process-level replacement work the runtime
+// installLifecycle owns the process-level replacement work the runtime
 // server cannot perform itself. The cmd layer implements it with the same
 // drain→commit→exec sequence the test driver journeys exercise.
-type InstallLifecycle interface {
+type installLifecycle interface {
 	// AcquireUpdateLock takes the per-runtime update transaction lock; the
 	// guarded commit section holds it. The returned release drops it.
 	AcquireUpdateLock() (release func(), acquired bool)
@@ -117,10 +117,6 @@ type installRefusal struct {
 	status int
 	code   errcat.Code
 	opts   []errcat.Option
-}
-
-func (r *installRefusal) Error() string {
-	return string(r.code)
 }
 
 // installAcceptance reports what requestInstall did: coalesced means an
@@ -726,7 +722,7 @@ func incompatibleServerContract(contract *selfupdate.ServerContract) string {
 // stop-dispatch/confirmation interval. Success leaves admission closed and
 // the operation inside its non-cancellable draining interval, ready for
 // the guarded commit.
-func (c *updateCoordinator) enterStopInterval(op *installOperation, ctx context.Context, staged stagedInstall, admission InstallAdmission) installPhaseOutcome {
+func (c *updateCoordinator) enterStopInterval(op *installOperation, ctx context.Context, staged stagedInstall, admission installAdmission) installPhaseOutcome {
 	// A test-only race seam parks the worker between staging and the
 	// protected-work recheck; production never sets it. The gate
 	// honors the operation context, so a cancellation that wins during
@@ -808,7 +804,7 @@ func (c *updateCoordinator) enterStopInterval(op *installOperation, ctx context.
 // the quiesced-only boundary closure. A blocker or a lost closure race
 // aborts as blocked; success leaves the boundary closed for the guarded
 // commit.
-func (c *updateCoordinator) enterQuiescedInstall(op *installOperation, admission InstallAdmission) installPhaseOutcome {
+func (c *updateCoordinator) enterQuiescedInstall(op *installOperation, admission installAdmission) installPhaseOutcome {
 	if blockers := c.installBlockers(admission); blockers != nil {
 		c.failInstall(op, errcat.UpdateBlockedActiveWork, "install_blocked_active_work", blockers...)
 		return installPhaseSettled
@@ -833,7 +829,7 @@ func (c *updateCoordinator) enterQuiescedInstall(op *installOperation, admission
 // operation crosses into its final drain, which owns shutdown: Replace
 // either never returns or settles the truthful failure. Every exit path
 // settles the operation, so the phase returns nothing.
-func (c *updateCoordinator) guardedCommit(op *installOperation, ctx context.Context, staged stagedInstall, admission InstallAdmission) {
+func (c *updateCoordinator) guardedCommit(op *installOperation, ctx context.Context, staged stagedInstall, admission installAdmission) {
 	lifecycle := c.opts.Install
 	window := c.installWindow(op)
 	for {
@@ -855,7 +851,7 @@ func (c *updateCoordinator) guardedCommit(op *installOperation, ctx context.Cont
 			}
 			continue
 		}
-		if window != nil && !window.Contains(c.clock.Now().Local()) {
+		if window != nil && !window.Contains(c.clock.now().Local()) {
 			// Idle arrived after the window closed: reopen and wait for the
 			// next opening.
 			c.admissionOpen()
@@ -990,7 +986,7 @@ func (c *updateCoordinator) installWindow(op *installOperation) *selfupdate.Wind
 // when the operation context ended.
 func (c *updateCoordinator) awaitWindow(ctx context.Context, op *installOperation, window selfupdate.Window) bool {
 	for {
-		now := c.clock.Now().Local()
+		now := c.clock.now().Local()
 		if window.Contains(now) {
 			c.setScheduledFor(op, nil)
 			return true
@@ -1001,7 +997,7 @@ func (c *updateCoordinator) awaitWindow(ctx context.Context, op *installOperatio
 		select {
 		case <-ctx.Done():
 			return false
-		case <-c.clock.After(open.Sub(now)):
+		case <-c.clock.after(open.Sub(now)):
 		}
 	}
 }
@@ -1052,7 +1048,7 @@ func waitResponseDone(responseDone <-chan struct{}) {
 // drive reevaluation, and the atomic closure re-checks the reservation
 // count under the boundary's own mutex. When work races in first, the caller
 // keeps waiting. An already-closed boundary is idle by construction.
-func (c *updateCoordinator) awaitIdleForInstall(ctx context.Context, op *installOperation, admission InstallAdmission) error {
+func (c *updateCoordinator) awaitIdleForInstall(ctx context.Context, op *installOperation, admission installAdmission) error {
 	for {
 		if err := ctx.Err(); err != nil {
 			return err
@@ -1079,7 +1075,7 @@ func (c *updateCoordinator) awaitIdleForInstall(ctx context.Context, op *install
 // installBlockers reports the canonical active-work blockers for an
 // immediate install, or nil when the runtime is observably idle. Failed or
 // incomplete detection always blocks.
-func (c *updateCoordinator) installBlockers(admission InstallAdmission) []errcat.Option {
+func (c *updateCoordinator) installBlockers(admission installAdmission) []errcat.Option {
 	activity, held, _, ok := detectAdmissionActivity(admission)
 	if !ok {
 		return detectionFailedBlockers()
@@ -1093,7 +1089,7 @@ func (c *updateCoordinator) installBlockers(admission InstallAdmission) []errcat
 // supervisor waiting on the user does not block, since the install's own
 // shutdown ends it and resolves the open request as interrupted. Failed or
 // incomplete detection always blocks.
-func (c *updateCoordinator) idleInstallBlockers(admission InstallAdmission) []errcat.Option {
+func (c *updateCoordinator) idleInstallBlockers(admission installAdmission) []errcat.Option {
 	activity, held, _, ok := detectAdmissionActivity(admission)
 	if !ok {
 		return detectionFailedBlockers()
@@ -1105,7 +1101,7 @@ func (c *updateCoordinator) idleInstallBlockers(admission InstallAdmission) []er
 }
 
 // installHeldNone reports whether no admission reservations are held.
-func (c *updateCoordinator) installHeldNone(admission InstallAdmission) bool {
+func (c *updateCoordinator) installHeldNone(admission installAdmission) bool {
 	held, _ := admission.Held()
 	return held == 0
 }
@@ -1363,7 +1359,7 @@ func (c *updateCoordinator) installActive() bool {
 // permission any active work or pending reservation blocks; with stop
 // permission only repository activity, reservations outside the stoppable
 // feature/supervisor categories, and failed or incomplete detection block.
-func (c *updateCoordinator) installRequestBlockers(ctx context.Context, admission InstallAdmission, stopPermitted bool) []errcat.Option {
+func (c *updateCoordinator) installRequestBlockers(ctx context.Context, admission installAdmission, stopPermitted bool) []errcat.Option {
 	activity, err := admission.Detect(ctx)
 	if err != nil {
 		return detectionFailedBlockers()

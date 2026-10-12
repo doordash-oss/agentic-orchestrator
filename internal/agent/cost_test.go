@@ -25,7 +25,7 @@ import (
 )
 
 func TestExtractSessionCostNilSession(t *testing.T) {
-	cost := ExtractSessionCost(nil)
+	cost := extractSessionCost(nil)
 	if cost.TotalCostUSD != 0 {
 		t.Errorf("TotalCostUSD = %v, want 0 for nil session", cost.TotalCostUSD)
 	}
@@ -33,7 +33,7 @@ func TestExtractSessionCostNilSession(t *testing.T) {
 
 func TestExtractSessionCostNilResult(t *testing.T) {
 	sess := session.NewSession("test", "feat-1", 0)
-	cost := ExtractSessionCost(sess)
+	cost := extractSessionCost(sess)
 	if cost.TotalCostUSD != 0 {
 		t.Errorf("TotalCostUSD = %v, want 0 for nil result", cost.TotalCostUSD)
 	}
@@ -43,7 +43,7 @@ func TestExtractSessionCostFromResult(t *testing.T) {
 	sess := session.NewSession("test", "feat-1", 0)
 	sess.SetAccumulatedUsage(llm.Usage{CostUSD: 1.25})
 	sess.SetCost(&llm.ResultMessage{TotalCostUSD: 2.75})
-	cost := ExtractSessionCost(sess)
+	cost := extractSessionCost(sess)
 	if cost.TotalCostUSD != 2.75 {
 		t.Errorf("TotalCostUSD = %v, want 2.75", cost.TotalCostUSD)
 	}
@@ -53,7 +53,7 @@ func TestExtractSessionCostFallsBackToRunningUsageCost(t *testing.T) {
 	sess := session.NewSession("test", "feat-1", 0)
 	sess.SetAccumulatedUsage(llm.Usage{CostUSD: 0.42})
 
-	cost := ExtractSessionCost(sess)
+	cost := extractSessionCost(sess)
 
 	if cost.TotalCostUSD != 0.42 {
 		t.Errorf("TotalCostUSD = %v, want 0.42 from running usage snapshot", cost.TotalCostUSD)
@@ -82,7 +82,7 @@ func TestExtractSessionCostIncludesProviderAdditionalSessionCost(t *testing.T) {
 		},
 	}
 
-	cost := ExtractSessionCost(sess)
+	cost := extractSessionCost(sess)
 
 	if cost.TotalCostUSD != 2.75 {
 		t.Errorf("TotalCostUSD = %v, want 2.75", cost.TotalCostUSD)
@@ -151,11 +151,11 @@ func TestImplementCostAttributionUsesStoreKey(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got := updated.PhaseCost("implement"); got != 1.50 {
-		t.Errorf("PhaseCost(implement) = %v, want 1.50", got)
+	if got := updated.PhaseCosts["implement"]; got != 1.50 {
+		t.Errorf("PhaseCosts[implement] = %v, want 1.50", got)
 	}
-	if got := updated.PhaseCost("plan"); got != 0 {
-		t.Errorf("PhaseCost(plan) = %v, want 0", got)
+	if got := updated.PhaseCosts["plan"]; got != 0 {
+		t.Errorf("PhaseCosts[plan] = %v, want 0", got)
 	}
 }
 
@@ -174,7 +174,7 @@ func TestAccumulateSessionCostToFeatureUsesActiveTimingKey(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	err := accumulateSessionCostToFeature(store, f.ID, "review", SessionCost{TotalCostUSD: 0.42})
+	err := accumulateSessionCostToFeature(store, f.ID, "review", sessionCost{TotalCostUSD: 0.42})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -183,11 +183,11 @@ func TestAccumulateSessionCostToFeatureUsesActiveTimingKey(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got := updated.PhaseCost("phase-2-impl"); got != 0.42 {
-		t.Errorf("PhaseCost(phase-2-impl) = %v, want 0.42", got)
+	if got := updated.PhaseCosts["phase-2-impl"]; got != 0.42 {
+		t.Errorf("PhaseCosts[phase-2-impl] = %v, want 0.42", got)
 	}
-	if got := updated.PhaseCost("review"); got != 0 {
-		t.Errorf("PhaseCost(review) = %v, want 0", got)
+	if got := updated.PhaseCosts["review"]; got != 0 {
+		t.Errorf("PhaseCosts[review] = %v, want 0", got)
 	}
 }
 
@@ -206,7 +206,7 @@ func TestAccumulateSessionCostToFeatureRecordsIndividualSession(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	err := accumulateSessionCostToFeature(store, f.ID, "review", SessionCost{TotalCostUSD: 0.42}, SessionCostMetadata{
+	err := accumulateSessionCostToFeature(store, f.ID, "review", sessionCost{TotalCostUSD: 0.42}, sessionCostMetadata{
 		SessionID:     "feat-phase-02-review-01",
 		ObserverPhase: "review",
 		RepoName:      "repo-a",
@@ -219,8 +219,8 @@ func TestAccumulateSessionCostToFeatureRecordsIndividualSession(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got := updated.PhaseCost("phase-2-impl"); got != 0.42 {
-		t.Errorf("PhaseCost(phase-2-impl) = %v, want 0.42", got)
+	if got := updated.PhaseCosts["phase-2-impl"]; got != 0.42 {
+		t.Errorf("PhaseCosts[phase-2-impl] = %v, want 0.42", got)
 	}
 	if len(updated.SessionCosts) != 1 {
 		t.Fatalf("len(SessionCosts) = %d, want 1", len(updated.SessionCosts))
@@ -257,7 +257,7 @@ func TestAccumulateSessionCostToFeatureUsesFallbackKey(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	err := accumulateSessionCostToFeature(store, f.ID, "review", SessionCost{TotalCostUSD: 0.31})
+	err := accumulateSessionCostToFeature(store, f.ID, "review", sessionCost{TotalCostUSD: 0.31})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -266,8 +266,8 @@ func TestAccumulateSessionCostToFeatureUsesFallbackKey(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got := updated.PhaseCost("review"); got != 0.31 {
-		t.Errorf("PhaseCost(review) = %v, want 0.31", got)
+	if got := updated.PhaseCosts["review"]; got != 0.31 {
+		t.Errorf("PhaseCosts[review] = %v, want 0.31", got)
 	}
 }
 
@@ -286,7 +286,7 @@ func TestAccumulateSessionCostToFeatureKeyIgnoresStaleActiveTimingKey(t *testing
 		t.Fatal(err)
 	}
 
-	err := accumulateSessionCostToFeatureKey(store, f.ID, "review", SessionCost{TotalCostUSD: 0.29})
+	err := accumulateSessionCostToFeatureKey(store, f.ID, "review", sessionCost{TotalCostUSD: 0.29})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -295,11 +295,11 @@ func TestAccumulateSessionCostToFeatureKeyIgnoresStaleActiveTimingKey(t *testing
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got := updated.PhaseCost("review"); got != 0.29 {
-		t.Errorf("PhaseCost(review) = %v, want 0.29", got)
+	if got := updated.PhaseCosts["review"]; got != 0.29 {
+		t.Errorf("PhaseCosts[review] = %v, want 0.29", got)
 	}
-	if got := updated.PhaseCost("phase-3-impl"); got != 0 {
-		t.Errorf("PhaseCost(phase-3-impl) = %v, want 0", got)
+	if got := updated.PhaseCosts["phase-3-impl"]; got != 0 {
+		t.Errorf("PhaseCosts[phase-3-impl] = %v, want 0", got)
 	}
 }
 
@@ -318,7 +318,7 @@ func TestAccumulateSessionCostToFeatureSkipsZeroCost(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	err := accumulateSessionCostToFeature(store, f.ID, "review", SessionCost{})
+	err := accumulateSessionCostToFeature(store, f.ID, "review", sessionCost{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -337,7 +337,7 @@ func TestExtractSessionCostWithUsage(t *testing.T) {
 	mock.AccumulatedUsageVal = llm.Usage{InputTokens: 1000, OutputTokens: 500}
 	mock.CostVal = &llm.ResultMessage{TotalCostUSD: 2.5}
 
-	sc := ExtractSessionCost(mock)
+	sc := extractSessionCost(mock)
 
 	if sc.TotalCostUSD != 2.5 {
 		t.Errorf("TotalCostUSD = %v, want 2.5", sc.TotalCostUSD)
@@ -351,7 +351,7 @@ func TestExtractSessionCostWithUsage(t *testing.T) {
 }
 
 func TestExtractSessionCostNilSessionUsage(t *testing.T) {
-	sc := ExtractSessionCost(nil)
+	sc := extractSessionCost(nil)
 	if sc.Usage != (llm.Usage{}) {
 		t.Errorf("Usage = %+v, want zero value", sc.Usage)
 	}
@@ -362,7 +362,7 @@ func TestExtractSessionCostNoUsage(t *testing.T) {
 	mock.CostVal = &llm.ResultMessage{TotalCostUSD: 3.75}
 	// AccumulatedUsageVal left at zero value
 
-	sc := ExtractSessionCost(mock)
+	sc := extractSessionCost(mock)
 
 	if sc.TotalCostUSD != 3.75 {
 		t.Errorf("TotalCostUSD = %v, want 3.75", sc.TotalCostUSD)
@@ -385,7 +385,7 @@ func TestExtractSessionCostPrefersReconciledSnapshotIncludingZero(t *testing.T) 
 		base.CostVal = &llm.ResultMessage{TotalCostUSD: 2}
 		credits := int64(987)
 		sess := &reconciledCostSession{MockSessionView: base, snapshot: &llm.Usage{CostUSD: amount, CostSource: "provider_estimate", CostCreditsMicros: &credits, CacheCreationInputTokens: 42}}
-		got := ExtractSessionCost(sess)
+		got := extractSessionCost(sess)
 		if got.TotalCostUSD != amount || got.Usage.CacheCreationInputTokens != 42 || got.Usage.CostCreditsMicros == nil || *got.Usage.CostCreditsMicros != 987 {
 			t.Fatalf("extraction retained provisional price: %+v", got)
 		}
@@ -399,8 +399,8 @@ func TestCreditOnlyCostPersistsWithoutInventingDollars(t *testing.T) {
 		t.Fatal(err)
 	}
 	credits := int64(42)
-	cost := SessionCost{Usage: llm.Usage{CostSource: "unavailable", CostCreditsMicros: &credits}}
-	if err := accumulateSessionCostToFeatureKey(store, f.ID, "implement", cost, SessionCostMetadata{SessionID: "session"}); err != nil {
+	cost := sessionCost{Usage: llm.Usage{CostSource: "unavailable", CostCreditsMicros: &credits}}
+	if err := accumulateSessionCostToFeatureKey(store, f.ID, "implement", cost, sessionCostMetadata{SessionID: "session"}); err != nil {
 		t.Fatal(err)
 	}
 	updated, err := store.Load(f.ID)
@@ -414,11 +414,88 @@ func TestCreditOnlyCostPersistsWithoutInventingDollars(t *testing.T) {
 
 func TestSessionTelemetryPreservesReconciledCostProvenance(t *testing.T) {
 	credits := int64(12345)
-	cost := SessionCost{TotalCostUSD: 1.25, Usage: llm.Usage{CostSource: "provider_estimate", CostCreditsMicros: &credits, InputTokens: 42}}
+	cost := sessionCost{TotalCostUSD: 1.25, Usage: llm.Usage{CostSource: "provider_estimate", CostCreditsMicros: &credits, InputTokens: 42}}
 	sess := session.NewSession("test", "feat-1", 0)
 	sess.SetCost(&llm.ResultMessage{Subtype: "success", NumTurns: 3, TotalCostUSD: 99})
 	usage := toSessionUsage(cost, sess)
 	if usage.TotalCostUSD != 1.25 || usage.CostSource != "provider_estimate" || usage.CostCreditsMicros == nil || *usage.CostCreditsMicros != credits || usage.InputTokens != 42 || usage.Turns != 3 {
 		t.Fatalf("session telemetry lost reconciled cost provenance: %+v", usage)
+	}
+}
+
+// TestOpenCodeValidatorUsageAggregatesIntoReviewPhase reproduces the Final
+// Review shape where OpenCode validators report tokens but a zero cost amount
+// (no configured price). Each validator must still land a ledger row with its
+// tokens and an "unavailable" cost source, and materialize cost.by_phase
+// ["review"], while priced review sessions keep summing into the same key.
+func TestOpenCodeValidatorUsageAggregatesIntoReviewPhase(t *testing.T) {
+	store := feature.NewStore(t.TempDir())
+	f := &feature.Feature{
+		ID:              "opencode-review-cost",
+		Name:            "opencode-review-cost",
+		Status:          feature.StatusFinalReviewing,
+		ActiveTimingKey: "review",
+		SchemaVersion:   feature.SchemaVersionCurrent,
+		PhaseCosts:      map[string]float64{"plan": 0.03, "phase-1-impl": 0.05},
+	}
+	if err := store.Save(f); err != nil {
+		t.Fatal(err)
+	}
+
+	for _, axis := range []string{"qa", "craft", "cleanliness"} {
+		sess := session.NewSession("feat-"+axis+"-03", f.ID, 0)
+		sess.SetAccumulatedUsage(llm.Usage{
+			InputTokens:          188,
+			OutputTokens:         282,
+			CacheReadInputTokens: 48896,
+			CostSource:           "unavailable",
+		})
+		sess.SetCost(&llm.ResultMessage{Subtype: "success", TotalCostUSD: 0})
+		cost := extractSessionCost(sess)
+		if err := accumulateSessionCostToFeature(store, f.ID, "review", cost, sessionCostMetadata{
+			SessionID:     sess.ID(),
+			ObserverPhase: "review",
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	updated, err := store.Load(f.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, ok := updated.PhaseCosts["review"]; !ok || got != 0 {
+		t.Fatalf("PhaseCosts[review] = %v (present=%v), want present with 0 for unpriced tokens", got, ok)
+	}
+	if len(updated.SessionCosts) != 3 {
+		t.Fatalf("len(SessionCosts) = %d, want 3 validator rows", len(updated.SessionCosts))
+	}
+	for _, rec := range updated.SessionCosts {
+		if rec.PhaseKey != "review" || rec.CostSource != "unavailable" || rec.InputTokens != 188 || rec.OutputTokens != 282 || rec.CacheReadInputTokens != 48896 {
+			t.Fatalf("validator ledger row = %+v, want review/unavailable with tokens", rec)
+		}
+	}
+
+	// A priced (token-estimated) OpenCode validator and a Claude fixer both sum
+	// into the same review key and into the feature total.
+	estimated := session.NewSession("feat-qa-04", f.ID, 0)
+	estimated.SetAccumulatedUsage(llm.Usage{InputTokens: 1000, OutputTokens: 100, CostUSD: 0.2, CostSource: "token_estimate"})
+	estimated.SetCost(&llm.ResultMessage{Subtype: "success", TotalCostUSD: 0.2})
+	fixer := session.NewSession("feat-fix-03", f.ID, 0)
+	fixer.SetCost(&llm.ResultMessage{Subtype: "success", TotalCostUSD: 0.5})
+	for _, sess := range []*session.Session{estimated, fixer} {
+		if err := accumulateSessionCostToFeatureKey(store, f.ID, feature.PhaseFinalReview.DirName(), extractSessionCost(sess), sessionCostMetadata{SessionID: sess.ID()}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	updated, err = store.Load(f.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := updated.PhaseCosts["review"]; got < 0.6999 || got > 0.7001 {
+		t.Fatalf("PhaseCosts[review] = %v, want 0.7", got)
+	}
+	if got := updated.TotalCost(); got < 0.7799 || got > 0.7801 {
+		t.Fatalf("TotalCost = %v, want 0.78 (plan + impl + review)", got)
 	}
 }

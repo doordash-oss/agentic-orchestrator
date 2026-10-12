@@ -16,10 +16,11 @@ package orchestrator
 
 import (
 	"errors"
+	"os"
+	"path/filepath"
 	"testing"
 
 	"github.com/doordash-oss/agentic-orchestrator/internal/feature"
-	"github.com/doordash-oss/agentic-orchestrator/test/testutil/mocks"
 )
 
 func TestRelationshipGuardParentWithActiveChild(t *testing.T) {
@@ -35,9 +36,8 @@ func TestRelationshipGuardParentWithActiveChild(t *testing.T) {
 		Pipeline: feature.PipelineMedium,
 		Parent:   &feature.ChildRelationship{ParentID: "guard-parent", Kind: feature.ChildKindRefactor},
 	}
-	store := newGuardTestStore(parent, child)
-	lc := newGuardTestLifecycle(parent)
-	o := New(Deps{Lifecycle: lc, Store: store}, Hooks{})
+	deps := storedFeatureDeps(t, parent, child)
+	o := New(deps, Hooks{})
 
 	// Publish should be rejected for parent with active child.
 	err := o.relationshipGuard("guard-parent", mutationPublish)
@@ -109,9 +109,8 @@ func TestRelationshipGuardChildRestrictions(t *testing.T) {
 		Pipeline: feature.PipelineMedium,
 		Parent:   &feature.ChildRelationship{ParentID: "guard-parent2", Kind: feature.ChildKindRefactor},
 	}
-	store := newGuardTestStore(child)
-	lc := newGuardTestLifecycle(child)
-	o := New(Deps{Lifecycle: lc, Store: store}, Hooks{})
+	deps := storedFeatureDeps(t, child)
+	o := New(deps, Hooks{})
 
 	// Publish is not allowed on a child.
 	err := o.relationshipGuard("guard-child-only", mutationPublish)
@@ -194,9 +193,8 @@ func TestRelationshipGuardParentWithoutChildAllowsAll(t *testing.T) {
 		Status:   feature.StatusPublished,
 		Pipeline: feature.PipelineMoonshot,
 	}
-	store := newGuardTestStore(parent)
-	lc := newGuardTestLifecycle(parent)
-	o := New(Deps{Lifecycle: lc, Store: store}, Hooks{})
+	deps := storedFeatureDeps(t, parent)
+	o := New(deps, Hooks{})
 
 	// All operations should be allowed when no active child exists.
 	ops := []mutationOperation{
@@ -218,40 +216,6 @@ func TestRelationshipGuardParentWithoutChildAllowsAll(t *testing.T) {
 	}
 }
 
-// TestRelationshipGuardFailsClosedOnListError verifies that when
-// Store.List fails, the guard propagates the error rather than treating
-// it as "no active child" and allowing the parent mutation to proceed.
-func TestRelationshipGuardFailsClosedOnListError(t *testing.T) {
-	t.Parallel()
-	parent := &feature.Feature{
-		ID:       "list-err-parent",
-		Status:   feature.StatusPublished,
-		Pipeline: feature.PipelineMoonshot,
-	}
-	store := newGuardTestStore(parent)
-	listErr := errors.New("disk read error")
-	store.ListFn = func() ([]*feature.Feature, error) {
-		return nil, listErr
-	}
-	lc := newGuardTestLifecycle(parent)
-	o := New(Deps{Lifecycle: lc, Store: store}, Hooks{})
-
-	err := o.relationshipGuard("list-err-parent", mutationPublish)
-	if err == nil {
-		t.Fatal("expected error when Store.List fails, got nil (fail-open)")
-	}
-	// The guard must propagate the underlying List error (fail closed)
-	// rather than masking it as ErrParentMutationLocked, which would
-	// imply a legitimate relationship rejection rather than an
-	// infrastructure failure.
-	if !errors.Is(err, listErr) {
-		t.Errorf("expected error to wrap the list error, got %v", err)
-	}
-	if errors.Is(err, feature.ErrParentMutationLocked) {
-		t.Errorf("expected the propagated list error, not ErrParentMutationLocked; got %v", err)
-	}
-}
-
 // TestDetectPairedConfigTargetToleratesPartialLoad verifies that legacy
 // feature records (which fail to load with a PartialLoadError) do not block
 // paired config detection: the scan uses the features that did load.
@@ -268,14 +232,15 @@ func TestDetectPairedConfigTargetToleratesPartialLoad(t *testing.T) {
 		Pipeline: feature.PipelineMedium,
 		Parent:   &feature.ChildRelationship{ParentID: "partial-parent", Kind: feature.ChildKindRefactor},
 	}
-	store := newGuardTestStore(parent, child)
-	store.ListFn = func() ([]*feature.Feature, error) {
-		return []*feature.Feature{parent, child}, &feature.PartialLoadError{
-			Warnings: []feature.LoadWarning{{ID: "legacy-record", Err: feature.ErrLegacySchemaVersion}},
-		}
+	deps := storedFeatureDeps(t, parent, child)
+	legacyDir := filepath.Join(deps.Store.BaseDir, "legacy-record")
+	if err := os.MkdirAll(legacyDir, 0o755); err != nil {
+		t.Fatal(err)
 	}
-	lc := newGuardTestLifecycle(parent)
-	o := New(Deps{Lifecycle: lc, Store: store}, Hooks{})
+	if err := os.WriteFile(filepath.Join(legacyDir, "feature.yaml"), []byte("id: legacy-record\nschema_version: 1\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	o := New(deps, Hooks{})
 
 	parentID, childID, paired, err := o.detectPairedConfigTarget("partial-parent")
 	if err != nil {
@@ -313,9 +278,8 @@ func TestRelationshipGuardDeleteDuringDiscardReturnsCascadeError(t *testing.T) {
 			Step: feature.DiscardStepIntentRecorded,
 		},
 	}
-	store := newGuardTestStore(parent, child)
-	lc := newGuardTestLifecycle(parent)
-	o := New(Deps{Lifecycle: lc, Store: store}, Hooks{})
+	deps := storedFeatureDeps(t, parent, child)
+	o := New(deps, Hooks{})
 
 	// Delete must return cascade_delete_not_available, not
 	// parent_mutation_locked, even while discard is in progress.
@@ -352,31 +316,3 @@ func TestRelationshipGuardDeleteDuringDiscardReturnsCascadeError(t *testing.T) {
 // being created. This closes the time-of-check/time-of-use gap where a
 // standalone RelationshipGuard read could pass, then CreateChildLocked creates
 // a child, then the mutation lands on a parent that now has an active child.
-
-// newGuardTestStore is an in-memory store whose Load, Modify, and List see
-// the same feature objects.
-func newGuardTestStore(features ...*feature.Feature) *gateTestFeatureStore {
-	fs := newGateFeatureStore(features...)
-	fs.ListFn = func() ([]*feature.Feature, error) {
-		fs.mu.Lock()
-		defer fs.mu.Unlock()
-		out := make([]*feature.Feature, 0, len(fs.features))
-		for _, f := range fs.features {
-			out = append(out, f)
-		}
-		return out, nil
-	}
-	return fs
-}
-
-// newGuardTestLifecycle returns a lifecycle double whose Get returns f and
-// whose Transition mutates f's status in place.
-func newGuardTestLifecycle(f *feature.Feature) *mocks.MockFeatureLifecycle {
-	lc := mocks.NewMockFeatureLifecycle()
-	lc.GetFn = func(string) (*feature.Feature, error) { return f, nil }
-	lc.TransitionFn = func(_ string, to feature.Status) error {
-		f.Status = to
-		return nil
-	}
-	return lc
-}

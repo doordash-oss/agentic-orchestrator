@@ -158,11 +158,7 @@ func safeRecoveryKey(key string) bool {
 	return true
 }
 
-const (
-	recoveryActionKill = "kill"
-	// recoveryActionSkip preserves the legacy spelling solely for fail-closed rejection tests.
-	recoveryActionSkip = "skip"
-)
+const recoveryActionKill = "kill"
 
 func recoveryItemDTO(item ports.RecoveryItem) RecoveryItem {
 	dto := RecoveryItem{
@@ -178,8 +174,8 @@ func recoveryItemDTO(item ports.RecoveryItem) RecoveryItem {
 	if item.Feature != nil {
 		dto.FeatureName = item.Feature.Name
 	}
-	dto.DefaultAction = actionResume
-	dto.AllowedActions = []string{actionResume, recoveryActionKill}
+	dto.DefaultAction = string(FeatureActionResume)
+	dto.AllowedActions = []string{string(FeatureActionResume), recoveryActionKill}
 	dto.Error = wireOrphanSessionError(item)
 	return dto
 }
@@ -263,8 +259,8 @@ func decodeRecoveryActions(items []ports.RecoveryItem, raw map[string]string) (m
 	for _, item := range items {
 		key := ports.RecoveryActionKey(item.PIDFile.FeatureID, item.RepoName)
 		itemAllowed := map[string]ports.RecoveryAction{
-			recoveryActionKill: ports.RecoveryKill,
-			actionResume:       ports.RecoveryResume,
+			recoveryActionKill:          ports.RecoveryKill,
+			string(FeatureActionResume): ports.RecoveryResume,
 		}
 		allowed[key] = itemAllowed
 	}

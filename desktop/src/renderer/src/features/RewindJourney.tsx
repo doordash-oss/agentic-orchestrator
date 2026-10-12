@@ -31,8 +31,9 @@ import type { CanonicalError } from '../../../shared/ipc';
 import { ErrorSurface } from '../components/ErrorSurface';
 import { FieldError } from '../components/FieldError';
 import { displayPhaseLabel } from './featureView';
+import { defined } from '../../../shared/defined';
 
-export interface RewindJourneyProps {
+interface RewindJourneyProps {
   featureId: string;
   featureName: string;
   /** Server-provided valid phase choices (from the action catalogue). */
@@ -125,7 +126,6 @@ export function RewindJourney(props: RewindJourneyProps) {
           featureId,
           action: 'rewind',
           result: 'rewound',
-          sessionIds: [],
           sourceRunNumber: reconcileSourceRunNumber,
           newRunNumber: feature.activeRun,
         });
@@ -175,9 +175,7 @@ export function RewindJourney(props: RewindJourneyProps) {
         targetPhase,
         ...(roadmapPhase !== null ? { roadmapPhase } : {}),
         ...(upgradePipeline !== '' ? { upgradePipeline } : {}),
-        ...(preview.sourceRunNumber !== undefined
-          ? { sourceRunNumber: preview.sourceRunNumber }
-          : {}),
+        ...defined('sourceRunNumber', preview.sourceRunNumber),
         ...(preview.sourceRevision !== '' ? { sourceRevision: preview.sourceRevision } : {}),
       });
       setResult(res);
@@ -194,7 +192,6 @@ export function RewindJourney(props: RewindJourneyProps) {
             featureId,
             action: 'rewind',
             result: 'rewound',
-            sessionIds: [],
             sourceRunNumber: preview.sourceRunNumber,
             newRunNumber: feature.activeRun,
           });

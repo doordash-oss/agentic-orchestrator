@@ -57,12 +57,12 @@ func TestAcquireLeaseContentionAndReacquire(t *testing.T) {
 	if err == nil {
 		t.Fatal("second AcquireLease: expected contention error")
 	}
-	if !IsLeaseHeld(err) {
-		t.Fatalf("second AcquireLease error = %v, want LeaseHeldError", err)
+	if !isLeaseHeld(err) {
+		t.Fatalf("second AcquireLease error = %v, want leaseHeldError", err)
 	}
-	var held *LeaseHeldError
+	var held *leaseHeldError
 	if !errors.As(err, &held) {
-		t.Fatalf("errors.As(LeaseHeldError) failed for %v", err)
+		t.Fatalf("errors.As(leaseHeldError) failed for %v", err)
 	}
 	if held.Record.PID != os.Getpid() {
 		t.Fatalf("held record pid = %d, want %d", held.Record.PID, os.Getpid())
@@ -109,7 +109,7 @@ func TestAcquireLeaseOverwritesStaleRecord(t *testing.T) {
 	stale.PID = 1 << 22
 	stale.ExecutableDigest = "deadbeef"
 	stale.ExecutableIno = 0
-	if ProcessAlive(stale.PID) {
+	if err := unix.Kill(stale.PID, 0); err == nil || errors.Is(err, unix.EPERM) {
 		t.Fatalf("fixture pid %d unexpectedly alive", stale.PID)
 	}
 	if err := writeOwnershipRecord(exec.Path, stale); err != nil {
@@ -123,9 +123,9 @@ func TestAcquireLeaseOverwritesStaleRecord(t *testing.T) {
 	}
 	t.Cleanup(func() { _ = lease.Close() })
 
-	got, err := ReadOwnershipRecord(exec.Path)
+	got, err := readOwnershipRecord(exec.Path)
 	if err != nil {
-		t.Fatalf("ReadOwnershipRecord: %v", err)
+		t.Fatalf("readOwnershipRecord: %v", err)
 	}
 	if got.PID != os.Getpid() || got.ExecutableDigest != exec.Digest || got.ExecutableIno != exec.ID.Ino {
 		t.Fatalf("record not overwritten: %+v", got)
@@ -172,7 +172,7 @@ func TestLeaseFilesNeverUnlinkedAfterClose(t *testing.T) {
 	if err != nil {
 		t.Fatalf("AcquireLease: %v", err)
 	}
-	leasePath, recordPath := LeasePath(exec.Path), OwnershipRecordPath(exec.Path)
+	leasePath, recordPath := leasePath(exec.Path), ownershipRecordPath(exec.Path)
 	if err := lease.Close(); err != nil {
 		t.Fatalf("Close: %v", err)
 	}
@@ -197,15 +197,11 @@ func TestLeaseFDIsCLOEXECByDefault(t *testing.T) {
 		t.Fatalf("AcquireLease: %v", err)
 	}
 	t.Cleanup(func() { _ = lease.Close() })
-	ok, err := IsCLOEXEC(lease.FD())
-	if err != nil {
-		t.Fatalf("IsCLOEXEC: %v", err)
-	}
-	if !ok {
+	if !fdIsCLOEXEC(t, lease.FD()) {
 		t.Fatal("lease fd must be close-on-exec by default")
 	}
-	if lease.Path() != LeasePath(exec.Path) {
-		t.Fatalf("lease path = %s, want %s", lease.Path(), LeasePath(exec.Path))
+	if lease.Path() != leasePath(exec.Path) {
+		t.Fatalf("lease path = %s, want %s", lease.Path(), leasePath(exec.Path))
 	}
 }
 
@@ -221,9 +217,9 @@ func TestLeaseSetTransactionIDKeepsFields(t *testing.T) {
 	if err := lease.SetTransactionID("tx-1234"); err != nil {
 		t.Fatalf("SetTransactionID: %v", err)
 	}
-	got, err := ReadOwnershipRecord(exec.Path)
+	got, err := readOwnershipRecord(exec.Path)
 	if err != nil {
-		t.Fatalf("ReadOwnershipRecord: %v", err)
+		t.Fatalf("readOwnershipRecord: %v", err)
 	}
 	if got.TransactionID != "tx-1234" {
 		t.Fatalf("transaction id = %q, want tx-1234", got.TransactionID)
@@ -244,8 +240,8 @@ func TestAdoptLeaseRejectsClosedFD(t *testing.T) {
 		t.Fatalf("close: %v", err)
 	}
 	rec := testRecordFor(exec, t.TempDir())
-	if _, err := AdoptLease(fd, rec); err == nil {
-		t.Fatal("AdoptLease on closed fd: expected error")
+	if _, err := adoptLease(fd, rec); err == nil {
+		t.Fatal("adoptLease on closed fd: expected error")
 	}
 }
 
@@ -296,14 +292,14 @@ func TestRuntimeUpdateLockContentionAndPersistence(t *testing.T) {
 	t.Cleanup(func() { _ = first.Close() })
 
 	_, err = AcquireRuntimeUpdateLock(runtimeDir)
-	if err == nil || !IsRuntimeUpdateLockHeld(err) {
-		t.Fatalf("second AcquireRuntimeUpdateLock error = %v, want ErrRuntimeUpdateLockHeld", err)
+	if err == nil || !errors.Is(err, errRuntimeUpdateLockHeld) {
+		t.Fatalf("second AcquireRuntimeUpdateLock error = %v, want errRuntimeUpdateLockHeld", err)
 	}
 
 	if err := first.Close(); err != nil {
 		t.Fatalf("Close: %v", err)
 	}
-	if _, err := os.Stat(RuntimeUpdateLockPath(runtimeDir)); err != nil {
+	if _, err := os.Stat(runtimeUpdateLockPath(runtimeDir)); err != nil {
 		t.Fatalf("lock file must survive Close: %v", err)
 	}
 	second, err := AcquireRuntimeUpdateLock(runtimeDir)
@@ -313,7 +309,7 @@ func TestRuntimeUpdateLockContentionAndPersistence(t *testing.T) {
 	if err := second.Close(); err != nil {
 		t.Fatalf("Close second: %v", err)
 	}
-	info, err := os.Stat(RuntimeUpdateLockPath(runtimeDir))
+	info, err := os.Stat(runtimeUpdateLockPath(runtimeDir))
 	if err != nil {
 		t.Fatalf("stat lock: %v", err)
 	}
@@ -335,7 +331,7 @@ func TestLiveHandoffScenarios(t *testing.T) {
 			TransactionID:  "txid",
 			ExecutablePath: exec.Path,
 			Outcome:        OutcomePending,
-			Phase:          PhaseBackupReady,
+			Phase:          phaseBackupReady,
 		}
 	}
 
@@ -416,27 +412,6 @@ func TestLiveHandoffScenarios(t *testing.T) {
 	})
 }
 
-func TestProcessAlive(t *testing.T) {
-	if !ProcessAlive(os.Getpid()) {
-		t.Fatal("ProcessAlive(current pid) = false, want true")
-	}
-	if !ProcessAlive(1) {
-		t.Fatal("ProcessAlive(1) = false, want true")
-	}
-	if ProcessAlive(-1) {
-		t.Fatal("ProcessAlive(-1) = true, want false")
-	}
-
-	// A reaped child is definitively dead.
-	cmd := exec.Command(os.Args[0], "-test.run=^$")
-	if err := cmd.Run(); err != nil {
-		t.Fatalf("helper run: %v", err)
-	}
-	if ProcessAlive(cmd.Process.Pid) {
-		t.Fatalf("ProcessAlive(reaped pid %d) = true, want false", cmd.Process.Pid)
-	}
-}
-
 func TestReadLatestReceipt(t *testing.T) {
 	keyedTx := "11111111111111111111111111111111"
 	writeReceiptBinding := func(t *testing.T, execPath, path, execPathInRecord, txID string) {
@@ -449,7 +424,7 @@ func TestReadLatestReceipt(t *testing.T) {
 			TransactionID:  txID,
 			ExecutablePath: execPathInRecord,
 			Outcome:        OutcomePending,
-			Phase:          PhaseBackupReady,
+			Phase:          phaseBackupReady,
 		}
 		if err := writeReceiptAtomic(path, r, time.Now()); err != nil {
 			t.Fatalf("write receipt at %s: %v", path, err)
@@ -485,7 +460,7 @@ func TestReadLatestReceipt(t *testing.T) {
 	})
 	t.Run("unkeyed file is not a receipt", func(t *testing.T) {
 		exec := installExecutable(t, "v1")
-		path := filepath.Join(LeaseDir(exec.Path), "receipt.json")
+		path := filepath.Join(leaseDir(exec.Path), "receipt.json")
 		writeReceiptBinding(t, exec.Path, path, exec.Path, keyedTx)
 		if _, found, err := ReadLatestReceipt(exec.Path); err != nil || found {
 			t.Fatalf("unkeyed file used as receipt: found %v, err %v", found, err)
@@ -497,7 +472,7 @@ func TestReadLatestReceipt(t *testing.T) {
 		if _, err := ConfirmTransaction(exec.Path, keyedTx); err == nil {
 			t.Fatal("confirmed an unkeyed record")
 		}
-		r, err := ReadReceipt(path)
+		r, err := readReceipt(path)
 		if err != nil || r.Outcome != OutcomePending {
 			t.Fatalf("unrelated file modified: %+v, %v", r, err)
 		}
@@ -535,7 +510,7 @@ func TestLiveHandoffRequiresActionablePendingReceipt(t *testing.T) {
 		TransactionID:  "0123456789abcdef0123456789abcdef",
 		ExecutablePath: exec.Path,
 		Outcome:        OutcomePending,
-		Phase:          PhaseBackupReady,
+		Phase:          phaseBackupReady,
 	}
 	writeAt := func(t *testing.T, r Receipt) {
 		t.Helper()
@@ -545,7 +520,7 @@ func TestLiveHandoffRequiresActionablePendingReceipt(t *testing.T) {
 	}
 
 	abandoned := base
-	abandoned.Resolution = ResolutionAbandonedPreReplacement
+	abandoned.Resolution = resolutionAbandonedPreReplacement
 	writeAt(t, abandoned)
 	if live, _, err := LiveHandoff(exec.Path); err != nil || live {
 		t.Fatalf("LiveHandoff with abandoned receipt = (%v, %v), want (false, nil)", live, err)
@@ -553,7 +528,7 @@ func TestLiveHandoffRequiresActionablePendingReceipt(t *testing.T) {
 
 	rolledBack := base
 	rolledBack.Outcome = OutcomeRolledBack
-	rolledBack.Phase = PhaseRollbackAttempted
+	rolledBack.Phase = phaseRollbackAttempted
 	writeAt(t, rolledBack)
 	if live, _, err := LiveHandoff(exec.Path); err != nil || live {
 		t.Fatalf("LiveHandoff with rolled-back receipt = (%v, %v), want (false, nil)", live, err)

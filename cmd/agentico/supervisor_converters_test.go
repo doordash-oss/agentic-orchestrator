@@ -27,7 +27,7 @@ import (
 
 func TestSupervisorConvertersRegisterEveryHarness(t *testing.T) {
 	converters := supervisorConverters(nil)
-	openCodeName := opencode.New().Name()
+	openCodeName := opencode.New("", nil).Name()
 	for _, harness := range []string{"claude", "codex", openCodeName} {
 		c, ok := converters[harness]
 		if !ok || c.Harness() != harness {
@@ -56,7 +56,7 @@ func TestSupervisorConvertersRegisterEveryHarness(t *testing.T) {
 // wiring reads the OpenCode model's context window from the registry: a
 // tiny window drops the oldest turn that the 200K default would keep.
 func TestSupervisorConvertersSizeOpenCodeSeedFromCatalog(t *testing.T) {
-	p := opencode.New()
+	p := opencode.New("", nil)
 	p.SetModelCatalog([]llm.ModelInfo{{ID: "vendor/tiny", ContextWindow: 30, Category: "cheap"}})
 	reg := llm.NewRegistry()
 	reg.Register(p)

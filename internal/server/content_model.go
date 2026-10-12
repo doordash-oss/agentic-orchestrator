@@ -57,11 +57,7 @@ func (h *apiHandler) handleArtifactList(w http.ResponseWriter, r *http.Request, 
 		return
 	}
 	runDir := h.store.RunDir(featureID, runNumber)
-	ids := make([]string, 0, len(run.Artifacts))
-	for id := range run.Artifacts {
-		ids = append(ids, id)
-	}
-	sort.Strings(ids)
+	ids := listedArtifactIDs(runDir, run.Artifacts)
 	artifacts := make([]Artifact, 0, len(ids))
 	for _, id := range ids {
 		rel := run.Artifacts[id]
@@ -86,6 +82,43 @@ func (h *apiHandler) handleArtifactList(w http.ResponseWriter, r *http.Request, 
 		Meta:       h.responseMeta(revision),
 		Artifacts:  artifacts,
 	})
+}
+
+// artifactIDPlanAlias is the current-phase plan pointer the orchestrator
+// stores alongside the stable per-phase "phase-N-plan" ids (see
+// startImplement). It aliases a phase plan the listing already reports.
+const artifactIDPlanAlias = "plan"
+
+// listedArtifactIDs returns the sorted artifact ids to list for a run. The
+// "plan" alias is omitted when another id already points at the same file, so
+// every file is listed exactly once under its stable id. The alias stays
+// readable through handleArtifactContent, which looks ids up in
+// run.Artifacts directly.
+func listedArtifactIDs(runDir string, artifacts map[string]string) []string {
+	canonical := make(map[string]bool, len(artifacts))
+	for id, rel := range artifacts {
+		if id != artifactIDPlanAlias {
+			canonical[artifactIdentity(runDir, rel)] = true
+		}
+	}
+	ids := make([]string, 0, len(artifacts))
+	for id, rel := range artifacts {
+		if id == artifactIDPlanAlias && canonical[artifactIdentity(runDir, rel)] {
+			continue
+		}
+		ids = append(ids, id)
+	}
+	sort.Strings(ids)
+	return ids
+}
+
+// artifactIdentity normalizes an artifact target so relative and absolute
+// references to the same run file compare equal.
+func artifactIdentity(runDir, rel string) string {
+	if path, ok := resolveRunArtifactPath(runDir, rel); ok {
+		return path
+	}
+	return rel
 }
 
 func (h *apiHandler) handleArtifactContent(w http.ResponseWriter, r *http.Request, featureID string, runNumber int, artifactID string) {

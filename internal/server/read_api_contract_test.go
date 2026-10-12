@@ -3083,6 +3083,49 @@ func TestArtifactReadsAllowAbsolutePathsWithinSameRun(t *testing.T) {
 	}
 }
 
+func TestArtifactListSinglePhaseRunListsPhasePlanOnce(t *testing.T) {
+	t.Parallel()
+	store, f := seedReadFeature(t)
+	runDir := store.RunDir(f.ID, 1)
+	roadmapPath := filepath.Join(runDir, artifactIDRoadmap, "roadmap.md")
+	planPath := filepath.Join(runDir, "phase-01", targetPhasePlan, "phase-plan.md")
+	writeFile(t, roadmapPath, "# Roadmap\n")
+	writeFile(t, planPath, "# Phase plan\n")
+	// The orchestrator persists the per-phase id and the "plan" current-phase
+	// alias; the alias here is run-relative to cover path normalization.
+	f.Artifacts = map[string]string{
+		artifactIDRoadmap:   roadmapPath,
+		"phase-1-plan":      planPath,
+		artifactIDPlanAlias: filepath.Join("phase-01", targetPhasePlan, "phase-plan.md"),
+	}
+	if err := store.Save(f); err != nil {
+		t.Fatalf("Save() error = %v", err)
+	}
+	handler := NewHandler(baseReadHandlerOptions(store))
+
+	list := getJSONMap(t, handler, "/api/v1/features/"+f.ID+"/runs/1/artifacts")
+	seen := map[string]string{}
+	var ids []string
+	for _, raw := range list["artifacts"].([]any) {
+		artifact := raw.(map[string]any)
+		id, path := artifact["id"].(string), artifact["path"].(string)
+		if prev, dup := seen[path]; dup {
+			t.Fatalf("artifact path %s listed twice (ids %q and %q)", path, prev, id)
+		}
+		seen[path] = id
+		ids = append(ids, id)
+	}
+	if want := []string{"phase-1-plan", artifactIDRoadmap}; !reflect.DeepEqual(ids, want) {
+		t.Fatalf("artifact ids = %v; want %v", ids, want)
+	}
+
+	// The legacy alias still resolves on lookup.
+	content := getJSONMap(t, handler, "/api/v1/features/"+f.ID+"/runs/1/artifacts/plan?offset=2&limit=5")
+	if content[blockTypeText] != "Phase" {
+		t.Fatalf("plan alias content = %q; want Phase", content[blockTypeText])
+	}
+}
+
 func TestRewindDescriptionReviewArtifactAndStateExposed(t *testing.T) {
 	t.Parallel()
 	store, f := seedReadFeature(t)

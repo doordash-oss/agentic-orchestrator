@@ -30,13 +30,37 @@ import (
 // CommandRunner executes a command and returns its stdout output.
 type CommandRunner func(ctx context.Context, name string, args []string, env []string) ([]byte, error)
 
+// ProbeCommand prepares a provider inspection subprocess. Preserve the launch
+// directory while it exists (CLIs may read project configuration there). A
+// long-lived server can outlive a temporary launch directory; recover only the
+// child's cwd in that case, without changing the server's process-wide cwd.
+func ProbeCommand(ctx context.Context, name string, args ...string) (*exec.Cmd, error) {
+	dir, err := os.Getwd()
+	if err == nil {
+		// On macOS Getwd can still return the path of an unlinked directory.
+		_, err = os.Stat(dir)
+	}
+	if err != nil {
+		dir, err = os.UserHomeDir()
+		if err != nil {
+			return nil, fmt.Errorf("recover provider probe working directory: %w", err)
+		}
+	}
+	cmd := exec.CommandContext(ctx, name, args...)
+	cmd.Dir = dir
+	return cmd, nil
+}
+
 // DefaultRunner returns a CommandRunner that captures only stdout.
 // Stderr is discarded to prevent CLI warnings from corrupting structured output.
 func DefaultRunner() CommandRunner {
 	return func(ctx context.Context, name string, args []string, env []string) ([]byte, error) {
-		cmd := exec.CommandContext(ctx, name, args...)
+		cmd, err := ProbeCommand(ctx, name, args...)
+		if err != nil {
+			return nil, err
+		}
 		if len(env) > 0 {
-			cmd.Env = append(os.Environ(), env...)
+			cmd.Env = append(cmd.Environ(), env...)
 		}
 		return cmd.Output()
 	}
@@ -47,9 +71,12 @@ func DefaultRunner() CommandRunner {
 // state) on stderr rather than stdout, where DefaultRunner would drop it.
 func CombinedRunner() CommandRunner {
 	return func(ctx context.Context, name string, args []string, env []string) ([]byte, error) {
-		cmd := exec.CommandContext(ctx, name, args...)
+		cmd, err := ProbeCommand(ctx, name, args...)
+		if err != nil {
+			return nil, err
+		}
 		if len(env) > 0 {
-			cmd.Env = append(os.Environ(), env...)
+			cmd.Env = append(cmd.Environ(), env...)
 		}
 		return cmd.CombinedOutput()
 	}

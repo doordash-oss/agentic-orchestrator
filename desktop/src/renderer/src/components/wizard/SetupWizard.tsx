@@ -16,9 +16,8 @@ limitations under the License.
 
 /**
  * Runtime readiness wizard. It has two hosts: the full page, shown while no
- * provider is ready and the runtime cannot run work at all, and a sheet the
- * shell opens on demand while a runtime with a ready provider is still
- * incomplete (the banner's "Open setup", the Setup… command, the `setup`
+ * provider is ready, with an escape to the shell for recovery, and a sheet the
+ * shell opens on demand while setup is still incomplete (the banner's "Open setup", the Setup… command, the `setup`
  * route). The sheet is the Recovery sheet's presentation — scrim, sheet
  * classes, and the shared modal-dismiss hook — and never opens on its own.
  * Every step derives entirely from the latest authoritative readiness
@@ -50,6 +49,8 @@ interface SetupWizardProps {
   onSnapshot(next: RuntimeReadinessSnapshot): void;
   /** `page` (default) fills the window; `sheet` descends over the shell. */
   host?: 'page' | 'sheet';
+  /** Leave the first-launch page without changing runtime readiness. */
+  onDefer?(): void;
   /** Sheet host only: Escape, a scrim press, and the Close button call it. */
   onClose?(): void;
 }
@@ -60,6 +61,7 @@ export function SetupWizard({
   snapshot,
   onSnapshot,
   host = 'page',
+  onDefer,
   onClose = noop,
 }: SetupWizardProps) {
   const derived = deriveWizardState(snapshot);
@@ -255,9 +257,16 @@ export function SetupWizard({
     >
       <header className="shell-card__identity">
         <h1 className="shell-card__title">Set up Agentico</h1>
-        {helpToggle}
+        <div className="setup-wizard__header-actions">
+          {helpToggle}
+          {onDefer !== undefined ? (
+            <button type="button" className="sheet__footer-secondary" onClick={onDefer}>
+              Set up later
+            </button>
+          ) : null}
+        </div>
       </header>
-      {body}
+      <div className="setup-wizard__body">{body}</div>
     </section>
   );
 }
@@ -286,9 +295,8 @@ function ProvidersStep({
       </h2>
       {!helpCollapsed ? (
         <p className="setup-step__help">
-          Agentico drives coding agents through provider CLIs installed on this machine. Install and
-          sign in to at least one provider in your own terminal — authentication always happens in
-          the provider&apos;s external flow — then check again.
+          Agentico checks provider CLIs on the connected server. Run the commands in a terminal on
+          that server, using the same account and environment as Agentico, then check again.
         </p>
       ) : null}
       {providers.length === 0 ? (

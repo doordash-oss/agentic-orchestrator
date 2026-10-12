@@ -146,6 +146,9 @@ func TestRunPhasePlanning_HighInquireness_GrillMePromptInvariant(t *testing.T) {
 		Sessions:    sm,
 		PhaseRunner: pr,
 	}, Hooks{})
+	// Capturing the prompt precedes completion handling, which still writes
+	// feature state. Drain that work before the temporary stores are removed.
+	t.Cleanup(o.WaitForCycles)
 
 	if _, err := o.startRoadmapPhasePlan(featureID, f); err != nil {
 		t.Fatalf("startRoadmapPhasePlan: %v", err)

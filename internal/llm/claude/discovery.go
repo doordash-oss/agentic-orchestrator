@@ -20,12 +20,11 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
-	"os"
-	"os/exec"
 	"strings"
 	"time"
 
 	"github.com/doordash-oss/agentic-orchestrator/internal/llm"
+	"github.com/doordash-oss/agentic-orchestrator/internal/llm/clirun"
 )
 
 const catalogRequestID = "agentico-model-catalog"
@@ -39,12 +38,16 @@ func (p *Provider) DiscoverModelCatalog(ctx context.Context) ([]llm.ModelInfo, e
 func (p *Provider) DiscoverModelCatalogWithProgress(ctx context.Context, report llm.ModelDiscoveryReporter) ([]llm.ModelInfo, error) {
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
-	cmd := exec.CommandContext(ctx, p.cliBinary(), "-p", "--input-format", "stream-json",
+	cmd, err := clirun.ProbeCommand(ctx, p.cliBinary(), "-p", "--input-format", "stream-json",
 		"--output-format", "stream-json", "--verbose", "--safe-mode", "--no-session-persistence")
+	if err != nil {
+		return nil, err
+	}
 	// Discovery must not load project customizations or inherit nested-session
 	// detection. Authentication and backend configuration remain with the CLI.
-	cmd.Env = make([]string, 0, len(os.Environ()))
-	for _, entry := range os.Environ() {
+	env := cmd.Environ()
+	cmd.Env = make([]string, 0, len(env))
+	for _, entry := range env {
 		if !strings.HasPrefix(entry, "CLAUDECODE=") {
 			cmd.Env = append(cmd.Env, entry)
 		}

@@ -18,15 +18,22 @@ limitations under the License.
  * Decides what a ready connection shows: nothing but a loading state until
  * the first authoritative readiness snapshot arrives (so an already-ready
  * runtime never flashes the wizard), then one of three modes. With no ready
- * provider the full-page setup wizard owns the window. With at least one
- * ready provider but setup still incomplete, the main view mounts in
+ * provider the full-page setup wizard opens first and can be deferred. With
+ * at least one ready provider, or after deferring setup, the main view mounts in
  * partial-readiness mode, carrying the snapshot so its banner and on-demand
  * wizard sheet read the same truth the gate does. Once everything passes the
  * main view mounts as-is. Partial and complete render the same shell element,
  * so a "Check again" that completes setup never remounts it. Mounted fresh on
  * every reconnect, so resume always starts from the server truth.
  */
-import { useCallback, useEffect, useRef, type Dispatch, type SetStateAction } from 'react';
+import {
+  useCallback,
+  useEffect,
+  useRef,
+  useState,
+  type Dispatch,
+  type SetStateAction,
+} from 'react';
 import type { AttentionItem, RoutedRequest, UpdateState } from '../../../shared/ipc';
 import { WorkspaceShell } from '../features/WorkspaceShell';
 import type { AttentionDrafts } from '../features/AttentionInbox';
@@ -83,7 +90,9 @@ export function ReadinessGate({
   const load = useCallback(() => window.agentico.getRuntimeReadiness(), []);
   const { state, reload, replace } = useIpcLoad(load, []);
   const mode = state.phase === 'loaded' ? readinessGateMode(state.data) : null;
-  const setupIncomplete = mode === 'partial';
+  const [setupDeferred, setSetupDeferred] = useState(false);
+  const showWizard = mode === 'wizard' && !setupDeferred;
+  const setupIncomplete = mode !== null && mode !== 'complete' && !showWizard;
 
   const onSetupIncompleteChangeRef = useRef(onSetupIncompleteChange);
   onSetupIncompleteChangeRef.current = onSetupIncompleteChange;
@@ -114,7 +123,7 @@ export function ReadinessGate({
   }
 
   const snapshot = state.data;
-  if (mode !== 'wizard') {
+  if (!showWizard) {
     return (
       <WorkspaceShell
         attentionItems={attentionItems}
@@ -137,5 +146,7 @@ export function ReadinessGate({
     );
   }
 
-  return <SetupWizard snapshot={snapshot} onSnapshot={replace} />;
+  return (
+    <SetupWizard snapshot={snapshot} onSnapshot={replace} onDefer={() => setSetupDeferred(true)} />
+  );
 }

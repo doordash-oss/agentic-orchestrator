@@ -755,6 +755,9 @@ func TestOrchestrator_StartPhase_PhaseRunnerDispatch_Implement(t *testing.T) {
 		CmdRunner:   cpr.cmd,
 	}, orchestrator.Hooks{})
 
+	// BuildSession is observed before completion handling finishes writing state.
+	t.Cleanup(o.WaitForCycles)
+
 	if err := o.StartFeature(f.ID); err != nil {
 		t.Fatalf("StartFeature: %v", err)
 	}

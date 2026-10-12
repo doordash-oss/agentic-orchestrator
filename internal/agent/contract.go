@@ -259,6 +259,31 @@ func validatePlanAttemptMetaArtifact(_ roleArtifactSpec, _ string, path string, 
 	return nil, nil
 }
 
+// PhasePlanCommandWarnings lints a phase plan's Automated Verification
+// commands for doubled backslashes. Planners that author the plan through a
+// string literal (a JSON payload, a JS patch string) sometimes escape twice,
+// leaving `\\n` where a shell command needs `\n`. A doubled backslash can be
+// legitimate, so this only warns; it never fails the preflight.
+func PhasePlanCommandWarnings(phase feature.Phase, role Role, iterDir string) []string {
+	if phase != feature.PhasePlan || (role != RolePlanPhasePlanner && role != rolePlanPhaseReviser) {
+		return nil
+	}
+	path := resolvePlanMarkdownRoleArtifact("phase-plan.md")(roleRuntime{IterationDir: iterDir}, roleArtifactSpec{})
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return nil
+	}
+	var warnings []string
+	for _, step := range parsePlanVerification(string(data)) {
+		if strings.Contains(step.Command, `\\`) {
+			warnings = append(warnings, fmt.Sprintf(
+				"phase plan markdown: Automated Verification command for %q contains a doubled backslash; write commands exactly as typed in a shell and do not escape backslashes a second time (a regex newline is one backslash plus n)",
+				step.Description))
+		}
+	}
+	return warnings
+}
+
 func validatePhasePlanMarkdownArtifact(_ roleArtifactSpec, iterDir string, path string, _ *Outcome) ([]ProtocolViolation, error) {
 	if path == "" {
 		return []ProtocolViolation{{Artifact: "phase plan markdown", Reason: missingArtifactReason("phase plan markdown", phasePlanArtifactDir(iterDir))}}, nil

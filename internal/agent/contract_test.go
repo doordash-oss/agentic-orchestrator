@@ -291,6 +291,38 @@ func TestContractRegistryPlanPhasePlannerRejectsEmptyNoneReasonAndManualCommand(
 	}
 }
 
+func TestPhasePlanCommandWarningsFlagsDoubledBackslash(t *testing.T) {
+	t.Parallel()
+	single := "- [ ] Fences match: `python3 -c 'import re; re.findall(r\"^[^\\n]*$\", \"\")'`"
+	doubled := "- [ ] Fences match: `python3 -c 'import re; re.findall(r\"^[^\\\\n]*$\", \"\")'`"
+	for _, tc := range []struct {
+		name string
+		item string
+		want int
+	}{
+		{name: "single backslash", item: single, want: 0},
+		{name: "doubled backslash", item: doubled, want: 1},
+	} {
+		plan := strings.Replace(validPhasePlanText(), "- [ ] Tests pass: `go test ./...`", tc.item, 1)
+		attemptDir := writePhasePlannerAttempt(t, phasePlannerArtifacts{PlanText: plan})
+
+		out, violations, err := ValidateArtifactsPreflight(feature.PhasePlan, RolePlanPhasePlanner, attemptDir)
+		if err != nil || !out.OK {
+			t.Fatalf("%s: ValidateArtifactsPreflight() = (%+v, %v, %v), want OK (lint must only warn)", tc.name, out, violations, err)
+		}
+		got := PhasePlanCommandWarnings(feature.PhasePlan, RolePlanPhasePlanner, attemptDir)
+		if len(got) != tc.want {
+			t.Fatalf("%s: PhasePlanCommandWarnings() = %q, want %d warning(s)", tc.name, got, tc.want)
+		}
+		if tc.want > 0 && !strings.Contains(got[0], "Fences match") {
+			t.Fatalf("%s: warning %q does not name the offending item", tc.name, got[0])
+		}
+	}
+	if got := PhasePlanCommandWarnings(feature.PhasePlan, RolePlanRoadmapPlanner, t.TempDir()); got != nil {
+		t.Fatalf("PhasePlanCommandWarnings(roadmap planner) = %q, want nil", got)
+	}
+}
+
 func TestContractRegistryPlanPhasePlannerRejectsMultipleManualArtifacts(t *testing.T) {
 	plan := strings.Replace(validPhasePlanText(),
 		"- [ ] None required: internal-only test fixture.",

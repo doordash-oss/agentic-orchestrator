@@ -599,6 +599,9 @@ func runValidateArtifacts(opts validateArtifactsOptions, stdout, stderr io.Write
 		renderProtocolViolations(stderr, "artifact contract", violations)
 		return 1
 	}
+	for _, warning := range agent.PhasePlanCommandWarnings(phase, role, opts.dir) {
+		fmt.Fprintf(stderr, "warning: %s\n", warning)
+	}
 	fmt.Fprintln(stdout, "artifacts OK")
 	return 0
 }

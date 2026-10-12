@@ -352,6 +352,12 @@ function ProviderRow({ provider, onCopy }: ProviderRowProps) {
           <dt>Authentication</dt>
           <dd>{authentication}</dd>
         </div>
+        {provider.endpointReachable !== undefined ? (
+          <div className="provider-row__fact">
+            <dt>Endpoint</dt>
+            <dd>{provider.endpointReachable ? 'reachable' : 'unreachable'}</dd>
+          </div>
+        ) : null}
       </dl>
       {issue !== undefined ? (
         <>
@@ -370,6 +376,10 @@ function ProviderRow({ provider, onCopy }: ProviderRowProps) {
             </button>
           ) : null}
         </>
+      ) : null}
+      {/* Advisory: an unreachable endpoint never blocks readiness. */}
+      {provider.warning !== undefined ? (
+        <ErrorSurface error={provider.warning} variant="compact" />
       ) : null}
     </li>
   );

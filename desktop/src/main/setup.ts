@@ -294,6 +294,8 @@ function toRuntimeReadinessSnapshot(server: RuntimeReadinessResponse): RuntimeRe
       ...defined('version', provider.version),
       ready: provider.ready,
       ...defined('issue', provider.issue),
+      ...defined('endpointReachable', provider.endpoint_reachable),
+      ...defined('warning', provider.warning),
     })),
     models: {
       available: server.models.available,
@@ -305,9 +307,10 @@ function toRuntimeReadinessSnapshot(server: RuntimeReadinessResponse): RuntimeRe
       ...defined('issue', server.configuration.issue),
     },
     issues: [
-      ...server.providers.flatMap((provider) =>
-        provider.issue === undefined ? [] : [provider.issue],
-      ),
+      ...server.providers.flatMap((provider) => [
+        ...(provider.issue === undefined ? [] : [provider.issue]),
+        ...(provider.warning === undefined ? [] : [provider.warning]),
+      ]),
       ...(server.models.issue === undefined ? [] : [server.models.issue]),
       ...(server.configuration.issue === undefined ? [] : [server.configuration.issue]),
     ],

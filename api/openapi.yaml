@@ -2866,6 +2866,19 @@ components:
         issue:
           $ref: "#/components/schemas/Error"
           x-go-type-skip-optional-pointer: false
+        endpoint_reachable:
+          type: boolean
+          description: >-
+            Result of a bounded, unauthenticated reachability probe of the
+            custom API endpoint(s) the provider CLI is configured to call
+            (any HTTP response counts as reachable). Absent when the provider
+            has no custom endpoint or the background check has not finished.
+            Never affects `ready`.
+          x-go-type-skip-optional-pointer: false
+        warning:
+          $ref: "#/components/schemas/Error"
+          description: Non-blocking warning (provider_endpoint_unreachable) for a provider whose configured endpoint is unreachable.
+          x-go-type-skip-optional-pointer: false
     ModelReadiness:
       type: object
       required: [available]

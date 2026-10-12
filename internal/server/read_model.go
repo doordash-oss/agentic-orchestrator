@@ -1300,6 +1300,7 @@ func (h *apiHandler) handleProviderModelRefreshRoute(w http.ResponseWriter, r *h
 		h.writeAdmissionOrInternal(w, err)
 		return
 	}
+	h.checkProviderEndpoints(r.Context(), true)
 	if status.Ready {
 		provider := h.registry.ByName(req.Provider)
 		discoveryCtx, cancel := context.WithTimeout(r.Context(), 45*time.Second)

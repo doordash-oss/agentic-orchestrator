@@ -181,6 +181,10 @@ func (h *apiHandler) runtimeReadinessSnapshot(ctx context.Context, forceProbe bo
 	if err != nil {
 		return ReadinessResponse{}, err
 	}
+	// Endpoint reachability is advisory: plain reads use the cached result
+	// and refresh it in the background; only forced refreshes wait (bounded).
+	h.checkProviderEndpoints(ctx, forceProbe)
+	providers = h.applyEndpointResults(providers)
 	cfg := h.configOrDefault()
 	resp := ReadinessResponse{
 		APIVersion:    APIVersion,
@@ -524,6 +528,9 @@ func flattenReadinessIssues(resp ReadinessResponse) []Error {
 	for _, p := range resp.Providers {
 		if p.Issue != nil {
 			issues = append(issues, *p.Issue)
+		}
+		if p.Warning != nil {
+			issues = append(issues, *p.Warning)
 		}
 	}
 	if resp.Models.Issue != nil {

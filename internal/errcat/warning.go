@@ -64,6 +64,10 @@ const (
 	// OriginBranchMissing reports a selected repository whose mapped origin
 	// branch was proved missing on the remote by the current check attempt.
 	OriginBranchMissing Code = "origin_branch_missing"
+	// ProviderEndpointUnreachable reports an installed, ready provider whose
+	// configured API endpoint did not answer a bounded reachability probe;
+	// sessions on that provider will fail until the network path returns.
+	ProviderEndpointUnreachable Code = "provider_endpoint_unreachable"
 )
 
 // Orphan-session recovery codes. An orphan session is a recovery item whose
@@ -167,6 +171,27 @@ func warningRepoSummary(p Params, format string) string {
 		return ""
 	}
 	return fmt.Sprintf(format, clause)
+}
+
+// ProviderEndpointParams names the provider and the endpoint host a
+// reachability warning refers to.
+type ProviderEndpointParams struct {
+	Provider string
+	Host     string
+}
+
+func (ProviderEndpointParams) params() {}
+
+// providerEndpointSummary names the unreachable host and its provider.
+func providerEndpointSummary(p Params) string {
+	params, ok := p.(ProviderEndpointParams)
+	if !ok || strings.TrimSpace(params.Host) == "" {
+		return ""
+	}
+	if provider := strings.TrimSpace(params.Provider); provider != "" {
+		return fmt.Sprintf("Provider endpoint %s (%s) is unreachable; %s sessions will fail until it can be reached.", params.Host, provider, provider)
+	}
+	return fmt.Sprintf("Provider endpoint %s is unreachable.", params.Host)
 }
 
 // effortCapabilityDriftSummary names the role, effort, and model of the

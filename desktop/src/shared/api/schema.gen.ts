@@ -1593,6 +1593,10 @@ export interface components {
             version?: string;
             ready: boolean;
             issue?: components["schemas"]["Error"];
+            /** @description Result of a bounded, unauthenticated reachability probe of the custom API endpoint(s) the provider CLI is configured to call (any HTTP response counts as reachable). Absent when the provider has no custom endpoint or the background check has not finished. Never affects `ready`. */
+            endpoint_reachable?: boolean;
+            /** @description Non-blocking warning (provider_endpoint_unreachable) for a provider whose configured endpoint is unreachable. */
+            warning?: components["schemas"]["Error"];
         };
         ModelReadiness: {
             available: boolean;

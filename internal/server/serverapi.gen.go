@@ -3484,13 +3484,18 @@ type ProviderModelRefreshResponse struct {
 
 // ProviderReadiness defines model for ProviderReadiness.
 type ProviderReadiness struct {
-	Installed bool `json:"installed"`
+	// EndpointReachable Result of a bounded, unauthenticated reachability probe of the custom API endpoint(s) the provider CLI is configured to call (any HTTP response counts as reachable). Absent when the provider has no custom endpoint or the background check has not finished. Never affects `ready`.
+	EndpointReachable *bool `json:"endpoint_reachable,omitempty"`
+	Installed         bool  `json:"installed"`
 
 	// Issue Canonical catalog-rendered error.
 	Issue   *Error `json:"issue,omitempty"`
 	Name    string `json:"name"`
 	Ready   bool   `json:"ready"`
 	Version string `json:"version,omitempty"`
+
+	// Warning Non-blocking warning (provider_endpoint_unreachable) for a provider whose configured endpoint is unreachable.
+	Warning *Error `json:"warning,omitempty"`
 }
 
 // PublishDescriptionResponse defines model for PublishDescriptionResponse.

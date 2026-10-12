@@ -184,6 +184,8 @@ Recovery lists sessions orphaned by a previous server process.
 - `POST /api/v1/readiness/runtime/refresh` — refresh runtime readiness without repository inspection. Body `{}`.
   Example: `"$AGENTICO_BIN" api POST /api/v1/readiness/runtime/refresh '{}'`
 
+Each `providers[]` entry may carry `endpoint_reachable` (result of a short, unauthenticated probe of the provider's custom API endpoint, such as an OpenCode `baseURL`, `ANTHROPIC_BASE_URL`, or a Codex `model_provider` `base_url`; absent when none is configured or the background check is still running) and `warning`. A `provider_endpoint_unreachable` warning also appears in `issues` and does not set `ready:false`, but sessions on that provider will fail to connect. Tell the user to check their VPN or network, then refresh readiness. A refresh waits up to 3 seconds for the check; plain reads use the cached result and recheck in the background.
+
 ## Runtime config
 
 - `GET /api/v1/config/runtime` — read runtime configuration: model and feature defaults, workspace roots, notifications.

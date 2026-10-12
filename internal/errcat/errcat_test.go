@@ -42,6 +42,7 @@ var zeroParams = []Params{
 	IntegrationRepoParams{},
 	setupFailureParams{},
 	EffortDriftParams{},
+	ProviderEndpointParams{},
 	FeatureLoadFailedParams{},
 	WarningRepoParams{},
 	OrphanSessionParams{},

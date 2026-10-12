@@ -620,6 +620,11 @@ export function SettingsPanel({
                       }
                     />
                   )}
+                  {p.warning && (
+                    // Advisory endpoint warning (e.g. VPN down): the provider
+                    // stays ready, but its sessions will fail to connect.
+                    <ErrorSurface error={p.warning} variant="compact" />
+                  )}
                   {p.installed && p.version && (
                     <p className="settings-panel__provider-version">v{p.version}</p>
                   )}

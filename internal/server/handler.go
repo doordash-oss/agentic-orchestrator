@@ -139,6 +139,9 @@ type apiHandler struct {
 	readinessMu       sync.Mutex
 	providerReadiness []ProviderReadiness
 	readinessProbedAt time.Time
+	// endpoints caches the background provider-endpoint reachability
+	// checks merged into provider readiness as non-blocking warnings.
+	endpoints         endpointChecks
 	providerRefreshMu sync.Mutex
 	creationMu        sync.Mutex
 	creationResults   map[string]creationResult

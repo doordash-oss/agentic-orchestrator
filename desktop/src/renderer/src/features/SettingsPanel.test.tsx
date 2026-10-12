@@ -193,6 +193,42 @@ describe('SettingsPanel provider refresh', () => {
     await userEvent.click(within(surface as HTMLElement).getByRole('button', { name: 'Recheck' }));
     expect(mock.api.refreshProviderModels).toHaveBeenCalledWith('claude');
   });
+
+  it('shows an unreachable endpoint as a warning on a provider that stays ready', async () => {
+    installAgenticoMock({
+      readiness: readySnapshot({
+        providers: [
+          {
+            name: 'opencode',
+            installed: true,
+            version: '1.18.25',
+            ready: true,
+            endpointReachable: false,
+            warning: {
+              code: 'provider_endpoint_unreachable',
+              class: 'warning',
+              title: 'Provider endpoint unreachable',
+              summary:
+                'Provider endpoint gw.example.team (opencode) is unreachable; opencode sessions will fail until it can be reached.',
+              remediation: {
+                hint: 'Check your VPN or network connection, then check readiness again.',
+              },
+            },
+          },
+        ],
+      }),
+    });
+    render(<SettingsPanel pane="providers" />);
+
+    const row = (await screen.findByText('opencode')).closest('li')!;
+    expect(within(row).getByText('Ready')).toBeVisible();
+    const surface = within(row)
+      .getByText('provider_endpoint_unreachable')
+      .closest('.error-surface');
+    expect(surface).not.toBeNull();
+    expect(surface).toHaveTextContent('gw.example.team');
+    expect(within(row).getByRole('button', { name: 'Recheck' })).toBeEnabled();
+  });
 });
 
 // These update and diagnostics behaviours were asserted through App while

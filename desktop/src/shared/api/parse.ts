@@ -491,6 +491,9 @@ export const ReadinessResponseSchema = z.object({
       version: z.string().optional(),
       ready: z.boolean(),
       issue: CanonicalErrorSchema.optional(),
+      // Advisory endpoint reachability; never affects `ready`.
+      endpoint_reachable: z.boolean().optional(),
+      warning: CanonicalErrorSchema.optional(),
     }),
   ),
   models: z.object({

@@ -116,6 +116,39 @@ describe('SetupService.getReadiness', () => {
     });
   });
 
+  it('carries the advisory endpoint reachability warning without blocking readiness', async () => {
+    const warning = {
+      code: 'provider_endpoint_unreachable',
+      class: 'warning',
+      title: 'Provider endpoint unreachable',
+      summary:
+        'Provider endpoint gw.example.team (opencode) is unreachable; opencode sessions will fail until it can be reached.',
+      remediation: { hint: 'Check your VPN or network connection, then check readiness again.' },
+    };
+    const { service } = makeService(() => ({
+      status: 200,
+      body: serverReadiness({
+        ready: true,
+        providers: [
+          {
+            name: 'opencode',
+            installed: true,
+            ready: true,
+            endpoint_reachable: false,
+            warning,
+          },
+        ],
+        models: { available: true, models: ['opencode/m'] },
+        issues: [warning],
+      }),
+    }));
+    const snapshot = await service.getRuntimeReadiness();
+    expect(RuntimeReadinessSnapshotSchema.parse(snapshot)).toEqual(snapshot);
+    expect(snapshot.ready).toBe(true);
+    expect(snapshot.providers[0]).toMatchObject({ ready: true, endpointReachable: false, warning });
+    expect(snapshot.issues.map((issue) => issue.code)).toEqual(['provider_endpoint_unreachable']);
+  });
+
   it('tolerates a snapshot without optional probe time or issues', async () => {
     const body = serverReadiness();
     delete body['probed_at'];

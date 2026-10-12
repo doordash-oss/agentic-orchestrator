@@ -1693,6 +1693,13 @@ var catalog = map[Code]entry{
 		},
 		Remediation: "Restore the origin branch or re-track the local branch; creation can continue from the local source.",
 	},
+	ProviderEndpointUnreachable: {
+		Class:         classWarning,
+		Title:         "Provider endpoint unreachable",
+		Summary:       "A provider's configured API endpoint is unreachable; its sessions will fail until it can be reached.",
+		summaryParams: providerEndpointSummary,
+		Remediation:   "Check your VPN or network connection, then check readiness again.",
+	},
 
 	// --- Orphan-session recovery codes ---------------------------------------
 	// An orphan session's recovery item carries one of these, picked by

@@ -525,6 +525,11 @@ const ProviderReadinessSchema = z.strictObject({
   version: z.string().optional(),
   ready: z.boolean(),
   issue: ReadinessIssueSchema.optional(),
+  /** Bounded reachability probe of the provider's custom API endpoint;
+   * absent when none is configured or the check is pending. Advisory only. */
+  endpointReachable: z.boolean().optional(),
+  /** Non-blocking warning (`provider_endpoint_unreachable`). */
+  warning: ReadinessIssueSchema.optional(),
 });
 
 export type ProviderReadiness = z.output<typeof ProviderReadinessSchema>;

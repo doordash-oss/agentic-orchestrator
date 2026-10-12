@@ -3483,3 +3483,60 @@ func TestLateCostReconciliationPreservesTerminalOutcome(t *testing.T) {
 		t.Fatalf("lost usage: %+v", usage)
 	}
 }
+
+// TestClaudeSessionContextPercentageFromCacheHeavyUsage replays a synthetic
+// Claude stream through the real Claude protocol for a model whose discovered
+// catalog entry has no context window (ContextWindowForModel returns 0). Claude reports almost the whole prompt
+// as cache reads/creations with a tiny input_tokens, so the meter must sum all
+// three buckets of the latest turn against the provider's default window and
+// be available mid-run, not only after result.modelUsage arrives.
+func TestClaudeSessionContextPercentageFromCacheHeavyUsage(t *testing.T) {
+	t.Parallel()
+	prov := claude.NewProvider("")
+	prov.SetModelCatalog([]llm.ModelInfo{{ID: "claude-haiku-5-5", Aliases: []string{"claude-haiku-5-5"}}})
+	window := prov.ContextWindowForModel("claude-haiku-5-5")
+	if window != 0 {
+		t.Fatalf("precondition: catalog window = %d, want 0 (unknown)", window)
+	}
+
+	s := NewSession("claude-ctx", "feat-ctx", feature.PhaseImplement)
+	s.protocol = claude.NewProtocol(llm.ProtocolOpts{Model: "claude-haiku-5-5", ContextWindow: window})
+	lines := []string{
+		`{"type":"system","subtype":"init","session_id":"c1","model":"claude-haiku-5-5"}`,
+		`{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"a"}],"usage":{"input_tokens":2,"output_tokens":8,"cache_read_input_tokens":20000,"cache_creation_input_tokens":4000}}}`,
+		`{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"b"}],"usage":{"input_tokens":3,"output_tokens":40,"cache_read_input_tokens":40000,"cache_creation_input_tokens":4000}}}`,
+		`{"type":"result","subtype":"success","session_id":"c1","total_cost_usd":0.01}`,
+	}
+	var pcts []int
+	runSessionWithStdoutLines(t, s, lines, func(msg llm.SDKMessage) {
+		if msg.Assistant != nil {
+			pcts = append(pcts, s.ContextPercentage())
+		}
+	})
+	// (2+20000+4000)/200000 = 12%; (3+40000+4000)/200000 = 22%. The second
+	// value reflects the latest turn's context, not a sum across turns.
+	if want := []int{12, 22}; fmt.Sprint(pcts) != fmt.Sprint(want) {
+		t.Fatalf("mid-run ContextPercentage() = %v, want %v", pcts, want)
+	}
+	if got := s.ContextPercentage(); got != 22 {
+		t.Fatalf("final ContextPercentage() = %d, want 22", got)
+	}
+}
+
+// TestContextPercentageUnknownWindowStaysUnavailable confirms a provider that
+// supplies usage but no context window still reports -1 (unknown).
+func TestContextPercentageUnknownWindowStaysUnavailable(t *testing.T) {
+	t.Parallel()
+	s := NewSession("unknown-ctx", "feat-ctx", feature.PhaseImplement)
+	runMockSession(t, s, []llm.SDKMessage{{
+		Type: "assistant",
+		Assistant: &llm.AssistantMessage{Message: llm.ConversationMsg{
+			Role:    "assistant",
+			Content: []llm.ContentBlock{{Type: "text", Text: "a"}},
+			Usage:   &llm.Usage{InputTokens: 2, OutputTokens: 8, CacheReadInputTokens: 20_000},
+		}},
+	}}, nil)
+	if got := s.ContextPercentage(); got != -1 {
+		t.Fatalf("ContextPercentage() = %d, want -1 without a context window", got)
+	}
+}

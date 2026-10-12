@@ -43,12 +43,32 @@ type Protocol struct {
 	contextWindow int    // provider-derived fallback, refined by result.modelUsage
 }
 
+// defaultContextWindow is Claude's standard context window. The Claude CLI
+// reports a window only in the final result's modelUsage, and the discovered
+// catalog carries one only for [<window>]-suffixed selectors, so plain model
+// IDs (e.g. "claude-haiku-5-5") would otherwise leave the live context meter
+// unknown for the whole turn.
+const defaultContextWindow = 200_000
+
 // NewProtocol creates a new Claude protocol handler.
 func NewProtocol(opts llm.ProtocolOpts) *Protocol {
 	return &Protocol{
 		opts:          opts,
-		contextWindow: opts.ContextWindow,
+		contextWindow: initialContextWindow(opts),
 	}
+}
+
+// initialContextWindow seeds the live context window: the caller's catalog
+// window, else a [<window>] selector suffix such as "opus[1m]", else the
+// Claude default. result.modelUsage refines it once reported.
+func initialContextWindow(opts llm.ProtocolOpts) int {
+	if opts.ContextWindow > 0 {
+		return opts.ContextWindow
+	}
+	if window := llm.ParseModelContextWindow(strings.TrimSpace(opts.Model)); window > 0 {
+		return window
+	}
+	return defaultContextWindow
 }
 
 func (p *Protocol) SetStdin(w io.Writer) {

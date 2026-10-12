@@ -1371,6 +1371,8 @@ const ReviewGateViewSchema = z.strictObject({
   reviewFixing: z.boolean(),
   validatingPlan: z.boolean(),
   validatorStatuses: z.record(z.string(), z.string()),
+  /** Last error of each failed or retrying validator, keyed like validatorStatuses. */
+  validatorErrors: z.record(z.string(), z.string()).optional(),
 });
 export type ReviewGateView = z.output<typeof ReviewGateViewSchema>;
 

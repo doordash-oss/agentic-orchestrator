@@ -6559,6 +6559,16 @@ components:
           type: boolean
         validator_statuses:
           type: object
+          description: >-
+            Live state per validator: running, retrying, interrupted, error,
+            or its verdict.
+          additionalProperties:
+            type: string
+        validator_errors:
+          type: object
+          description: >-
+            Last error of each validator that failed or is retrying, keyed like
+            validator_statuses.
           additionalProperties:
             type: string
     NeedUserInputGate:

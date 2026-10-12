@@ -1152,6 +1152,12 @@ function toSnapshot(feature: ServerFeatureDetail): FeatureSnapshot {
       reviewFixing: feature.review_gate.review_fixing,
       validatingPlan: feature.review_gate.validating_plan,
       validatorStatuses: { ...(feature.review_gate.validator_statuses ?? {}) },
+      ...defined(
+        'validatorErrors',
+        feature.review_gate.validator_errors === undefined
+          ? undefined
+          : { ...feature.review_gate.validator_errors },
+      ),
     },
     ...defined(
       'verificationItems',

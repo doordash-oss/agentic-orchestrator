@@ -4248,9 +4248,14 @@ type ReviewFeedbackSelectionUpdate struct {
 
 // ReviewGate defines model for ReviewGate.
 type ReviewGate struct {
-	ReviewFixing      bool              `json:"review_fixing"`
-	ReviewingGate     bool              `json:"reviewing_gate"`
-	ValidatingPlan    bool              `json:"validating_plan"`
+	ReviewFixing   bool `json:"review_fixing"`
+	ReviewingGate  bool `json:"reviewing_gate"`
+	ValidatingPlan bool `json:"validating_plan"`
+
+	// ValidatorErrors Last error of each validator that failed or is retrying, keyed like validator_statuses.
+	ValidatorErrors map[string]string `json:"validator_errors,omitempty"`
+
+	// ValidatorStatuses Live state per validator: running, retrying, interrupted, error, or its verdict.
 	ValidatorStatuses map[string]string `json:"validator_statuses,omitempty"`
 }
 

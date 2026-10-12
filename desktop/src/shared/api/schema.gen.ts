@@ -3085,7 +3085,12 @@ export interface components {
             reviewing_gate: boolean;
             review_fixing: boolean;
             validating_plan: boolean;
+            /** @description Live state per validator: running, retrying, interrupted, error, or its verdict. */
             validator_statuses?: {
+                [key: string]: string;
+            };
+            /** @description Last error of each validator that failed or is retrying, keyed like validator_statuses. */
+            validator_errors?: {
                 [key: string]: string;
             };
         };

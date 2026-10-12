@@ -67,7 +67,11 @@ export function reviewStatusTone(status: string): ReviewStatusTone {
   const normalized = status.trim().toLocaleLowerCase();
   if (['approved', 'passed', 'done', 'complete', 'completed'].includes(normalized)) return 'passed';
   if (['changes_requested', 'failed', 'error'].includes(normalized)) return 'failed';
-  if (['running', 'active', 'implementing', 'reviewing', 'finalreviewing'].includes(normalized)) {
+  if (
+    ['running', 'retrying', 'active', 'implementing', 'reviewing', 'finalreviewing'].includes(
+      normalized,
+    )
+  ) {
     return 'running';
   }
   return 'pending';

@@ -1086,6 +1086,7 @@ const ServerFeatureDetailSchema = ServerFeatureSummarySchema.extend({
     review_fixing: z.boolean(),
     validating_plan: z.boolean(),
     validator_statuses: z.record(z.string(), z.string()).optional(),
+    validator_errors: z.record(z.string(), z.string()).optional(),
   }),
   need_user_input: ServerNeedUserInputGateDetailSchema.optional(),
   // The durable run failure, rendered by the server through the error

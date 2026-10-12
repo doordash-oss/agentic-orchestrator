@@ -1395,7 +1395,11 @@ function ReviewGateSummary({
         <>
           <ul className="review-gate__axes" aria-label="Review axes">
             {statuses.map(([name, status]) => (
-              <li key={name} data-status={reviewStatusTone(status)} title={`${name}: ${status}`}>
+              <li
+                key={name}
+                data-status={reviewStatusTone(status)}
+                title={reviewAxisTitle(name, status, gate.validatorErrors?.[name])}
+              >
                 <span>{reviewAxisShortName(name)}</span>
                 <span aria-hidden="true">{reviewStatusSymbol(status)}</span>
               </li>
@@ -1410,6 +1414,11 @@ function ReviewGateSummary({
       )}
     </section>
   );
+}
+
+/** Hover text for one review axis: its state plus the last error, if any. */
+function reviewAxisTitle(name: string, status: string, lastError?: string): string {
+  return lastError ? `${name}: ${status} — ${lastError}` : `${name}: ${status}`;
 }
 
 function reviewGateTarget(

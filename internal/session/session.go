@@ -2371,6 +2371,10 @@ func backgroundTaskKey(taskID, toolUseID string) string {
 func (s *Session) LiveBackgroundTaskCount() int {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	return s.liveBackgroundTaskCountLocked()
+}
+
+func (s *Session) liveBackgroundTaskCountLocked() int {
 	count := 0
 	for _, activity := range s.taskActivities {
 		if activity != nil && activity.IsRunning() {

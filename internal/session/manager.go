@@ -471,6 +471,14 @@ func (m *Manager) handleSessionMessage(s *Session, id, featureID string, phase f
 			break
 		}
 		interactive := s.turnMode == ports.TurnModeInteractive
+		// A phase turn that yields while background tasks are still running
+		// is waiting on those tasks, not on a human: the provider re-invokes
+		// the model when they finish. Treat it like a non-interactive turn
+		// end so it never becomes a synthetic help request. Conversational
+		// sessions keep their between-turn rest so the user can type.
+		if interactive && !s.kind.Conversational() && s.liveBackgroundTaskCountLocked() > 0 {
+			interactive = false
+		}
 		// Result received — turn completed. Preserve WaitingHelp when an
 		// AskUserQuestion is still outstanding. Interactive sessions also
 		// return to WaitingHelp after an unblocked turn because the user is
@@ -503,6 +511,16 @@ func (m *Manager) handleSessionMessage(s *Session, id, featureID string, phase f
 		// incorrectly clobber SessionWaitingPermission before the user can
 		// respond.
 		if s.status == SessionWaitingPermission && len(s.pendingControlRequests) == 0 {
+			s.setStatusLocked(SessionRunning)
+		}
+		// Committed root assistant output while WaitingHelp means the
+		// provider resumed on its own (e.g. re-invoked after a background
+		// task finished), so the session is no longer waiting on a human.
+		// Partials and usage-only updates are excluded: they can trail the
+		// turn's Result without the model actually running again.
+		if s.status == SessionWaitingHelp && msg.Origin.IsRoot() && msg.Subtype != "partial" && msg.UsageUpdate == nil &&
+			len(msg.Assistant.Message.Content) > 0 &&
+			!s.hasUnansweredQuestion && !s.hasPendingAskUserQuestionLocked() {
 			s.setStatusLocked(SessionRunning)
 		}
 	}

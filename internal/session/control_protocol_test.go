@@ -745,6 +745,90 @@ func TestManagerOnMessage_InteractiveTurnMode_ResultSetsWaitingHelp(t *testing.T
 	}
 }
 
+// A phase turn that yields while background tasks are still running is
+// waiting on the provider to re-invoke it, not on a human.
+func TestManagerOnMessage_InteractiveResultWithRunningTasksStaysRunning(t *testing.T) {
+	t.Parallel()
+	mgr := NewManager(make(chan interface{}, 100))
+	sess := NewSession("interactive-tasks-test", "feat-1", feature.PhaseImplement)
+	sess.turnMode = ports.TurnModeInteractive
+	for _, id := range []string{"bash_1", "monitor_1"} {
+		msg := llm.SDKMessage{Type: "system", TaskStarted: &llm.TaskStartedMessage{TaskID: id, TaskType: "local_bash"}}
+		sess.observeTaskActivity(msg)
+		mgr.handleSessionMessage(sess, sess.ID(), sess.FeatureID(), sess.Phase(), msg)
+	}
+	mgr.handleSessionMessage(sess, sess.ID(), sess.FeatureID(), sess.Phase(), successResultMessage("s1"))
+
+	if status := sess.Status(); status != SessionRunning {
+		t.Fatalf("after Result with running tasks: status = %v, want SessionRunning", status)
+	}
+
+	// Once every task finished, a later turn end is a genuine wait again.
+	for _, id := range []string{"bash_1", "monitor_1"} {
+		sess.observeTaskActivity(llm.SDKMessage{Type: "system", TaskNotification: &llm.TaskNotificationMessage{TaskID: id, Status: "completed"}})
+	}
+	mgr.handleSessionMessage(sess, sess.ID(), sess.FeatureID(), sess.Phase(), successResultMessage("s1"))
+	if status := sess.Status(); status != SessionWaitingHelp {
+		t.Fatalf("after Result with no running tasks: status = %v, want SessionWaitingHelp", status)
+	}
+}
+
+// A provider that resumes on its own after a turn end leaves WaitingHelp as
+// soon as it commits new assistant output.
+func TestManagerOnMessage_AssistantResumeLeavesWaitingHelp(t *testing.T) {
+	t.Parallel()
+	mgr := NewManager(make(chan interface{}, 100))
+	sess := NewSession("interactive-resume-test", "feat-1", feature.PhaseImplement)
+	sess.turnMode = ports.TurnModeInteractive
+	mgr.handleSessionMessage(sess, sess.ID(), sess.FeatureID(), sess.Phase(), successResultMessage("s1"))
+	if status := sess.Status(); status != SessionWaitingHelp {
+		t.Fatalf("after Result: status = %v, want SessionWaitingHelp", status)
+	}
+
+	// Usage-only and partial updates can trail a Result; they are not a resume.
+	mgr.handleSessionMessage(sess, sess.ID(), sess.FeatureID(), sess.Phase(), llm.SDKMessage{
+		Type: "assistant", Subtype: "partial", UsageUpdate: &llm.Usage{InputTokens: 1},
+		Origin:    llm.EventOrigin{Kind: llm.EventOriginRoot},
+		Assistant: &llm.AssistantMessage{},
+	})
+	if status := sess.Status(); status != SessionWaitingHelp {
+		t.Fatalf("after usage partial: status = %v, want SessionWaitingHelp", status)
+	}
+
+	mgr.handleSessionMessage(sess, sess.ID(), sess.FeatureID(), sess.Phase(), llm.SDKMessage{
+		Type:   "assistant",
+		Origin: llm.EventOrigin{Kind: llm.EventOriginRoot},
+		Assistant: &llm.AssistantMessage{Message: llm.ConversationMsg{
+			Role:    "assistant",
+			Content: []llm.ContentBlock{{Type: "text", Text: "tests passed"}},
+		}},
+	})
+	if status := sess.Status(); status != SessionRunning {
+		t.Fatalf("after resumed assistant output: status = %v, want SessionRunning", status)
+	}
+}
+
+// A pending AskUserQuestion keeps the session waiting even when assistant
+// output arrives.
+func TestManagerOnMessage_AssistantOutputKeepsPendingQuestionWaiting(t *testing.T) {
+	t.Parallel()
+	mgr := NewManager(make(chan interface{}, 100))
+	sess := NewSession("interactive-question-test", "feat-1", feature.PhaseImplement)
+	sess.turnMode = ports.TurnModeInteractive
+	mgr.handleSessionMessage(sess, sess.ID(), sess.FeatureID(), sess.Phase(), askUserControlMessage("ask_1"))
+	mgr.handleSessionMessage(sess, sess.ID(), sess.FeatureID(), sess.Phase(), llm.SDKMessage{
+		Type:   "assistant",
+		Origin: llm.EventOrigin{Kind: llm.EventOriginRoot},
+		Assistant: &llm.AssistantMessage{Message: llm.ConversationMsg{
+			Role:    "assistant",
+			Content: []llm.ContentBlock{{Type: "text", Text: "waiting"}},
+		}},
+	})
+	if status := sess.Status(); status != SessionWaitingHelp {
+		t.Fatalf("status = %v, want SessionWaitingHelp while a question is pending", status)
+	}
+}
+
 func TestManagerOnMessage_TerminalErrorDoesNotRequestPhaseInput(t *testing.T) {
 	for _, kind := range []ports.SessionKind{ports.KindPhase, ports.KindSupervisor} {
 		t.Run(kind.String(), func(t *testing.T) {

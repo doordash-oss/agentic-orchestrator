@@ -40,6 +40,7 @@ import (
 	"github.com/doordash-oss/agentic-orchestrator/internal/feature"
 	"github.com/doordash-oss/agentic-orchestrator/internal/llm"
 	"github.com/doordash-oss/agentic-orchestrator/internal/ports"
+	"github.com/doordash-oss/agentic-orchestrator/internal/session"
 	"github.com/doordash-oss/agentic-orchestrator/internal/supervisor"
 	"github.com/doordash-oss/agentic-orchestrator/test/testutil/mocks"
 )
@@ -2099,6 +2100,30 @@ func TestPromptSnapshotIncludesWaitingHelpSessionWithoutControlRequest(t *testin
 	}
 	if got := stringFieldFromJSON(t, prompts["ask_user_questions"], requestIDKey); len(got) != 0 {
 		t.Fatalf("prompt ask_user_questions = %v; want empty without control request", got)
+	}
+}
+
+// The synthetic coordinating entry is derived from live session status, so it
+// must disappear as soon as the session resumes instead of lingering until the
+// session ends.
+func TestPromptSnapshotDropsCoordinatingEntryWhenSessionResumes(t *testing.T) {
+	t.Parallel()
+	store, f := seedReadFeature(t)
+	sess := session.NewSession("sess-resume", f.ID, feature.PhaseImplement)
+	sess.SetStatus(ports.SessionWaitingHelp)
+	opts := baseReadHandlerOptions(store)
+	opts.Sessions = fakeSessionManager{views: []ports.SessionView{sess}}
+	handler := NewHandler(opts)
+
+	prompts := getJSONMap(t, handler, apiPathPrompts)
+	if got := stringFieldFromJSON(t, prompts["help_queue"], questionFieldKey); len(got) != 1 || got[0] != agentQuestionPrompt {
+		t.Fatalf("help_queue while WaitingHelp = %v; want one coordinating entry", got)
+	}
+
+	sess.SetStatus(ports.SessionRunning)
+	prompts = getJSONMap(t, handler, apiPathPrompts)
+	if got := stringFieldFromJSON(t, prompts["help_queue"], questionFieldKey); len(got) != 0 {
+		t.Fatalf("help_queue after resume = %v; want empty", got)
 	}
 }
 

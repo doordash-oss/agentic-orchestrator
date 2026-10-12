@@ -18,6 +18,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log"
 	"os"
 	"path/filepath"
 	"sort"
@@ -882,6 +883,7 @@ func (o *Orchestrator) moveFeatureToPlanningForPlanRevision(featureID string, ro
 		ff.PlanIteration = 0
 		ff.ValidatingPlan = false
 		ff.ValidatorStatuses = nil
+		ff.ValidatorErrors = nil
 		if ff.MaxPlanIterations < minPlanAttempts {
 			ff.MaxPlanIterations = minPlanAttempts
 		}
@@ -1304,6 +1306,18 @@ func (o *Orchestrator) startDeferredFinalReview(featureID string) (chan *agent.O
 }
 
 func (o *Orchestrator) finishDeferredFinalReviewResult(featureID string, res *agent.OrchestratorResult, ok bool) error {
+	// A round that finishes after the feature left Final Review (pause-stop,
+	// a concurrent failure) is stale: discard it instead of transitioning a
+	// feature that is no longer FinalReviewing, which would fail it.
+	if f, loadErr := o.deps.Store.Load(featureID); loadErr == nil && f.Status != feature.StatusFinalReviewing {
+		finalStatus := "<none>"
+		if ok && res != nil {
+			finalStatus = res.FinalStatus
+		}
+		log.Printf("final review: discarding %s result for feature %s: status is %s, not %s",
+			finalStatus, featureID, f.Status, feature.StatusFinalReviewing)
+		return fmt.Errorf("discard final review result in status %s: %w", f.Status, errFinalReviewInterrupted)
+	}
 	if !ok || res == nil {
 		errMsg := "final review returned no result"
 		o.emitPhaseCompleted(featureID, feature.PhaseFinalReview, errors.New(errMsg))

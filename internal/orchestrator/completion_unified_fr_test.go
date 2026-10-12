@@ -911,3 +911,105 @@ func TestOrchestrator_FeatureFinalReview_FailedProtocolViolationPreserved(t *tes
 		t.Fatalf("persisted failure = %+v, want protocol violation with final_review_fixer diagnostics", failure)
 	}
 }
+
+// TestOrchestrator_FeatureFinalReview_ResultAfterInterruptIsDiscarded
+// reproduces orphaned validators finishing after pause-stop: an approved (or
+// failed) Final Review result that lands while the feature is Interrupted is
+// discarded, never "invalid transition from Interrupted to ReviewPassed",
+// and never marks the stopped feature Failed.
+func TestOrchestrator_FeatureFinalReview_ResultAfterInterruptIsDiscarded(t *testing.T) {
+	for _, finalStatus := range []string{"all_passed", "failed"} {
+		t.Run(finalStatus, func(t *testing.T) {
+			pub := true
+			f := &feature.Feature{
+				ID:           "feat-fr-orphan-" + finalStatus,
+				Status:       feature.StatusImplementing,
+				CurrentPhase: feature.PhaseImplement,
+				Repos: []feature.FeatureRepo{
+					{Name: "payments", Path: "/tmp/payments", Publishable: &pub},
+				},
+				RepoStates: map[string]*feature.RepoState{
+					"payments": {Touched: true},
+				},
+				Pipeline: feature.PipelineMedium,
+			}
+			fs, lc := newStoredFeatureFixture(t, f)
+			o := orchestrator.New(orchestrator.Deps{Manager: lc, Store: fs}, orchestrator.Hooks{})
+			o.SetRunMultiRepoFinalReviewFn(func(ff *feature.Feature, _ ...agent.KBInfo) (chan *agent.OrchestratorResult, error) {
+				ch := make(chan *agent.OrchestratorResult, 1)
+				go func() {
+					_ = fs.Modify(ff.ID, func(target *feature.Feature) error {
+						return target.Transition(feature.StatusInterrupted)
+					})
+					ch <- &agent.OrchestratorResult{FinalStatus: finalStatus, LastError: "late validator failure"}
+				}()
+				return ch, nil
+			})
+
+			if err := o.HandlePhaseCompletion(f.ID, orchestrator.PhaseCompletionInput{
+				Phase:           feature.PhaseImplement,
+				MultiRepoResult: &agent.OrchestratorResult{FinalStatus: "awaiting_final_review"},
+			}); err != nil {
+				t.Fatalf("HandlePhaseCompletion: %v (a stale FR result must be discarded)", err)
+			}
+			stored := loadStoredFeature(t, fs, f.ID)
+			if stored.Status != feature.StatusInterrupted {
+				t.Errorf("persisted status = %s, want Interrupted", stored.Status)
+			}
+			if stored.Run().Failure != nil {
+				t.Errorf("unexpected failure: %+v", stored.Run().Failure)
+			}
+		})
+	}
+}
+
+// TestOrchestrator_FeatureFinalReview_ProviderUnavailableFailsWithRetryRemediation
+// proves a Final Review that could not reach its provider lands the feature
+// in Failed with an infrastructure_failure envelope whose remediation offers
+// retry (and restart).
+func TestOrchestrator_FeatureFinalReview_ProviderUnavailableFailsWithRetryRemediation(t *testing.T) {
+	pub := true
+	f := &feature.Feature{
+		ID:           "feat-fr-provider-down",
+		Status:       feature.StatusImplementing,
+		CurrentPhase: feature.PhaseImplement,
+		Repos: []feature.FeatureRepo{
+			{Name: apiRepoName, Path: apiRepoWorkPath, Publishable: &pub},
+		},
+		RepoStates: map[string]*feature.RepoState{
+			apiRepoName: {Touched: true},
+		},
+		Pipeline: feature.PipelineMedium,
+	}
+	fs, lc := newStoredFeatureFixture(t, f)
+	o := orchestrator.New(orchestrator.Deps{Manager: lc, Store: fs}, orchestrator.Hooks{})
+	o.SetRunMultiRepoFinalReviewFn(func(ff *feature.Feature, _ ...agent.KBInfo) (chan *agent.OrchestratorResult, error) {
+		ch := make(chan *agent.OrchestratorResult, 1)
+		ch <- &agent.OrchestratorResult{
+			FinalStatus:  "failed",
+			RepoStatuses: map[string]string{apiRepoName: "failed"},
+			FailedRepos:  []string{apiRepoName},
+			LastError:    "final review could not run: Cleanliness validator: provider unavailable (non-retryable): Cannot connect to API",
+		}
+		return ch, nil
+	})
+
+	if err := o.HandlePhaseCompletion(f.ID, orchestrator.PhaseCompletionInput{
+		Phase:           feature.PhaseImplement,
+		MultiRepoResult: &agent.OrchestratorResult{FinalStatus: "awaiting_final_review"},
+	}); err == nil {
+		t.Fatal("HandlePhaseCompletion() error = nil, want final review failure")
+	}
+	stored := loadStoredFeature(t, fs, f.ID)
+	if stored.Status != feature.StatusFailed {
+		t.Fatalf("persisted status = %s, want Failed", stored.Status)
+	}
+	failure := stored.Run().Failure
+	if failure == nil || failure.Code != errcat.InfrastructureFailure || !strings.Contains(failure.Diagnostics, "Cannot connect to API") {
+		t.Fatalf("persisted failure = %+v, want infrastructure_failure with the provider diagnostic", failure)
+	}
+	rendered := errcat.RenderRecord(*failure)
+	if rendered.Remediation == nil || len(rendered.Remediation.Actions) == 0 || rendered.Remediation.Actions[0] != "retry" {
+		t.Fatalf("remediation = %+v, want retry as the primary action", rendered.Remediation)
+	}
+}

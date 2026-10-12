@@ -327,7 +327,28 @@ func BackendModel(model string) string {
 
 // NewProtocol creates a per-session ACP protocol handler.
 func (p *Provider) NewProtocol(opts llm.ProtocolOpts) llm.Protocol {
-	return NewProtocol(opts)
+	proto := NewProtocol(opts)
+	proto.price = p.ModelCostForModel(opts.Model)
+	return proto
+}
+
+// ModelCostForModel returns the per-million-token prices OpenCode advertised
+// for model in the discovered catalog, or nil when the catalog has no price.
+// It is the fallback the protocol uses to estimate cost when OpenCode reports
+// tokens but a zero cost amount.
+func (p *Provider) ModelCostForModel(model string) *llm.ModelCost {
+	model = strings.TrimSpace(strings.TrimPrefix(strings.TrimSpace(model), routingPrefix))
+	if model == "" {
+		return nil
+	}
+	catalog := p.ModelCatalog()
+	for _, candidate := range []string{model, strings.TrimSpace(llm.StripModelContextWindow(model))} {
+		if entry, ok := llm.LookupModel(catalog, candidate); ok && entry.Cost != nil {
+			cost := *entry.Cost
+			return &cost
+		}
+	}
+	return nil
 }
 
 // InstallHint returns the supported OpenCode install command.

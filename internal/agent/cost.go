@@ -154,7 +154,19 @@ func firstSessionCostMetadata(metadata []sessionCostMetadata) sessionCostMetadat
 }
 
 func accumulateSessionCost(store FeatureStore, featureID, fallbackKey string, cost sessionCost, preferActiveKey bool, metadata sessionCostMetadata) error {
-	if store == nil || strings.TrimSpace(featureID) == "" || (cost.TotalCostUSD <= 0 && cost.Usage.CostCreditsMicros == nil) {
+	record := feature.SessionCostRecord{
+		SessionID:                metadata.SessionID,
+		ObserverPhase:            metadata.ObserverPhase,
+		RepoName:                 metadata.RepoName,
+		CostUSD:                  cost.TotalCostUSD,
+		CostSource:               cost.Usage.CostSource,
+		CostCreditsMicros:        cost.Usage.CostCreditsMicros,
+		InputTokens:              cost.Usage.InputTokens,
+		OutputTokens:             cost.Usage.OutputTokens,
+		CacheReadInputTokens:     cost.Usage.CacheReadInputTokens,
+		CacheCreationInputTokens: cost.Usage.CacheCreationInputTokens,
+	}
+	if store == nil || strings.TrimSpace(featureID) == "" || !record.HasUsage() {
 		return nil
 	}
 	return store.Modify(featureID, func(f *feature.Feature) error {
@@ -168,15 +180,8 @@ func accumulateSessionCost(store FeatureStore, featureID, fallbackKey string, co
 		if costKey == "" {
 			return nil
 		}
-		f.RecordSessionCost(feature.SessionCostRecord{
-			SessionID:         metadata.SessionID,
-			PhaseKey:          costKey,
-			ObserverPhase:     metadata.ObserverPhase,
-			RepoName:          metadata.RepoName,
-			CostUSD:           cost.TotalCostUSD,
-			CostSource:        cost.Usage.CostSource,
-			CostCreditsMicros: cost.Usage.CostCreditsMicros,
-		})
+		record.PhaseKey = costKey
+		f.RecordSessionCost(record)
 		return nil
 	})
 }

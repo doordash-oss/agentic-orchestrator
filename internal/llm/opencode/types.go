@@ -259,8 +259,8 @@ type SessionUpdate struct {
 
 // usageCost is the cumulative session cost carried on a usage_update. Amount is
 // the running total in Currency (ISO-4217). OpenCode omits it (or sends zero)
-// when the backend has no pricing, in which case Agentico keeps its zero-cost
-// fallback rather than inventing a figure.
+// when the backend has no pricing, in which case Agentico estimates from the
+// catalog's advertised prices or, with none, marks the cost unavailable.
 type usageCost struct {
 	Amount   float64 `json:"amount"`
 	Currency string  `json:"currency"`

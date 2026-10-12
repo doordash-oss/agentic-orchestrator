@@ -422,3 +422,80 @@ func TestSessionTelemetryPreservesReconciledCostProvenance(t *testing.T) {
 		t.Fatalf("session telemetry lost reconciled cost provenance: %+v", usage)
 	}
 }
+
+// TestOpenCodeValidatorUsageAggregatesIntoReviewPhase reproduces the Final
+// Review shape where OpenCode validators report tokens but a zero cost amount
+// (no configured price). Each validator must still land a ledger row with its
+// tokens and an "unavailable" cost source, and materialize cost.by_phase
+// ["review"], while priced review sessions keep summing into the same key.
+func TestOpenCodeValidatorUsageAggregatesIntoReviewPhase(t *testing.T) {
+	store := feature.NewStore(t.TempDir())
+	f := &feature.Feature{
+		ID:              "opencode-review-cost",
+		Name:            "opencode-review-cost",
+		Status:          feature.StatusFinalReviewing,
+		ActiveTimingKey: "review",
+		SchemaVersion:   feature.SchemaVersionCurrent,
+		PhaseCosts:      map[string]float64{"plan": 0.03, "phase-1-impl": 0.05},
+	}
+	if err := store.Save(f); err != nil {
+		t.Fatal(err)
+	}
+
+	for _, axis := range []string{"qa", "craft", "cleanliness"} {
+		sess := session.NewSession("feat-"+axis+"-03", f.ID, 0)
+		sess.SetAccumulatedUsage(llm.Usage{
+			InputTokens:          188,
+			OutputTokens:         282,
+			CacheReadInputTokens: 48896,
+			CostSource:           "unavailable",
+		})
+		sess.SetCost(&llm.ResultMessage{Subtype: "success", TotalCostUSD: 0})
+		cost := extractSessionCost(sess)
+		if err := accumulateSessionCostToFeature(store, f.ID, "review", cost, sessionCostMetadata{
+			SessionID:     sess.ID(),
+			ObserverPhase: "review",
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	updated, err := store.Load(f.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, ok := updated.PhaseCosts["review"]; !ok || got != 0 {
+		t.Fatalf("PhaseCosts[review] = %v (present=%v), want present with 0 for unpriced tokens", got, ok)
+	}
+	if len(updated.SessionCosts) != 3 {
+		t.Fatalf("len(SessionCosts) = %d, want 3 validator rows", len(updated.SessionCosts))
+	}
+	for _, rec := range updated.SessionCosts {
+		if rec.PhaseKey != "review" || rec.CostSource != "unavailable" || rec.InputTokens != 188 || rec.OutputTokens != 282 || rec.CacheReadInputTokens != 48896 {
+			t.Fatalf("validator ledger row = %+v, want review/unavailable with tokens", rec)
+		}
+	}
+
+	// A priced (token-estimated) OpenCode validator and a Claude fixer both sum
+	// into the same review key and into the feature total.
+	estimated := session.NewSession("feat-qa-04", f.ID, 0)
+	estimated.SetAccumulatedUsage(llm.Usage{InputTokens: 1000, OutputTokens: 100, CostUSD: 0.2, CostSource: "token_estimate"})
+	estimated.SetCost(&llm.ResultMessage{Subtype: "success", TotalCostUSD: 0.2})
+	fixer := session.NewSession("feat-fix-03", f.ID, 0)
+	fixer.SetCost(&llm.ResultMessage{Subtype: "success", TotalCostUSD: 0.5})
+	for _, sess := range []*session.Session{estimated, fixer} {
+		if err := accumulateSessionCostToFeatureKey(store, f.ID, feature.PhaseFinalReview.DirName(), extractSessionCost(sess), sessionCostMetadata{SessionID: sess.ID()}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	updated, err = store.Load(f.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := updated.PhaseCosts["review"]; got < 0.6999 || got > 0.7001 {
+		t.Fatalf("PhaseCosts[review] = %v, want 0.7", got)
+	}
+	if got := updated.TotalCost(); got < 0.7799 || got > 0.7801 {
+		t.Fatalf("TotalCost = %v, want 0.78 (plan + impl + review)", got)
+	}
+}

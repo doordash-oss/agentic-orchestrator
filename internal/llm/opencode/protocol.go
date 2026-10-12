@@ -100,6 +100,10 @@ type Protocol struct {
 	lastEstimatedUsageEmitTokens          int
 	costUSD                               float64
 	usageSeen                             bool
+	// price is the catalog's advertised per-million-token pricing for the
+	// session model (nil when unknown). It is used only to estimate cost when
+	// OpenCode reports tokens but no positive cost amount.
+	price *llm.ModelCost
 
 	assistantBuf       strings.Builder
 	assistantMessageID string
@@ -1474,8 +1478,8 @@ func unsupportedSurfaceDiagnostic(method string) string {
 // state and returns a cumulative usage update SDK message. Used is the tokens
 // currently in context and Size the model window — both SET, the latest snapshot
 // wins, and absent values leave context unavailable. Cost.Amount is the
-// cumulative session cost when the backend has pricing; absent or zero leaves the
-// zero-cost fallback. The emitted message carries the FULL cumulative snapshot
+// cumulative session cost when the backend has pricing; absent or zero leaves
+// costLocked's catalog estimate / unavailable fallback. The emitted message carries the FULL cumulative snapshot
 // (including the token split accumulated from prompt results) so the session
 // layer's SET-semantics accumulation stays correct across turns rather than being
 // zeroed by an update that carries no token split.
@@ -1620,6 +1624,7 @@ func (p *Protocol) usageLocked() llm.Usage {
 	if contextFill == 0 {
 		contextFill = p.estimatedContextTokens
 	}
+	cost, source := p.costLocked()
 	return llm.Usage{
 		InputTokens:              p.inTok,
 		OutputTokens:             p.outTok,
@@ -1629,8 +1634,61 @@ func (p *Protocol) usageLocked() llm.Usage {
 		ContextTotalTokens:       contextFill,
 		ContextWindow:            p.contextWindow,
 		ContextBaseline:          0,
-		CostUSD:                  p.costUSD,
+		CostUSD:                  cost,
+		CostSource:               source,
 	}
+}
+
+// Cost sources for OpenCode sessions whose backend reported no positive cost.
+// An empty source means OpenCode's own cumulative cost is authoritative.
+const (
+	costSourceTokenEstimate = "token_estimate"
+	costSourceUnavailable   = "unavailable"
+)
+
+// costLocked returns the session cost and its source. OpenCode's reported
+// cumulative cost wins whenever it is positive. When OpenCode reports zero
+// (common for custom/proxy providers configured without pricing) but tokens
+// were consumed, the cost is estimated from the catalog's advertised prices;
+// with no usable price it stays zero and is marked unavailable so the zero is
+// not mistaken for a free session. Callers must hold p.mu.
+func (p *Protocol) costLocked() (float64, string) {
+	if p.costUSD > 0 {
+		return p.costUSD, ""
+	}
+	if p.inTok+p.outTok+p.cacheRead+p.cacheCreate == 0 {
+		return 0, ""
+	}
+	if estimate, ok := estimateTokenCost(p.price, p.inTok, p.outTok, p.cacheRead, p.cacheCreate); ok {
+		return estimate, costSourceTokenEstimate
+	}
+	return 0, costSourceUnavailable
+}
+
+// estimateTokenCost prices tokens at USD-per-million rates. Cache reads and
+// writes fall back to the input rate when no cache rate is advertised. A nil
+// price or one whose rates are all zero is treated as unknown: OpenCode
+// configs commonly declare zero cost for models whose real price is simply
+// not configured.
+func estimateTokenCost(price *llm.ModelCost, input, output, cacheRead, cacheWrite int) (float64, bool) {
+	if price == nil {
+		return 0, false
+	}
+	readRate, writeRate := price.Input, price.Input
+	if price.CacheRead != nil {
+		readRate = *price.CacheRead
+	}
+	if price.CacheWrite != nil {
+		writeRate = *price.CacheWrite
+	}
+	if price.Input <= 0 && price.Output <= 0 && readRate <= 0 && writeRate <= 0 {
+		return 0, false
+	}
+	cost := (float64(input)*price.Input +
+		float64(output)*price.Output +
+		float64(cacheRead)*readRate +
+		float64(cacheWrite)*writeRate) / 1_000_000
+	return cost, true
 }
 
 // resultUsage returns the cumulative usage to attach to a terminal result, or
@@ -1647,12 +1705,13 @@ func (p *Protocol) resultUsage() *llm.Usage {
 }
 
 // resultCost returns the cumulative session cost OpenCode reported via the latest
-// usage_update, or zero when OpenCode supplied no pricing. Agentico never invents
-// a figure; zero is the documented fallback.
+// usage_update, falling back to a catalog-price token estimate (or zero when no
+// price is known) as described on costLocked.
 func (p *Protocol) resultCost() float64 {
 	p.mu.Lock()
 	defer p.mu.Unlock()
-	return p.costUSD
+	cost, _ := p.costLocked()
+	return cost
 }
 
 // --- terminal result helpers ---
@@ -1690,9 +1749,9 @@ func (p *Protocol) terminalSuccess() (llm.SDKMessage, bool) {
 			Type:       "result",
 			Subtype:    "success",
 			StopReason: "end_turn",
-			// Cost is OpenCode's reported cumulative session cost (zero when the
-			// backend has no pricing) — never invented from tokens. Emitted token
-			// usage is preserved.
+			// Cost is OpenCode's reported cumulative session cost, or a
+			// catalog-price token estimate when OpenCode reports zero (see
+			// costLocked). Emitted token usage is preserved.
 			TotalCostUSD: p.resultCost(),
 			Usage:        p.resultUsage(),
 		},

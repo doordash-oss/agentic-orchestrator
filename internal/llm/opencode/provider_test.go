@@ -991,3 +991,26 @@ func atLeast(got, min [3]int) bool {
 	}
 	return true
 }
+
+func TestNewProtocolCarriesCatalogPriceForSessionModel(t *testing.T) {
+	p := New("", nil)
+	p.SetModelCatalog([]llm.ModelInfo{
+		{ID: "portkey/@modal/glm-5-3-flash[1.05M]", Aliases: []string{"portkey/@modal/glm-5-3-flash"}, Cost: &llm.ModelCost{Input: 0.5, Output: 2}},
+		{ID: "portkey/@modal/unpriced"},
+	})
+	for _, model := range []string{"portkey/@modal/glm-5-3-flash[1.05M]", "opencode:portkey/@modal/glm-5-3-flash", "portkey/@modal/glm-5-3-flash[1M]"} {
+		proto, ok := p.NewProtocol(llm.ProtocolOpts{Model: model}).(*Protocol)
+		if !ok {
+			t.Fatalf("NewProtocol returned %T", proto)
+		}
+		if proto.price == nil || proto.price.Input != 0.5 || proto.price.Output != 2 {
+			t.Errorf("%s price = %+v, want 0.5 / 2", model, proto.price)
+		}
+	}
+	if got := p.ModelCostForModel("portkey/@modal/unpriced"); got != nil {
+		t.Errorf("unpriced model cost = %+v, want nil", got)
+	}
+	if got := p.ModelCostForModel("unknown/model"); got != nil {
+		t.Errorf("unknown model cost = %+v, want nil", got)
+	}
+}

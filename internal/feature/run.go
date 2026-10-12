@@ -224,6 +224,19 @@ type SessionCostRecord struct {
 	CostUSD           float64 `yaml:"cost_usd"`
 	CostSource        string  `yaml:"cost_source,omitempty"`
 	CostCreditsMicros *int64  `yaml:"cost_credits_micros,omitempty"`
+	// Token counts are recorded so sessions whose provider reported no price
+	// (CostSource "unavailable") still leave an auditable usage row.
+	InputTokens              int `yaml:"input_tokens,omitempty"`
+	OutputTokens             int `yaml:"output_tokens,omitempty"`
+	CacheReadInputTokens     int `yaml:"cache_read_input_tokens,omitempty"`
+	CacheCreationInputTokens int `yaml:"cache_creation_input_tokens,omitempty"`
+}
+
+// HasUsage reports whether the record carries any cost, credit, or token
+// signal worth persisting.
+func (r SessionCostRecord) HasUsage() bool {
+	return r.CostUSD > 0 || r.CostCreditsMicros != nil ||
+		r.InputTokens+r.OutputTokens+r.CacheReadInputTokens+r.CacheCreationInputTokens > 0
 }
 
 // IsSealed reports whether this run has been sealed (rewound past).

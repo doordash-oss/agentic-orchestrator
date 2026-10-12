@@ -544,3 +544,67 @@ func TestInterrupt_CancelledPromptIsNonSuccessAndSticky(t *testing.T) {
 		t.Fatalf("late end_turn after cancellation produced %+v, want no messages", late)
 	}
 }
+
+// TestZeroCostAmountWithTokensAndNoPriceMarksCostUnavailable mirrors the
+// portkey/modal wire shape: usage_update reports cost amount 0 while the
+// prompt result carries tokens. Tokens are kept, cost stays 0, and the cost is
+// marked unavailable rather than passed off as a free session.
+func TestZeroCostAmountWithTokensAndNoPriceMarksCostUnavailable(t *testing.T) {
+	p, _, promptID := newPostHandshakeProtocol(t)
+	p.price = &llm.ModelCost{} // configured as cost 0 in opencode.json
+	mustParse(t, p, usageUpdateLine(t, map[string]any{
+		"used": 49084, "size": 1048576,
+		"cost": map[string]any{"amount": 0, "currency": "USD"},
+	}))
+	r := terminalResult(t, mustParse(t, p, promptResultLine(t, promptID, "end_turn", map[string]any{
+		"inputTokens": 188, "outputTokens": 282, "totalTokens": 49366, "cachedReadTokens": 48896,
+	})))
+	if r.Usage == nil || r.Usage.InputTokens != 188 || r.Usage.OutputTokens != 282 || r.Usage.CacheReadInputTokens != 48896 {
+		t.Fatalf("terminal usage = %+v, want 188/282/48896", r.Usage)
+	}
+	if r.TotalCostUSD != 0 || r.Usage.CostUSD != 0 {
+		t.Fatalf("cost = %v / %v, want 0 (no price)", r.TotalCostUSD, r.Usage.CostUSD)
+	}
+	if r.Usage.CostSource != costSourceUnavailable {
+		t.Fatalf("cost source = %q, want %q", r.Usage.CostSource, costSourceUnavailable)
+	}
+}
+
+// TestZeroCostAmountWithTokensEstimatesFromCatalogPrice proves a catalog price
+// is used to estimate cost when OpenCode reports tokens but zero cost.
+func TestZeroCostAmountWithTokensEstimatesFromCatalogPrice(t *testing.T) {
+	p, _, promptID := newPostHandshakeProtocol(t)
+	cacheRead := 0.1
+	p.price = &llm.ModelCost{Input: 1, Output: 4, CacheRead: &cacheRead}
+	mustParse(t, p, usageUpdateLine(t, map[string]any{
+		"used": 1_001_000, "size": 1048576,
+		"cost": map[string]any{"amount": 0, "currency": "USD"},
+	}))
+	r := terminalResult(t, mustParse(t, p, promptResultLine(t, promptID, "end_turn", map[string]any{
+		"inputTokens": 1_000_000, "outputTokens": 500_000, "cachedReadTokens": 2_000_000, "cachedWriteTokens": 1_000_000,
+	})))
+	// 1M*$1 + 0.5M*$4 + 2M*$0.1 + 1M*$1 (cache write falls back to input) = $4.2
+	if r.TotalCostUSD < 4.1999 || r.TotalCostUSD > 4.2001 {
+		t.Fatalf("estimated cost = %v, want 4.2", r.TotalCostUSD)
+	}
+	if r.Usage == nil || r.Usage.CostSource != costSourceTokenEstimate || r.Usage.CostUSD != r.TotalCostUSD {
+		t.Fatalf("usage = %+v, want token_estimate matching result cost", r.Usage)
+	}
+}
+
+// TestReportedCostWinsOverCatalogEstimate proves a positive OpenCode cost
+// stays authoritative even when a catalog price is known.
+func TestReportedCostWinsOverCatalogEstimate(t *testing.T) {
+	p, _, promptID := newPostHandshakeProtocol(t)
+	p.price = &llm.ModelCost{Input: 100, Output: 100}
+	mustParse(t, p, usageUpdateLine(t, map[string]any{
+		"used": 1000, "size": 200000,
+		"cost": map[string]any{"amount": 0.05, "currency": "USD"},
+	}))
+	r := terminalResult(t, mustParse(t, p, promptResultLine(t, promptID, "end_turn", map[string]any{
+		"inputTokens": 1000, "outputTokens": 100,
+	})))
+	if r.TotalCostUSD != 0.05 || r.Usage == nil || r.Usage.CostSource != "" {
+		t.Fatalf("result cost = %v usage = %+v, want provider-reported 0.05 with empty source", r.TotalCostUSD, r.Usage)
+	}
+}

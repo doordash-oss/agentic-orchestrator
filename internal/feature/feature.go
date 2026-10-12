@@ -1110,15 +1110,24 @@ func (f *Feature) AddPhaseCost(key string, cost float64) {
 }
 
 // RecordSessionCost appends one session-level ledger row and updates the
-// phase-level aggregate used by existing dashboard and summary readers.
+// phase-level aggregate used by existing dashboard and summary readers. A
+// session that consumed tokens but has no known price still records its row
+// and materializes its phase key, so the phase is visible in cost.by_phase
+// rather than silently missing.
 func (f *Feature) RecordSessionCost(record SessionCostRecord) {
 	record.PhaseKey = strings.TrimSpace(record.PhaseKey)
-	if (record.CostUSD <= 0 && record.CostCreditsMicros == nil) || record.PhaseKey == "" {
+	if !record.HasUsage() || record.PhaseKey == "" {
 		return
 	}
 	record.SessionID = strings.TrimSpace(record.SessionID)
 	record.ObserverPhase = strings.TrimSpace(record.ObserverPhase)
 	record.RepoName = strings.TrimSpace(record.RepoName)
+	if f.PhaseCosts == nil {
+		f.PhaseCosts = make(map[string]float64)
+	}
+	if _, ok := f.PhaseCosts[record.PhaseKey]; !ok {
+		f.PhaseCosts[record.PhaseKey] = 0
+	}
 	f.AddPhaseCost(record.PhaseKey, record.CostUSD)
 	f.SessionCosts = append(f.SessionCosts, record)
 }

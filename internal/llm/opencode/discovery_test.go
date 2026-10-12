@@ -124,6 +124,9 @@ func TestDiscover_VerboseSuccess(t *testing.T) {
 	if sonnet.Cost == nil || sonnet.Cost.Input != 3 || sonnet.Cost.Output != 15 {
 		t.Errorf("sonnet Cost = %+v, want 3 in / 15 out per 1M tokens", sonnet.Cost)
 	}
+	if sonnet.Cost != nil && (sonnet.Cost.CacheRead == nil || *sonnet.Cost.CacheRead != 0.3 || sonnet.Cost.CacheWrite == nil || *sonnet.Cost.CacheWrite != 3.75) {
+		t.Errorf("sonnet cache cost = read %v write %v, want 0.3 / 3.75", sonnet.Cost.CacheRead, sonnet.Cost.CacheWrite)
+	}
 
 	nano, ok := findModel(models, "openai/gpt-5-nano[400K]")
 	if !ok {

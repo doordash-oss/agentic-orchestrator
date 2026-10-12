@@ -50,6 +50,10 @@ type openCodeVerboseModel struct {
 type openCodeModelCost struct {
 	Input  *float64 `json:"input"`
 	Output *float64 `json:"output"`
+	Cache  *struct {
+		Read  *float64 `json:"read"`
+		Write *float64 `json:"write"`
+	} `json:"cache"`
 }
 
 type openCodeModelLimit struct {
@@ -195,6 +199,14 @@ func parseOpenCodeModels(out []byte) ([]llm.ModelInfo, error) {
 
 		if meta != nil && meta.Cost != nil && meta.Cost.Input != nil && meta.Cost.Output != nil && validPrice(*meta.Cost.Input) && validPrice(*meta.Cost.Output) {
 			info.Cost = &llm.ModelCost{Input: *meta.Cost.Input, Output: *meta.Cost.Output}
+			if cache := meta.Cost.Cache; cache != nil {
+				if cache.Read != nil && validPrice(*cache.Read) {
+					info.Cost.CacheRead = cache.Read
+				}
+				if cache.Write != nil && validPrice(*cache.Write) {
+					info.Cost.CacheWrite = cache.Write
+				}
+			}
 		}
 
 		models = append(models, info)

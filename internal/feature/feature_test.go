@@ -1821,3 +1821,23 @@ func TestParseAutomaticReviewMode(t *testing.T) {
 		t.Fatalf("ParseAutomaticReviewMode(bogus) = %q, nil; want error", got)
 	}
 }
+
+func TestRecordSessionCostKeepsUnpricedTokenUsage(t *testing.T) {
+	t.Parallel()
+	// parallel-candidate: pure value, no shared state.
+	f := &Feature{PhaseCosts: map[string]float64{"plan": 0.03}}
+	f.RecordSessionCost(SessionCostRecord{SessionID: "empty", PhaseKey: "review"})
+	if _, ok := f.PhaseCosts["review"]; ok || len(f.SessionCosts) != 0 {
+		t.Fatalf("usage-free record persisted: costs=%v ledger=%+v", f.PhaseCosts, f.SessionCosts)
+	}
+	f.RecordSessionCost(SessionCostRecord{SessionID: "qa-03", PhaseKey: "review", CostSource: "unavailable", InputTokens: 188, OutputTokens: 282})
+	if got, ok := f.PhaseCosts["review"]; !ok || got != 0 {
+		t.Fatalf("PhaseCosts[review] = %v (present=%v), want present at 0", got, ok)
+	}
+	if len(f.SessionCosts) != 1 || f.SessionCosts[0].InputTokens != 188 || f.SessionCosts[0].CostSource != "unavailable" {
+		t.Fatalf("ledger = %+v, want one unavailable row with tokens", f.SessionCosts)
+	}
+	if got := f.TotalCost(); got != 0.03 {
+		t.Fatalf("TotalCost = %v, want 0.03 (unpriced tokens add no dollars)", got)
+	}
+}

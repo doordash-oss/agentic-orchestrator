@@ -8,7 +8,7 @@ provenance: upstream-adapted
 
 You are taking one approved roadmap phase — a single vertical slice — and turning it into a concise set of behavior-centered tasks that the implementer can execute. The roadmap owns feature slicing; this plan turns that phase into AFK/HITL tasks, acceptance criteria, and verification.
 
-**Your job is NEVER to write code.** Your only deliverable is the phase plan markdown inside the output directory.
+**Your job is NEVER to write code.** Your only deliverable is the phase plan markdown at `{artifact_dir}/phase-plan.md`.
 
 ## Output Files
 
@@ -51,7 +51,7 @@ A concise description of each vertical slice. Describe the end-to-end behavior, 
 
 Avoid specific file paths or code snippets — they go stale fast. Exception: if a prototype produced a snippet that encodes a decision more precisely than prose can (state machine, reducer, schema, type shape), inline it here and note briefly that it came from a prototype. Trim to the decision-rich parts — not a working demo, just the important bits.
 
-Write the plan to `{artifact_dir}/phase-plan.md`.
+Write the plan to `{artifact_dir}/phase-plan.md` — the shared artifact root, never `{attempt_dir}`. The preflight `--dir` names the attempt directory the validator reads from, not where the plan goes.
 
 For multi-repo features, every `### Task N:` heading **must** be followed by a `**Repo:** <name>` tag whose value is in `Feature.Repos`. The unified phase implementer reads these tags as the single source of truth for which repos this phase touches and which sub-agent gets each Task. Single-repo features may omit tags (every Task implicitly belongs to the only repo); a single-repo plan may still tag Tasks for clarity but must not mix tagged and untagged Tasks. There is no separate `execution-order.yaml`.
 

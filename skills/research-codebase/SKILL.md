@@ -74,7 +74,7 @@ You are tasked with conducting comprehensive research across the codebase to ans
    - Highlight patterns, connections, and architectural decisions
    - Answer the user's specific questions with concrete evidence
 
-5. **Write the research document to the output directory:**
+5. **Write the research document to `{phase_dir}`:**
    - Name it `YYYY-MM-DD-research.md` (e.g., `2025-01-08-research.md`)
    - Structure the document as follows:
 

@@ -6,7 +6,7 @@ provenance: agentic-orchestrator-original
 
 # Roadmap Revision
 
-**Your job is NEVER to write code.** Your only deliverable is the revised roadmap markdown inside the output directory.
+**Your job is NEVER to write code.** Your only deliverable is the revised roadmap markdown at `{artifact_dir}/roadmap.md` — the shared artifact root, never `{attempt_dir}`.
 
 ## Output Files
 
@@ -18,7 +18,7 @@ provenance: agentic-orchestrator-original
 
 1. **DO re-research the codebase when the critic identifies a wrong claim.** If the feedback says "mechanism X doesn't work this way" or "callback Y is already used for Z", read the relevant source file to verify before responding. Do NOT guess or speculate — verify first, then correct.
 2. **Do NOT start from scratch.** Read the previous roadmap provided by the user and make targeted edits to address each piece of critic feedback.
-3. **Do NOT rewrite the roadmap if the critic has no substantive changes.** If the feedback is purely positive (e.g., "looks good", "approved", no actionable items), simply copy the previous roadmap file to the output directory unchanged.
+3. **Do NOT rewrite the roadmap if the critic has no substantive changes.** If the feedback is purely positive (e.g., "looks good", "approved", no actionable items), keep the previous roadmap unchanged at `{artifact_dir}/roadmap.md` (copy it there only if the prompt's path is elsewhere).
 4. **Preserve phase intent and sequencing.** Phase 1 must keep proving the riskiest integration questions unless the critic explicitly says that sequencing is wrong.
 5. **Preserve explicit stub contracts when they exist.** Stubs may be reassigned to different phases, but named stubs from an existing **Stub Inventory** should not be silently removed. Do not add a stub inventory to roadmaps that intentionally avoid stubs.
 6. **No new unverified claims.** When addressing feedback, do NOT introduce assertions that aren't in the design doc or verified against the codebase. This is the #1 cause of revision ping-pong: fixing one reviewer's concern by adding speculation triggers new concerns from the next reviewer.
@@ -105,8 +105,8 @@ When the feedback is about a boundary or source of truth, explicitly verify:
 
 1. **Read the previous roadmap** provided in the prompt
 2. **Categorize each feedback item** using the table above
-3. **If there are no substantive changes needed**: copy the previous roadmap to the output directory as-is and complete. Do NOT rewrite it.
-4. **If changes are needed**: make targeted edits and write the complete revised roadmap to the output directory — the roadmap must be self-contained
+3. **If there are no substantive changes needed**: keep the previous roadmap as-is at `{artifact_dir}/roadmap.md` and complete. Do NOT rewrite it.
+4. **If changes are needed**: make targeted edits and write the complete revised roadmap to `{artifact_dir}/roadmap.md` — the roadmap must be self-contained
 
 ## Roadmap Format
 

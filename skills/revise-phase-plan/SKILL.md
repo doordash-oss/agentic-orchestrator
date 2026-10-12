@@ -6,7 +6,7 @@ provenance: agentic-orchestrator-original
 
 # Phase Plan Revision
 
-**Your job is NEVER to write code.** Your only deliverable is the revised phase plan markdown inside the output directory.
+**Your job is NEVER to write code.** Your only deliverable is the revised phase plan markdown at `{artifact_dir}/phase-plan.md` — the shared artifact root, never `{attempt_dir}`.
 
 ## Output Files
 
@@ -18,7 +18,7 @@ provenance: agentic-orchestrator-original
 
 1. **Do NOT re-research the codebase.** The previous plan already incorporates codebase exploration. Only read additional source files if the critic feedback specifically requires it.
 2. **Do NOT start from scratch.** Read the previous plan (provided inline below) and make targeted edits.
-3. **Do NOT rewrite the plan if the critic has no substantive changes.** If the feedback is purely positive, simply copy the previous plan file to the output directory unchanged.
+3. **Do NOT rewrite the plan if the critic has no substantive changes.** If the feedback is purely positive, keep the previous plan unchanged at `{artifact_dir}/phase-plan.md` (copy it there only if the prompt's path is elsewhere).
 4. **Respect approved roadmap scope** — if the critic pushes you to shrink the plan below the Phase N contract approved in the roadmap, do NOT silently drop roadmap-assigned deliverables. Phase sizing is a roadmap concern; if the approved phase truly cannot land in one iteration, escalate via `AGENT_LOOP_NEED_INPUT: phase too large — revise roadmap` so the roadmap itself gets re-sliced rather than diverging from it here.
 5. **Sticky axis approvals** — if the revise prompt includes a `## Prior Axis Approvals` block, treat the listed `frozen_sections` for each approved axis as no-touch boundaries. Do NOT rewrite or restructure them unless the currently-failing axis's feedback explicitly cites that section. Treat frozen sections as narrow — they list only the headings the approving axis specifically inspected, not every heading in the plan. If the currently-failing axis's feedback points at a section that another axis also froze, the currently-failing feedback wins: edit the section to address the active feedback. "No-touch" applies to gratuitous edits, not to edits demanded by an active rejection.
 

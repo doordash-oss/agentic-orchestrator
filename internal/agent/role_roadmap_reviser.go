@@ -27,8 +27,8 @@ var roadmapReviserRoleSpec = roleSpec{
 	Role:      rolePlanRoadmapReviser,
 	SkillName: "revise-roadmap",
 	OutputRoots: []outputRootSpec{
-		iterationParentOutputRoot("artifact_dir", "Shared roadmap artifact root. Revisions update the roadmap markdown here across attempts."),
-		iterationOutputRoot("attempt_dir", "Active roadmap revision attempt directory. Debug prompts, attempt metadata, and validator output are written here; the harness records its completion receipt here after validation."),
+		iterationParentOutputRoot("artifact_dir", "Shared roadmap artifact root. Revisions update `roadmap.md` directly here; it persists across attempts."),
+		iterationOutputRoot("attempt_dir", "Active roadmap revision attempt directory. Debug prompts, attempt metadata, and validator output are written here; the harness records its completion receipt here after validation. Never write the roadmap markdown here."),
 	},
 	Artifacts: []roleArtifactSpec{
 		roadmapMarkdownRoleArtifact(),

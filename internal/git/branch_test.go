@@ -167,7 +167,8 @@ func TestNonInteractiveGitEnvPreservesServerConfiguration(t *testing.T) {
 func TestExecBranchProbeRunnerCancellationKillsProcessTree(t *testing.T) {
 	binDir := t.TempDir()
 	pidFile := filepath.Join(t.TempDir(), "child.pid")
-	script := "#!/bin/sh\nsleep 60 &\necho $! > \"$BRANCH_PROBE_CHILD_PID\"\nwait\n"
+	// Publish the complete PID before file existence signals readiness to cancel.
+	script := "#!/bin/sh\nsleep 60 &\necho $! > \"$BRANCH_PROBE_CHILD_PID.tmp\"\nmv \"$BRANCH_PROBE_CHILD_PID.tmp\" \"$BRANCH_PROBE_CHILD_PID\"\nwait\n"
 	if err := os.WriteFile(filepath.Join(binDir, "git"), []byte(script), 0o755); err != nil {
 		t.Fatalf("write fake git: %v", err)
 	}

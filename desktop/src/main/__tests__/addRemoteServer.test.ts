@@ -18,11 +18,8 @@ import { describe, expect, it } from 'vitest';
 import { CanonicalErrorException } from '../../shared/errors';
 import { applyServersPatch, type ServersPrefs } from '../../shared/ipc';
 import { serverKeyForBaseUrl } from '../connectionString';
-import {
-  ADD_REMOTE_PROBE_MS,
-  addRemoteServer,
-  type AddRemoteServerDeps,
-} from '../gateway/addRemoteServer';
+import { addRemoteServer, type AddRemoteServerDeps } from '../gateway/addRemoteServer';
+import { REMOTE_HEALTH_PROBE_MS } from '../gateway/attachProfiles';
 import type { HttpResult } from '../gateway/runtimeGateway';
 import { DESKTOP_SCHEMA_VERSION } from '../gateway/compatibility';
 
@@ -97,7 +94,7 @@ function makeHarness(): Harness {
     registerSecret: (secret) => harness.secrets.push(secret),
     log: (line) => harness.logs.push(line),
     now: () => Date.parse('2026-08-10T12:00:00.000Z'),
-    timeouts: { healthProbeMs: ADD_REMOTE_PROBE_MS },
+    timeouts: { healthProbeMs: REMOTE_HEALTH_PROBE_MS },
   };
   harness.deps = deps;
   harness.run = (connectionString = CONNECTION_STRING) =>

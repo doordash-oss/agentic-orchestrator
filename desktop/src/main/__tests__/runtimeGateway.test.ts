@@ -430,7 +430,7 @@ describe('RuntimeGateway attach', () => {
   it('authenticates readiness with the discovery token kept in main-process memory', async () => {
     const env = makeEnv({
       discovery: JSON.stringify(discoveryRecord()),
-      timeouts: { healthProbeMs: 11, apiRequestMs: 22 },
+      timeouts: { healthProbeMs: 11, remoteHealthProbeMs: 44, apiRequestMs: 22 },
     });
     await env.gateway.start();
     const readiness = env.fetchCalls.find((c) => c.url.endsWith('/api/v1/readiness/runtime'));

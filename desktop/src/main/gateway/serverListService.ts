@@ -41,7 +41,7 @@ import {
 } from '../../shared/ipc';
 import type { RegistryScan } from './registry';
 import type { HttpResult } from './runtimeGateway';
-import { probeAuthExemptHealth } from './attachProfiles';
+import { probeAuthExemptHealth, REMOTE_HEALTH_PROBE_MS } from './attachProfiles';
 import { defined } from '../../shared/defined';
 
 export interface ServerListServiceDeps {
@@ -84,6 +84,8 @@ export interface ServerListServiceDeps {
   clearInterval?(handle: unknown): void;
   /** Per-server probe bound. */
   probeTimeoutMs?: number;
+  /** Per-server probe bound for remote servers. */
+  remoteProbeTimeoutMs?: number;
   /** Interval between probe rounds while the popover is open. */
   pollIntervalMs?: number;
 }
@@ -97,6 +99,7 @@ interface ProbeOutcome {
 export class ServerListService {
   private readonly listeners = new Set<(snapshot: ServerListSnapshot) => void>();
   private readonly probeTimeoutMs: number;
+  private readonly remoteProbeTimeoutMs: number;
   private readonly pollIntervalMs: number;
   /** Latest liveness verdict per serverKey; absent means never probed. */
   private readonly health = new Map<string, 'healthy' | 'unreachable'>();
@@ -107,6 +110,7 @@ export class ServerListService {
 
   constructor(private readonly deps: ServerListServiceDeps) {
     this.probeTimeoutMs = deps.probeTimeoutMs ?? 1500;
+    this.remoteProbeTimeoutMs = deps.remoteProbeTimeoutMs ?? REMOTE_HEALTH_PROBE_MS;
     this.pollIntervalMs = deps.pollIntervalMs ?? 5000;
   }
 
@@ -259,7 +263,7 @@ export class ServerListService {
         continue;
       }
       this.pending.add(target.serverKey);
-      void this.probe(target.baseUrl)
+      void this.probe(target.baseUrl, target.remote)
         .then((outcome) => {
           this.pending.delete(target.serverKey);
           // Rows are never hidden for unhealthiness and nothing is deleted
@@ -279,28 +283,40 @@ export class ServerListService {
   }
 
   /** serverKey → health-endpoint base URL (registry record wins when live). */
-  private probeTargets(): Array<{ serverKey: string; baseUrl: string | null }> {
-    const targets: Array<{ serverKey: string; baseUrl: string | null }> = [];
+  private probeTargets(): Array<{ serverKey: string; baseUrl: string | null; remote: boolean }> {
+    const targets: Array<{ serverKey: string; baseUrl: string | null; remote: boolean }> = [];
     const seen = new Set<string>();
     for (const candidate of this.deps.scanRegistry().candidates) {
       seen.add(candidate.serverKey);
-      targets.push({ serverKey: candidate.serverKey, baseUrl: candidate.record.base_url });
+      targets.push({
+        serverKey: candidate.serverKey,
+        baseUrl: candidate.record.base_url,
+        remote: false,
+      });
     }
     for (const entry of this.deps.knownServers().known) {
       if (seen.has(entry.serverKey)) {
         continue;
       }
       seen.add(entry.serverKey);
-      targets.push({ serverKey: entry.serverKey, baseUrl: entry.baseUrl });
+      targets.push({
+        serverKey: entry.serverKey,
+        baseUrl: entry.baseUrl,
+        remote: entry.kind === 'remote',
+      });
     }
     return targets;
   }
 
-  private async probe(baseUrl: string | null): Promise<ProbeOutcome> {
+  private async probe(baseUrl: string | null, remote: boolean): Promise<ProbeOutcome> {
     if (baseUrl === null) {
       return { healthy: false, name: null };
     }
-    const result = await probeAuthExemptHealth(this.deps.fetchJson, baseUrl, this.probeTimeoutMs);
+    const result = await probeAuthExemptHealth(
+      this.deps.fetchJson,
+      baseUrl,
+      remote ? this.remoteProbeTimeoutMs : this.probeTimeoutMs,
+    );
     const healthy = result.kind === 'healthy';
     const rawName = healthy ? (result.probe.name ?? null) : null;
     const scrub = this.deps.scrubProbeText;

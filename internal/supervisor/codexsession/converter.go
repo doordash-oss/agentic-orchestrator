@@ -550,7 +550,7 @@ func toolResultOutput(content json.RawMessage) (string, error) {
 		case "image":
 			parts = append(parts, supervisor.OmittedImagePlaceholder(imageMediaType(it)))
 		default:
-			return "", fmt.Errorf("unsupported %q content item %d", head.Type, i)
+			parts = append(parts, supervisor.ToolResultItemPlaceholder(head.Type, it))
 		}
 	}
 	return strings.Join(parts, "\n"), nil

@@ -219,6 +219,25 @@ func OmittedImagePlaceholder(mediaType string) string {
 	return "[image omitted: " + mediaType + " could not be restored]"
 }
 
+// ToolResultItemPlaceholder is the text a converter writes for a tool-result
+// content item it has no native form for, so one unrecognised block does not
+// fail the whole conversion. A tool_reference names the tool it points at.
+func ToolResultItemPlaceholder(itemType string, item json.RawMessage) string {
+	if itemType == "tool_reference" {
+		var ref struct {
+			ToolName string `json:"tool_name"`
+		}
+		if json.Unmarshal(item, &ref) == nil && ref.ToolName != "" {
+			return "[tool reference: " + ref.ToolName + "]"
+		}
+		return "[tool reference]"
+	}
+	if itemType == "" {
+		itemType = "unknown"
+	}
+	return "[" + itemType + " content omitted: could not be restored]"
+}
+
 // ValidateNativeRebuildInput checks a rebuild request that targets a native
 // session id: a non-empty, path-free session id and a working directory.
 // prefix names the caller ("claude session rebuild") in the error text.

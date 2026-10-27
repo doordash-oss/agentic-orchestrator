@@ -198,3 +198,29 @@ func TestTrimToolResults(t *testing.T) {
 		})
 	}
 }
+
+func TestClipMiddle(t *testing.T) {
+	t.Parallel()
+	if got := ClipMiddle("short", 3, 3, "omitted"); got != "short" {
+		t.Errorf("ClipMiddle(short) = %q", got)
+	}
+	want := "ab\n[... 8 characters omitted ...]\nkl"
+	if got := ClipMiddle("abcdefghijkl", 2, 2, "omitted"); got != want {
+		t.Errorf("ClipMiddle = %q, want %q", got, want)
+	}
+}
+
+func TestToolResultItemPlaceholder(t *testing.T) {
+	t.Parallel()
+	cases := []struct{ typ, item, want string }{
+		{"tool_reference", `{"type":"tool_reference","tool_name":"TaskStop"}`, "[tool reference: TaskStop]"},
+		{"tool_reference", `{"type":"tool_reference"}`, "[tool reference]"},
+		{"document", `{"type":"document"}`, "[document content omitted: could not be restored]"},
+		{"", `{}`, "[unknown content omitted: could not be restored]"},
+	}
+	for _, tc := range cases {
+		if got := ToolResultItemPlaceholder(tc.typ, json.RawMessage(tc.item)); got != tc.want {
+			t.Errorf("ToolResultItemPlaceholder(%q, %s) = %q, want %q", tc.typ, tc.item, got, tc.want)
+		}
+	}
+}

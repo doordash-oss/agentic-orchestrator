@@ -196,15 +196,24 @@ func trimToolResultContent(content json.RawMessage) (json.RawMessage, bool) {
 }
 
 func trimText(s string) (string, bool) {
-	n := utf8.RuneCountInString(s)
-	if n <= trimMaxResultChars {
+	if utf8.RuneCountInString(s) <= trimMaxResultChars {
 		return s, false
 	}
+	return ClipMiddle(s, trimHeadChars, trimTailChars, "trimmed when Agentico restored this session"), true
+}
+
+// ClipMiddle keeps the first head and last tail characters of s and replaces
+// the rest with a marker naming how many were cut and why. It returns s
+// unchanged when nothing would be cut.
+func ClipMiddle(s string, head, tail int, why string) string {
+	n := utf8.RuneCountInString(s)
+	if n <= head+tail {
+		return s
+	}
 	runes := []rune(s)
-	omitted := n - trimHeadChars - trimTailChars
-	return string(runes[:trimHeadChars]) +
-		"\n[... " + strconv.Itoa(omitted) + " characters trimmed when Agentico restored this session ...]\n" +
-		string(runes[n-trimTailChars:]), true
+	return string(runes[:head]) +
+		"\n[... " + strconv.Itoa(n-head-tail) + " characters " + why + " ...]\n" +
+		string(runes[n-tail:])
 }
 
 // toolResultChars counts the text characters of a tool result's content;

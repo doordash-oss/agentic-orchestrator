@@ -2684,6 +2684,8 @@ export function isSupervisorSessionId(sessionId: string | undefined): boolean {
 export const SUPERVISOR_MESSAGE_MAX_CHARS = 100_000;
 /** Largest transcript page the server returns. */
 export const SUPERVISOR_TRANSCRIPT_MAX_LIMIT = 500;
+/** Upper bound for one main-process clipboard write (a whole transcript reply fits). */
+export const CLIPBOARD_TEXT_MAX_CHARS = 1_000_000;
 
 const SupervisorSeqSchema = z.number().int().nonnegative();
 const SupervisorIdentifierSchema = z.string().max(200);
@@ -4572,7 +4574,7 @@ export const ipcContracts = {
   },
   revealPath: { request: z.tuple([RevealPathRequestSchema]), response: RevealPathResultSchema },
   writeClipboardText: {
-    request: z.tuple([z.string().min(1).max(4096)]),
+    request: z.tuple([z.string().min(1).max(CLIPBOARD_TEXT_MAX_CHARS)]),
     response: z.strictObject({ ok: z.boolean() }),
   },
   publishUiState: {
@@ -4868,8 +4870,8 @@ export interface AgenticoApi {
   revealPath(request: RevealPathRequest): Promise<RevealPathResult>;
   /**
    * Writes text to the OS clipboard through the main process. The renderer
-   * has no Chromium clipboard permission by policy, so the remote Copy Path
-   * affordance goes through this narrow call instead.
+   * has no Chromium clipboard permission by policy, so Copy Path and the
+   * transcript's Copy message go through this narrow call instead.
    */
   writeClipboardText(text: string): Promise<{ ok: boolean }>;
   /**

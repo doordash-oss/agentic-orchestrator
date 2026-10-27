@@ -24,6 +24,7 @@ import os from 'node:os';
 import path from 'node:path';
 import {
   BrowserWindow,
+  Menu,
   app,
   clipboard,
   dialog,
@@ -65,6 +66,7 @@ import { CloneService } from './cloneService';
 import { CreateService } from './createService';
 import { InitializeService } from './initializeService';
 import { CompletionService } from './completion';
+import { editContextMenuTemplate } from './contextMenu';
 import { RecoveryService } from './recovery';
 import { BulkService } from './bulk';
 import { AttentionService } from './attention';
@@ -464,6 +466,15 @@ if (!hasSingleInstanceLock) {
       (fileUrl) => net.fetch(fileUrl),
     );
     installSecurityPolicies({ app, session: session.defaultSession, appOrigins });
+    app.on('web-contents-created', (_event, contents) => {
+      contents.on('context-menu', (_menuEvent, params) => {
+        const template = editContextMenuTemplate(params);
+        if (template.length === 0) return;
+        Menu.buildFromTemplate(template).popup({
+          ...defined('window', BrowserWindow.fromWebContents(contents) ?? undefined),
+        });
+      });
+    });
 
     // The gateway (and therefore the server's inherited PATH) must not exist
     // before the login-shell merge lands; the resolution itself started at

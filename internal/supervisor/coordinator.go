@@ -253,6 +253,9 @@ type Coordinator struct {
 type rebuildProbe struct {
 	generation int64
 	harness    string
+	// baseline is the session's cumulative usage when the launch completed:
+	// Codex reports thread totals, which a resumed thread starts above zero.
+	baseline llm.Usage
 }
 
 type pendingCompaction struct {
@@ -1524,6 +1527,9 @@ func (c *Coordinator) completeLaunch(attempt *launchAttempt, sess ports.SessionV
 		return
 	}
 	c.session = sess
+	if c.rebuildProbe != nil {
+		c.rebuildProbe.baseline = sess.AccumulatedUsage()
+	}
 	c.launch = nil
 	c.step = ""
 	results := make([]joinResult, len(attempt.joiners))
@@ -1979,7 +1985,7 @@ func (c *Coordinator) observeMessage(gen int64, sessionID string, msg llm.SDKMes
 	}
 }
 
-// logRebuildUsageLocked logs the first usage reported after a launch that
+// logRebuildUsageLocked logs the first request's usage after a launch that
 // restored history: its cache read against cache write shows whether the
 // rebuilt prefix hit the provider's prompt cache.
 func (c *Coordinator) logRebuildUsageLocked(gen int64) {
@@ -1987,13 +1993,34 @@ func (c *Coordinator) logRebuildUsageLocked(gen int64) {
 	if probe == nil || probe.generation != gen || c.session == nil {
 		return
 	}
-	u := c.session.LatestUsage()
-	if u == nil || u.InputTokens+u.CacheReadInputTokens+u.CacheCreationInputTokens == 0 {
+	input, read, write := requestUsage(probe.harness, c.session.LatestUsage(), c.session.AccumulatedUsage(), probe.baseline)
+	if input+read+write == 0 {
 		return
 	}
 	c.rebuildProbe = nil
 	log.Printf("supervisor: first %s request after history rebuild (generation %d): input %d, cache read %d, cache write %d tokens",
-		probe.harness, gen, u.InputTokens, u.CacheReadInputTokens, u.CacheCreationInputTokens)
+		probe.harness, gen, input, read, write)
+}
+
+// requestUsage returns the input, cache-read and cache-write tokens of the
+// first request of a launch. Claude's latest usage is that request's own. For
+// the other harnesses it holds a context-meter snapshot without the cache
+// counters, so the request is the growth of the cumulative counters since the
+// baseline; a counter that went backwards yields nothing.
+func requestUsage(harness string, latest *llm.Usage, accumulated, baseline llm.Usage) (input, read, write int) {
+	if harness == "claude" {
+		if latest == nil {
+			return 0, 0, 0
+		}
+		return latest.InputTokens, latest.CacheReadInputTokens, latest.CacheCreationInputTokens
+	}
+	input = accumulated.InputTokens - baseline.InputTokens
+	read = accumulated.CacheReadInputTokens - baseline.CacheReadInputTokens
+	write = accumulated.CacheCreationInputTokens - baseline.CacheCreationInputTokens
+	if input < 0 || read < 0 || write < 0 {
+		return 0, 0, 0
+	}
+	return input, read, write
 }
 
 func (c *Coordinator) updateContextUsageLocked() {

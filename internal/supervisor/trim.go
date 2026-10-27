@@ -47,8 +47,10 @@ type TrimStats struct {
 // trimMaxResultChars keeps its head and tail, and when the older results
 // still exceed trimBudgetChars the oldest are cleared. The durable
 // transcript is untouched and the output depends only on records, so equal
-// transcripts rebuild to equal bytes.
-func TrimToolResults(records []Record) ([]Record, TrimStats) {
+// transcripts rebuild to equal bytes. keep, when set, names the tool calls
+// whose results the replay will contain; the others are left alone and do
+// not count against the budget.
+func TrimToolResults(records []Record, keep func(toolUseID string) bool) ([]Record, TrimStats) {
 	var stats TrimStats
 	protectFrom := protectedTail(records)
 	type candidate struct {
@@ -71,7 +73,7 @@ func TrimToolResults(records []Record) ([]Record, TrimStats) {
 		before, after, trimmed := 0, 0, false
 		for j := range cd.Content {
 			b := &cd.Content[j]
-			if b.Type != "tool_result" {
+			if b.Type != "tool_result" || (keep != nil && !keep(b.ToolUseID)) {
 				continue
 			}
 			n := toolResultChars(b.Content)
@@ -101,11 +103,11 @@ func TrimToolResults(records []Record) ([]Record, TrimStats) {
 		}
 		c := &candidates[i]
 		for j := range c.data.Content {
-			if c.data.Content[j].Type == "tool_result" {
-				c.data.Content[j].Content = jsonString(ClearedToolResult)
+			if b := &c.data.Content[j]; b.Type == "tool_result" && (keep == nil || keep(b.ToolUseID)) {
+				b.Content = jsonString(ClearedToolResult)
 			}
 		}
-		cleared := toolResultsChars(c.data)
+		cleared := toolResultsChars(c.data, keep)
 		total -= c.chars - cleared
 		if c.changed {
 			stats.Trimmed--
@@ -247,10 +249,10 @@ func toolResultChars(content json.RawMessage) int {
 	return 0
 }
 
-func toolResultsChars(cd ContentData) int {
+func toolResultsChars(cd ContentData, keep func(string) bool) int {
 	n := 0
 	for _, b := range cd.Content {
-		if b.Type == "tool_result" {
+		if b.Type == "tool_result" && (keep == nil || keep(b.ToolUseID)) {
 			n += toolResultChars(b.Content)
 		}
 	}
@@ -260,4 +262,29 @@ func toolResultsChars(cd ContentData) int {
 func jsonString(s string) json.RawMessage {
 	raw, _ := json.Marshal(s)
 	return raw
+}
+
+// SelectTrimmedEntries selects the entries a rebuild replays, then trims the
+// tool results that survived the selection's exclusions (interrupted turns,
+// unpaired calls), so results the replay never contains cannot spend the
+// trim budget. It returns the records the entries were selected from.
+func SelectTrimmedEntries[E any, T any](records []Record, rules SelectionRules[E, T]) ([]E, []Record, TrimStats, error) {
+	entries, err := SelectEntries(records, rules)
+	if err != nil {
+		return nil, nil, TrimStats{}, err
+	}
+	replayed := map[string]bool{}
+	for i := range entries {
+		for _, p := range rules.Parts(&entries[i]) {
+			if rules.PartKind(p) == rules.ToolResultKind {
+				replayed[rules.PartID(p)] = true
+			}
+		}
+	}
+	trimmed, stats := TrimToolResults(records, func(id string) bool { return replayed[id] })
+	if stats.Trimmed == 0 && stats.Cleared == 0 {
+		return entries, records, stats, nil
+	}
+	entries, err = SelectEntries(trimmed, rules)
+	return entries, trimmed, stats, err
 }

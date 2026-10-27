@@ -150,12 +150,11 @@ func render(in supervisor.RebuildInput) ([]byte, supervisor.TrimStats, error) {
 	if err != nil {
 		return nil, supervisor.TrimStats{}, err
 	}
-	var trim supervisor.TrimStats
-	in.Records, trim = supervisor.TrimToolResults(selection.Records)
-	entries, err := supervisor.SelectEntries(in.Records, selectionRules())
+	entries, records, trim, err := supervisor.SelectTrimmedEntries(selection.Records, selectionRules())
 	if err != nil {
 		return nil, supervisor.TrimStats{}, err
 	}
+	in.Records = records
 	data, err := encodeLines(in, entries, selection)
 	return data, trim, err
 }

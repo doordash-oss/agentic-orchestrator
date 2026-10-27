@@ -266,11 +266,11 @@ func renderRollout(in supervisor.RebuildInput, opts Options) ([]byte, time.Time,
 	if err != nil {
 		return nil, time.Time{}, trim, err
 	}
-	in.Records, trim = supervisor.TrimToolResults(selection.Records)
-	entries, err := supervisor.SelectEntries(in.Records, selectionRules(in.WorkDir))
+	entries, records, trim, err := supervisor.SelectTrimmedEntries(selection.Records, selectionRules(in.WorkDir))
 	if err != nil {
 		return nil, time.Time{}, trim, err
 	}
+	in.Records = records
 	data, started, err := encodeLines(in, opts, entries, selection)
 	return data, started, trim, err
 }

@@ -182,9 +182,8 @@ func Render(in supervisor.RebuildInput, opts Options) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
-	in.Records, _ = supervisor.TrimToolResults(selection.Records)
 	rules := selectionRules()
-	entries, err := supervisor.SelectEntries(in.Records, rules)
+	entries, _, _, err := supervisor.SelectTrimmedEntries(selection.Records, rules)
 	if err != nil {
 		return nil, err
 	}

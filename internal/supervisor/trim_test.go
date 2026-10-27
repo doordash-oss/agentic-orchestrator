@@ -182,13 +182,13 @@ func TestTrimToolResults(t *testing.T) {
 			for i := range in {
 				snapshot[i] = bytes.Clone(in[i].Data)
 			}
-			out, stats := TrimToolResults(in)
+			out, stats := TrimToolResults(in, nil)
 			for i := range in {
 				if !bytes.Equal(in[i].Data, snapshot[i]) {
 					t.Fatalf("input record %d was modified", in[i].Seq)
 				}
 			}
-			again, _ := TrimToolResults(in)
+			again, _ := TrimToolResults(in, nil)
 			for i := range out {
 				if !bytes.Equal(out[i].Data, again[i].Data) {
 					t.Fatalf("record %d differs between runs", out[i].Seq)

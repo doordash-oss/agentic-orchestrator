@@ -42,7 +42,7 @@ import type {
   ServersPrefs,
 } from '../../shared/ipc';
 import { parseConnectionString, serverKeyForBaseUrl } from '../connectionString';
-import { probeAuthExemptHealth } from './attachProfiles';
+import { probeAuthExemptHealth, REMOTE_HEALTH_PROBE_MS } from './attachProfiles';
 import { evaluateCompatibility } from './compatibility';
 import type { RegistryScan } from './registry';
 import type { SaveResult as TokenSaveResult } from './remoteTokenStore';
@@ -51,13 +51,6 @@ import type { HttpResult } from './runtimeGateway';
 export const E_REMOTE_UNREACHABLE = 'E_REMOTE_UNREACHABLE';
 export const E_REMOTE_INCOMPATIBLE = 'E_REMOTE_INCOMPATIBLE';
 export const E_REMOTE_AUTH_REJECTED = 'E_REMOTE_AUTH_REJECTED';
-
-/**
- * Network-bound probe bound: wider than the local attach probe (1.5s) because
- * a remote server may sit behind real latency, still tight enough that a dead
- * host fails fast.
- */
-export const ADD_REMOTE_PROBE_MS = 4000;
 
 /** State-dir basename under a runtime dir (mirrors gateway/wiring.ts). */
 const STATE_BASENAME = 'features';
@@ -135,7 +128,7 @@ export async function addRemoteServer(
   deps: AddRemoteServerDeps,
 ): Promise<RemoteServerAddResult> {
   const now = deps.now ?? (() => Date.now());
-  const probeMs = deps.timeouts?.healthProbeMs ?? ADD_REMOTE_PROBE_MS;
+  const probeMs = deps.timeouts?.healthProbeMs ?? REMOTE_HEALTH_PROBE_MS;
 
   // Parse errors surface as-is: each carries a distinct actionable code.
   const parsed = parseConnectionString(request.connectionString);

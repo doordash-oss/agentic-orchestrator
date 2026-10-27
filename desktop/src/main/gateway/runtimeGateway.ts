@@ -61,6 +61,7 @@ import {
 import { isAllowedApiPath, SESSION_ID_PATTERN } from './apiPaths';
 import {
   probeAuthExemptHealth,
+  REMOTE_HEALTH_PROBE_MS,
   runLocalAttach,
   runRemoteAttach,
   trimBase,
@@ -110,6 +111,8 @@ export interface ServerChildLike {
 export interface GatewayTimeouts {
   /** Per-request bound for health/readiness probes. */
   healthProbeMs: number;
+  /** Per-request bound for health probes of a remote server. */
+  remoteHealthProbeMs: number;
   /** Total bound for a launched server to publish discovery and turn healthy. */
   launchReadyMs: number;
   /** Poll interval while waiting for a launched server. */
@@ -129,6 +132,7 @@ export interface GatewayTimeouts {
 
 const DEFAULT_TIMEOUTS: GatewayTimeouts = {
   healthProbeMs: 1500,
+  remoteHealthProbeMs: REMOTE_HEALTH_PROBE_MS,
   // Server bootstrap performs bounded provider readiness checks before its
   // concurrent model-catalog discovery, whose own ceiling is 45 seconds.
   // Leave enough room for those legitimate stages plus filesystem setup while
@@ -300,6 +304,7 @@ export class RuntimeGateway {
       recordAttachedServer: (entry) => this.deps.recordAttachedServer(entry),
       remoteTokens: this.deps.remoteTokens,
       healthProbeMs: this.timeouts.healthProbeMs,
+      remoteHealthProbeMs: this.timeouts.remoteHealthProbeMs,
       now: () => this.now(),
       setState: (next) => this.setState(next),
       cancelled: (generation) => this.cancelled(generation),
@@ -1017,7 +1022,9 @@ export class RuntimeGateway {
     const health = await probeAuthExemptHealth(
       this.deps.fetchJson,
       baseUrl,
-      this.timeouts.healthProbeMs,
+      this.connectedKind === 'remote'
+        ? this.timeouts.remoteHealthProbeMs
+        : this.timeouts.healthProbeMs,
     );
     const healthy = health.kind === 'healthy';
     if (
@@ -1257,7 +1264,7 @@ export class RuntimeGateway {
     const result = await probeAuthExemptHealth(
       this.deps.fetchJson,
       baseUrl,
-      this.timeouts.healthProbeMs,
+      this.timeouts.remoteHealthProbeMs,
     );
     return result.kind === 'healthy';
   }
@@ -1396,7 +1403,7 @@ export class RuntimeGateway {
       const health = await probeAuthExemptHealth(
         this.deps.fetchJson,
         entry.baseUrl,
-        this.timeouts.healthProbeMs,
+        this.timeouts.remoteHealthProbeMs,
       );
       const healthy = health.kind === 'healthy';
       if (this.remoteReprobeGeneration !== generation || this.cancelled(generation)) {

@@ -203,3 +203,183 @@ func TestCheckpointAloneCountsAsHistoryContent(t *testing.T) {
 		t.Fatal("checkpoint-only transcript did not count as history")
 	}
 }
+
+type locatingConverter struct {
+	fakeConverter
+	lines map[string]int64
+}
+
+func (l *locatingConverter) LocateRebuiltLine(_ string, records []Record, id string) (int64, bool) {
+	seq, ok := l.lines[id]
+	if !ok {
+		return 0, false
+	}
+	for _, rec := range records {
+		if rec.Seq == seq {
+			return seq, true
+		}
+	}
+	return 0, false
+}
+
+func syntheticSummary(uuid, text string) llm.SDKMessage {
+	return llm.SDKMessage{Type: "user", User: &llm.UserMessage{IsSynthetic: true, UUID: uuid, Message: llm.ConversationMsg{Content: []llm.ContentBlock{{Type: "text", Text: text}}}}}
+}
+
+func checkpointsOf(t *testing.T, c *Coordinator) []CheckpointData {
+	t.Helper()
+	var out []CheckpointData
+	for _, rec := range allRecords(t, c) {
+		if rec.Kind != KindCheckpoint {
+			continue
+		}
+		var data CheckpointData
+		if err := json.Unmarshal(rec.Data, &data); err != nil {
+			t.Fatal(err)
+		}
+		out = append(out, data)
+	}
+	return out
+}
+
+func unavailableMarkers(t *testing.T, c *Coordinator) int {
+	t.Helper()
+	n := 0
+	for _, rec := range markersOf(t, allRecords(t, c), MarkerCompacted) {
+		var marker MarkerData
+		if err := json.Unmarshal(rec.Data, &marker); err != nil {
+			t.Fatal(err)
+		}
+		if marker.Code == "checkpoint_unavailable" {
+			n++
+		}
+	}
+	return n
+}
+
+func TestClaudeCompactionCapturesSyntheticSummary(t *testing.T) {
+	launcher := &fakeLauncher{}
+	c := newTestCoordinator(t, t.TempDir(), launcher)
+	chooseSettings(t, c)
+	if _, err := c.Send(context.Background(), "before", "", "synthetic"); err != nil {
+		t.Fatal(err)
+	}
+	s := launcher.session(0)
+	head := c.State().HeadSeq
+	s.emit(llm.SDKMessage{Type: "system", Subtype: "status"})
+	s.emit(llm.SDKMessage{Type: "system", Subtype: "compact_boundary", Compact: &llm.CompactBoundaryMessage{Trigger: "auto", PreTokens: 900, PostTokens: 800}})
+	s.emit(syntheticSummary("summary-1", "invented summary"))
+	s.emit(llm.SDKMessage{Type: "system", Subtype: "status"})
+	s.emit(llm.SDKMessage{Type: "system", Subtype: "hook_started"})
+	s.emit(llm.SDKMessage{Type: "system", Subtype: "hook_response"})
+	s.emit(assistantText("a-1", "continuing"))
+	checkpoints := checkpointsOf(t, c)
+	if len(checkpoints) != 1 || unavailableMarkers(t, c) != 0 {
+		t.Fatalf("checkpoints = %+v, unavailable = %d", checkpoints, unavailableMarkers(t, c))
+	}
+	if got := checkpoints[0]; got.CoversThroughSeq != head || got.Summary != "invented summary" || got.NativeBaseline == nil || got.NativeBaseline.Harness != "claude" {
+		t.Fatalf("checkpoint = %+v", got)
+	}
+}
+
+func TestClaudeCompactionStatusAndHookMessagesKeepCaptureAlive(t *testing.T) {
+	launcher := &fakeLauncher{}
+	c := newTestCoordinator(t, t.TempDir(), launcher)
+	chooseSettings(t, c)
+	if _, err := c.Send(context.Background(), "before", "", "hooks-between"); err != nil {
+		t.Fatal(err)
+	}
+	s := launcher.session(0)
+	s.emit(llm.SDKMessage{Type: "system", Subtype: "compact_boundary", Compact: &llm.CompactBoundaryMessage{Trigger: "auto"}})
+	s.emit(llm.SDKMessage{Type: "system", Subtype: "status"})
+	s.emit(llm.SDKMessage{Type: "system", Subtype: "hook_started"})
+	s.emit(llm.SDKMessage{Type: "system", Subtype: "hook_response"})
+	s.emit(llm.SDKMessage{Type: "user", User: &llm.UserMessage{IsCompactSummary: true, Message: llm.ConversationMsg{Content: []llm.ContentBlock{{Type: "text", Text: "legacy summary"}}}}})
+	checkpoints := checkpointsOf(t, c)
+	if len(checkpoints) != 1 || checkpoints[0].Summary != "legacy summary" || unavailableMarkers(t, c) != 0 {
+		t.Fatalf("checkpoints = %+v", checkpoints)
+	}
+}
+
+func TestClaudeCompactionIgnoresUnrelatedUserMessages(t *testing.T) {
+	launcher := &fakeLauncher{}
+	c := newTestCoordinator(t, t.TempDir(), launcher)
+	chooseSettings(t, c)
+	if _, err := c.Send(context.Background(), "before", "", "anchor"); err != nil {
+		t.Fatal(err)
+	}
+	s := launcher.session(0)
+	s.emit(llm.SDKMessage{Type: "system", Subtype: "compact_boundary", Compact: &llm.CompactBoundaryMessage{Trigger: "auto", PreservedAnchorUUID: "anchor-1"}})
+	s.emit(syntheticSummary("other", "not the summary"))
+	s.emit(llm.SDKMessage{Type: "user", User: &llm.UserMessage{UUID: "anchor-1", Message: llm.ConversationMsg{Content: []llm.ContentBlock{{Type: "text", Text: "not synthetic"}}}}})
+	s.emit(syntheticSummary("anchor-1", "anchored summary"))
+	checkpoints := checkpointsOf(t, c)
+	if len(checkpoints) != 1 || checkpoints[0].Summary != "anchored summary" {
+		t.Fatalf("checkpoints = %+v", checkpoints)
+	}
+}
+
+func TestClaudePartialCompactionCoversOnlyBeforePreservedHead(t *testing.T) {
+	for _, tc := range []struct {
+		name         string
+		head         string
+		wantMappedAt bool
+	}{
+		{"head from the rebuilt file", "head-rebuilt", true},
+		{"head produced live is unmapped", "head-live", false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			conv := &locatingConverter{lines: map[string]int64{}}
+			launcher := &fakeLauncher{}
+			c := newTestCoordinator(t, t.TempDir(), launcher, withConverter(conv))
+			chooseSettings(t, c)
+			completeTurn(t, c, launcher, "gen1")
+			rebuiltHead := c.State().HeadSeq
+			c.End()
+			completeTurn(t, c, launcher, "gen2")
+			if c.State().HeadSeq <= rebuiltHead {
+				t.Fatalf("head = %d, rebuilt head = %d", c.State().HeadSeq, rebuiltHead)
+			}
+			preserved := rebuiltHead - 1
+			conv.lines["head-rebuilt"] = preserved
+			s := launcher.session(1)
+			s.emit(llm.SDKMessage{Type: "system", Subtype: "compact_boundary", Compact: &llm.CompactBoundaryMessage{Trigger: "auto", PreservedHeadUUID: tc.head, PreservedAnchorUUID: "anchor-1"}})
+			s.emit(syntheticSummary("anchor-1", "invented summary"))
+			checkpoints := checkpointsOf(t, c)
+			if len(checkpoints) != 1 {
+				t.Fatalf("checkpoints = %+v", checkpoints)
+			}
+			want := rebuiltHead
+			if tc.wantMappedAt {
+				want = preserved - 1
+			}
+			if got := checkpoints[0].CoversThroughSeq; got != want {
+				t.Fatalf("covers through %d, want %d", got, want)
+			}
+		})
+	}
+}
+
+func TestClaudeConsecutiveCompactionsEachCheckpoint(t *testing.T) {
+	launcher := &fakeLauncher{}
+	c := newTestCoordinator(t, t.TempDir(), launcher)
+	chooseSettings(t, c)
+	if _, err := c.Send(context.Background(), "before", "", "consecutive"); err != nil {
+		t.Fatal(err)
+	}
+	s := launcher.session(0)
+	for i, text := range []string{"first", "second", "third"} {
+		anchor := "anchor-" + text
+		s.emit(llm.SDKMessage{Type: "system", Subtype: "status"})
+		s.emit(llm.SDKMessage{Type: "system", Subtype: "compact_boundary", Compact: &llm.CompactBoundaryMessage{Trigger: "auto", PreservedAnchorUUID: anchor}})
+		s.emit(syntheticSummary(anchor, text+" summary"))
+		s.emit(llm.SDKMessage{Type: "system", Subtype: "status"})
+		if got := len(checkpointsOf(t, c)); got != i+1 {
+			t.Fatalf("after compaction %d: checkpoints = %d", i+1, got)
+		}
+	}
+	checkpoints := checkpointsOf(t, c)
+	if last := checkpoints[len(checkpoints)-1]; last.Summary != "third summary" || unavailableMarkers(t, c) != 0 {
+		t.Fatalf("last = %+v, unavailable = %d", last, unavailableMarkers(t, c))
+	}
+}

@@ -65,6 +65,12 @@ type NativeCompactionCapture interface {
 	CaptureCompaction(ctx context.Context, nativeSessionID string) (json.RawMessage, error)
 }
 
+// RebuiltLineLocator maps a native line id in a rebuilt session back to the
+// earliest of records it was rendered from.
+type RebuiltLineLocator interface {
+	LocateRebuiltLine(conversationID string, records []Record, lineID string) (seq int64, ok bool)
+}
+
 // HarnessAssignedIDs is implemented by converters whose harness mints its
 // own session id and cannot resume under a caller-chosen one. For those the
 // coordinator pre-assigns nothing: it adopts the id the harness reports

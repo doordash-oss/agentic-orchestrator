@@ -240,6 +240,11 @@ type Coordinator struct {
 	rebuildProbe   *rebuildProbe
 	contextUsage   *ContextUsage
 	pendingCompact *pendingCompaction
+	// rebuiltFromSeq and liveFromSeq bound the records the launch rebuilt
+	// into the native session: those in (rebuiltFromSeq, liveFromSeq] came
+	// from the file, later ones were produced live by the harness.
+	rebuiltFromSeq int64
+	liveFromSeq    int64
 	interrupt      *interruptAttempt
 	closed         bool
 	subs           map[*Subscription]struct{}
@@ -256,6 +261,10 @@ type pendingCompaction struct {
 	turnID     string
 	trigger    string
 	preTokens  int
+	// headUUID and anchorUUID identify a partial compaction's preserved
+	// segment head and the summary message that follows the boundary.
+	headUUID   string
+	anchorUUID string
 }
 
 type relaunchSettings struct {
@@ -1233,6 +1242,7 @@ func (c *Coordinator) resetProcessLocked() {
 	c.rebuildProbe = nil
 	c.contextUsage = nil
 	c.pendingCompact = nil
+	c.rebuiltFromSeq, c.liveFromSeq = 0, 0
 	c.interrupt = nil
 	c.step = ""
 	c.permMode = PermissionMode{Requested: RequestedPermissionMode}
@@ -1417,6 +1427,13 @@ func (c *Coordinator) rebuildNative(attempt *launchAttempt) (resumeID, seedPath 
 	if err != nil {
 		return "", "", fmt.Errorf("read transcript for rebuild: %w", err)
 	}
+	var liveFromSeq, rebuiltFromSeq int64
+	if len(records) > 0 {
+		liveFromSeq = records[len(records)-1].Seq
+	}
+	if selection, err := SelectCheckpoint(records, converter.Harness()); err == nil && selection.Checkpoint != nil {
+		rebuiltFromSeq = selection.Data.CoversThroughSeq
+	}
 	res, err := converter.Rebuild(context.Background(), RebuildInput{
 		ConversationID:  conversationID,
 		NativeSessionID: nativeID,
@@ -1442,9 +1459,12 @@ func (c *Coordinator) rebuildNative(attempt *launchAttempt) (resumeID, seedPath 
 	case err != nil:
 		return "", "", fmt.Errorf("rebuild %s session history: %w", converter.Harness(), err)
 	}
-	if c.launch == attempt && c.step == StepRebuilding {
-		c.step = StepLaunching
-		c.publishStateLocked()
+	if c.launch == attempt {
+		c.rebuiltFromSeq, c.liveFromSeq = rebuiltFromSeq, liveFromSeq
+		if c.step == StepRebuilding {
+			c.step = StepLaunching
+			c.publishStateLocked()
+		}
 	}
 	if !res.Resume {
 		return "", "", nil
@@ -1893,7 +1913,7 @@ func (c *Coordinator) observeMessage(gen int64, sessionID string, msg llm.SDKMes
 		return
 	}
 	if c.pendingCompact != nil {
-		if msg.User != nil && msg.User.IsCompactSummary {
+		if msg.User != nil && c.pendingCompact.isSummary(msg.User) {
 			c.completeClaudeCompactionLocked(gen, msg.User)
 			return
 		}
@@ -2013,7 +2033,8 @@ func (c *Coordinator) observeCompactionLocked(gen int64, sessionID string, bound
 		return
 	}
 	c.unavailableCompactLocked()
-	pending := &pendingCompaction{generation: gen, coversSeq: c.store.head(), turnID: c.currentTurnLocked(), trigger: boundary.Trigger, preTokens: boundary.PreTokens}
+	pending := &pendingCompaction{generation: gen, coversSeq: c.store.head(), turnID: c.currentTurnLocked(), trigger: boundary.Trigger, preTokens: boundary.PreTokens,
+		headUUID: boundary.PreservedHeadUUID, anchorUUID: boundary.PreservedAnchorUUID}
 	if c.settings.Harness == "claude" {
 		c.pendingCompact = pending
 		return
@@ -2072,7 +2093,48 @@ func (c *Coordinator) completeClaudeCompactionLocked(gen int64, user *llm.UserMe
 		c.appendUnavailableCompactLocked(gen, pending.turnID)
 		return
 	}
+	pending.coversSeq = c.preservedCoverLocked(pending)
 	c.appendCheckpointLocked(gen, pending, summary, &NativeBaseline{Harness: "claude", Payload: payload})
+}
+
+// isSummary reports whether user is the summary that follows the boundary.
+// The CLI marks it isCompactSummary in its session file but only isSynthetic
+// on stdout, where a partial compaction names it by anchor uuid.
+func (p *pendingCompaction) isSummary(user *llm.UserMessage) bool {
+	if user.IsCompactSummary {
+		return true
+	}
+	return user.IsSynthetic && (p.anchorUUID == "" || user.UUID == p.anchorUUID)
+}
+
+// preservedCoverLocked returns the last record the checkpoint may cover. A
+// partial compaction keeps its preserved messages verbatim after the summary,
+// so the cover stops just before the earliest record they came from. Messages
+// of the rebuilt session file map back through the converter's deterministic
+// line ids. When the head cannot be mapped it is a live message of this
+// generation, so the cover is limited to what the launch rebuilt: replaying
+// more is harmless, dropping a preserved message is not.
+func (c *Coordinator) preservedCoverLocked(pending *pendingCompaction) int64 {
+	if pending.headUUID == "" {
+		return pending.coversSeq
+	}
+	cover := min(pending.coversSeq, c.liveFromSeq)
+	locator, ok := c.converterLocked().(RebuiltLineLocator)
+	if !ok || c.liveFromSeq <= c.rebuiltFromSeq {
+		return cover
+	}
+	records, err := c.store.after(c.rebuiltFromSeq)
+	if err != nil {
+		log.Printf("supervisor: read transcript to place compaction checkpoint: %v", err)
+		return cover
+	}
+	for len(records) > 0 && records[len(records)-1].Seq > c.liveFromSeq {
+		records = records[:len(records)-1]
+	}
+	if seq, ok := locator.LocateRebuiltLine(c.conv.ConversationID, records, pending.headUUID); ok {
+		return min(cover, seq-1)
+	}
+	return cover
 }
 
 func (c *Coordinator) appendCheckpointLocked(gen int64, pending *pendingCompaction, summary string, baseline *NativeBaseline) {

@@ -82,6 +82,8 @@ func New(opts Options) *Converter {
 	return &Converter{configDir: dir}
 }
 
+var _ supervisor.RebuiltLineLocator = (*Converter)(nil)
+
 // Harness reports "claude".
 func (c *Converter) Harness() string { return Harness }
 
@@ -532,6 +534,27 @@ func encodeLines(in supervisor.RebuildInput, entries []entry, selection supervis
 		return nil, nil
 	}
 	return buf.Bytes(), nil
+}
+
+// LocateRebuiltLine returns the seq of the earliest record rendered as the
+// session line id.
+func (c *Converter) LocateRebuiltLine(conversationID string, records []supervisor.Record, id string) (int64, bool) {
+	for i := range records {
+		e, err := decodeEntry(&records[i])
+		if err != nil {
+			continue
+		}
+		seq := records[i].Seq
+		if e.prompt != nil && lineID(conversationID, seq, 0, "line") == id {
+			return seq, true
+		}
+		for _, b := range e.blocks {
+			if lineID(conversationID, seq, b.index, "line") == id {
+				return seq, true
+			}
+		}
+	}
+	return 0, false
 }
 
 func lineID(conversationID string, seq int64, index int, purpose string) string {

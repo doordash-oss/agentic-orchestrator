@@ -235,11 +235,19 @@ type Coordinator struct {
 	// fallbackMarked records that this process already reported a failed
 	// resume, so the marker appears once per generation.
 	fallbackMarked bool
+	// rebuildProbe is the restored-history launch whose first reported
+	// usage is still to be logged.
+	rebuildProbe   *rebuildProbe
 	contextUsage   *ContextUsage
 	pendingCompact *pendingCompaction
 	interrupt      *interruptAttempt
 	closed         bool
 	subs           map[*Subscription]struct{}
+}
+
+type rebuildProbe struct {
+	generation int64
+	harness    string
 }
 
 type pendingCompaction struct {
@@ -1222,6 +1230,7 @@ func (c *Coordinator) resetProcessLocked() {
 	c.keepTurns = false
 	c.resumeID = ""
 	c.fallbackMarked = false
+	c.rebuildProbe = nil
 	c.contextUsage = nil
 	c.pendingCompact = nil
 	c.interrupt = nil
@@ -1439,6 +1448,13 @@ func (c *Coordinator) rebuildNative(attempt *launchAttempt) (resumeID, seedPath 
 	}
 	if !res.Resume {
 		return "", "", nil
+	}
+	if t := res.Trim; t.Trimmed > 0 || t.Cleared > 0 {
+		log.Printf("supervisor: %s rebuild trimmed %d and cleared %d old tool results (%d -> %d characters)",
+			converter.Harness(), t.Trimmed, t.Cleared, t.CharsBefore, t.CharsAfter)
+	}
+	if c.launch == attempt {
+		c.rebuildProbe = &rebuildProbe{generation: attempt.generation, harness: converter.Harness()}
 	}
 	if seeds {
 		return "", res.Path, nil
@@ -1933,12 +1949,31 @@ func (c *Coordinator) observeMessage(gen int64, sessionID string, msg llm.SDKMes
 		c.surfaceRequestLocked(gen, msg.ControlRequest)
 	case msg.Result != nil && current:
 		c.refreshContextUsageLocked(false)
+		c.logRebuildUsageLocked(gen)
 		c.observeResultLocked(msg.Result)
 		return
 	}
 	if msg.UsageUpdate != nil || (msg.Assistant != nil && msg.Assistant.Message.Usage != nil) {
 		c.updateContextUsageLocked()
+		c.logRebuildUsageLocked(gen)
 	}
+}
+
+// logRebuildUsageLocked logs the first usage reported after a launch that
+// restored history: its cache read against cache write shows whether the
+// rebuilt prefix hit the provider's prompt cache.
+func (c *Coordinator) logRebuildUsageLocked(gen int64) {
+	probe := c.rebuildProbe
+	if probe == nil || probe.generation != gen || c.session == nil {
+		return
+	}
+	u := c.session.LatestUsage()
+	if u == nil || u.InputTokens+u.CacheReadInputTokens+u.CacheCreationInputTokens == 0 {
+		return
+	}
+	c.rebuildProbe = nil
+	log.Printf("supervisor: first %s request after history rebuild (generation %d): input %d, cache read %d, cache write %d tokens",
+		probe.harness, gen, u.InputTokens, u.CacheReadInputTokens, u.CacheCreationInputTokens)
 }
 
 func (c *Coordinator) updateContextUsageLocked() {

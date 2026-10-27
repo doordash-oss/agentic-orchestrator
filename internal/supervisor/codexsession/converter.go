@@ -164,7 +164,7 @@ func (c *Converter) Rebuild(ctx context.Context, in supervisor.RebuildInput) (su
 	if err := ctx.Err(); err != nil {
 		return supervisor.RebuildResult{}, err
 	}
-	data, started, err := renderRollout(in, c.opts)
+	data, started, trim, err := renderRollout(in, c.opts)
 	if err != nil {
 		return supervisor.RebuildResult{}, err
 	}
@@ -194,7 +194,7 @@ func (c *Converter) Rebuild(ctx context.Context, in supervisor.RebuildInput) (su
 	c.mu.Lock()
 	c.seen[in.NativeSessionID] = countCompacted(data)
 	c.mu.Unlock()
-	return supervisor.RebuildResult{Resume: true, SessionID: in.NativeSessionID, Path: path}, nil
+	return supervisor.RebuildResult{Resume: true, SessionID: in.NativeSessionID, Path: path, Trim: trim}, nil
 }
 
 // CaptureCompaction waits for the next native compacted rollout line and
@@ -257,20 +257,22 @@ func compactedPayloads(content []byte) []json.RawMessage {
 
 func countCompacted(content []byte) int { return len(compactedPayloads(content)) }
 
-func renderRollout(in supervisor.RebuildInput, opts Options) ([]byte, time.Time, error) {
+func renderRollout(in supervisor.RebuildInput, opts Options) ([]byte, time.Time, supervisor.TrimStats, error) {
+	var trim supervisor.TrimStats
 	if err := supervisor.ValidateNativeRebuildInput(in, "codex rollout rebuild"); err != nil {
-		return nil, time.Time{}, err
+		return nil, time.Time{}, trim, err
 	}
 	selection, err := supervisor.SelectCheckpoint(in.Records, Harness)
 	if err != nil {
-		return nil, time.Time{}, err
+		return nil, time.Time{}, trim, err
 	}
-	in.Records = selection.Records
+	in.Records, trim = supervisor.TrimToolResults(selection.Records)
 	entries, err := supervisor.SelectEntries(in.Records, selectionRules(in.WorkDir))
 	if err != nil {
-		return nil, time.Time{}, err
+		return nil, time.Time{}, trim, err
 	}
-	return encodeLines(in, opts, entries, selection)
+	data, started, err := encodeLines(in, opts, entries, selection)
+	return data, started, trim, err
 }
 
 const (

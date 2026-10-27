@@ -45,6 +45,8 @@ type RebuildResult struct {
 	Resume    bool
 	SessionID string
 	Path      string
+	// Trim reports the tool results shortened for the rebuild.
+	Trim TrimStats
 }
 
 // Converter rebuilds one harness's native session from the durable

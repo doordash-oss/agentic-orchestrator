@@ -89,7 +89,7 @@ func testOptions(home func() (string, error)) Options {
 // Argument errors are plain errors; unrepresentable records are
 // *supervisor.ConversionError.
 func render(in supervisor.RebuildInput, opts Options) ([]byte, error) {
-	data, _, err := renderRollout(in, opts.withDefaults())
+	data, _, _, err := renderRollout(in, opts.withDefaults())
 	return data, err
 }
 

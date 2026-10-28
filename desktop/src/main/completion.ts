@@ -37,6 +37,7 @@ import { openExternalSafely } from './security';
 import {
   CompletionPreflightRequestSchema,
   RepositoryDiffRequestSchema,
+  CLIPBOARD_TEXT_MAX_CHARS,
   FeatureIdSchema,
   OpenExternalRequestSchema,
   RevealPathRequestSchema,
@@ -167,12 +168,12 @@ export class CompletionService {
 
   /**
    * The renderer never holds a Chromium clipboard permission (security.ts's
-   * deny-all policy), so the remote Copy Path affordance writes through the
+   * deny-all policy), so Copy Path and Copy message write through the
    * main-process clipboard. Bounded text only; what the renderer cannot
    * write is anything but the string itself.
    */
   writeClipboardText(text: unknown): Promise<{ ok: boolean }> {
-    const value = validateWithSchema(text, z.string().min(1).max(4096));
+    const value = validateWithSchema(text, z.string().min(1).max(CLIPBOARD_TEXT_MAX_CHARS));
     clipboard.writeText(value);
     return Promise.resolve({ ok: true });
   }

@@ -496,10 +496,8 @@ func safeTranscriptText(text, role string, locallyAppended bool) string {
 	if role == roleUser && !locallyAppended {
 		return safeTranscriptPrompt(text)
 	}
-	if role == roleAssistant {
-		return SafeDisplayText(text, 0)
-	}
-	return SafeDisplayText(text, 500)
+	// What the operator typed and what the agent replied render in full.
+	return SafeDisplayText(text, 0)
 }
 
 func toolCallDTOFromToolUse(block llm.ContentBlock) *ToolCall {

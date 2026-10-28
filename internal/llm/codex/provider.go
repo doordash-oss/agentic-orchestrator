@@ -254,7 +254,7 @@ func (p *Provider) CheckReadiness(ctx context.Context) llm.ProviderReadiness {
 	text := strings.TrimSpace(string(out))
 	lower := strings.ToLower(text)
 
-	if err == nil && strings.Contains(lower, "logged in") && !strings.Contains(lower, "not logged in") {
+	if err == nil && reportsSignedIn(lower) {
 		return llm.ProviderReadiness{
 			Ready:  true,
 			Detail: text,
@@ -286,6 +286,16 @@ func (p *Provider) CheckReadiness(ctx context.Context) llm.ProviderReadiness {
 		Detail: fmt.Sprintf("login status did not report a logged-in account: %s", text),
 		Remedy: "Run 'codex login'",
 	}
+}
+
+// reportsSignedIn matches the lowercased signed-in wordings of
+// `codex login status`: "Logged in using ..." and, since 0.164, API-key
+// sign-ins as "API key configured - ...".
+func reportsSignedIn(lower string) bool {
+	if strings.Contains(lower, "not logged in") {
+		return false
+	}
+	return strings.Contains(lower, "logged in") || strings.Contains(lower, "api key configured")
 }
 
 // RecommendedModels nominates the balanced Codex model as the default for

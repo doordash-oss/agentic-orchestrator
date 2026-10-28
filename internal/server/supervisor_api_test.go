@@ -815,6 +815,18 @@ func TestSupervisorRecoveryMarkerKeepsPreservedPath(t *testing.T) {
 	}
 }
 
+func TestSupervisorUserRecordKeepsFullText(t *testing.T) {
+	text := strings.Repeat("A long request line.\n", 200)
+	data, err := json.Marshal(supervisor.UserData{Text: text})
+	if err != nil {
+		t.Fatal(err)
+	}
+	dto := supervisorRecordDTO(supervisor.Record{Seq: 1, Kind: supervisor.KindUser, Visibility: supervisor.VisibilityContent, TurnID: "g0.t1", Data: data}, "")
+	if len(dto.Messages) != 1 || dto.Messages[0].Text != strings.TrimSpace(text) {
+		t.Fatalf("user record messages = %+v, want the full message", dto.Messages)
+	}
+}
+
 func TestSupervisorCheckpointProjectionHidesBaselineAndBoundsSummary(t *testing.T) {
 	summary := strings.Repeat("s", 20*1024)
 	data, err := json.Marshal(supervisor.CheckpointData{CoversThroughSeq: 17, Summary: summary, NativeBaseline: &supervisor.NativeBaseline{Harness: "codex", Payload: json.RawMessage(`{"encrypted_content":"secret-baseline"}`)}, Reason: "native_auto", Model: "gpt-5"})

@@ -87,6 +87,7 @@ export interface AttachHost {
     load(serverKey: string): RemoteTokenLoadResult;
   };
   healthProbeMs: number;
+  remoteHealthProbeMs: number;
   now(): number;
   setState(next: ConnectionState): void;
   cancelled(generation: number): boolean;
@@ -109,6 +110,14 @@ type HealthProbeResult =
   | { kind: 'unreachable' }
   | { kind: 'bad-status' }
   | { kind: 'bad-payload' };
+
+/**
+ * Health-probe bound for remote servers: wider than the local probe (1.5s)
+ * because a remote sits behind real latency — an SSH tunnel through a proxy
+ * can spend over a second on a fresh connection — yet tight enough that a
+ * dead host fails fast.
+ */
+export const REMOTE_HEALTH_PROBE_MS = 4000;
 
 /** The shared pipeline's first step: one bounded auth-exempt health probe. */
 export async function probeAuthExemptHealth(
@@ -412,7 +421,7 @@ export async function runRemoteAttach(
     return 'blocked';
   }
 
-  const probed = await probeAuthExemptHealth(host.fetchJson, baseUrl, host.healthProbeMs);
+  const probed = await probeAuthExemptHealth(host.fetchJson, baseUrl, host.remoteHealthProbeMs);
   if (probed.kind !== 'healthy') {
     if (probed.kind !== 'unreachable' && host.cancelled(generation)) {
       return 'blocked';

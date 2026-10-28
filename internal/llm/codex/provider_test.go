@@ -179,27 +179,44 @@ func TestProviderResolveCodexHome_FallsBackToDefaultHome(t *testing.T) {
 }
 
 func TestProviderCheckReadinessLoggedIn(t *testing.T) {
-	homeDir := t.TempDir()
-	codexHome := filepath.Join(homeDir, "codex-home")
-	t.Setenv("HOME", homeDir)
-	t.Setenv("CODEX_HOME", codexHome)
-
-	p := &Provider{
-		runner: func(ctx context.Context, name string, args []string, env []string) ([]byte, error) {
-			assertProviderCommand(t, name, args, "codex", []string{"login", "status"})
-			return []byte("Logged in using ChatGPT\n"), nil
+	tests := []struct {
+		name       string
+		output     string
+		wantDetail string
+	}{
+		{"chatgpt", "Logged in using ChatGPT\n", "Logged in using ChatGPT"},
+		{"api key before 0.164", "Logged in using an API key - sk-***abcd\n", "Logged in using an API key"},
+		{
+			"api key since 0.164",
+			"API key configured - sk-***abcd\nAuthentication is checked when you send a request.\n",
+			"API key configured",
 		},
 	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			homeDir := t.TempDir()
+			codexHome := filepath.Join(homeDir, "codex-home")
+			t.Setenv("HOME", homeDir)
+			t.Setenv("CODEX_HOME", codexHome)
 
-	status := p.CheckReadiness(context.Background())
-	if !status.Ready {
-		t.Fatalf("CheckReadiness().Ready = false, detail=%q remedy=%q", status.Detail, status.Remedy)
-	}
-	if !strings.Contains(status.Detail, "Logged in") {
-		t.Fatalf("CheckReadiness().Detail = %q, want login status text", status.Detail)
-	}
-	if info, err := os.Stat(codexHome); err != nil || !info.IsDir() {
-		t.Fatalf("CheckReadiness() did not create CODEX_HOME: info=%v err=%v", info, err)
+			p := &Provider{
+				runner: func(ctx context.Context, name string, args []string, env []string) ([]byte, error) {
+					assertProviderCommand(t, name, args, "codex", []string{"login", "status"})
+					return []byte(tt.output), nil
+				},
+			}
+
+			status := p.CheckReadiness(context.Background())
+			if !status.Ready {
+				t.Fatalf("CheckReadiness().Ready = false, detail=%q remedy=%q", status.Detail, status.Remedy)
+			}
+			if !strings.Contains(status.Detail, tt.wantDetail) {
+				t.Fatalf("CheckReadiness().Detail = %q, want %q", status.Detail, tt.wantDetail)
+			}
+			if info, err := os.Stat(codexHome); err != nil || !info.IsDir() {
+				t.Fatalf("CheckReadiness() did not create CODEX_HOME: info=%v err=%v", info, err)
+			}
+		})
 	}
 }
 

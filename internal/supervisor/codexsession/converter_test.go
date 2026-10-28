@@ -89,7 +89,7 @@ func testOptions(home func() (string, error)) Options {
 // Argument errors are plain errors; unrepresentable records are
 // *supervisor.ConversionError.
 func render(in supervisor.RebuildInput, opts Options) ([]byte, error) {
-	data, _, err := renderRollout(in, opts.withDefaults())
+	data, _, _, err := renderRollout(in, opts.withDefaults())
 	return data, err
 }
 
@@ -590,7 +590,7 @@ func TestRebuildConversionErrorWritesNothing(t *testing.T) {
 		"Bash command not a string":   bad(supervisor.KindToolUse, supervisor.VisibilityContent, `{"content":[{"type":"tool_use","id":"t","name":"Bash","input":{"command":["ls"]}}]}`),
 		"tool_result without id":      bad(supervisor.KindToolResult, supervisor.VisibilityModelOnly, `{"content":[{"type":"tool_result","content":"x"}]}`),
 		"tool_result object content":  bad(supervisor.KindToolResult, supervisor.VisibilityContent, `{"content":[{"type":"tool_result","tool_use_id":"t","content":{"a":1}}]}`),
-		"tool_result unknown item":    bad(supervisor.KindToolResult, supervisor.VisibilityContent, `{"content":[{"type":"tool_result","tool_use_id":"t","content":[{"type":"document"}]}]}`),
+		"tool_result non-object item": bad(supervisor.KindToolResult, supervisor.VisibilityContent, `{"content":[{"type":"tool_result","tool_use_id":"t","content":["x"]}]}`),
 		"undecodable marker":          bad(supervisor.KindMarker, supervisor.VisibilityDisplayOnly, `{"marker":`),
 		"text block in a tool result": bad(supervisor.KindToolResult, supervisor.VisibilityContent, `{"content":[{"type":"text","text":"x"}]}`),
 	}
@@ -874,6 +874,8 @@ func TestToolResultOutput(t *testing.T) {
 		{"intact png", `[{"type":"image","source":{"type":"base64","media_type":"image/png","data":"` + png + `"}}]`, "[image omitted: image/png could not be restored]"},
 		{"url image", `[{"type":"image","source":{"type":"url","url":"https://example.com/a.png"}}]`, "[image omitted: image could not be restored]"},
 		{"no source", `[{"type":"image"}]`, "[image omitted: image could not be restored]"},
+		{"tool reference", `[{"type":"tool_reference","tool_name":"TaskStop"}]`, "[tool reference: TaskStop]"},
+		{"unknown item", `[{"type":"text","text":"a"},{"type":"document"}]`, "a\n[document content omitted: could not be restored]"},
 	}
 	for _, tc := range cases {
 		got, err := toolResultOutput(json.RawMessage(tc.content))

@@ -82,6 +82,8 @@ func New(opts Options) *Converter {
 	return &Converter{configDir: dir}
 }
 
+var _ supervisor.RebuiltLineLocator = (*Converter)(nil)
+
 // Harness reports "claude".
 func (c *Converter) Harness() string { return Harness }
 
@@ -107,7 +109,7 @@ func (c *Converter) Rebuild(ctx context.Context, in supervisor.RebuildInput) (su
 	if in.WorkDir != "" {
 		in.WorkDir = claudeconfig.ResolveWorkDir(in.WorkDir)
 	}
-	data, err := Render(in)
+	data, trim, err := render(in)
 	if err != nil {
 		return supervisor.RebuildResult{}, err
 	}
@@ -128,7 +130,7 @@ func (c *Converter) Rebuild(ctx context.Context, in supervisor.RebuildInput) (su
 	if err := supervisor.WriteFileAtomic(path, data, 0o700, 0o600); err != nil {
 		return supervisor.RebuildResult{}, fmt.Errorf("write claude session file %s: %w", path, err)
 	}
-	return supervisor.RebuildResult{Resume: true, SessionID: in.NativeSessionID, Path: path}, nil
+	return supervisor.RebuildResult{Resume: true, SessionID: in.NativeSessionID, Path: path, Trim: trim}, nil
 }
 
 // Render converts in.Records to the bytes of a Claude session JSONL file
@@ -136,19 +138,25 @@ func (c *Converter) Rebuild(ctx context.Context, in supervisor.RebuildInput) (su
 // empty. Argument errors are plain errors; unrepresentable records are
 // *supervisor.ConversionError.
 func Render(in supervisor.RebuildInput) ([]byte, error) {
+	data, _, err := render(in)
+	return data, err
+}
+
+func render(in supervisor.RebuildInput) ([]byte, supervisor.TrimStats, error) {
 	if err := supervisor.ValidateNativeRebuildInput(in, "claude session rebuild"); err != nil {
-		return nil, err
+		return nil, supervisor.TrimStats{}, err
 	}
 	selection, err := supervisor.SelectCheckpoint(in.Records, Harness)
 	if err != nil {
-		return nil, err
+		return nil, supervisor.TrimStats{}, err
 	}
-	in.Records = selection.Records
-	entries, err := supervisor.SelectEntries(in.Records, selectionRules())
+	entries, records, trim, err := supervisor.SelectTrimmedEntries(selection.Records, selectionRules())
 	if err != nil {
-		return nil, err
+		return nil, supervisor.TrimStats{}, err
 	}
-	return encodeLines(in, entries, selection)
+	in.Records = records
+	data, err := encodeLines(in, entries, selection)
+	return data, trim, err
 }
 
 const (
@@ -525,6 +533,27 @@ func encodeLines(in supervisor.RebuildInput, entries []entry, selection supervis
 		return nil, nil
 	}
 	return buf.Bytes(), nil
+}
+
+// LocateRebuiltLine returns the seq of the earliest record rendered as the
+// session line id.
+func (c *Converter) LocateRebuiltLine(conversationID string, records []supervisor.Record, id string) (int64, bool) {
+	for i := range records {
+		e, err := decodeEntry(&records[i])
+		if err != nil {
+			continue
+		}
+		seq := records[i].Seq
+		if e.prompt != nil && lineID(conversationID, seq, 0, "line") == id {
+			return seq, true
+		}
+		for _, b := range e.blocks {
+			if lineID(conversationID, seq, b.index, "line") == id {
+				return seq, true
+			}
+		}
+	}
+	return 0, false
 }
 
 func lineID(conversationID string, seq int64, index int, purpose string) string {

@@ -428,12 +428,49 @@ func TestRenderClipsEachItem(t *testing.T) {
 	text := string(data)
 	for _, want := range []string{
 		"User: " + strings.Repeat("é", maxTextChars) + " [clipped 5 characters]\n",
-		"Assistant: called Bash with " + input0[:maxInputChars] + " [clipped 14 characters]\n",
-		"Tool (Bash): result: " + result[:maxResultChars] + " [clipped 10 characters]\n",
+		"Assistant: called Bash with " + input0[:inputHeadChars] + "\n  [... 14 characters omitted ...]\n  " + input0[len(input0)-inputTailChars:] + "\n",
+		"Tool (Bash): result: " + result[:resultHeadChars] + "\n  [... 10 characters omitted ...]\n  " + result[len(result)-resultTailChars:] + "\n",
 	} {
 		if !strings.Contains(text, want) {
 			t.Errorf("seed lacks clipped item %.60q...", want)
 		}
+	}
+}
+
+func TestToolResultOutputDegradesUnknownItems(t *testing.T) {
+	t.Parallel()
+	cases := []struct{ name, content, want string }{
+		{"tool reference", `[{"type":"tool_reference","tool_name":"TaskStop"}]`, "[tool reference: TaskStop]"},
+		{"unknown item", `[{"type":"text","text":"a"},{"type":"document"}]`, "a\n[document content omitted: could not be restored]"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			got, err := toolResultOutput(json.RawMessage(tc.content))
+			if err != nil || got != tc.want {
+				t.Errorf("toolResultOutput = %q, %v; want %q", got, err, tc.want)
+			}
+		})
+	}
+}
+
+func TestRenderKeepsDistinctToolResults(t *testing.T) {
+	t.Parallel()
+	var recs []supervisor.Record
+	for i, id := range []string{"c1", "c2"} {
+		seq := int64(2*i + 1)
+		recs = append(recs,
+			supervisor.Record{Seq: seq, TurnID: "t" + id, Kind: supervisor.KindToolUse, Visibility: supervisor.VisibilityContent,
+				Data: json.RawMessage(`{"content":[{"type":"tool_use","id":"` + id + `","name":"Bash","input":{}}]}`)},
+			supervisor.Record{Seq: seq + 1, TurnID: "t" + id, Kind: supervisor.KindToolResult, Visibility: supervisor.VisibilityContent,
+				Data: json.RawMessage(`{"content":[{"type":"tool_result","tool_use_id":"` + id + `","content":"same"}]}`)})
+	}
+	data, err := Render(input("", recs), Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := strings.Count(string(data), "Tool (Bash): result: same\n"); got != 2 {
+		t.Errorf("identical results from distinct calls kept %d times, want 2:\n%s", got, data)
 	}
 }
 
@@ -480,7 +517,7 @@ func TestRebuildConversionErrorWritesNothing(t *testing.T) {
 		"tool_use without name":       bad(supervisor.KindToolUse, supervisor.VisibilityContent, `{"content":[{"type":"tool_use","id":"t"}]}`),
 		"tool_result without id":      bad(supervisor.KindToolResult, supervisor.VisibilityModelOnly, `{"content":[{"type":"tool_result","content":"x"}]}`),
 		"tool_result object content":  bad(supervisor.KindToolResult, supervisor.VisibilityContent, `{"content":[{"type":"tool_result","tool_use_id":"t","content":{"a":1}}]}`),
-		"tool_result unknown item":    bad(supervisor.KindToolResult, supervisor.VisibilityContent, `{"content":[{"type":"tool_result","tool_use_id":"t","content":[{"type":"document"}]}]}`),
+		"tool_result non-object item": bad(supervisor.KindToolResult, supervisor.VisibilityContent, `{"content":[{"type":"tool_result","tool_use_id":"t","content":["x"]}]}`),
 		"undecodable marker":          bad(supervisor.KindMarker, supervisor.VisibilityDisplayOnly, `{"marker":`),
 		"text block in a tool result": bad(supervisor.KindToolResult, supervisor.VisibilityContent, `{"content":[{"type":"text","text":"x"}]}`),
 	}

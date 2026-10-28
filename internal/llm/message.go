@@ -359,11 +359,15 @@ type Usage struct {
 
 // UserMessage is an echoed user message or tool result.
 type UserMessage struct {
-	Type             string          `json:"type"`
-	Subtype          string          `json:"subtype,omitempty"`
-	IsCompactSummary bool            `json:"isCompactSummary,omitempty"`
-	Message          ConversationMsg `json:"message"`
-	SessionID        string          `json:"session_id,omitempty"`
+	Type             string `json:"type"`
+	Subtype          string `json:"subtype,omitempty"`
+	IsCompactSummary bool   `json:"isCompactSummary,omitempty"`
+	// IsSynthetic marks CLI-generated user messages. On stdout the post-compaction
+	// summary carries it instead of isCompactSummary.
+	IsSynthetic bool            `json:"isSynthetic,omitempty"`
+	UUID        string          `json:"uuid,omitempty"`
+	Message     ConversationMsg `json:"message"`
+	SessionID   string          `json:"session_id,omitempty"`
 }
 
 // ModelUsageEntry holds per-model usage metadata from the result message.
@@ -534,6 +538,13 @@ type CompactBoundaryMessage struct {
 	ItemID    string `json:"-"`
 	Trigger   string `json:"-"`
 	PreTokens int    `json:"-"`
+	// PostTokens and the preserved-segment uuids describe a partial
+	// compaction, where the CLI keeps the messages from PreservedHeadUUID on
+	// verbatim after the summary, whose uuid is PreservedAnchorUUID.
+	PostTokens          int    `json:"-"`
+	PreservedHeadUUID   string `json:"-"`
+	PreservedAnchorUUID string `json:"-"`
+	PreservedTailUUID   string `json:"-"`
 }
 
 func (m *CompactBoundaryMessage) UnmarshalJSON(data []byte) error {
@@ -541,15 +552,23 @@ func (m *CompactBoundaryMessage) UnmarshalJSON(data []byte) error {
 		Type            string `json:"type"`
 		Subtype         string `json:"subtype"`
 		CompactMetadata struct {
-			Trigger   string `json:"trigger"`
-			PreTokens int    `json:"pre_tokens"`
+			Trigger          string `json:"trigger"`
+			PreTokens        int    `json:"pre_tokens"`
+			PostTokens       int    `json:"post_tokens"`
+			PreservedSegment struct {
+				HeadUUID   string `json:"head_uuid"`
+				AnchorUUID string `json:"anchor_uuid"`
+				TailUUID   string `json:"tail_uuid"`
+			} `json:"preserved_segment"`
 		} `json:"compact_metadata"`
 	}
 	if err := json.Unmarshal(data, &raw); err != nil {
 		return err
 	}
 	m.Type, m.Subtype = raw.Type, raw.Subtype
-	m.Trigger, m.PreTokens = raw.CompactMetadata.Trigger, raw.CompactMetadata.PreTokens
+	meta := raw.CompactMetadata
+	m.Trigger, m.PreTokens, m.PostTokens = meta.Trigger, meta.PreTokens, meta.PostTokens
+	m.PreservedHeadUUID, m.PreservedAnchorUUID, m.PreservedTailUUID = meta.PreservedSegment.HeadUUID, meta.PreservedSegment.AnchorUUID, meta.PreservedSegment.TailUUID
 	return nil
 }
 

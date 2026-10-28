@@ -807,3 +807,31 @@ func TestAttachmentsGolden(t *testing.T) {
 		t.Fatalf("attachments golden mismatch: %v\n--- got ---\n%s", err, data)
 	}
 }
+
+func TestLocateRebuiltLineMapsEveryRenderedLineBackToItsRecord(t *testing.T) {
+	recs := loadRecords(t, "transcript.jsonl")
+	got, err := Render(input(recs))
+	if err != nil {
+		t.Fatal(err)
+	}
+	seen := map[int64]bool{}
+	for _, line := range bytes.Split(bytes.TrimSpace(got), []byte{'\n'}) {
+		var parsed struct {
+			UUID string `json:"uuid"`
+		}
+		if err := json.Unmarshal(line, &parsed); err != nil {
+			t.Fatal(err)
+		}
+		seq, ok := New(Options{}).LocateRebuiltLine(testConvID, recs, parsed.UUID)
+		if !ok {
+			t.Fatalf("line %s not located", parsed.UUID)
+		}
+		seen[seq] = true
+	}
+	if len(seen) < 2 {
+		t.Fatalf("lines mapped to %d records", len(seen))
+	}
+	if _, ok := New(Options{}).LocateRebuiltLine(testConvID, recs, "00000000-0000-0000-0000-000000000000"); ok {
+		t.Fatal("unknown line was located")
+	}
+}

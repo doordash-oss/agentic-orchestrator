@@ -75,6 +75,15 @@ const (
 	maxResultChars = 2000
 )
 
+// Tool inputs and results keep their head and tail, since the end of an
+// output is usually what matters; each pair sums to its limit.
+const (
+	inputHeadChars  = 700
+	inputTailChars  = 300
+	resultHeadChars = 1000
+	resultTailChars = 1000
+)
+
 // preamble and closing lines of every seed.
 const (
 	preamble = "The following is the prior conversation history of this session, restored by Agentico after the agent process restarted. " +
@@ -173,9 +182,8 @@ func Render(in supervisor.RebuildInput, opts Options) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
-	in.Records = selection.Records
 	rules := selectionRules()
-	entries, err := supervisor.SelectEntries(in.Records, rules)
+	entries, _, _, err := supervisor.SelectTrimmedEntries(selection.Records, rules)
 	if err != nil {
 		return nil, err
 	}
@@ -251,7 +259,7 @@ func conversionError(rec *supervisor.Record, format string, args ...any) error {
 // selectionRules wires the OpenCode entry and line types into the shared
 // selection algorithm. The decode closure threads one toolNames map through
 // the whole selection so a result line can name the tool its call line
-// recorded. The duplicate key covers role and line texts.
+// recorded. The duplicate key covers role, tool ids and line texts.
 func selectionRules() supervisor.SelectionRules[entry, line] {
 	toolNames := map[string]string{}
 	return supervisor.SelectionRules[entry, line]{
@@ -341,7 +349,7 @@ func renderBlock(rec *supervisor.Record, role string, index int, cb llm.ContentB
 		if _, seen := toolNames[cb.ID]; !seen {
 			toolNames[cb.ID] = cb.Name
 		}
-		text := "called " + cb.Name + " with " + clip(compacted.String(), maxInputChars)
+		text := "called " + cb.Name + " with " + clipMiddle(compacted.String(), inputHeadChars, inputTailChars)
 		return line{kind: lineCall, id: cb.ID, text: labelled("Assistant", text)}, true, nil
 	case blockToolResult:
 		if role != roleUser {
@@ -362,7 +370,7 @@ func renderBlock(rec *supervisor.Record, role string, index int, cb llm.ContentB
 		if cb.IsError {
 			prefix = "result (error): "
 		}
-		return line{kind: lineResult, id: cb.ToolUseID, text: labelled(label, prefix+clip(output, maxResultChars))}, true, nil
+		return line{kind: lineResult, id: cb.ToolUseID, text: labelled(label, prefix+clipMiddle(output, resultHeadChars, resultTailChars))}, true, nil
 	}
 	return line{}, false, conversionError(rec, "unsupported %q block %d in %s record", cb.Type, index, rec.Kind)
 }
@@ -383,6 +391,11 @@ func clip(text string, limit int) string {
 	}
 	runes := []rune(text)
 	return string(runes[:limit]) + " [clipped " + strconv.Itoa(n-limit) + " characters]"
+}
+
+// clipMiddle keeps the head and tail of a tool input or result.
+func clipMiddle(text string, head, tail int) string {
+	return supervisor.ClipMiddle(text, head, tail, "omitted")
 }
 
 // toolResultOutput flattens tool_result content to text: string content as
@@ -430,7 +443,7 @@ func toolResultOutput(content json.RawMessage) (string, error) {
 			}
 			parts = append(parts, supervisor.OmittedImagePlaceholder(mediaType))
 		default:
-			return "", fmt.Errorf("unsupported %q content item %d", head.Type, i)
+			parts = append(parts, supervisor.ToolResultItemPlaceholder(head.Type, it))
 		}
 	}
 	return strings.Join(parts, "\n"), nil
@@ -440,6 +453,8 @@ func entryKey(e entry) string {
 	var sb strings.Builder
 	sb.WriteString(e.role)
 	for _, l := range e.lines {
+		sb.WriteByte(0)
+		sb.WriteString(l.id)
 		sb.WriteByte(0)
 		sb.WriteString(l.text)
 	}

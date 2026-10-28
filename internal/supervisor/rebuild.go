@@ -45,6 +45,8 @@ type RebuildResult struct {
 	Resume    bool
 	SessionID string
 	Path      string
+	// Trim reports the tool results shortened for the rebuild.
+	Trim TrimStats
 }
 
 // Converter rebuilds one harness's native session from the durable
@@ -61,6 +63,12 @@ type Converter interface {
 // without interpreting the native format.
 type NativeCompactionCapture interface {
 	CaptureCompaction(ctx context.Context, nativeSessionID string) (json.RawMessage, error)
+}
+
+// RebuiltLineLocator maps a native line id in a rebuilt session back to the
+// earliest of records it was rendered from.
+type RebuiltLineLocator interface {
+	LocateRebuiltLine(conversationID string, records []Record, lineID string) (seq int64, ok bool)
 }
 
 // HarnessAssignedIDs is implemented by converters whose harness mints its

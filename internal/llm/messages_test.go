@@ -358,6 +358,23 @@ func TestSDKMessage_UnmarshalJSON_CompactionMetadataAndStringSummary(t *testing.
 	}
 }
 
+func TestSDKMessage_UnmarshalJSON_PartialCompactionAndSyntheticSummary(t *testing.T) {
+	var boundary, summary SDKMessage
+	if err := json.Unmarshal([]byte(`{"type":"system","subtype":"compact_boundary","compact_metadata":{"trigger":"auto","pre_tokens":900,"post_tokens":700,"preserved_segment":{"head_uuid":"h-1","anchor_uuid":"a-1","tail_uuid":"t-1"}}}`), &boundary); err != nil {
+		t.Fatal(err)
+	}
+	b := boundary.Compact
+	if b == nil || b.PostTokens != 700 || b.PreservedHeadUUID != "h-1" || b.PreservedAnchorUUID != "a-1" || b.PreservedTailUUID != "t-1" {
+		t.Fatalf("boundary = %+v", b)
+	}
+	if err := json.Unmarshal([]byte(`{"type":"user","uuid":"a-1","isSynthetic":true,"message":{"role":"user","content":[{"type":"text","text":"Summary"}]}}`), &summary); err != nil {
+		t.Fatal(err)
+	}
+	if summary.User == nil || !summary.User.IsSynthetic || summary.User.IsCompactSummary || summary.User.UUID != "a-1" {
+		t.Fatalf("summary = %+v", summary.User)
+	}
+}
+
 func TestSDKMessage_UnmarshalJSON_TaskStarted(t *testing.T) {
 	data := `{
         "type": "system",

@@ -395,6 +395,29 @@ describe('ServerListService probing', () => {
     expect(JSON.stringify(rows)).not.toContain('http://');
   });
 
+  it('bounds remote probes with the remote timeout and local probes with the local one', async () => {
+    const bounds = new Map<string, number>();
+    const harness = makeHarness({
+      scanRegistry: () => scan(candidate(ALPHA_KEY, 'alpha', 'http://127.0.0.1:51001')),
+      probeTimeoutMs: 100,
+      remoteProbeTimeoutMs: 400,
+      fetchJson: async (url, options) => {
+        bounds.set(url, options.timeoutMs);
+        return OK;
+      },
+    });
+    harness.prefs = {
+      known: [remoteKnown(BETA_KEY, 'far-box', 'http://10.9.8.7:8080')],
+      lastUsed: null,
+    };
+
+    harness.service.setOpen(true);
+    await vi.waitFor(() => expect(bounds.size).toBe(2));
+
+    expect(bounds.get(HEALTH('http://127.0.0.1:51001'))).toBe(100);
+    expect(bounds.get(HEALTH('http://10.9.8.7:8080'))).toBe(400);
+  });
+
   it('refreshes the stored base name on probe success only when it changed', async () => {
     const harness = makeHarness({});
     harness.prefs = {

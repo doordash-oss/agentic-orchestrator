@@ -91,7 +91,10 @@ function Notice({ item }: { item: Extract<ConversationItem, { kind: 'notice' }> 
   );
 }
 
-/** A quiet, hover-revealed control under each reply to copy its source text. */
+/**
+ * A quiet, hover-revealed control under each reply to copy its source text.
+ * Writes through the main process: the renderer holds no clipboard permission.
+ */
 function CopyMessageButton({ text }: { text: string }) {
   const [copied, setCopied] = useState(false);
   return (
@@ -101,10 +104,9 @@ function CopyMessageButton({ text }: { text: string }) {
       aria-label={copied ? 'Copied' : 'Copy message'}
       title="Copy message"
       onClick={() => {
-        const clipboard = (navigator as Partial<Navigator>).clipboard;
-        if (clipboard === undefined) return;
-        void clipboard.writeText(text).then(
-          () => {
+        void window.agentico.writeClipboardText(text).then(
+          ({ ok }) => {
+            if (!ok) return;
             setCopied(true);
             window.setTimeout(() => setCopied(false), 1600);
           },

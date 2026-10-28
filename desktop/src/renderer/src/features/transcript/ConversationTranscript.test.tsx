@@ -16,6 +16,7 @@ limitations under the License.
 
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { act, cleanup, fireEvent, render, screen } from '@testing-library/react';
+import { installAgenticoMock } from '../../test/agenticoMock';
 import { installTranscriptLayout, viewportOffset } from '../../test/transcriptLayout';
 import {
   ActivityIndicator,
@@ -139,6 +140,23 @@ describe('conversation turns', () => {
     expect(reply.querySelector('script')).toBeNull();
     expect(reply).toHaveTextContent('<script>alert(1)</script>');
     expect(screen.getByRole('button', { name: 'Copy message' })).toBeInTheDocument();
+  });
+
+  it('copies a reply through the main-process clipboard', async () => {
+    const { api } = installAgenticoMock();
+    render(
+      <ConversationTranscript
+        ariaLabel="Transcript"
+        idleLabel="Idle"
+        waiting={false}
+        items={[{ kind: 'message', key: 'a', role: 'assistant', text: '**Done.**' }]}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole('button', { name: 'Copy message' }));
+
+    expect(api.writeClipboardText).toHaveBeenCalledWith('**Done.**');
+    expect(await screen.findByRole('button', { name: 'Copied' })).toBeInTheDocument();
   });
 
   it('folds tool activity into one quiet line', () => {

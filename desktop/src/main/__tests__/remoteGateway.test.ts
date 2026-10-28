@@ -412,6 +412,19 @@ describe('RuntimeGateway remote attach profile', () => {
     expectNoTokenLeak(env);
   });
 
+  it('probes remote health with the remote bound, not the local one', async () => {
+    const env = makeEnv({ timeouts: { healthProbeMs: 11, remoteHealthProbeMs: 44 } });
+    env.updateServers({ upsertKnown: remoteEntry(), lastUsed: remoteKey() });
+    env.tokens.save(remoteKey(), REMOTE_TOKEN);
+
+    await env.gateway.start();
+
+    expect(env.gateway.getState().status).toBe('ready');
+    const health = env.fetchCalls.filter((c) => c.url === `${REMOTE_BASE}/api/v1/health`);
+    expect(health.length).toBeGreaterThan(0);
+    expect(health.every((c) => c.timeoutMs === 44)).toBe(true);
+  });
+
   it('an incompatible remote lands in the incompatible state', async () => {
     const env = makeEnv({});
     env.deps.fetchJson = async (url) => {
@@ -610,6 +623,28 @@ describe('RuntimeGateway remote loss and re-probe', () => {
     // No crash restart was ever attempted for the remote.
     expect(env.logs.some((line) => line.includes('relaunched'))).toBe(false);
     expectNoTokenLeak(env);
+  });
+
+  it('the loss check and the re-probe use the remote bound', async () => {
+    const env = makeEnv({ timeouts: { healthProbeMs: 11, remoteHealthProbeMs: 44 } });
+    await startRemote(env);
+    const probeBounds: number[] = [];
+    env.deps.fetchJson = async (url, opts) => {
+      if (url === `${REMOTE_BASE}/api/v1/health`) {
+        probeBounds.push(opts.timeoutMs);
+      }
+      throw new Error('connection refused');
+    };
+
+    await env.gateway.handleGlobalStreamStale();
+    expect(requireError(env.gateway.getState()).code).toBe('E_REMOTE_SERVER_LOST_REPROBING');
+    pumpSleep(env);
+    for (let i = 0; i < 10; i += 1) {
+      await Promise.resolve();
+    }
+
+    expect(probeBounds.length).toBeGreaterThanOrEqual(2);
+    expect(probeBounds.every((ms) => ms === 44)).toBe(true);
   });
 
   it('a switch away from the lost remote quiesces the re-probe', async () => {

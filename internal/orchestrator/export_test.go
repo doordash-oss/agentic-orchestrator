@@ -14,7 +14,11 @@
 
 package orchestrator
 
-import "github.com/doordash-oss/agentic-orchestrator/internal/feature"
+import (
+	"time"
+
+	"github.com/doordash-oss/agentic-orchestrator/internal/feature"
+)
 
 // This file exposes unexported orchestrator steps to the external
 // orchestrator_test package so its tests can drive one step in isolation.
@@ -52,3 +56,14 @@ func (o *Orchestrator) StartMultiRepoImplementation(featureID string) error {
 
 // SetPublishFn intercepts publish dispatch in place of the publish step.
 func (o *Orchestrator) SetPublishFn(fn func(featureID string) error) { o.publishFn = fn }
+
+// SetNowFn overrides the auto-resume clock.
+func (o *Orchestrator) SetNowFn(fn func() time.Time) { o.nowFn = fn }
+
+// AutoResumeArmed reports whether featureID has an armed auto-resume timer.
+func (o *Orchestrator) AutoResumeArmed(featureID string) bool { return o.autoResumeArmed(featureID) }
+
+// FireAutoResume runs the auto-resume timer body for featureID synchronously.
+func (o *Orchestrator) FireAutoResume(featureID string, resumeAt time.Time) {
+	o.fireAutoResume(featureID, resumeAt)
+}

@@ -108,6 +108,7 @@ func (o *Orchestrator) markFailedWithEvent(featureID string, failure errcat.Fail
 	if err := o.deps.Manager.MarkFailed(featureID, failure); err != nil {
 		return fmt.Errorf("mark failed: %w", err)
 	}
+	o.scheduleAutoResumeForFailure(featureID, failure)
 	o.emitEventBlocking(ports.Event{
 		Type:           ports.FeatureFailed,
 		FeatureID:      featureID,

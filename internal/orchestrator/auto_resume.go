@@ -164,6 +164,14 @@ func (o *Orchestrator) autoResumeArmed(featureID string) bool {
 // that fails on a fresh usage limit schedules a new resume of its own, and
 // one that fails for any other reason leaves the ordinary failure card.
 func (o *Orchestrator) fireAutoResume(featureID string, resumeAt time.Time) {
+	// Claim and dispatch under the same control as Stop and manual restart.
+	// Otherwise Stop can see a consumed schedule on a still-Failed feature
+	// and return success just before this timer starts new work.
+	startMu := o.featureStartControl(featureID)
+	startMu.Lock()
+	defer startMu.Unlock()
+	unlock := o.lockRelationshipRead()
+	defer unlock()
 	o.autoResume.mu.Lock()
 	if t := o.autoResume.timers[featureID]; t != nil {
 		delete(o.autoResume.timers, featureID)
@@ -178,7 +186,10 @@ func (o *Orchestrator) fireAutoResume(featureID string, resumeAt time.Time) {
 	if err != nil || !taken {
 		return
 	}
-	if err := o.RetryFeature(featureID); err != nil {
+	o.trace("auto-resume taken")
+	// Only agent-phase quota failures are scheduled, so no setup retry or
+	// iteration-budget extension is needed. The start control is held.
+	if _, err := o.restartAndDispatchLocked(featureID, 0, 0); err != nil {
 		// The feature is still Failed on its usage-limit record; tell
 		// clients the schedule is gone so they show the Retry card.
 		o.emitEvent(ports.Event{
@@ -220,8 +231,8 @@ func (o *Orchestrator) RearmAutoResumes() error {
 
 // cancelAutoResumeLocked is StopFeature for a Failed feature with a pending
 // usage-limit auto-resume: it drops the schedule and parks the feature as
-// Interrupted. The caller holds the relationship read lock and has passed
-// the stop guard. When the timer took the schedule first, the feature is
+// Interrupted. The caller holds the feature start control and relationship
+// read lock and has passed the stop guard. When the timer took the schedule first, the feature is
 // already being retried, so the stop falls through to the ordinary
 // interruption.
 func (o *Orchestrator) cancelAutoResumeLocked(featureID string) error {

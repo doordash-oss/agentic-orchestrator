@@ -58,6 +58,9 @@ func (e *staleRewindPreviewError) Is(target error) bool { return target == errSt
 
 // StopFeature interrupts the feature inside the relationship guard window.
 func (o *Orchestrator) StopFeature(featureID string) error {
+	startMu := o.featureStartControl(featureID)
+	startMu.Lock()
+	defer startMu.Unlock()
 	unlock := o.lockRelationshipRead()
 	defer unlock()
 	if err := o.relationshipGuard(featureID, mutationStop); err != nil {

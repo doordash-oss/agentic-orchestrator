@@ -159,6 +159,7 @@ func TestAutoResume_StopCancelsAndParksFeatureInterrupted(t *testing.T) {
 		OnFeatureInterrupted: func(string) { interrupted++ },
 	})
 	failImplement(t, o, "feat-cancel", claudeLimitError)
+	resumeAt := loadStoredFeature(t, fs, "feat-cancel").PendingAutoResume().ResumeAt
 
 	if err := o.StopFeature("feat-cancel"); err != nil {
 		t.Fatalf("StopFeature: %v", err)
@@ -181,6 +182,12 @@ func TestAutoResume_StopCancelsAndParksFeatureInterrupted(t *testing.T) {
 	}
 	if interrupted != 1 {
 		t.Errorf("second stop fired OnFeatureInterrupted again (%d)", interrupted)
+	}
+
+	// A callback already queued when Stop won must not restart the feature.
+	o.FireAutoResume("feat-cancel", resumeAt)
+	if spy.numCalls() != 0 {
+		t.Fatal("cancelled timer dispatched implementation")
 	}
 
 	// The parked feature resumes through the ordinary Resume path.

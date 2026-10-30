@@ -19,7 +19,9 @@ import (
 	"fmt"
 	"os/exec"
 	"strings"
+	"time"
 
+	"github.com/doordash-oss/agentic-orchestrator/internal/llm"
 	"github.com/doordash-oss/agentic-orchestrator/internal/observe"
 	"github.com/doordash-oss/agentic-orchestrator/internal/ports"
 )
@@ -183,4 +185,29 @@ func isProviderUnavailableError(err error) bool {
 // isHelperInterruptedError reports whether err records an interrupted helper.
 func isHelperInterruptedError(err error) bool {
 	return errors.Is(err, errHelperInterrupted)
+}
+
+// A quota with a known reset must reach the feature scheduler instead of
+// exhausting helper retries or review rounds. Keep the diagnostic on its
+// own line so outer error context cannot obscure its reset timestamp.
+var errProviderUsageLimit = errors.New("provider usage limit")
+
+func helperUsageLimitError(sess ports.SessionView, result *boundedHelperResult, cause error) error {
+	var diagnostics []string
+	if result != nil && result.Result != nil && (result.Result.IsError || result.Result.Subtype == "error") {
+		diagnostics = append(diagnostics, result.Result.Result)
+	}
+	if sess != nil {
+		diagnostics = append(diagnostics, sess.ErrorDetail())
+	}
+	for _, detail := range diagnostics {
+		if _, ok := llm.ParseUsageLimit(detail, time.Now()); ok {
+			return fmt.Errorf("%w: %w\n%s\n", errProviderUsageLimit, cause, strings.TrimSpace(detail))
+		}
+	}
+	return nil
+}
+
+func isProviderUsageLimitError(err error) bool {
+	return errors.Is(err, errProviderUsageLimit)
 }

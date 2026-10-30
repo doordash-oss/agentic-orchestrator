@@ -21,6 +21,7 @@ import (
 	"os/exec"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/doordash-oss/agentic-orchestrator/internal/feature"
 	"github.com/doordash-oss/agentic-orchestrator/internal/llm"
@@ -325,5 +326,51 @@ func TestMultiAxisValidatorStatusRecordsRetriesAndErrors(t *testing.T) {
 	f, _ = store.Load(id)
 	if f.ValidatorStatuses != nil || f.ValidatorErrors != nil {
 		t.Errorf("statuses/errors not cleared: %v %v", f.ValidatorStatuses, f.ValidatorErrors)
+	}
+}
+
+func TestRunBoundedHelper_UsageLimitPreservesResetWithoutRetry(t *testing.T) {
+	for _, diagnostic := range []string{
+		"You've hit your 5-hour limit · resets 11:10am (America/Los_Angeles)",
+		"You've hit your usage limit. Try again at Oct 30th, 2026 11:30 AM.",
+	} {
+		t.Run(diagnostic, func(t *testing.T) {
+			var starts, retries int
+			pr := &PhaseRunner{SessionManager: erroredResultSessionManager(diagnostic, &starts), StateDir: t.TempDir()}
+			_, err := pr.runBoundedHelperSession(context.Background(), boundedHelperRunConfig{
+				sessionID: "quota-axis", workDir: t.TempDir(), completionDir: t.TempDir(),
+				contractPhase: feature.PhaseReview, contractRole: RoleImplementationReviewCraft,
+				onRetry: func(int, error) { retries++ },
+			})
+			if !isProviderUsageLimitError(err) || !errors.Is(err, errHelperReturnedErrorResult) {
+				t.Fatalf("error = %v, want quota with original cause", err)
+			}
+			if starts != 1 || retries != 0 {
+				t.Fatalf("starts=%d retries=%d", starts, retries)
+			}
+			// Use the actual implementation review wrapper that reaches the scheduler.
+			wrapped := fmt.Sprintf("review did not complete: %v; resume to re-run the review for iteration 1", err)
+			now := time.Date(2026, time.October, 30, 8, 0, 0, 0, time.UTC)
+			want, _ := llm.ParseUsageLimit(diagnostic, now)
+			got, ok := llm.ParseUsageLimit(wrapped, now)
+			if !ok || got.Provider != want.Provider || !got.ResetAt.Equal(want.ResetAt) {
+				t.Fatalf("scheduler parsed %+v / %v, want %+v; diagnostic: %s", got, ok, want, wrapped)
+			}
+			results := []multiAxisReviewResult{{Error: errors.New("other axis failed")}, {Error: err}}
+			if isHelperInfrastructureError(err) {
+				t.Fatal("quota must not enter validator infrastructure retries")
+			}
+			validators := []validatorResult{{Error: errors.New("other validator failed")}, {Error: err}}
+			if retry := infrastructureFailedValidators(validators); len(retry) != 0 {
+				t.Fatalf("quota validators retried: %v", retry)
+			}
+			_, _, aggregate := composeValidatorResults(validators, feature.RiskLevel("low"))
+			if aggregate != err {
+				t.Fatalf("quota hidden by validator aggregation: %v", aggregate)
+			}
+			if firstMultiAxisReviewError(results) != err {
+				t.Fatal("quota hidden by another axis")
+			}
+		})
 	}
 }

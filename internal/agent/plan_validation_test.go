@@ -3298,3 +3298,32 @@ func testPlanValidatorAxis(t *testing.T, skillName string) planValidatorAxis {
 	t.Fatalf("no plan validator axis for skill %q", skillName)
 	return planValidatorAxis{}
 }
+
+func TestPlanValidatorUsageLimitSkipsAllInfrastructureRetries(t *testing.T) {
+	workDir, stateDir := t.TempDir(), t.TempDir()
+	store := feature.NewStore(stateDir)
+	f := newTestPlanFeature(t, workDir)
+	if err := store.Save(f); err != nil {
+		t.Fatal(err)
+	}
+	planPath := filepath.Join(t.TempDir(), "plan.md")
+	if err := os.WriteFile(planPath, []byte("# Plan\n## Tasks\nplaceholder\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	var starts int
+	diagnostic := "You've hit your 5-hour limit · resets 11:10am (America/Los_Angeles)"
+	sm := erroredResultSessionManager(diagnostic, &starts)
+	build, _ := capturingBuildSessionByModel(map[string]string{"reviewer": "/unused/reviewer"})
+	cfg := planLoopConfig{Feature: f, FeatureStore: store, StateDir: stateDir, WorkDir: workDir, BuildSession: build}
+	validators := []planValidatorAxis{testPlanValidatorAxis(t, "validate-phase-plan-structural")}
+	_, _, _, err := runValidatorSetWithInfrastructureRetry(cfg, sm, 1, t.TempDir(), planPath, validators, validationArtifactPhasePlan, planValidationExtras{})
+	if !isProviderUsageLimitError(err) {
+		t.Fatalf("error = %v, want quota", err)
+	}
+	if starts != 1 {
+		t.Fatalf("started %d validators, want one without helper, validator, or round retries", starts)
+	}
+	if !strings.Contains(err.Error(), diagnostic) {
+		t.Fatalf("lost reset diagnostic: %v", err)
+	}
+}

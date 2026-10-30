@@ -1421,7 +1421,30 @@ export interface components {
          * @description Feature lifecycle action identifier. `setup` dispatches a feature's queued durable setup (required after create unless the client dispatches `start`) or reruns only the unfinished tasks of a failed setup, asynchronously and without starting orchestration; the feature becomes `Created` when setup completes.
          * @enum {string}
          */
-        FeatureAction: "setup" | "start" | "resume" | "pause-stop" | "restart" | "publish" | "merge" | "rewind" | "retry" | "rebase" | "need-user-input" | "need-user-input-draft" | "testing-contract-waive" | "mark-done" | "cleanup" | "delete" | "refactor" | "review-feedback" | "discard";
+        FeatureAction: "setup" | "start" | "resume" | "pause-stop" | "restart" | "publish" | "merge" | "rewind" | "retry" | "rebase" | "need-user-input" | "need-user-input-draft" | "testing-contract-waive" | "mark-done" | "cleanup" | "delete" | "refactor" | "review-feedback" | "discard" | "cancel-auto-resume";
+        /** @description Pending usage-limit auto-resume of a Failed feature. Present only while the run's failure is a Claude or Codex usage limit with a known reset time; the server retries the feature at `resume_at`. `cancel-auto-resume` drops it and parks the feature as Interrupted. */
+        AutoResume: {
+            /**
+             * @description The provider CLI that reported the usage limit.
+             * @enum {string}
+             */
+            provider: "claude" | "codex";
+            /**
+             * Format: date-time
+             * @description When the provider reported the limit resets.
+             */
+            reset_at: string;
+            /**
+             * Format: date-time
+             * @description When the server will retry the feature.
+             */
+            resume_at: string;
+            /**
+             * Format: date-time
+             * @description When the auto-resume was scheduled.
+             */
+            scheduled_at: string;
+        };
         /** @description Canonical catalog-rendered error. */
         Error: {
             /** @description Stable snake_case catalog code. */
@@ -3264,6 +3287,7 @@ export interface components {
             review_gate: components["schemas"]["ReviewGate"];
             verification_items?: components["schemas"]["VerificationItem"][];
             failure?: components["schemas"]["Error"];
+            auto_resume?: components["schemas"]["AutoResume"];
             need_user_input?: components["schemas"]["NeedUserInputGate"];
             actions: components["schemas"]["Action"][];
             revision: string;

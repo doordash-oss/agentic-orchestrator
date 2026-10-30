@@ -2505,6 +2505,32 @@ components:
         - refactor
         - review-feedback
         - discard
+        - cancel-auto-resume
+    AutoResume:
+      type: object
+      description: >-
+        Pending usage-limit auto-resume of a Failed feature. Present only
+        while the run's failure is a Claude or Codex usage limit with a
+        known reset time; the server retries the feature at `resume_at`.
+        `cancel-auto-resume` drops it and parks the feature as Interrupted.
+      required: [provider, reset_at, resume_at, scheduled_at]
+      properties:
+        provider:
+          type: string
+          enum: [claude, codex]
+          description: The provider CLI that reported the usage limit.
+        reset_at:
+          type: string
+          format: date-time
+          description: When the provider reported the limit resets.
+        resume_at:
+          type: string
+          format: date-time
+          description: When the server will retry the feature.
+        scheduled_at:
+          type: string
+          format: date-time
+          description: When the auto-resume was scheduled.
     Error:
       type: object
       description: Canonical catalog-rendered error.
@@ -7012,6 +7038,9 @@ components:
                 $ref: "#/components/schemas/VerificationItem"
             failure:
               $ref: "#/components/schemas/Error"
+              x-go-type-skip-optional-pointer: false
+            auto_resume:
+              $ref: "#/components/schemas/AutoResume"
               x-go-type-skip-optional-pointer: false
             need_user_input:
               $ref: "#/components/schemas/NeedUserInputGate"

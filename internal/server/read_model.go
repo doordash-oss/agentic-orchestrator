@@ -225,6 +225,25 @@ func (h *apiHandler) featureDetailDTO(f *feature.Feature) (FeatureDetail, error)
 	if rec := f.FailureRecord(); rec != nil {
 		detail.Failure = wireStoredError(rec)
 	}
+	if pending := f.PendingAutoResume(); pending != nil && !f.IsChild() {
+		detail.AutoResume = &AutoResume{
+			Provider:    AutoResumeProvider(pending.Provider),
+			ResetAt:     pending.ResetAt,
+			ResumeAt:    pending.ResumeAt,
+			ScheduledAt: pending.ScheduledAt,
+		}
+		// Cancel is offered only while a resume is pending, so the catalog
+		// of every other feature is unchanged.
+		detail.Actions = append(detail.Actions, Action{
+			ID:             string(FeatureActionCancelAutoResume),
+			Enabled:        detail.ActiveChild == nil,
+			Scope:          ActionScope{Type: entityFeature},
+			RequiredInputs: []ActionInput{},
+		})
+		if detail.ActiveChild != nil {
+			detail.Actions[len(detail.Actions)-1].DisabledReasons = []ActionDisabledReason{disabledParentHasActiveChild}
+		}
+	}
 	if f.Status == feature.StatusNeedUserInput && f.PendingNeedUserInputPath != "" {
 		gate := needUserInputGateDTO(f.ID, entityFeature, "", f.CurrentIteration, f.InputNotifications, f.PendingNeedUserInputPath)
 		detail.NeedUserInput = &gate

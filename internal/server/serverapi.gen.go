@@ -47,6 +47,24 @@ func (e ActionImpactPreviewKind) Valid() bool {
 	}
 }
 
+// Defines values for AutoResumeProvider.
+const (
+	Claude AutoResumeProvider = "claude"
+	Codex  AutoResumeProvider = "codex"
+)
+
+// Valid indicates whether the value is a known member of the AutoResumeProvider enum.
+func (e AutoResumeProvider) Valid() bool {
+	switch e {
+	case Claude:
+		return true
+	case Codex:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for AutomaticReviewStateMode.
 const (
 	AutomaticReviewStateModeDangerouslySkipPermissions AutomaticReviewStateMode = "dangerously_skip_permissions"
@@ -262,6 +280,7 @@ func (e ErrorScope) Valid() bool {
 
 // Defines values for FeatureAction.
 const (
+	FeatureActionCancelAutoResume     FeatureAction = "cancel-auto-resume"
 	FeatureActionCleanup              FeatureAction = "cleanup"
 	FeatureActionDelete               FeatureAction = "delete"
 	FeatureActionDiscard              FeatureAction = "discard"
@@ -286,6 +305,8 @@ const (
 // Valid indicates whether the value is a known member of the FeatureAction enum.
 func (e FeatureAction) Valid() bool {
 	switch e {
+	case FeatureActionCancelAutoResume:
+		return true
 	case FeatureActionCleanup:
 		return true
 	case FeatureActionDelete:
@@ -2469,6 +2490,24 @@ type AskUserQuestion struct {
 	Question    string          `json:"question"`
 }
 
+// AutoResume Pending usage-limit auto-resume of a Failed feature. Present only while the run's failure is a Claude or Codex usage limit with a known reset time; the server retries the feature at `resume_at`. `cancel-auto-resume` drops it and parks the feature as Interrupted.
+type AutoResume struct {
+	// Provider The provider CLI that reported the usage limit.
+	Provider AutoResumeProvider `json:"provider"`
+
+	// ResetAt When the provider reported the limit resets.
+	ResetAt time.Time `json:"reset_at"`
+
+	// ResumeAt When the server will retry the feature.
+	ResumeAt time.Time `json:"resume_at"`
+
+	// ScheduledAt When the auto-resume was scheduled.
+	ScheduledAt time.Time `json:"scheduled_at"`
+}
+
+// AutoResumeProvider The provider CLI that reported the usage limit.
+type AutoResumeProvider string
+
 // AutomaticReviewState defines model for AutomaticReviewState.
 type AutomaticReviewState struct {
 	Enabled bool                       `json:"enabled"`
@@ -3029,10 +3068,13 @@ type FeatureDetail struct {
 	Actions []Action `json:"actions"`
 
 	// Active True while a child feature's relationship is open (no close outcome recorded). Only set on child features.
-	Active          bool                 `json:"active,omitempty"`
-	ActiveChild     *RelationshipChild   `json:"active_child,omitempty"`
-	ActiveRun       int                  `json:"active_run"`
-	ActiveRunDetail *RunSummary          `json:"active_run_detail,omitempty"`
+	Active          bool               `json:"active,omitempty"`
+	ActiveChild     *RelationshipChild `json:"active_child,omitempty"`
+	ActiveRun       int                `json:"active_run"`
+	ActiveRunDetail *RunSummary        `json:"active_run_detail,omitempty"`
+
+	// AutoResume Pending usage-limit auto-resume of a Failed feature. Present only while the run's failure is a Claude or Codex usage limit with a known reset time; the server retries the feature at `resume_at`. `cancel-auto-resume` drops it and parks the feature as Interrupted.
+	AutoResume      *AutoResume          `json:"auto_resume,omitempty"`
 	AutomaticReview AutomaticReviewState `json:"automatic_review"`
 
 	// Bases Exact per-repository parent tips captured at child launch.

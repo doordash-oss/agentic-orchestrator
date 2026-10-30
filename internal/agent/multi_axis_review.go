@@ -64,6 +64,12 @@ func strictMultiAxisReviewStatus(results []multiAxisReviewResult, selectedCount 
 }
 
 func firstMultiAxisReviewError(results []multiAxisReviewResult) error {
+	// A different axis's generic failure must not hide a known quota reset.
+	for _, result := range results {
+		if isProviderUsageLimitError(result.Error) {
+			return result.Error
+		}
+	}
 	for _, result := range results {
 		if result.Error != nil {
 			return result.Error

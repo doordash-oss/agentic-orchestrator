@@ -22,6 +22,7 @@ import (
 	"time"
 
 	"github.com/doordash-oss/agentic-orchestrator/internal/feature"
+	"github.com/doordash-oss/agentic-orchestrator/internal/llm"
 	"github.com/doordash-oss/agentic-orchestrator/internal/observe"
 	"github.com/doordash-oss/agentic-orchestrator/internal/ports"
 	"github.com/doordash-oss/agentic-orchestrator/internal/session"
@@ -203,5 +204,42 @@ func TestRunFeatureFinalReviewLoop_PauseStopCancelsValidators(t *testing.T) {
 	}
 	if len(loaded.ValidatorStatuses) != 0 {
 		t.Fatalf("validator statuses after stop = %v, want cleared (none running)", loaded.ValidatorStatuses)
+	}
+}
+
+// Exercise reviewer sessions through the round, preserving the reset
+// for the orchestrator instead of burning more validator attempts/rounds.
+func TestRunFeatureFinalReviewLoop_UsageLimitReachesScheduler(t *testing.T) {
+	for _, diagnostic := range []string{
+		"You’ve hit your 5-hour limit · resets 11:10am (America/Los_Angeles)",
+		"You’ve hit your usage limit. Try again at Oct 30th, 2026 11:30 AM.",
+	} {
+		t.Run(diagnostic, func(t *testing.T) {
+			env := newFRLoopEnv(t)
+			store, f, _, _ := newFRLifecycleFeature(t, env, "fr-quota")
+			bs, captured := capturingBuildSessionByModel(map[string]string{"reviewer": "/unused/reviewer"})
+			var starts int
+			sm := &lockedMockSessionManager{MockSessionManager: erroredResultSessionManager(diagnostic, &starts)}
+			result, err := runFeatureFinalReviewLoop(OrchestratorConfig{
+				Feature: f, FeatureStore: store, StateDir: env.stateDir,
+				ReviewModel: "reviewer", MaxIterations: 5, MaxConsecFails: 3,
+				BuildSession: bs, SkillsDir: filepath.Join(env.stateDir, "skills"), GuidelinesDir: filepath.Join(env.stateDir, "guidelines"),
+			}, sm)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if result.FinalStatus != "failed" || result.Iterations != 1 {
+				t.Fatalf("result = %+v", result)
+			}
+			if n := countReviewerBuilds(*captured); n > 3 {
+				t.Fatalf("reviewer builds = %d, quota should not retry axes or rounds", n)
+			}
+			now := time.Date(2026, time.October, 30, 8, 0, 0, 0, time.UTC)
+			want, _ := llm.ParseUsageLimit(diagnostic, now)
+			got, ok := llm.ParseUsageLimit(result.LastError, now)
+			if !ok || got.Provider != want.Provider || !got.ResetAt.Equal(want.ResetAt) {
+				t.Fatalf("scheduler cannot recover quota from %q: %+v", result.LastError, got)
+			}
+		})
 	}
 }

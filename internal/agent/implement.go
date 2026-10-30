@@ -1148,7 +1148,7 @@ func runImplementationLoop(cfg ImplementConfig, sm ports.SessionManager) (result
 			}
 
 			if reviewErr != nil {
-				if isProtocolViolationError(reviewErr) {
+				if isProtocolViolationError(reviewErr) && !isProviderUsageLimitError(reviewErr) {
 					consecutiveFailures++
 					if strings.TrimSpace(feedback) == "" {
 						feedback = fmt.Sprintf("Review helper protocol violation: %v", reviewErr)

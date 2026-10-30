@@ -698,7 +698,7 @@ func runSpecializedPlanValidationForArtifact(cfg planLoopConfig, sm ports.Sessio
 		})
 		// Hard provider failures and stops are final: rerunning the
 		// validator would hit the same outage or relaunch stopped work.
-		if err == nil || isProtocolViolationError(err) || isProviderUnavailableError(err) ||
+		if err == nil || isProtocolViolationError(err) || isProviderUnavailableError(err) || isProviderUsageLimitError(err) ||
 			isHelperInterruptedError(err) || isFeatureInterrupted(cfg.FeatureStore, cfg.Feature.ID) {
 			break
 		}
@@ -1134,7 +1134,7 @@ func runValidatorSetWithInfrastructureRetry(cfg planLoopConfig, sm ports.Session
 		}
 		status, feedback, err = composeValidatorResults(results, cfg.Feature.RiskLevel)
 		for _, result := range results {
-			if isProtocolViolationError(result.Error) {
+			if isProtocolViolationError(result.Error) && !isProviderUsageLimitError(err) {
 				err = result.Error
 				break
 			}
@@ -1274,7 +1274,7 @@ func runValidatorSet(cfg planLoopConfig, sm ports.SessionManager, attempt int, a
 
 	aggStatus, aggFeedback, aggErr := composeValidatorResults(results, cfg.Feature.RiskLevel)
 	for _, result := range results {
-		if isProtocolViolationError(result.Error) {
+		if isProtocolViolationError(result.Error) && !isProviderUsageLimitError(aggErr) {
 			aggErr = result.Error
 			break
 		}
@@ -1382,6 +1382,13 @@ func composeValidatorResults(results []validatorResult, risk feature.RiskLevel) 
 		}
 	}
 
+	// Preserve the quota as the decisive error even if another validator
+	// violated its protocol: the planner cannot repair an exhausted quota.
+	for _, result := range results {
+		if isProviderUsageLimitError(result.Error) {
+			return overallStatus, b.String(), result.Error
+		}
+	}
 	return overallStatus, b.String(), errors.Join(validatorErrors...)
 }
 
@@ -1855,7 +1862,7 @@ attemptLoop:
 		}
 
 		if reviewErr != nil {
-			if isProtocolViolationError(reviewErr) {
+			if isProtocolViolationError(reviewErr) && !isProviderUsageLimitError(reviewErr) {
 				meta := PlanAttemptMeta{Attempt: attempt, AgentStatus: agentStatusSuccess, ReviewStatus: agentStatusChangesRequested}
 				if axisStallTracker != nil {
 					_, _, _, meta.AxisVerdicts, meta.AxisDigests = axisStallTracker.observe(attempt, planArtifactPath, perAxisResults)

@@ -16,11 +16,14 @@ package orchestrator
 
 import (
 	"errors"
+	"os"
+	"path/filepath"
 	"reflect"
 	"sync"
 	"testing"
 	"time"
 
+	"github.com/doordash-oss/agentic-orchestrator/internal/agent"
 	"github.com/doordash-oss/agentic-orchestrator/internal/config"
 	"github.com/doordash-oss/agentic-orchestrator/internal/errcat"
 	"github.com/doordash-oss/agentic-orchestrator/internal/feature"
@@ -537,4 +540,101 @@ func TestDiscardChildSettlesAfterDiscard(t *testing.T) {
 			t.Fatalf("steps = %q, want admission settled last", steps)
 		}
 	})
+}
+
+func TestAutoResume_StopWhileTimerHasTakenSchedule(t *testing.T) {
+	f := opFeature("quota-stop-race", feature.StatusFailed, feature.PhaseImplement)
+	plan := filepath.Join(t.TempDir(), "plan.md")
+	if err := os.WriteFile(plan, []byte("# Plan\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	f.Artifacts = map[string]string{"plan": plan}
+	resumeAt := time.Now().Add(time.Hour)
+	f.Run().AutoResume = &feature.AutoResume{Provider: "claude", ResumeAt: resumeAt}
+	fx := newOpFixture(t, f)
+	taken, release := make(chan struct{}), make(chan struct{})
+	var releaseOnce sync.Once
+	unblock := func() { releaseOnce.Do(func() { close(release) }) }
+	defer unblock()
+	fx.o.traceStep = func(step string) {
+		if step == "auto-resume taken" {
+			close(taken)
+			<-release
+		}
+	}
+	resultCh := make(chan *agent.OrchestratorResult, 1)
+	fx.o.SetRunMultiRepoImplFn(func(*feature.Feature, string, ...agent.KBInfo) (chan *agent.OrchestratorResult, error) {
+		return resultCh, nil
+	})
+	defer func() { resultCh <- &agent.OrchestratorResult{FinalStatus: "interrupted"} }()
+	fired := make(chan struct{})
+	go func() { fx.o.fireAutoResume(f.ID, resumeAt); close(fired) }()
+	select {
+	case <-taken:
+	case <-time.After(5 * time.Second):
+		t.Fatal("timer did not take schedule")
+	}
+	stopped := make(chan error, 1)
+	go func() { stopped <- fx.o.StopFeature(f.ID) }()
+	select {
+	case err := <-stopped:
+		t.Fatalf("Stop returned before the claimed retry dispatched: %v", err)
+	case <-time.After(100 * time.Millisecond):
+	}
+	unblock()
+	select {
+	case <-fired:
+	case <-time.After(5 * time.Second):
+		t.Fatal("timer did not dispatch")
+	}
+	select {
+	case err := <-stopped:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("Stop did not finish")
+	}
+	got, err := fx.store.Load(f.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Status != feature.StatusInterrupted || got.PendingAutoResume() != nil {
+		t.Fatalf("after Stop: status=%s schedule=%+v", got.Status, got.PendingAutoResume())
+	}
+}
+
+func TestAutoResume_ReviewFailureDiagnosticsScheduleAcrossAgentPhases(t *testing.T) {
+	for phase, status := range map[feature.Phase]feature.Status{
+		feature.PhaseKnowledgeBase: feature.StatusBuildingKB,
+		feature.PhaseInquire:       feature.StatusInquiring,
+		feature.PhaseResearch:      feature.StatusResearching,
+		feature.PhaseDesign:        feature.StatusDesigning,
+		feature.PhasePlan:          feature.StatusPlanning,
+		feature.PhaseImplement:     feature.StatusImplementing,
+		feature.PhaseReview:        feature.StatusFinalReviewing,
+		feature.PhaseFinalReview:   feature.StatusFinalReviewing,
+	} {
+		t.Run(phase.String(), func(t *testing.T) {
+			f := opFeature("quota-phase", status, phase)
+			fx := newOpFixture(t, f)
+			now := time.Date(2026, time.October, 30, 8, 0, 0, 0, time.UTC)
+			fx.o.nowFn = func() time.Time { return now }
+			failure := errcat.FailureRecord{Code: errcat.InfrastructureFailure, Diagnostics: "review did not complete: provider usage limit: helper returned an error result\nYou've hit your 5-hour limit · resets 11:10am (America/Los_Angeles)\n; resume to re-run the review"}
+			if err := fx.o.markFailedWithEvent(f.ID, failure); err != nil {
+				t.Fatal(err)
+			}
+			got, err := fx.store.Load(f.ID)
+			if err != nil {
+				t.Fatal(err)
+			}
+			pending := got.PendingAutoResume()
+			if pending == nil || !fx.o.autoResumeArmed(f.ID) {
+				t.Fatalf("no auto-resume for %s", phase)
+			}
+			if !pending.ResumeAt.Equal(time.Date(2026, time.October, 30, 18, 12, 0, 0, time.UTC)) {
+				t.Fatalf("wrong resume time: %s", pending.ResumeAt)
+			}
+		})
+	}
 }

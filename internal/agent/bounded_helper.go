@@ -44,6 +44,9 @@ var errHelperEndedWithoutResult = errors.New("helper ended without a result")
 // isHelperInfrastructureError reports whether err is a provider or transport
 // failure of the helper itself rather than a verdict or a protocol violation.
 func isHelperInfrastructureError(err error) bool {
+	if isProviderUsageLimitError(err) {
+		return false
+	}
 	if err == nil || isProtocolViolationError(err) {
 		return false
 	}
@@ -366,6 +369,9 @@ func (pr *PhaseRunner) runBoundedHelperSessionOnce(ctx context.Context, cfg boun
 				result.Status = boundedHelperStatusInterrupted
 			}
 			return result, fmt.Errorf("running %s: %w", label, errHelperInterrupted), false
+		}
+		if quotaErr := helperUsageLimitError(sess, result, err); quotaErr != nil {
+			return result, quotaErr, false
 		}
 		if result != nil && result.Status == boundedHelperStatusFailed &&
 			classifyProviderFailure(providerFailureText(sess, result, err)) == providerFailureHard {

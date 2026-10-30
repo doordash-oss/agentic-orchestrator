@@ -266,6 +266,10 @@ func (s *featureFinalReviewLoopState) run() (*FeatureFinalReviewResult, error) {
 			if isHelperInterruptedError(reviewErr) || isFeatureInterrupted(cfg.FeatureStore, cfg.Feature.ID) {
 				return &FeatureFinalReviewResult{FinalStatus: "interrupted", Iterations: i - 1}, nil
 			}
+			if isProviderUsageLimitError(reviewErr) {
+				s.writeIterationMetaWithAgent(iterDir, i, "FAILED", "review_failed")
+				return &FeatureFinalReviewResult{FinalStatus: "failed", Iterations: i, LastError: reviewErr.Error()}, nil
+			}
 			// A provider that cannot be reached will not heal by rerunning
 			// the round: fail fast so the feature surfaces the outage.
 			if isProviderUnavailableError(reviewErr) {
@@ -464,7 +468,7 @@ func (s *featureFinalReviewLoopState) runFinalReviewAxes(iteration int, iterDir 
 
 		status, feedback, err := s.runFinalReviewAxis(roundCtx, iteration, iterDir, axis, axisCtx, cfg)
 		results[i] = reviewAxisResult{Axis: axis.Name, Status: status, Feedback: feedback, Error: err}
-		if isProviderUnavailableError(err) {
+		if isProviderUnavailableError(err) || isProviderUsageLimitError(err) {
 			cancelRound()
 		}
 
@@ -510,6 +514,11 @@ func (s *featureFinalReviewLoopState) runFinalReviewAxes(iteration int, iterDir 
 // siblings) wins over the interrupt it caused; otherwise a stopped feature
 // or interrupted validator aborts the round as interrupted.
 func finalReviewRoundAbort(cfg OrchestratorConfig, results []reviewAxisResult) error {
+	for _, result := range results {
+		if isProviderUsageLimitError(result.Error) {
+			return fmt.Errorf("%s validator: %w", result.Axis, result.Error)
+		}
+	}
 	for _, result := range results {
 		if isProviderUnavailableError(result.Error) {
 			return fmt.Errorf("%s validator: %w", result.Axis, result.Error)

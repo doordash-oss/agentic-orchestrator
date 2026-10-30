@@ -1474,6 +1474,15 @@ export const FeatureSnapshotSchema = z.strictObject({
   timing: z.strictObject({ totalSeconds: z.number().int().nonnegative() }).optional(),
   /** The durable run failure: the canonical catalog-rendered error object, diagnostics redacted. */
   failure: CanonicalErrorSchema.optional(),
+  /** Pending usage-limit auto-resume while the feature is Failed on a provider usage limit. */
+  autoResume: z
+    .strictObject({
+      provider: z.enum(['claude', 'codex']),
+      resetAt: z.string().max(64),
+      resumeAt: z.string().max(64),
+      scheduledAt: z.string().max(64),
+    })
+    .optional(),
 });
 
 export type FeatureSnapshot = z.output<typeof FeatureSnapshotSchema>;
@@ -1492,6 +1501,7 @@ const FeatureOperationalActionSchema = z.enum([
   'mark-done',
   'cleanup',
   'delete',
+  'cancel-auto-resume',
 ]);
 type FeatureOperationalAction = z.output<typeof FeatureOperationalActionSchema>;
 
@@ -1501,7 +1511,15 @@ const CompletionRepoNameSchema = z.string().min(1).max(128);
 export const FeatureActionRequestSchema = z.discriminatedUnion('action', [
   z.strictObject({
     featureId: FeatureIdSchema,
-    action: z.enum(['start', 'pause-stop', 'rewind', 'resume', 'retry', 'setup']),
+    action: z.enum([
+      'start',
+      'pause-stop',
+      'rewind',
+      'resume',
+      'retry',
+      'setup',
+      'cancel-auto-resume',
+    ]),
   }),
   z.strictObject({
     featureId: FeatureIdSchema,
@@ -1570,6 +1588,7 @@ const _featureActionCatalogueSubset: {
   'mark-done': z.never(),
   cleanup: z.never(),
   delete: z.never(),
+  'cancel-auto-resume': z.never(),
 };
 void _featureActionCatalogueSubset;
 

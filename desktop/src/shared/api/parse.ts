@@ -1092,6 +1092,16 @@ const ServerFeatureDetailSchema = ServerFeatureSummarySchema.extend({
   // The durable run failure, rendered by the server through the error
   // catalog at read time; strict canonical contract, same as ErrorResponse.
   failure: CanonicalErrorSchema.optional(),
+  // Pending usage-limit auto-resume of a Failed feature; the server retries
+  // the feature at resume_at unless cancel-auto-resume parks it first.
+  auto_resume: z
+    .object({
+      provider: z.enum(['claude', 'codex']),
+      reset_at: z.string(),
+      resume_at: z.string(),
+      scheduled_at: z.string(),
+    })
+    .optional(),
   verification_items: z.array(z.object({ name: z.string(), state: z.string() })).optional(),
   timing: z.object({ total_seconds: z.number().int().nonnegative() }).optional(),
   parent_id: z.string().optional(),

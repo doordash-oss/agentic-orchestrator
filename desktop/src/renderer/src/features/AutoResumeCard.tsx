@@ -52,7 +52,7 @@ function formatMoment(iso: string, nowMs: number): string {
 
 export interface AutoResumeCardProps {
   autoResume: AutoResume;
-  /** Whether the server catalog currently enables cancel-auto-resume. */
+  /** Whether the server catalog currently enables pause-stop, which cancels the resume. */
   cancelEnabled: boolean;
   /** Server reason shown when cancel is disabled. */
   cancelDisabledReason?: string;

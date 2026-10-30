@@ -1501,7 +1501,6 @@ const FeatureOperationalActionSchema = z.enum([
   'mark-done',
   'cleanup',
   'delete',
-  'cancel-auto-resume',
 ]);
 type FeatureOperationalAction = z.output<typeof FeatureOperationalActionSchema>;
 
@@ -1511,15 +1510,7 @@ const CompletionRepoNameSchema = z.string().min(1).max(128);
 export const FeatureActionRequestSchema = z.discriminatedUnion('action', [
   z.strictObject({
     featureId: FeatureIdSchema,
-    action: z.enum([
-      'start',
-      'pause-stop',
-      'rewind',
-      'resume',
-      'retry',
-      'setup',
-      'cancel-auto-resume',
-    ]),
+    action: z.enum(['start', 'pause-stop', 'rewind', 'resume', 'retry', 'setup']),
   }),
   z.strictObject({
     featureId: FeatureIdSchema,
@@ -1588,7 +1579,6 @@ const _featureActionCatalogueSubset: {
   'mark-done': z.never(),
   cleanup: z.never(),
   delete: z.never(),
-  'cancel-auto-resume': z.never(),
 };
 void _featureActionCatalogueSubset;
 

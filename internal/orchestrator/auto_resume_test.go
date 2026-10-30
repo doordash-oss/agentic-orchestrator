@@ -15,7 +15,6 @@
 package orchestrator_test
 
 import (
-	"errors"
 	"os"
 	"path/filepath"
 	"testing"
@@ -151,15 +150,18 @@ func TestAutoResume_OtherFailuresDoNotSchedule(t *testing.T) {
 	}
 }
 
-func TestAutoResume_CancelParksFeatureInterrupted(t *testing.T) {
+// TestAutoResume_StopCancelsAndParksFeatureInterrupted pins that pause-stop
+// on a feature waiting out a usage limit cancels the schedule and parks it
+// Interrupted, and that a repeated stop is the usual idempotent no-op.
+func TestAutoResume_StopCancelsAndParksFeatureInterrupted(t *testing.T) {
 	interrupted := 0
 	o, fs, _, spy := newAutoResumeFixture(t, "feat-cancel", orchestrator.Hooks{
 		OnFeatureInterrupted: func(string) { interrupted++ },
 	})
 	failImplement(t, o, "feat-cancel", claudeLimitError)
 
-	if err := o.CancelAutoResume("feat-cancel"); err != nil {
-		t.Fatalf("CancelAutoResume: %v", err)
+	if err := o.StopFeature("feat-cancel"); err != nil {
+		t.Fatalf("StopFeature: %v", err)
 	}
 	f := loadStoredFeature(t, fs, "feat-cancel")
 	if f.Status != feature.StatusInterrupted {
@@ -174,8 +176,11 @@ func TestAutoResume_CancelParksFeatureInterrupted(t *testing.T) {
 	if interrupted != 1 {
 		t.Errorf("OnFeatureInterrupted fired %d times, want 1", interrupted)
 	}
-	if err := o.CancelAutoResume("feat-cancel"); !errors.Is(err, orchestrator.ErrNoAutoResume) {
-		t.Errorf("second cancel err = %v, want ErrNoAutoResume", err)
+	if err := o.StopFeature("feat-cancel"); err != nil {
+		t.Errorf("second stop: %v", err)
+	}
+	if interrupted != 1 {
+		t.Errorf("second stop fired OnFeatureInterrupted again (%d)", interrupted)
 	}
 
 	// The parked feature resumes through the ordinary Resume path.

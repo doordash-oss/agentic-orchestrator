@@ -280,7 +280,6 @@ func (e ErrorScope) Valid() bool {
 
 // Defines values for FeatureAction.
 const (
-	FeatureActionCancelAutoResume     FeatureAction = "cancel-auto-resume"
 	FeatureActionCleanup              FeatureAction = "cleanup"
 	FeatureActionDelete               FeatureAction = "delete"
 	FeatureActionDiscard              FeatureAction = "discard"
@@ -305,8 +304,6 @@ const (
 // Valid indicates whether the value is a known member of the FeatureAction enum.
 func (e FeatureAction) Valid() bool {
 	switch e {
-	case FeatureActionCancelAutoResume:
-		return true
 	case FeatureActionCleanup:
 		return true
 	case FeatureActionDelete:
@@ -2490,7 +2487,7 @@ type AskUserQuestion struct {
 	Question    string          `json:"question"`
 }
 
-// AutoResume Pending usage-limit auto-resume of a Failed feature. Present only while the run's failure is a Claude or Codex usage limit with a known reset time; the server retries the feature at `resume_at`. `cancel-auto-resume` drops it and parks the feature as Interrupted.
+// AutoResume Pending usage-limit auto-resume of a Failed feature. Present only while the run's failure is a Claude or Codex usage limit with a known reset time; the server retries the feature at `resume_at`. While it is pending, `pause-stop` is enabled and cancels it, parking the feature as Interrupted.
 type AutoResume struct {
 	// Provider The provider CLI that reported the usage limit.
 	Provider AutoResumeProvider `json:"provider"`
@@ -3073,7 +3070,7 @@ type FeatureDetail struct {
 	ActiveRun       int                `json:"active_run"`
 	ActiveRunDetail *RunSummary        `json:"active_run_detail,omitempty"`
 
-	// AutoResume Pending usage-limit auto-resume of a Failed feature. Present only while the run's failure is a Claude or Codex usage limit with a known reset time; the server retries the feature at `resume_at`. `cancel-auto-resume` drops it and parks the feature as Interrupted.
+	// AutoResume Pending usage-limit auto-resume of a Failed feature. Present only while the run's failure is a Claude or Codex usage limit with a known reset time; the server retries the feature at `resume_at`. While it is pending, `pause-stop` is enabled and cancels it, parking the feature as Interrupted.
 	AutoResume      *AutoResume          `json:"auto_resume,omitempty"`
 	AutomaticReview AutomaticReviewState `json:"automatic_review"`
 

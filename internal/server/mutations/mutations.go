@@ -53,7 +53,6 @@ const (
 	resultDone         = "done"
 	resultDrafted      = "drafted"
 	resultGenerated    = "generated"
-	resultInterrupted  = "interrupted"
 	resultMerged       = "merged"
 	resultPublished    = "published"
 	resultRecovered    = "recovered"
@@ -240,12 +239,6 @@ func (t *mutationTarget) RunFeatureLifecycle(featureID string, action serverrunt
 	case serverruntime.FeatureActionRetry:
 		err = t.orch.RetryFeature(featureID)
 		result = resultRetried
-	case serverruntime.FeatureActionCancelAutoResume:
-		err = t.orch.CancelAutoResume(featureID)
-		if errors.Is(err, orchestrator.ErrNoAutoResume) {
-			err = &serverruntime.ActionConflictError{Detail: fmt.Sprintf("feature %q has no pending usage-limit auto-resume", featureID)}
-		}
-		result = resultInterrupted
 	case serverruntime.FeatureActionNeedUserInput:
 		err = t.orch.ResumeNeedUserInput(featureID, orchestrator.NeedUserInputResume{})
 		result = resultResumed

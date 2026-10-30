@@ -2505,14 +2505,14 @@ components:
         - refactor
         - review-feedback
         - discard
-        - cancel-auto-resume
     AutoResume:
       type: object
       description: >-
         Pending usage-limit auto-resume of a Failed feature. Present only
         while the run's failure is a Claude or Codex usage limit with a
         known reset time; the server retries the feature at `resume_at`.
-        `cancel-auto-resume` drops it and parks the feature as Interrupted.
+        While it is pending, `pause-stop` is enabled and cancels it, parking
+        the feature as Interrupted.
       required: [provider, reset_at, resume_at, scheduled_at]
       properties:
         provider:

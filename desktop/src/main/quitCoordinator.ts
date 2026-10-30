@@ -361,9 +361,11 @@ export function supervisorActivitySentence(active: {
 /** The reads active-work detection needs; structurally satisfied by the main-process services. */
 export interface ActiveWorkSources {
   listFeatures(): Promise<{ features: readonly { id: string }[] }>;
-  getFeature(
-    featureId: string,
-  ): Promise<{ id: string; actions: readonly { id: string; enabled: boolean }[] }>;
+  getFeature(featureId: string): Promise<{
+    id: string;
+    actions: readonly { id: string; enabled: boolean }[];
+    autoResume?: unknown;
+  }>;
   getSupervisorState(): Promise<{ lifecycle: SupervisorLifecycle }>;
 }
 
@@ -407,7 +409,13 @@ async function detectStoppableFeatures(
         failed = true;
         continue;
       }
-      if (result.value.actions.some((action) => action.id === 'pause-stop' && action.enabled)) {
+      // A pending usage-limit auto-resume enables pause-stop, but nothing is
+      // running and the server re-arms it on restart, so quitting must not
+      // cancel it.
+      if (
+        result.value.autoResume === undefined &&
+        result.value.actions.some((action) => action.id === 'pause-stop' && action.enabled)
+      ) {
         featureIds.push(result.value.id);
       }
     }

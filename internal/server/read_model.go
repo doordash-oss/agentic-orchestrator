@@ -232,16 +232,11 @@ func (h *apiHandler) featureDetailDTO(f *feature.Feature) (FeatureDetail, error)
 			ResumeAt:    pending.ResumeAt,
 			ScheduledAt: pending.ScheduledAt,
 		}
-		// Cancel is offered only while a resume is pending, so the catalog
-		// of every other feature is unchanged.
-		detail.Actions = append(detail.Actions, Action{
-			ID:             string(FeatureActionCancelAutoResume),
-			Enabled:        detail.ActiveChild == nil,
-			Scope:          ActionScope{Type: entityFeature},
-			RequiredInputs: []ActionInput{},
-		})
-		if detail.ActiveChild != nil {
-			detail.Actions[len(detail.Actions)-1].DisabledReasons = []ActionDisabledReason{disabledParentHasActiveChild}
+		// The pending resume is the feature's active work: pause-stop
+		// cancels it and parks the feature as Interrupted. An active child
+		// keeps it locked, like every other parent lifecycle action.
+		if detail.ActiveChild == nil {
+			enableAction(detail.Actions, string(FeatureActionPauseStop))
 		}
 	}
 	if f.Status == feature.StatusNeedUserInput && f.PendingNeedUserInputPath != "" {
@@ -428,6 +423,17 @@ func disableAction(actions []Action, actionID string, reason ActionDisabledReaso
 		actions[i].Enabled = false
 		actions[i].DisabledReasons = []ActionDisabledReason{reason}
 		return
+	}
+}
+
+// enableAction enables actionID in actions and drops its disabled reasons.
+func enableAction(actions []Action, actionID string) {
+	for i := range actions {
+		if actions[i].ID == actionID {
+			actions[i].Enabled = true
+			actions[i].DisabledReasons = nil
+			return
+		}
 	}
 }
 

@@ -699,7 +699,7 @@ func mutationRouteMethods(path string) ([]string, bool) {
 			return nil, false
 		}
 		switch parts[2] {
-		case string(FeatureActionSetup), string(FeatureActionStart), string(FeatureActionPauseStop), string(FeatureActionResume), string(FeatureActionRestart), string(FeatureActionPublish), string(FeatureActionMerge), string(FeatureActionRewind), string(FeatureActionRebase), string(FeatureActionRefactor), string(FeatureActionReviewFeedback), string(FeatureActionNeedUserInput), string(FeatureActionNeedUserInputDraft), string(FeatureActionTestingContractWaive), string(FeatureActionRetry), string(FeatureActionMarkDone), string(FeatureActionCleanup), string(FeatureActionDelete), string(FeatureActionDiscard), string(FeatureActionCancelAutoResume):
+		case string(FeatureActionSetup), string(FeatureActionStart), string(FeatureActionPauseStop), string(FeatureActionResume), string(FeatureActionRestart), string(FeatureActionPublish), string(FeatureActionMerge), string(FeatureActionRewind), string(FeatureActionRebase), string(FeatureActionRefactor), string(FeatureActionReviewFeedback), string(FeatureActionNeedUserInput), string(FeatureActionNeedUserInputDraft), string(FeatureActionTestingContractWaive), string(FeatureActionRetry), string(FeatureActionMarkDone), string(FeatureActionCleanup), string(FeatureActionDelete), string(FeatureActionDiscard):
 			if len(parts) == 3 {
 				return []string{http.MethodPost}, true
 			}
@@ -1006,10 +1006,6 @@ func (h *apiHandler) handleFeatureActionRoute(w http.ResponseWriter, r *http.Req
 	case string(FeatureActionRetry):
 		serveMutation(w, r, http.StatusOK, nil, func(ignoredBody) (FeatureActionResponse, error) {
 			return h.mutations.RunFeatureLifecycle(featureID, FeatureActionRetry, GuardedFeatureActionRequest{})
-		})
-	case string(FeatureActionCancelAutoResume):
-		serveMutation(w, r, http.StatusOK, nil, func(ignoredBody) (FeatureActionResponse, error) {
-			return h.mutations.RunFeatureLifecycle(featureID, FeatureActionCancelAutoResume, GuardedFeatureActionRequest{})
 		})
 	case string(FeatureActionRewind):
 		serveMutation(w, r, http.StatusOK, func(req *RewindFeatureRequest) bool {

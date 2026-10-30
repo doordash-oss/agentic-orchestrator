@@ -589,6 +589,22 @@ describe('detectActiveWork', () => {
     expect(deps.getSupervisorState).toHaveBeenCalledOnce();
   });
 
+  it('leaves a feature waiting out a usage limit to its auto-resume', async () => {
+    const deps = sources({
+      features: { running: true, waiting: true },
+      overrides: {
+        getFeature: vi.fn((id: string) =>
+          Promise.resolve({
+            id,
+            actions: [{ id: 'pause-stop', enabled: true }],
+            ...(id === 'waiting' ? { autoResume: { resumeAt: '2026-10-29T18:12:00Z' } } : {}),
+          }),
+        ),
+      },
+    });
+    await expect(detectActiveWork(deps)).resolves.toMatchObject({ featureIds: ['running'] });
+  });
+
   it('marks detection failed when the feature list or a snapshot cannot be fetched', async () => {
     await expect(
       detectActiveWork(

@@ -48,10 +48,6 @@ const (
 	autoResumeOverdueDelay = 10 * time.Second
 )
 
-// ErrNoAutoResume is returned by CancelAutoResume when the feature has no
-// pending usage-limit auto-resume.
-var ErrNoAutoResume = feature.ErrNoAutoResume
-
 // autoResumeTimers holds the armed in-memory timer of each scheduled feature.
 type autoResumeTimers struct {
 	mu     sync.Mutex
@@ -222,16 +218,17 @@ func (o *Orchestrator) RearmAutoResumes() error {
 	return nil
 }
 
-// CancelAutoResume cancels featureID's pending usage-limit auto-resume and
-// parks the feature as Interrupted, inside the relationship guard window
-// like StopFeature.
-func (o *Orchestrator) CancelAutoResume(featureID string) error {
-	unlock := o.lockRelationshipRead()
-	defer unlock()
-	if err := o.relationshipGuard(featureID, mutationStop); err != nil {
-		return err
-	}
+// cancelAutoResumeLocked is StopFeature for a Failed feature with a pending
+// usage-limit auto-resume: it drops the schedule and parks the feature as
+// Interrupted. The caller holds the relationship read lock and has passed
+// the stop guard. When the timer took the schedule first, the feature is
+// already being retried, so the stop falls through to the ordinary
+// interruption.
+func (o *Orchestrator) cancelAutoResumeLocked(featureID string) error {
 	if err := o.deps.Manager.CancelAutoResume(featureID); err != nil {
+		if errors.Is(err, feature.ErrNoAutoResume) {
+			return o.interruptFeature(featureID)
+		}
 		return err
 	}
 	o.disarmAutoResume(featureID)

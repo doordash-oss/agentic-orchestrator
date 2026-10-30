@@ -24,8 +24,8 @@ import (
 
 // TestFeatureDetailProjectsPendingAutoResume pins the usage-limit
 // auto-resume projection: a Failed feature with a pending schedule carries
-// auto_resume and an enabled cancel-auto-resume action; a plain failure
-// carries neither.
+// auto_resume and an enabled pause-stop action (stopping cancels the
+// resume); a plain failure carries neither.
 func TestFeatureDetailProjectsPendingAutoResume(t *testing.T) {
 	t.Parallel()
 	resetAt := time.Date(2026, time.October, 29, 18, 10, 0, 0, time.UTC)
@@ -59,17 +59,17 @@ func TestFeatureDetailProjectsPendingAutoResume(t *testing.T) {
 			handler := NewHandler(baseReadHandlerOptions(store))
 			detail := getJSONMap(t, handler, "/api/v1/features/"+f.ID)[entityFeature].(map[string]any)
 
-			var cancel map[string]any
+			var stop map[string]any
 			for _, raw := range detail["actions"].([]any) {
-				if action := raw.(map[string]any); action["id"] == string(FeatureActionCancelAutoResume) {
-					cancel = action
+				if action := raw.(map[string]any); action["id"] == string(FeatureActionPauseStop) {
+					stop = action
 				}
 			}
 			autoResume, hasAutoResume := detail["auto_resume"].(map[string]any)
 
 			if tc.schedule == nil {
-				if hasAutoResume || cancel != nil {
-					t.Fatalf("plain failure projected auto_resume %#v / cancel %#v", autoResume, cancel)
+				if hasAutoResume || stop["enabled"] != false {
+					t.Fatalf("plain failure projected auto_resume %#v / pause-stop %#v", autoResume, stop)
 				}
 				return
 			}
@@ -81,8 +81,8 @@ func TestFeatureDetailProjectsPendingAutoResume(t *testing.T) {
 				autoResume["resume_at"] != resetAt.Add(2*time.Minute).Format(time.RFC3339) {
 				t.Errorf("auto_resume = %#v", autoResume)
 			}
-			if cancel == nil || cancel["enabled"] != true {
-				t.Errorf("cancel-auto-resume action = %#v, want enabled", cancel)
+			if stop["enabled"] != true || stop["disabled_reasons"] != nil {
+				t.Errorf("pause-stop action = %#v, want enabled", stop)
 			}
 		})
 	}

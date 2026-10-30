@@ -1421,8 +1421,8 @@ export interface components {
          * @description Feature lifecycle action identifier. `setup` dispatches a feature's queued durable setup (required after create unless the client dispatches `start`) or reruns only the unfinished tasks of a failed setup, asynchronously and without starting orchestration; the feature becomes `Created` when setup completes.
          * @enum {string}
          */
-        FeatureAction: "setup" | "start" | "resume" | "pause-stop" | "restart" | "publish" | "merge" | "rewind" | "retry" | "rebase" | "need-user-input" | "need-user-input-draft" | "testing-contract-waive" | "mark-done" | "cleanup" | "delete" | "refactor" | "review-feedback" | "discard" | "cancel-auto-resume";
-        /** @description Pending usage-limit auto-resume of a Failed feature. Present only while the run's failure is a Claude or Codex usage limit with a known reset time; the server retries the feature at `resume_at`. `cancel-auto-resume` drops it and parks the feature as Interrupted. */
+        FeatureAction: "setup" | "start" | "resume" | "pause-stop" | "restart" | "publish" | "merge" | "rewind" | "retry" | "rebase" | "need-user-input" | "need-user-input-draft" | "testing-contract-waive" | "mark-done" | "cleanup" | "delete" | "refactor" | "review-feedback" | "discard";
+        /** @description Pending usage-limit auto-resume of a Failed feature. Present only while the run's failure is a Claude or Codex usage limit with a known reset time; the server retries the feature at `resume_at`. While it is pending, `pause-stop` is enabled and cancels it, parking the feature as Interrupted. */
         AutoResume: {
             /**
              * @description The provider CLI that reported the usage limit.

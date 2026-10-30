@@ -1093,7 +1093,7 @@ const ServerFeatureDetailSchema = ServerFeatureSummarySchema.extend({
   // catalog at read time; strict canonical contract, same as ErrorResponse.
   failure: CanonicalErrorSchema.optional(),
   // Pending usage-limit auto-resume of a Failed feature; the server retries
-  // the feature at resume_at unless cancel-auto-resume parks it first.
+  // the feature at resume_at unless pause-stop parks it first.
   auto_resume: z
     .object({
       provider: z.enum(['claude', 'codex']),

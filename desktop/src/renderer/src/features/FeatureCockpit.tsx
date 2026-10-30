@@ -1433,7 +1433,7 @@ export function FeatureCockpit({
   const cancelAutoResume = useCallback(
     () =>
       dispatchLifecycleAction(
-        { featureId, action: 'cancel-auto-resume' },
+        { featureId, action: 'pause-stop' },
         'Cancelling the automatic resume…',
         'Auto-resume cancelled. The feature is now interrupted.',
         'Cancel auto-resume',
@@ -1665,7 +1665,9 @@ export function FeatureCockpit({
   const stopAction = actionById(snapshot, 'pause-stop');
   const resumeAction = actionById(snapshot, 'resume');
   const retryAction = actionById(snapshot, 'retry');
-  const cancelAutoResumeAction = actionById(snapshot, 'cancel-auto-resume');
+  // While a usage-limit auto-resume is pending, pause-stop cancels it; the
+  // countdown card owns that control instead of the header Stop button.
+  const autoResumePending = snapshot.autoResume !== undefined;
   const restartAction = actionById(snapshot, 'restart');
   const rewindAction = actionById(snapshot, 'rewind');
   const deleteAction = actionById(snapshot, 'delete');
@@ -1929,7 +1931,7 @@ export function FeatureCockpit({
       disabled: busy,
     });
   }
-  if (stopAction?.enabled === true) {
+  if (stopAction?.enabled === true && !autoResumePending) {
     primaryActions.push({
       key: 'stop',
       label: 'Stop',
@@ -1971,7 +1973,7 @@ export function FeatureCockpit({
       onClick: () => {},
     });
   }
-  if (stopAction !== undefined && !stopAction.enabled) {
+  if (stopAction !== undefined && !stopAction.enabled && !autoResumePending) {
     menuActions.push({
       key: 'stop',
       label: 'Stop',
@@ -2084,7 +2086,8 @@ export function FeatureCockpit({
    */
   const featureCommandFlows: Record<FeatureCommandId, () => void> = {
     'feature.start': start,
-    'feature.pause-stop': () => void openStopDialog(),
+    'feature.pause-stop': () =>
+      autoResumePending ? void cancelAutoResume() : void openStopDialog(),
     'feature.resume': resume,
     'feature.retry': retry,
     'feature.restart': restart,
@@ -2857,10 +2860,10 @@ export function FeatureCockpit({
                   {snapshot.autoResume !== undefined ? (
                     <AutoResumeCard
                       autoResume={snapshot.autoResume}
-                      cancelEnabled={cancelAutoResumeAction?.enabled === true}
-                      {...(reasonsOf(cancelAutoResumeAction)[0] === undefined
+                      cancelEnabled={stopAction?.enabled === true}
+                      {...(reasonsOf(stopAction)[0] === undefined
                         ? {}
-                        : { cancelDisabledReason: reasonsOf(cancelAutoResumeAction)[0] })}
+                        : { cancelDisabledReason: reasonsOf(stopAction)[0] })}
                       busy={busy}
                       onCancel={cancelAutoResume}
                     />

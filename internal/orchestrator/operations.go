@@ -64,6 +64,9 @@ func (o *Orchestrator) StopFeature(featureID string) error {
 		return err
 	}
 	o.trace(traceTransition)
+	if f, err := o.deps.Store.Load(featureID); err == nil && f.PendingAutoResume() != nil {
+		return o.cancelAutoResumeLocked(featureID)
+	}
 	return o.interruptFeature(featureID)
 }
 

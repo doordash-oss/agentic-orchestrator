@@ -498,6 +498,17 @@ func (o *Orchestrator) restartPhaseLocked(featureID string, maxIterationsDelta, 
 	// safe to call unconditionally, but we retain the explicit gate for clarity.
 	if f.Status == feature.StatusFailed {
 		_ = o.extendFailedPhaseBudget(featureID, maxIterationsDelta, maxPlanIterationsDelta)
+		// A manual retry or restart supersedes a pending usage-limit
+		// auto-resume (an auto-resume reaches here already taken).
+		if f.Run().AutoResume != nil {
+			if err := o.deps.Store.Modify(featureID, func(ff *feature.Feature) error {
+				ff.Run().AutoResume = nil
+				return nil
+			}); err != nil {
+				return RestartOutcome{}, fmt.Errorf("clear auto-resume: %w", err)
+			}
+		}
+		o.disarmAutoResume(featureID)
 	}
 	phase := f.CurrentPhase
 

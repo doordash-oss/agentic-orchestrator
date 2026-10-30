@@ -193,6 +193,12 @@ type Run struct {
 	// older schemas are ignored on load and never written.
 	Failure *errcat.FailureRecord `yaml:"failure,omitempty"`
 
+	// AutoResume is the pending usage-limit auto-resume for this run's
+	// failure: set when the failure was a provider usage limit with a known
+	// reset time, cleared when the resume fires, is cancelled, or the
+	// feature leaves Failed. It only means something while Status is Failed.
+	AutoResume *AutoResume `yaml:"auto_resume,omitempty"`
+
 	// KB transient flags (moved from Feature — actual KB data lives in a
 	// sibling knowledge-base/ directory outside the feature dir, untouched).
 	KBWaitMessage  string            `yaml:"kb_wait_message,omitempty"`

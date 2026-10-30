@@ -1437,6 +1437,10 @@ func runServer(configPath, stateDir string, dangerouslySkipPerms bool, enabledPr
 				errcat.WithDiagnostics(fmt.Sprintf("startup sweep: %v", err)))
 		}
 	}
+	if err := boot.orchestrator.RearmAutoResumes(); err != nil {
+		renderError(os.Stderr, errcat.StartupMaintenanceFailed,
+			errcat.WithDiagnostics(fmt.Sprintf("re-arming usage-limit auto-resumes: %v", err)))
+	}
 
 	listen, err := serverruntime.ResolveListen(listenAddr)
 	if err != nil {

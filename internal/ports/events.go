@@ -79,6 +79,10 @@ const (
 	RelationshipCascadeProgress
 	// RelationshipCascadeDeleted fires after cascade completion removed both records.
 	RelationshipCascadeDeleted
+	// FeatureAutoResumeChanged fires when a usage-limit auto-resume schedule
+	// is dropped without another lifecycle event (its retry could not
+	// start). Subscribers refresh feature detail.
+	FeatureAutoResumeChanged
 )
 
 // Event is a typed domain event emitted by the orchestrator.

@@ -1310,7 +1310,11 @@ func (p *Protocol) parseNotification(method string, params json.RawMessage) (llm
 					case "ContextWindowExceeded":
 						errMsg = "Context window exceeded"
 					case "UsageLimitExceeded":
-						errMsg = "Usage limit exceeded"
+						// Keep Codex's own text: it names the reset time
+						// that usage-limit auto-resume schedules against.
+						if strings.TrimSpace(errMsg) == "" {
+							errMsg = "Usage limit exceeded"
+						}
 					case "ServerOverloaded":
 						errMsg = "Server overloaded"
 					}

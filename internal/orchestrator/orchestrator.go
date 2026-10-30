@@ -22,6 +22,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/doordash-oss/agentic-orchestrator/internal/agent"
 	"github.com/doordash-oss/agentic-orchestrator/internal/config"
@@ -291,6 +292,12 @@ type Orchestrator struct {
 	// worktreeFingerprintFn is a test seam for detecting whether a mounted
 	// context repo changed during the agent loop.
 	worktreeFingerprintFn func(worktreePath string) (string, error)
+
+	// autoResume holds the armed usage-limit auto-resume timers.
+	autoResume autoResumeTimers
+
+	// nowFn is a test seam over the auto-resume clock; nil means time.Now.
+	nowFn func() time.Time
 }
 
 // New creates an Orchestrator. The eventCh is a bounded buffer (256).
@@ -2162,6 +2169,7 @@ func (o *Orchestrator) Shutdown() error {
 	o.stopOnce.Do(func() {
 		o.emitShutdownStarted()
 		close(o.doneCh)
+		o.stopAutoResumeTimers()
 		if o.deps.Sessions != nil {
 			o.deps.Sessions.Shutdown()
 		}

@@ -53,6 +53,7 @@ import { useModalDismiss } from '../components/useModalDismiss';
 import { retryAction as retryLoadAction, useMediaQuery, type LoadState } from '../hooks';
 import { parseIpcError } from '../wizard/ipcError';
 import type { CanonicalError } from '../../../shared/ipc';
+import { AutoResumeCard } from './AutoResumeCard';
 import { CurrentRunInspection, type RunMetrics } from './CurrentRunInspection';
 import { classifyHold, railSegments, railTrio } from './phaseRail';
 import { PhaseRail } from './PhaseRailRow';
@@ -975,7 +976,15 @@ export function FeatureCockpit({
   const [busy, setBusy] = useState(false);
   const [announcement, setAnnouncement] = useState('');
   const [actionError, setActionError] = useState<{
-    action: 'Start' | 'Stop' | 'Resume' | 'Retry' | 'Restart' | 'Delete' | 'Rebase';
+    action:
+      | 'Start'
+      | 'Stop'
+      | 'Resume'
+      | 'Retry'
+      | 'Restart'
+      | 'Delete'
+      | 'Rebase'
+      | 'Cancel auto-resume';
     error: CanonicalError;
   } | null>(null);
   const [rebaseLaunchBusy, setRebaseLaunchBusy] = useState(false);
@@ -1362,7 +1371,7 @@ export function FeatureCockpit({
       request: FeatureActionRequest,
       pendingAnnouncement: string,
       acceptedAnnouncement: string,
-      errorLabel: 'Start' | 'Resume' | 'Retry' | 'Restart',
+      errorLabel: 'Start' | 'Resume' | 'Retry' | 'Restart' | 'Cancel auto-resume',
     ) => {
       if (actionInFlightRef.current) return;
       actionInFlightRef.current = true;
@@ -1417,6 +1426,17 @@ export function FeatureCockpit({
         'Retrying from the server snapshot…',
         'Retry accepted. Refreshing authoritative state…',
         'Retry',
+      ),
+    [dispatchLifecycleAction, featureId],
+  );
+
+  const cancelAutoResume = useCallback(
+    () =>
+      dispatchLifecycleAction(
+        { featureId, action: 'pause-stop' },
+        'Cancelling the automatic resume…',
+        'Auto-resume cancelled. The feature is now interrupted.',
+        'Cancel auto-resume',
       ),
     [dispatchLifecycleAction, featureId],
   );
@@ -1645,6 +1665,9 @@ export function FeatureCockpit({
   const stopAction = actionById(snapshot, 'pause-stop');
   const resumeAction = actionById(snapshot, 'resume');
   const retryAction = actionById(snapshot, 'retry');
+  // While a usage-limit auto-resume is pending, pause-stop cancels it; the
+  // countdown card owns that control instead of the header Stop button.
+  const autoResumePending = snapshot.autoResume !== undefined;
   const restartAction = actionById(snapshot, 'restart');
   const rewindAction = actionById(snapshot, 'rewind');
   const deleteAction = actionById(snapshot, 'delete');
@@ -1908,7 +1931,7 @@ export function FeatureCockpit({
       disabled: busy,
     });
   }
-  if (stopAction?.enabled === true) {
+  if (stopAction?.enabled === true && !autoResumePending) {
     primaryActions.push({
       key: 'stop',
       label: 'Stop',
@@ -1950,7 +1973,7 @@ export function FeatureCockpit({
       onClick: () => {},
     });
   }
-  if (stopAction !== undefined && !stopAction.enabled) {
+  if (stopAction !== undefined && !stopAction.enabled && !autoResumePending) {
     menuActions.push({
       key: 'stop',
       label: 'Stop',
@@ -2063,7 +2086,8 @@ export function FeatureCockpit({
    */
   const featureCommandFlows: Record<FeatureCommandId, () => void> = {
     'feature.start': start,
-    'feature.pause-stop': () => void openStopDialog(),
+    'feature.pause-stop': () =>
+      autoResumePending ? void cancelAutoResume() : void openStopDialog(),
     'feature.resume': resume,
     'feature.retry': retry,
     'feature.restart': restart,
@@ -2830,7 +2854,20 @@ export function FeatureCockpit({
                 ) : null}
 
                 <div className="cockpit__stage-status">
-                  {durableError !== undefined ? (
+                  {/* A usage-limit failure with a pending auto-resume is not
+                   * a dead end: the countdown card replaces the failure card
+                   * until the server resumes the feature or the user cancels. */}
+                  {snapshot.autoResume !== undefined ? (
+                    <AutoResumeCard
+                      autoResume={snapshot.autoResume}
+                      cancelEnabled={stopAction?.enabled === true}
+                      {...(reasonsOf(stopAction)[0] === undefined
+                        ? {}
+                        : { cancelDisabledReason: reasonsOf(stopAction)[0] })}
+                      busy={busy}
+                      onCancel={cancelAutoResume}
+                    />
+                  ) : durableError !== undefined ? (
                     <ErrorSurface
                       error={durableError}
                       variant="full"

@@ -848,6 +848,9 @@ func (m *Manager) MarkFailed(featureID string, failure errcat.FailureRecord) err
 			return err
 		}
 		f.Run().Failure = &failure
+		// A new failure supersedes any earlier usage-limit schedule; the
+		// orchestrator re-schedules when this failure is a limit too.
+		f.Run().AutoResume = nil
 		return nil
 	})
 }

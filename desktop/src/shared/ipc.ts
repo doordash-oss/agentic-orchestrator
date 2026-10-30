@@ -1474,6 +1474,15 @@ export const FeatureSnapshotSchema = z.strictObject({
   timing: z.strictObject({ totalSeconds: z.number().int().nonnegative() }).optional(),
   /** The durable run failure: the canonical catalog-rendered error object, diagnostics redacted. */
   failure: CanonicalErrorSchema.optional(),
+  /** Pending usage-limit auto-resume while the feature is Failed on a provider usage limit. */
+  autoResume: z
+    .strictObject({
+      provider: z.enum(['claude', 'codex']),
+      resetAt: z.string().max(64),
+      resumeAt: z.string().max(64),
+      scheduledAt: z.string().max(64),
+    })
+    .optional(),
 });
 
 export type FeatureSnapshot = z.output<typeof FeatureSnapshotSchema>;

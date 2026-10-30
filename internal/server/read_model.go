@@ -225,6 +225,20 @@ func (h *apiHandler) featureDetailDTO(f *feature.Feature) (FeatureDetail, error)
 	if rec := f.FailureRecord(); rec != nil {
 		detail.Failure = wireStoredError(rec)
 	}
+	if pending := f.PendingAutoResume(); pending != nil && !f.IsChild() {
+		detail.AutoResume = &AutoResume{
+			Provider:    AutoResumeProvider(pending.Provider),
+			ResetAt:     pending.ResetAt,
+			ResumeAt:    pending.ResumeAt,
+			ScheduledAt: pending.ScheduledAt,
+		}
+		// The pending resume is the feature's active work: pause-stop
+		// cancels it and parks the feature as Interrupted. An active child
+		// keeps it locked, like every other parent lifecycle action.
+		if detail.ActiveChild == nil {
+			enableAction(detail.Actions, string(FeatureActionPauseStop))
+		}
+	}
 	if f.Status == feature.StatusNeedUserInput && f.PendingNeedUserInputPath != "" {
 		gate := needUserInputGateDTO(f.ID, entityFeature, "", f.CurrentIteration, f.InputNotifications, f.PendingNeedUserInputPath)
 		detail.NeedUserInput = &gate
@@ -409,6 +423,17 @@ func disableAction(actions []Action, actionID string, reason ActionDisabledReaso
 		actions[i].Enabled = false
 		actions[i].DisabledReasons = []ActionDisabledReason{reason}
 		return
+	}
+}
+
+// enableAction enables actionID in actions and drops its disabled reasons.
+func enableAction(actions []Action, actionID string) {
+	for i := range actions {
+		if actions[i].ID == actionID {
+			actions[i].Enabled = true
+			actions[i].DisabledReasons = nil
+			return
+		}
 	}
 }
 

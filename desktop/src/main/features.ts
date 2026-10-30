@@ -1186,6 +1186,16 @@ function toSnapshot(feature: ServerFeatureDetail): FeatureSnapshot {
                 : redactText(feature.failure.diagnostics),
           },
         }),
+    ...(feature.auto_resume === undefined
+      ? {}
+      : {
+          autoResume: {
+            provider: feature.auto_resume.provider,
+            resetAt: feature.auto_resume.reset_at,
+            resumeAt: feature.auto_resume.resume_at,
+            scheduledAt: feature.auto_resume.scheduled_at,
+          },
+        }),
   };
 }
 

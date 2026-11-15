@@ -154,6 +154,57 @@ func TestImplementLoopPhaseReview_DecisionSurvivesResume(t *testing.T) {
 	}
 }
 
+// phaseGateAskedHandoff runs a phase to a no-change handoff asked in
+// iteration 3 and answered with answer.
+func phaseGateAskedHandoff(t *testing.T, env *phaseGateEnv, askBody string, answer string) phaseGateRun {
+	t.Helper()
+	return runPhaseGate(t, env, 5, []string{"", "", askBody},
+		map[string]string{"iteration-01/craft": "retry loop has no backoff"},
+		func(string) string { return answer })
+}
+
+func TestImplementLoopPhaseReview_HandoffSessionFailure(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping loop test in short mode")
+	}
+	t.Run("provider_error_parks", func(t *testing.T) {
+		env := newPhaseGateEnv(t, "feat-phase-handoff-err", feature.PipelineMoonshot)
+		run := phaseGateAskedHandoff(t, env, testutil.JSONLError("provider overloaded")+"\nexit 1", "")
+		if run.result == nil || run.result.FinalStatus != finalStatusStopped {
+			t.Fatalf("result = %+v, want stopped with the handoff still pending", run.result)
+		}
+		if gate := newPhaseReviewGate(ImplementConfig{Feature: env.f, ArtifactDir: env.artifactDir}, newArtifactManager(env.artifactDir), 5); gate.pending == nil {
+			t.Fatal("the handoff is no longer pending")
+		}
+	})
+	t.Run("provider_dies_while_asking_parks", func(t *testing.T) {
+		env := newPhaseGateEnv(t, "feat-phase-handoff-died", feature.PipelineMoonshot)
+		ask, _, _ := strings.Cut(phaseGateHandoffAsk(), "\nwhile ")
+		// The crash-resume session dies too.
+		run := runPhaseGate(t, env, 5, []string{"", "", ask + "\nexit 1", "exit 1"},
+			map[string]string{"iteration-01/craft": "retry loop has no backoff"}, func(string) string { return "" })
+		if run.result == nil || run.result.FinalStatus != finalStatusStopped {
+			t.Fatalf("result = %+v, want stopped with the handoff still pending", run.result)
+		}
+		if n := len(run.implementPrompts); n != 4 || !strings.Contains(run.implementPrompts[3], crashResumeMessageFragment) {
+			t.Fatalf("implement sessions = %d, want the asking session resumed once, then the phase parked", n)
+		}
+		if gate := newPhaseReviewGate(ImplementConfig{Feature: env.f, ArtifactDir: env.artifactDir}, newArtifactManager(env.artifactDir), 5); gate.pending == nil {
+			t.Fatal("the handoff is no longer pending")
+		}
+	})
+	t.Run("accept_then_error_passes", func(t *testing.T) {
+		env := newPhaseGateEnv(t, "feat-phase-handoff-accept-crash", feature.PipelineMoonshot)
+		run := phaseGateAskedHandoff(t, env, phaseGateHandoffAsk()+"\n"+testutil.JSONLError("provider overloaded")+"\nexit 1", phaseHandoffAcceptLabel)
+		if run.result == nil || run.result.FinalStatus != finalStatusReviewPassed {
+			t.Fatalf("result = %+v, want review_passed after accept", run.result)
+		}
+		if len(run.implementPrompts) != 3 {
+			t.Fatalf("implement sessions = %d, want none after the accepted handoff", len(run.implementPrompts))
+		}
+	})
+}
+
 // Decisions from a phase's review reach Final Review.
 func TestRunFeatureFinalReviewLoop_SeesPhaseReviewDecisions(t *testing.T) {
 	if testing.Short() {

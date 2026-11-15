@@ -758,20 +758,16 @@ func runImplementationLoop(cfg ImplementConfig, sm ports.SessionManager) (result
 			RepoName:      cfg.RepoName,
 		})
 
-		// Handle based on agent status
-		if waitResult.Err != nil {
-			_ = am.writeMeta(iterDir, meta)
-			_ = am.writeSummary(summaryPath, meta)
-			cfg.Observer.IterationEnded(iterCtx, i, toSessionUsage(cost), time.Since(iterStart), agentStatus)
-			return nil, fmt.Errorf("waiting for implementer outcome: %w", waitResult.Err)
-		}
-		if asked := gatePending(gate); asked != nil && sess != nil {
-			switch gate.resolveHandoff() {
-			case handoffAccept:
+		// A pending handoff is settled by the user's answer, whatever the
+		// asking session's outcome; without one it stays pending.
+		if asked := gatePending(gate); asked != nil {
+			switch choice := classifyHandoffAnswer(asked.Answer); {
+			case choice == handoffAccept:
+				gate.resolveHandoff()
 				meta.Handoff = reviewHandoffAccepted
-			case handoffContinue:
-				meta.Handoff = reviewHandoffContinued
-			case handoffStop:
+				agentStatus, waitResult.Err = agentStatusSuccess, nil
+			case choice == handoffStop:
+				gate.resolveHandoff()
 				meta.Handoff = reviewHandoffStopped
 				meta.ReviewStatus = reviewChangesRequested.String()
 				carryOpenFindings(iterDir, gate.openFindings(reviewerFeedback))
@@ -779,23 +775,25 @@ func runImplementationLoop(cfg ImplementConfig, sm ports.SessionManager) (result
 				_ = am.writeSummary(summaryPath, meta)
 				cfg.Observer.IterationEnded(iterCtx, i, toSessionUsage(cost), time.Since(iterStart), finalStatusStopped)
 				return &LoopResult{FinalStatus: finalStatusStopped, Iterations: i, LastError: asked.Reason}, nil
+			case choice == handoffContinue && agentStatus == agentStatusSuccess && waitResult.Err == nil:
+				gate.resolveHandoff()
+				meta.Handoff = reviewHandoffContinued
 			default:
-				// A session that ended without an answer leaves the handoff
-				// pending: a failed one retries next iteration, a completed
-				// one parks the feature so resuming asks again.
-				if agentStatus == agentStatusSuccess {
-					meta.ReviewStatus = reviewChangesRequested.String()
-					carryOpenFindings(iterDir, gate.openFindings(reviewerFeedback))
-					_ = am.writeMeta(iterDir, meta)
-					_ = am.writeSummary(summaryPath, meta)
-					cfg.Observer.IterationEnded(iterCtx, i, toSessionUsage(cost), time.Since(iterStart), finalStatusStopped)
-					return &LoopResult{
-						FinalStatus: finalStatusStopped,
-						Iterations:  i,
-						LastError:   fmt.Sprintf("%s needs your decision, and the handoff question has no answer yet: %s Resume the feature to ask again; see %s.", gate.label(), asked.Reason, asked.NotePath),
-					}, nil
-				}
+				meta.ReviewStatus = reviewChangesRequested.String()
+				carryOpenFindings(iterDir, gate.openFindings(reviewerFeedback))
+				_ = am.writeMeta(iterDir, meta)
+				_ = am.writeSummary(summaryPath, meta)
+				cfg.Observer.IterationEnded(iterCtx, i, toSessionUsage(cost), time.Since(iterStart), finalStatusStopped)
+				return &LoopResult{FinalStatus: finalStatusStopped, Iterations: i, LastError: gate.parkReason(asked, agentStatus, waitResult.Err)}, nil
 			}
+		}
+
+		// Handle based on agent status
+		if waitResult.Err != nil {
+			_ = am.writeMeta(iterDir, meta)
+			_ = am.writeSummary(summaryPath, meta)
+			cfg.Observer.IterationEnded(iterCtx, i, toSessionUsage(cost), time.Since(iterStart), agentStatus)
+			return nil, fmt.Errorf("waiting for implementer outcome: %w", waitResult.Err)
 		}
 		if agentStatus == agentStatusProtocolViolation {
 			violations := waitResult.ProtocolViolations

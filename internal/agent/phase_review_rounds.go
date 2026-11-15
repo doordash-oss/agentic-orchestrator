@@ -332,6 +332,21 @@ type implementReviewUserInput struct {
 	DecisionsPath string
 }
 
+// parkReason explains a handoff left pending by its asking session.
+func (g *phaseReviewGate) parkReason(asked *reviewHandoffPromptInput, agentStatus string, err error) string {
+	detail := ""
+	switch {
+	case err != nil:
+		detail = fmt.Sprintf(" (the asking session failed: %v)", err)
+	case agentStatus != agentStatusSuccess:
+		detail = fmt.Sprintf(" (the asking session ended %s)", agentStatus)
+	}
+	if asked.Answer != "" {
+		return fmt.Sprintf("%s stopped before your guidance was applied%s: %s Resume the feature to apply it; see %s.", g.label(), detail, asked.Reason, asked.NotePath)
+	}
+	return fmt.Sprintf("%s needs your decision, and the handoff question has no answer yet%s: %s Resume the feature to ask again; see %s.", g.label(), detail, asked.Reason, asked.NotePath)
+}
+
 // owes reports whether the loop must run another iteration past the cap.
 func (g *phaseReviewGate) owes(resumeOwed bool) bool {
 	return g != nil && (g.pending != nil || resumeOwed)

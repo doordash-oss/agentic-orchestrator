@@ -746,8 +746,43 @@ func TestRunFeatureFinalReviewLoop_FinalGateRunsAxesAndAggregates(t *testing.T) 
 	if result.FinalStatus != "review_passed" {
 		t.Fatalf("FinalStatus = %q, want review_passed; LastError=%q", result.FinalStatus, result.LastError)
 	}
-	if result.Iterations != 2 {
-		t.Fatalf("Iterations = %d, want 2 after changes-requested aggregate and fix", result.Iterations)
+	// QA requests changes in round 1; round 2 reruns only QA; round 3 is the
+	// one-time confirmation of the Craft and Cleanliness approvals that
+	// predate the fix.
+	if result.Iterations != 3 {
+		t.Fatalf("Iterations = %d, want 3 (changes requested, follow-up, confirmation)", result.Iterations)
+	}
+	for iteration, axes := range map[string][]string{
+		"iteration-01": {"craft", "cleanliness", "qa"},
+		"iteration-02": {"qa"},
+		"iteration-03": {"craft", "cleanliness"},
+	} {
+		for _, slug := range []string{"craft", "cleanliness", "qa"} {
+			_, err := os.Stat(filepath.Join(artDir, iteration, slug, "review-prompt.md"))
+			if ran := err == nil; ran != slices.Contains(axes, slug) {
+				t.Fatalf("%s %s ran = %v, want %v", iteration, slug, ran, slices.Contains(axes, slug))
+			}
+		}
+	}
+	followUp, err := os.ReadFile(filepath.Join(artDir, "iteration-02", "qa", "review-prompt.md"))
+	if err != nil {
+		t.Fatalf("read follow-up prompt: %v", err)
+	}
+	for _, want := range []string{
+		"## Round Scope: Follow-Up",
+		filepath.Join(artDir, "iteration-01", "qa", "review-feedback.md"),
+		"Rerun the checks behind your open findings on the current commit.",
+	} {
+		if !strings.Contains(string(followUp), want) {
+			t.Fatalf("follow-up prompt missing %q:\n%s", want, followUp)
+		}
+	}
+	confirm, err := os.ReadFile(filepath.Join(artDir, "iteration-03", "craft", "review-prompt.md"))
+	if err != nil {
+		t.Fatalf("read confirmation prompt: %v", err)
+	}
+	if !strings.Contains(string(confirm), "## Round Scope: Confirmation") {
+		t.Fatalf("confirmation prompt missing round scope:\n%s", confirm)
 	}
 
 	for _, axisSlug := range []string{"craft", "cleanliness", "qa"} {
@@ -788,26 +823,27 @@ func TestRunFeatureFinalReviewLoop_FinalGateRunsAxesAndAggregates(t *testing.T) 
 		}
 	}
 	if reviewerCalls != 6 {
-		t.Fatalf("reviewer BuildSession calls = %d, want 6 (three axes across two iterations)", reviewerCalls)
+		t.Fatalf("reviewer BuildSession calls = %d, want 6 (three axes, then QA, then two confirmations)", reviewerCalls)
 	}
 
 	events := readObserveEvents(t, observeDir, f.ID)
 	validationStarted := filterEventsByType(events, "validation.started")
-	if len(validationStarted) != 2 {
-		t.Fatalf("validation.started count = %d, want 2", len(validationStarted))
+	if len(validationStarted) != 3 {
+		t.Fatalf("validation.started count = %d, want 3", len(validationStarted))
 	}
-	if validationStarted[0].Phase != "final_review" || validationStarted[0].Data["validator_count"] != float64(3) {
-		t.Fatalf("first validation.started = %+v, want final_review with validator_count=3", validationStarted[0])
+	for i, want := range []float64{3, 1, 2} {
+		if validationStarted[i].Phase != "final_review" || validationStarted[i].Data["validator_count"] != want {
+			t.Fatalf("validation.started[%d] = %+v, want final_review with validator_count=%v", i, validationStarted[i], want)
+		}
 	}
 	validationCompleted := filterEventsByType(events, "validation.completed")
-	if len(validationCompleted) != 2 {
-		t.Fatalf("validation.completed count = %d, want 2", len(validationCompleted))
+	if len(validationCompleted) != 3 {
+		t.Fatalf("validation.completed count = %d, want 3", len(validationCompleted))
 	}
-	if validationCompleted[0].Phase != "final_review" || validationCompleted[0].Status != "CHANGES_REQUESTED" {
-		t.Fatalf("first validation.completed = %+v, want final_review CHANGES_REQUESTED", validationCompleted[0])
-	}
-	if validationCompleted[1].Phase != "final_review" || validationCompleted[1].Status != "APPROVED" {
-		t.Fatalf("second validation.completed = %+v, want final_review APPROVED", validationCompleted[1])
+	for i, want := range []string{"CHANGES_REQUESTED", "APPROVED", "APPROVED"} {
+		if validationCompleted[i].Phase != "final_review" || validationCompleted[i].Status != want {
+			t.Fatalf("validation.completed[%d] = %+v, want final_review %s", i, validationCompleted[i], want)
+		}
 	}
 	started := validatorNamesByEvent(events, "validator.started")
 	wantNames := []string{

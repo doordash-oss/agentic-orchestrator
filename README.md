@@ -109,7 +109,7 @@ The lifecycle is profile-dependent and checkpoint-driven. Medium starts at plann
 
 **Implementation** — Runs a unified phase implementation loop across the phase-scoped repo set. Medium and Large rely on Final Review; Moonshot also keeps per-iteration review during implementation, where an acceptance reviewer runs the phase plan's verification itself.
 
-**Final Review** — Runs once after the last roadmap phase, across every touched repo that has not already been published. The phase contains its own review/fix loop. Passing Final Review moves the feature to `CodeReady`; exhausting the loop or violating the phase contract fails the feature.
+**Final Review** — Runs once after the last roadmap phase, across every touched repo that has not already been published. The phase contains its own review/fix loop: the first round runs every review axis over the full diff, later rounds rerun only the axes that requested changes, and earlier approvals confirm once against the fixes that followed them. The fixer can dispute a finding by asking you, and your answer is recorded for every later round. When a fix round changes nothing, or one axis requests changes three rounds in a row, Final Review asks you whether to continue with guidance, accept and proceed to Publish, or stop. Passing Final Review moves the feature to `CodeReady`; hitting the iteration cap or violating the phase contract fails the feature.
 
 **Publishing** — If auto-publish is enabled, Agentic Orchestrator commits, pushes, creates PRs, and injects cross-repo PR links automatically. If manual publish is enabled, the desktop app pauses at `CodeReady` so you can review the diff and PR description first.
 

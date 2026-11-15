@@ -39,6 +39,11 @@ type finalFixPromptOpts struct {
 	// RefactorPassForkPoint resolves the spec's "fork point" references for a
 	// refactor child ("repo @ sha"). Empty for top-level features.
 	RefactorPassForkPoint string
+
+	RoadmapPath     string
+	UserAnswerPaths []string
+	DecisionsPath   string
+	Handoff         *finalFixHandoffInput
 }
 
 // buildFinalFixPrompt constructs the prompt for the fix agent session.
@@ -60,6 +65,10 @@ func buildFinalFixPrompt(opts finalFixPromptOpts) string {
 		IncludeManualVerificationOutcomes: feedbackMentionsManualVerification(opts.Feedback),
 		Publishable:                       opts.Publishable,
 		RefactorPassForkPoint:             opts.RefactorPassForkPoint,
+		RoadmapPath:                       opts.RoadmapPath,
+		UserAnswerPaths:                   opts.UserAnswerPaths,
+		DecisionsPath:                     opts.DecisionsPath,
+		Handoff:                           opts.Handoff,
 	})
 }
 

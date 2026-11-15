@@ -29,12 +29,6 @@ Read the approved roadmap at: /state/feat-x/run-1/roadmap/plan.md
 
 Read the implementation plan at: /state/feat-x/run-1/phase-2/plan.md
 
-## Prior Aggregate Feedback
-
-## Findings
-### Craft
-- Tighten error handling.
-
 ## Acceptance
 
 Feature acceptance is defined by the `## Acceptance Criteria` section of the approved design at /state/feat-x/run-1/design/design.md. Judge acceptance against that section, not against any restatement of it.

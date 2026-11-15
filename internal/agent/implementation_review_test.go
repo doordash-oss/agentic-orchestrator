@@ -268,7 +268,6 @@ func TestBuildImplementationReviewAxisPromptIncludesFinalGateContext(t *testing.
 		DesignArtifactPath: "/design.md",
 		ExitCriteria:       "Feature fully implemented.",
 		DiffBase:           "main",
-		PreviousFeedback:   "Prior aggregate finding.",
 		Iteration:          2,
 		RoadmapPath:        "/roadmap.md",
 		PlanPath:           "/phase-plan.md",
@@ -287,7 +286,6 @@ func TestBuildImplementationReviewAxisPromptIncludesFinalGateContext(t *testing.
 		"Feature fully implemented.",
 		"Read the approved roadmap at: /roadmap.md",
 		"Read the implementation plan at: /phase-plan.md",
-		"Prior aggregate finding.",
 		"Review feedback output: /review/iteration-02/functionality-evidence/review-feedback.md",
 	} {
 		if !strings.Contains(got, want) {
@@ -307,15 +305,14 @@ func TestBuildImplementationReviewAxisPromptIncludesFinalGateContext(t *testing.
 
 func TestBuildImplementationReviewAxisPromptLiveRunFinalGuidance(t *testing.T) {
 	got := buildImplementationReviewAxisPromptWithOpts(implementationReviewAxisPromptOpts{
-		Gate:             implementationReviewGateFinal,
-		AxisLabel:        "QA",
-		LiveRunAxis:      true,
-		IterDir:          "/review/iteration-01",
-		FeedbackPath:     "/review/iteration-01/qa/review-feedback.md",
-		ExitCriteria:     "Feature works end to end.",
-		RoadmapPath:      "/roadmap.md",
-		PlanPath:         "/phase-plan.md",
-		PreviousFeedback: "",
+		Gate:         implementationReviewGateFinal,
+		AxisLabel:    "QA",
+		LiveRunAxis:  true,
+		IterDir:      "/review/iteration-01",
+		FeedbackPath: "/review/iteration-01/qa/review-feedback.md",
+		ExitCriteria: "Feature works end to end.",
+		RoadmapPath:  "/roadmap.md",
+		PlanPath:     "/phase-plan.md",
 	})
 
 	for _, want := range []string{

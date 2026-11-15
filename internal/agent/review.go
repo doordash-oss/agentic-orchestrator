@@ -61,7 +61,6 @@ type reviewUserInput struct {
 	DiffBase           string
 	FeatureDescription string
 	DesignArtifactPath string
-	PreviousFeedback   string
 	// RefactorPassForkPoint names a refactor child's fork-point commits
 	// ("repo @ sha"). It resolves the spec's "fork point" references and
 	// attributes cumulative-diff hunks between parent and pass. Empty for
@@ -92,7 +91,6 @@ type implementationReviewAxisPromptOpts struct {
 	ExitCriteria       string
 	AcceptanceClause   string
 	DiffBase           string
-	PreviousFeedback   string
 	// RefactorPassForkPoint resolves the spec's "fork point" references for a
 	// refactor child ("repo @ sha"). Empty for top-level features.
 	RefactorPassForkPoint string
@@ -125,7 +123,6 @@ func buildImplementationReviewAxisPromptWithOpts(opts implementationReviewAxisPr
 			RefactorPassForkPoint: opts.RefactorPassForkPoint,
 			FeatureDescription:    opts.FeatureDescription,
 			DesignArtifactPath:    opts.DesignArtifactPath,
-			PreviousFeedback:      opts.PreviousFeedback,
 			RoadmapPath:           opts.RoadmapPath,
 			PlanPath:              opts.PlanPath,
 			ExitCriteria:          opts.ExitCriteria,

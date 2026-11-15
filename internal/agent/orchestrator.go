@@ -260,6 +260,8 @@ func RunMultiRepoFinalReview(cfg OrchestratorConfig, sm ports.SessionManager) (*
 		return &OrchestratorResult{FinalStatus: "all_passed"}, nil
 	case "interrupted":
 		return &OrchestratorResult{FinalStatus: "interrupted"}, nil
+	case finalStatusStopped:
+		return &OrchestratorResult{FinalStatus: finalStatusStopped, LastError: frResult.LastError}, nil
 	default:
 		return &OrchestratorResult{
 			FinalStatus:  "failed",

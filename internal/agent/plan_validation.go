@@ -773,7 +773,8 @@ var axisFrozenHeading = map[string]string{
 // the same axis that cause the phase-planning loop to escalate to
 // needs_human_review. Three means: two retries past the first failure with no
 // material change — strong evidence the critic is drifting rather than the
-// planner producing a new artifact.
+// planner producing a new artifact. Final Review applies the same limit to
+// consecutive CHANGES_REQUESTED rounds from one axis.
 const axisStallLimit = 3
 
 // axisStallState tracks how many consecutive attempts each axis has failed

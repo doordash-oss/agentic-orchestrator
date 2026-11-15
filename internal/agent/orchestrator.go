@@ -160,7 +160,7 @@ func resolveOrchestratorSessionConfig(cfg OrchestratorConfig, role llm.PhaseRole
 
 // OrchestratorResult is the aggregate outcome of multi-repo implementation.
 type OrchestratorResult struct {
-	FinalStatus  string            // "all_passed" | "awaiting_final_review" | "failed" | "plan_revision_required" | "interrupted"
+	FinalStatus  string            // "all_passed" | "awaiting_final_review" | "failed" | "plan_revision_required" | "interrupted" | "stopped"
 	RepoStatuses map[string]string // per-repo inner loop FinalStatus (e.g., "max_iterations")
 	FailedRepos  []string
 	LastError    string
@@ -205,6 +205,8 @@ func phaseLoopResultToOrchestratorResult(_ OrchestratorConfig, r *PhaseImplement
 	switch r.FinalStatus {
 	case "interrupted":
 		return &OrchestratorResult{FinalStatus: "interrupted"}
+	case finalStatusStopped:
+		return &OrchestratorResult{FinalStatus: finalStatusStopped, LastError: r.LastError}
 	case "plan_revision_required":
 		return &OrchestratorResult{
 			FinalStatus:          "plan_revision_required",

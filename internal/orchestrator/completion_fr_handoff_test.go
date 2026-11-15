@@ -66,3 +66,37 @@ func TestOrchestrator_FeatureFinalReview_StoppedAtHandoffParksInterrupted(t *tes
 		t.Fatalf("unexpected failure: %+v", stored.Run().Failure)
 	}
 }
+
+// A user who answers "Stop" at a per-phase review handoff parks the feature
+// in its implement phase, so resuming re-enters the phase review.
+func TestOrchestrator_PhaseImplement_StoppedAtHandoffParksInterrupted(t *testing.T) {
+	f := &feature.Feature{
+		ID:                  "feat-phase-stopped",
+		Status:              feature.StatusImplementing,
+		CurrentPhase:        feature.PhaseImplement,
+		CurrentRoadmapPhase: 1,
+		TotalRoadmapPhases:  2,
+		Repos:               []feature.FeatureRepo{{Name: "payments", Path: "/tmp/payments"}},
+		Pipeline:            feature.PipelineMoonshot,
+	}
+	fs, lc := newStoredFeatureFixture(t, f)
+	o := orchestrator.New(orchestrator.Deps{Manager: lc, Store: fs}, orchestrator.Hooks{})
+
+	if err := o.HandlePhaseCompletion(f.ID, orchestrator.PhaseCompletionInput{
+		Phase:           feature.PhaseImplement,
+		MultiRepoResult: &agent.OrchestratorResult{FinalStatus: "stopped", LastError: "The Craft axis requested changes in 3 consecutive rounds."},
+	}); err != nil {
+		t.Fatalf("HandlePhaseCompletion: %v", err)
+	}
+
+	stored := loadStoredFeature(t, fs, f.ID)
+	if stored.Status != feature.StatusInterrupted {
+		t.Fatalf("persisted status = %s, want Interrupted", stored.Status)
+	}
+	if stored.CurrentPhase != feature.PhaseImplement || stored.CurrentRoadmapPhase != 1 {
+		t.Fatalf("phase = %s/%d, want implement phase 1 so resume re-enters it", stored.CurrentPhase, stored.CurrentRoadmapPhase)
+	}
+	if stored.Run().Failure != nil {
+		t.Fatalf("unexpected failure: %+v", stored.Run().Failure)
+	}
+}

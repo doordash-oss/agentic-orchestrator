@@ -212,13 +212,15 @@ func RunPhaseImplementLoop(cfg OrchestratorConfig, sm ports.SessionManager) (*Ph
 			PlanRevisionFeedback: loopResult.PlanRevisionFeedback,
 		}, nil
 
-	case "interrupted":
+	case "interrupted", finalStatusStopped:
 		// Crash recovery re-runs from scratch — no atomic stamp on
 		// interrupt; the persisted state stays at whatever the prior
-		// iterations committed (typically untouched).
+		// iterations committed (typically untouched). A stop at a review
+		// handoff resumes the same way.
 		return &PhaseImplementLoopResult{
-			FinalStatus: "interrupted",
+			FinalStatus: loopResult.FinalStatus,
 			Iterations:  loopResult.Iterations,
+			LastError:   loopResult.LastError,
 			PhaseRepos:  phaseRepos,
 		}, nil
 

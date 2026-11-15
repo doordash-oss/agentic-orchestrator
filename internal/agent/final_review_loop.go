@@ -728,7 +728,6 @@ func (s *featureFinalReviewLoopState) runFix(iteration int, iterDir, feedback st
 		IterationDir:   iterDir,
 		SkillsDir:      cfg.SkillsDir,
 		GuidelinesDir:  cfg.GuidelinesDir,
-		KBInfos:        cfg.KBInfos,
 		AskingClause:   cfg.AskingClause,
 		CompletionTool: cfg.CompletionTool,
 	})
@@ -881,7 +880,6 @@ func (s *featureFinalReviewLoopState) observeFinalReviewSession(sess ports.Sessi
 	sessionCtx := observe.SpanContextForFeature(cfg.Feature.ID, cfg.Feature.TraceID, cfg.Feature.Name, cfg.Feature.FeatureSpanID).WithRun(cfg.Feature.ActiveRun).Child()
 	cfg.Observer.SessionStarted(sessionCtx, feature.PhaseFinalReview.String(), sessionID, providerName, model, "", string(cfg.ImplEffectiveEffort), string(cfg.ImplEffortSource))
 	(&contextReadTracker{
-		KBBaseDir:     filepath.Join(filepath.Dir(cfg.StateDir), "knowledge-base"),
 		SkillsDir:     cfg.SkillsDir,
 		GuidelinesDir: cfg.GuidelinesDir,
 		Observer:      cfg.Observer,

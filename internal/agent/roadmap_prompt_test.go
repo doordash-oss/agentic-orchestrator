@@ -49,9 +49,6 @@ func TestBuildRoadmapPrompt(t *testing.T) {
 	if !strings.Contains(prompt, "Ambiguity Resolution") {
 		t.Error("prompt should contain inquireness directive")
 	}
-	if strings.Contains(prompt, "/kb/") {
-		t.Error("prompt should not contain KB directory path; RoleSpec system prompt owns useful resources")
-	}
 	// Roadmap decomposition methodology is in SKILL.md, not in the prompt.
 }
 
@@ -99,7 +96,6 @@ func TestBuildRoadmapPromptLeavesRoleSpecOwnedContentToSystemPrompt(t *testing.T
 		"# Useful Resources",
 		"/skills/create-roadmap/SKILL.md",
 		"/guidelines/go/index.md",
-		"/kb/agentic/index.md",
 	} {
 		if strings.Contains(prompt, forbidden) {
 			t.Fatalf("BuildRoadmapPromptWithResearch() contains RoleSpec-owned content %q:\n%s", forbidden, prompt)
@@ -120,7 +116,6 @@ func TestBuildPhasePlanPromptLeavesRoleSpecOwnedContentToSystemPrompt(t *testing
 		"# Useful Resources",
 		"/skills/plan-phase/SKILL.md",
 		"/guidelines/go/index.md",
-		"/kb/agentic/index.md",
 	} {
 		if strings.Contains(prompt, forbidden) {
 			t.Fatalf("BuildPhasePlanPromptWithResearch() contains RoleSpec-owned content %q:\n%s", forbidden, prompt)
@@ -210,9 +205,6 @@ func TestBuildRoadmapPromptNoKB(t *testing.T) {
 
 	if !strings.Contains(prompt, "/path/to/design.md") {
 		t.Error("prompt should contain design path")
-	}
-	if strings.Contains(prompt, "Knowledge Base") {
-		t.Error("prompt should not contain KB section when no KBInfos")
 	}
 	if !strings.Contains(prompt, "## Ambiguity Resolution [grill-me]") {
 		t.Error("prompt should contain [grill-me] header for none inquireness")

@@ -56,7 +56,6 @@ const (
 	TemplateImplementUser                templateKey = "implement.user"
 	templateImplementationReviewAxisUser templateKey = "implementation_review_axis.user"
 	TemplateInquireUser                  templateKey = "inquire.user"
-	TemplateKBBuildUser                  templateKey = "kb_build.user"
 	TemplatePhasePlanUser                templateKey = "phase_plan.user"
 	TemplatePhasePlanRevisionUser        templateKey = "phase_plan_revision.user"
 	TemplatePRDescriptionUser            templateKey = "pr_description.user"

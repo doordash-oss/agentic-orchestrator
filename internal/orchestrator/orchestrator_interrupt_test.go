@@ -23,15 +23,11 @@ import (
 	"github.com/doordash-oss/agentic-orchestrator/test/testutil/mocks"
 )
 
-// kbStatusBuilding is the fixture KBStatus value shared by this file's tests.
-const kbStatusBuilding = "building"
-
 // ---------------------------------------------------------------------------
 // TestOrchestrator_InterruptFeature
 // ---------------------------------------------------------------------------
 
 func TestOrchestrator_InterruptFeature(t *testing.T) {
-	kbStatus := map[string]string{repoName: kbStatusBuilding, repoNameB: kbStatusCompleted}
 	f := &feature.Feature{
 		ID:                       "feat-int",
 		Status:                   feature.StatusNeedUserInput,
@@ -44,7 +40,6 @@ func TestOrchestrator_InterruptFeature(t *testing.T) {
 		PermissionsQueue: []feature.PermissionRequest{
 			{Tool: "t1", Pending: true},
 		},
-		KBStatus: kbStatus,
 	}
 	fs, lc := newStoredFeatureFixture(t, f)
 
@@ -87,14 +82,6 @@ func TestOrchestrator_InterruptFeature(t *testing.T) {
 	}
 	if f.PendingNeedUserInputPath != "" {
 		t.Errorf("PendingNeedUserInputPath = %q, want empty after Stop", f.PendingNeedUserInputPath)
-	}
-
-	// KBStatus preserved (NOT cleared by InterruptFeature).
-	if f.KBStatus == nil {
-		t.Error("KBStatus was cleared by InterruptFeature — should be preserved")
-	}
-	if f.KBStatus[repoName] != kbStatusBuilding {
-		t.Errorf("KBStatus[repo-a] = %q, want building", f.KBStatus[repoName])
 	}
 
 	if f.Status != feature.StatusInterrupted {
@@ -175,19 +162,16 @@ func TestOrchestrator_InterruptFeature_SettledFeatureIsIdempotent(t *testing.T) 
 
 func TestOrchestrator_InterruptAllRunning(t *testing.T) {
 	running1 := &feature.Feature{
-		ID:       "running-1",
-		Status:   feature.StatusImplementing,
-		KBStatus: map[string]string{"r": kbStatusBuilding},
+		ID:     "running-1",
+		Status: feature.StatusImplementing,
 	}
 	running2 := &feature.Feature{
-		ID:       "running-2",
-		Status:   feature.StatusPlanning,
-		KBStatus: map[string]string{"r": kbStatusCompleted},
+		ID:     "running-2",
+		Status: feature.StatusPlanning,
 	}
 	published := &feature.Feature{
-		ID:       "pub-1",
-		Status:   feature.StatusPublished,
-		KBStatus: map[string]string{"r": kbStatusCompleted},
+		ID:     "pub-1",
+		Status: feature.StatusPublished,
 	}
 	done := &feature.Feature{ID: "done-1", Status: feature.StatusDone}
 	setup := &feature.Feature{ID: "setup-1", Status: feature.StatusSettingUpWorktrees}
@@ -214,24 +198,8 @@ func TestOrchestrator_InterruptAllRunning(t *testing.T) {
 		t.Errorf("OnFeatureInterrupted calls = %d, want 2 (only running features)", interrupts)
 	}
 
-	// Running features KBStatus cleared (startup-sweep parity).
-	running1 = loadStoredFeature(t, fs, running1.ID)
-	running2 = loadStoredFeature(t, fs, running2.ID)
-	published = loadStoredFeature(t, fs, published.ID)
 	done = loadStoredFeature(t, fs, done.ID)
 	setup = loadStoredFeature(t, fs, setup.ID)
-	if running1.KBStatus != nil {
-		t.Errorf("running1.KBStatus should be nil after InterruptAllRunning, got %v", running1.KBStatus)
-	}
-	if running2.KBStatus != nil {
-		t.Errorf("running2.KBStatus should be nil after InterruptAllRunning, got %v", running2.KBStatus)
-	}
-
-	// Published feature KBStatus NOT cleared.
-	if published.KBStatus == nil {
-		t.Error("published.KBStatus should NOT be cleared for published features")
-	}
-
 	// Done feature untouched.
 	if done.Status != feature.StatusDone {
 		t.Error("done feature status changed unexpectedly")

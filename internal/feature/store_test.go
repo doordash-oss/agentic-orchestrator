@@ -2093,7 +2093,7 @@ func TestStore_SealAndForkRun_IdempotentReseal(t *testing.T) {
 		Description:   "test",
 		Created:       time.Now(),
 		Status:        StatusInquiryNeedsReview,
-		CurrentPhase:  PhaseKnowledgeBase,
+		CurrentPhase:  PhaseInquire,
 		ActiveRun:     1,
 		RunCount:      1,
 		SchemaVersion: SchemaVersionCurrent,
@@ -2348,6 +2348,84 @@ artifacts: {}
 	}
 }
 
+// TestStoreLoadsFeatureInterruptedMidKnowledgeBase covers a record persisted
+// while the retired Knowledge Base phase was running: it loads interrupted at
+// Inquire, keeps the phase's timing and cost history, and ignores the
+// retired run fields.
+func TestStoreLoadsFeatureInterruptedMidKnowledgeBase(t *testing.T) {
+	t.Parallel()
+	// parallel-candidate: per-test temp dirs isolate filesystem state.
+	dir := t.TempDir()
+	store := NewStore(dir)
+
+	const featureID = "legacy-kb-001"
+	runDir := filepath.Join(dir, featureID, "runs", "run-001")
+	if err := os.MkdirAll(runDir, 0o755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	featureYAML := fmt.Sprintf(`id: %s
+name: Legacy KB
+slug: legacy-kb
+description: persisted mid knowledge base
+created: 2026-01-01T00:00:00Z
+status: BuildingKB
+current_phase: %d
+pipeline: large
+repos:
+  - name: repo-a
+    path: /tmp/a
+models:
+  kb_build: some-model
+effort:
+  kb_build: high
+inquireness: medium
+active_run: 1
+run_count: 1
+schema_version: %d
+`, featureID, int(PhaseKnowledgeBase), SchemaVersionCurrent)
+	if err := os.WriteFile(filepath.Join(dir, featureID, "feature.yaml"), []byte(featureYAML), 0o644); err != nil {
+		t.Fatalf("write feature.yaml: %v", err)
+	}
+	runYAML := `started_at: 2026-01-01T00:00:00Z
+active_timing_key: knowledgebase
+active_phase_start: 2026-01-01T00:00:00Z
+phase_timings:
+  knowledgebase: 1m0s
+phase_costs:
+  knowledgebase: 1.5
+kb_wait_message: waiting
+force_kb_rebuild: true
+kb_status:
+  repo-a: pending
+`
+	if err := os.WriteFile(filepath.Join(runDir, "run.yaml"), []byte(runYAML), 0o644); err != nil {
+		t.Fatalf("write run.yaml: %v", err)
+	}
+
+	loaded, err := store.Load(featureID)
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if loaded.Status != StatusInterrupted {
+		t.Errorf("Status = %v, want %v", loaded.Status, StatusInterrupted)
+	}
+	if loaded.CurrentPhase != PhaseInquire {
+		t.Errorf("CurrentPhase = %v, want %v", loaded.CurrentPhase, PhaseInquire)
+	}
+	if loaded.ActivePhaseStart != nil {
+		t.Errorf("ActivePhaseStart = %v, want accumulated and cleared", loaded.ActivePhaseStart)
+	}
+	if got := loaded.PhaseTimings["knowledgebase"]; got <= time.Minute {
+		t.Errorf("PhaseTimings[knowledgebase] = %v, want more than the persisted minute", got)
+	}
+	if got := loaded.PhaseCosts["knowledgebase"]; got != 1.5 {
+		t.Errorf("PhaseCosts[knowledgebase] = %v, want 1.5", got)
+	}
+	if err := loaded.Transition(StatusInquiring); err != nil {
+		t.Errorf("resume transition to Inquiring: %v", err)
+	}
+}
+
 func TestStoreSetupStateRoundTrip(t *testing.T) {
 	t.Parallel()
 	// parallel-candidate: per-test temp dirs and isolated store state.
@@ -2366,7 +2444,7 @@ func TestStoreSetupStateRoundTrip(t *testing.T) {
 		Description:   "setup serialization",
 		Created:       now,
 		Status:        StatusSettingUpWorktrees,
-		CurrentPhase:  PhaseKnowledgeBase,
+		CurrentPhase:  PhaseInquire,
 		Repos:         repos,
 		Models:        config.ModelConfig{},
 		ExitCriteria:  "",

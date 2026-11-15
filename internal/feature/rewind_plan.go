@@ -23,6 +23,7 @@ type rewindPlan struct {
 	Choices            []RewindChoice
 	UpgradeOptions     []PipelineProfile
 	EffectiveTarget    Phase
+	RestartsPipeline   bool
 	ValidRoadmapPhases []int
 	CarriedPhases      []string
 	PRs                []RewindPRConsequence
@@ -47,6 +48,7 @@ func buildRewindPlan(f *Feature, sealedRunDir string, request RewindRequest, upg
 	}
 	upgraded := FeatureWithUpgrade(f, upgrade)
 	plan.EffectiveTarget = effectiveRewindPhase(&upgraded, request.TargetPhase)
+	plan.RestartsPipeline = rewindRestartsPipeline(&upgraded, request.TargetPhase)
 	partial, err := validatePartialRewindRequestForFeature(f, request)
 	if err != nil {
 		return plan, err

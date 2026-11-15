@@ -62,11 +62,8 @@ var Module = fx.Module("orchestrator",
 			Sessions:    p.SessionManager, // *session.Manager satisfies ports.SessionManager
 			Worktrees:   p.Worktrees,      // retained feature.WorktreeOps seam
 			PhaseRunner: p.PhaseRunner,    // concrete *agent.PhaseRunner
-			// Reuse PhaseRunner.CommandRunner so KB freshness checks
-			// (agent.IsKBFresh → GetCurrentCommit) have a real runner to
-			// shell out to git. PhaseRunner constructs an execCommandRunner
-			// in production and a MockCommandRunner in tests, so wiring it
-			// through here avoids a nil dereference in startKB.
+			// Reuse PhaseRunner.CommandRunner so git-backed checks have a real
+			// runner (execCommandRunner in production, a mock in tests).
 			CmdRunner: p.PhaseRunner.CommandRunner,
 			// Recovery adapter bound to the feature store's BaseDir and the
 			// feature manager so orphan-session discovery and dispatch can

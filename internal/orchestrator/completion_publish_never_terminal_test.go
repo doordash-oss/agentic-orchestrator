@@ -80,7 +80,7 @@ func TestOrchestrator_RoadmapFinalAutoPublishFailureIsNeverTerminal(t *testing.T
 	}, orchestrator.Hooks{})
 	// The deferred end-of-feature Final Review pass stubs to all_passed so
 	// the flow reaches the roadmap-final auto-publish under test.
-	o.SetRunMultiRepoFinalReviewFn(func(*feature.Feature, ...agent.KBInfo) (chan *agent.OrchestratorResult, error) {
+	o.SetRunMultiRepoFinalReviewFn(func(*feature.Feature) (chan *agent.OrchestratorResult, error) {
 		ch := make(chan *agent.OrchestratorResult, 1)
 		ch <- &agent.OrchestratorResult{FinalStatus: "all_passed"}
 		return ch, nil
@@ -229,7 +229,7 @@ func TestOrchestrator_RoadmapFinalScrubFailureStillEmitsPublishCompleted(t *test
 			}
 		},
 	})
-	o.SetRunMultiRepoFinalReviewFn(func(*feature.Feature, ...agent.KBInfo) (chan *agent.OrchestratorResult, error) {
+	o.SetRunMultiRepoFinalReviewFn(func(*feature.Feature) (chan *agent.OrchestratorResult, error) {
 		ch := make(chan *agent.OrchestratorResult, 1)
 		ch <- &agent.OrchestratorResult{FinalStatus: "all_passed"}
 		return ch, nil

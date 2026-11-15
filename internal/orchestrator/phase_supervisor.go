@@ -139,9 +139,6 @@ func (s *phaseSupervisor) runSingleShotSession(featureID, sessionID string, phas
 }
 
 func singleShotPhaseRole(phase feature.Phase) agent.Role {
-	if phase == feature.PhaseKnowledgeBase {
-		return agent.RoleKnowledgeBaseBuilder
-	}
 	role, _ := artifactPhaseRole(phase)
 	return role
 }

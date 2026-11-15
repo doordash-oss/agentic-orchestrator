@@ -79,15 +79,14 @@ func TestBuildInquirePromptUsesDescription(t *testing.T) {
 	}
 }
 
-func TestBuildInquirePromptLeavesKBResourcesToSystemPrompt(t *testing.T) {
+func TestBuildInquirePromptLeavesResourcesToSystemPrompt(t *testing.T) {
 	f := &feature.Feature{
-		Name:        "KB Feature",
+		Name:        "Resource Feature",
 		Description: "Test",
 		Inquireness: feature.InquirenessMedium,
 	}
-	kb := KBInfo{Name: "myrepo", IndexPath: "/tmp/kb/index.md", RootDir: "/tmp/kb"}
 	prompt := buildInquirePrompt(f)
-	for _, forbidden := range []string{"# Useful Resources", "## Knowledge Base", "/tmp/kb/index.md", "/tmp/kb"} {
+	for _, forbidden := range []string{"# Useful Resources", "## Repository Instructions"} {
 		if strings.Contains(prompt, forbidden) {
 			t.Fatalf("BuildInquirePrompt() contains RoleSpec-owned resource %q:\n%s", forbidden, prompt)
 		}
@@ -97,9 +96,8 @@ func TestBuildInquirePromptLeavesKBResourcesToSystemPrompt(t *testing.T) {
 		Spec:         inquirerRoleSpec,
 		IterationDir: "/tmp/feature/runs/run-001/inquire",
 		SkillsDir:    "/tmp/skills",
-		KBInfos:      []KBInfo{kb},
 	})
-	for _, want := range []string{"# Useful Resources", "## Knowledge Base", "**myrepo**", "/tmp/kb/index.md", "/tmp/kb"} {
+	for _, want := range []string{"# Useful Resources", "## Repository Instructions", "AGENTS.md"} {
 		if !strings.Contains(systemPrompt, want) {
 			t.Fatalf("buildRoleSystemPrompt() missing %q:\n%s", want, systemPrompt)
 		}

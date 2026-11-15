@@ -1158,7 +1158,7 @@ func TestRunBoundedHelper_ArmsKeepAliveForCompletionHelpers(t *testing.T) {
 				sess := newUtilityTestSession()
 				sess.CostVal = &llm.ResultMessage{Type: testResultMessageType, Subtype: testResultSuccessValue, Result: "done", StopReason: testStopReasonEndTurn}
 				if tc.phaseDir != "" {
-					if err := os.WriteFile(filepath.Join(tc.phaseDir, "index.md"), []byte("# Knowledge Base\n"), 0o644); err != nil {
+					if err := os.WriteFile(filepath.Join(tc.phaseDir, "research.md"), []byte("# Research\n"), 0o644); err != nil {
 						t.Fatalf("write contract artifact: %v", err)
 					}
 					sess.setRootIntent(validSuccessCompletionIntent())
@@ -1172,8 +1172,8 @@ func TestRunBoundedHelper_ArmsKeepAliveForCompletionHelpers(t *testing.T) {
 				sessionID:     "helper-keepalive",
 				workDir:       t.TempDir(),
 				completionDir: tc.phaseDir,
-				contractPhase: feature.PhaseKnowledgeBase,
-				contractRole:  RoleKnowledgeBaseBuilder,
+				contractPhase: feature.PhaseResearch,
+				contractRole:  RoleResearcher,
 			})
 			if err != nil {
 				t.Fatalf("runBoundedHelperSession() error = %v", err)

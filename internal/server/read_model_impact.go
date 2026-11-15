@@ -32,7 +32,6 @@ const (
 	impactCategoryWorktrees = "worktrees"
 	impactCategoryBranches  = "branches"
 	impactCategoryHistory   = "history"
-	impactCategoryKnowledge = "knowledge"
 )
 
 // Retained statements for child_discard; parent_cascade_delete keeps nothing.
@@ -43,9 +42,9 @@ const (
 
 // childDiscardImpactPreview projects the discard state machine's impact from
 // the child record: every active child session stops, disposable per-repo
-// worktrees and ephemeral branches are removed, and the temporary knowledge
-// workspace is discarded — while the paired Review configuration and the
-// immutable closed (Discarded) child record are retained.
+// worktrees and ephemeral branches are removed — while the paired Review
+// configuration and the immutable closed (Discarded) child record are
+// retained.
 func (h *apiHandler) childDiscardImpactPreview(f *feature.Feature) *ActionImpactPreview {
 	if f == nil || !f.IsChild() || !f.IsActiveChild() {
 		return nil
@@ -57,7 +56,6 @@ func (h *apiHandler) childDiscardImpactPreview(f *feature.Feature) *ActionImpact
 			{Key: impactCategorySessions, Label: "Sessions stopped", Items: h.sessionImpactEntries(f)},
 			{Key: impactCategoryWorktrees, Label: "Disposable worktrees removed", Items: worktreeImpactEntries(f)},
 			{Key: impactCategoryBranches, Label: "Ephemeral branches removed", Items: branchImpactEntries(f)},
-			{Key: impactCategoryKnowledge, Label: "Temporary knowledge removed", Items: h.childKnowledgeImpactEntries(f)},
 		},
 		Retained: []string{impactRetainedReviewConfig, impactRetainedDiscardHistory},
 	}
@@ -65,8 +63,8 @@ func (h *apiHandler) childDiscardImpactPreview(f *feature.Feature) *ActionImpact
 
 // parentCascadeDeleteImpactPreview projects the durable relationship cascade:
 // the parent record and every active or closed child record disappear together
-// with the union of their sessions, worktrees, branches, the relationship
-// history, and the knowledge overlays/workspaces owned by the relationship.
+// with the union of their sessions, worktrees, branches, and the relationship
+// history.
 // It returns nil for an ordinary child-free feature so a plain single-feature
 // delete never carries a preview.
 func (h *apiHandler) parentCascadeDeleteImpactPreview(f *feature.Feature, children *feature.RelationshipChildren) *ActionImpactPreview {
@@ -95,7 +93,6 @@ func (h *apiHandler) parentCascadeDeleteImpactPreview(f *feature.Feature, childr
 			{Key: impactCategoryWorktrees, Label: "Worktrees removed", Items: worktrees},
 			{Key: impactCategoryBranches, Label: "Branches removed", Items: branches},
 			{Key: impactCategoryHistory, Label: "Relationship history removed", Items: relationshipHistoryImpactEntries(children)},
-			{Key: impactCategoryKnowledge, Label: "Knowledge removed", Items: h.cascadeKnowledgeImpactEntries(f, children)},
 		},
 		Retained: []string{},
 	}
@@ -163,57 +160,6 @@ func branchImpactEntries(f *feature.Feature) []string {
 		out = append(out, repo.Branch+" (repo "+repo.Name+")")
 	}
 	return out
-}
-
-// childKnowledgeImpactEntries mirrors DiscardChild's cleanup tail: the
-// temporary per-repo knowledge workspace exists only when the pipeline has a
-// knowledge-base phase AND durable workspace state proves the workspace was
-// actually seeded — otherwise the category stays empty so absent impact
-// renders as None.
-func (h *apiHandler) childKnowledgeImpactEntries(f *feature.Feature) []string {
-	out := []string{}
-	if !f.EffectivePipeline().HasPhase(feature.PhaseKnowledgeBase) {
-		return out
-	}
-	baseDir := h.knowledgeStateDir()
-	if baseDir == "" {
-		return out
-	}
-	for _, repo := range f.Repos {
-		state, err := feature.LoadWorkspaceState(feature.ChildKBWorkspaceDir(baseDir, f.ID, repo.Name))
-		if err != nil || state == nil {
-			continue
-		}
-		out = append(out, "temporary knowledge workspace for repo "+repo.Name+" (child "+f.ID+")")
-	}
-	return out
-}
-
-// cascadeKnowledgeImpactEntries mirrors the cascade manifest: each child
-// knowledge workspace plus the stable per-repo parent overlay the relationship
-// promoted knowledge into. Overlay entries are emitted only when durable
-// on-disk provenance proves a promotion completed — the overlay path is a
-// namespace the cascade reserves speculatively, so a Medium-pipeline
-// relationship (no knowledge-base phase) has no overlay to lose and renders
-// an explicitly empty category.
-func (h *apiHandler) cascadeKnowledgeImpactEntries(f *feature.Feature, children *feature.RelationshipChildren) []string {
-	out := []string{}
-	baseDir := h.knowledgeStateDir()
-	for _, repo := range f.Repos {
-		if baseDir == "" || !feature.ParentOverlayExists(baseDir, f.ID, repo.Name) {
-			continue
-		}
-		out = append(out, "knowledge overlay for repo "+repo.Name+" (parent "+f.ID+")")
-	}
-	for _, child := range relationshipRelated(children) {
-		out = append(out, h.childKnowledgeImpactEntries(child)...)
-	}
-	return out
-}
-
-// knowledgeStateDir returns the durable feature state root for impact previews.
-func (h *apiHandler) knowledgeStateDir() string {
-	return h.store.BaseDirectory()
 }
 
 // relationshipHistoryImpactEntries names the closed-child history records the

@@ -172,31 +172,6 @@ func TestFailureRecord_SingleShotFailure_HonorsInputFailureCode(t *testing.T) {
 	requireRecordShape(t, rec, errcat.ProtocolViolation, feature.PhaseInquire.FailureName(), "Inquire phase failed: turn violated the completion protocol")
 }
 
-// A KB session failure scopes the record to the per-repo KB phase: the
-// repositories block names the repo whose session crashed.
-func TestFailureRecord_KBSessionFailure_ScopesRecordToRepo(t *testing.T) {
-	fx := newFailureRecordFixture(t, &feature.Feature{
-		ID:           "frkb-crash",
-		Status:       feature.StatusBuildingKB,
-		CurrentPhase: feature.PhaseKnowledgeBase,
-		Pipeline:     feature.PipelineLarge,
-		Repos:        []feature.FeatureRepo{{Name: repoName, Path: repoAPath}},
-	})
-
-	if err := fx.o.HandlePhaseCompletion(fx.f.ID, orchestrator.PhaseCompletionInput{
-		Phase:       feature.PhaseKnowledgeBase,
-		SessionID:   "frkb-crash-kb-repo-a",
-		Success:     false,
-		ErrorDetail: "kb session exploded",
-	}); err != nil {
-		t.Fatalf("HandlePhaseCompletion: %v", err)
-	}
-
-	rec := requireStoredFailureRecord(t, fx.store, fx.f.ID)
-	requireRecordShape(t, rec, errcat.SessionCrashed, feature.PhaseKnowledgeBase.FailureName(), "kb session exploded")
-	requireRecordRepos(t, rec, repoName)
-}
-
 // ---------------------------------------------------------------------------
 // Plan loop failures
 // ---------------------------------------------------------------------------
@@ -421,7 +396,7 @@ func TestFailureRecord_FinalReview_DispatchFailures(t *testing.T) {
 		{
 			name: "engine dispatch errors",
 			installFRFn: func(o *orchestrator.Orchestrator) {
-				o.SetRunMultiRepoFinalReviewFn(func(*feature.Feature, ...agent.KBInfo) (chan *agent.OrchestratorResult, error) {
+				o.SetRunMultiRepoFinalReviewFn(func(*feature.Feature) (chan *agent.OrchestratorResult, error) {
 					return nil, errors.New("engine wedged")
 				})
 			},
@@ -430,7 +405,7 @@ func TestFailureRecord_FinalReview_DispatchFailures(t *testing.T) {
 		{
 			name: "engine returns no result channel",
 			installFRFn: func(o *orchestrator.Orchestrator) {
-				o.SetRunMultiRepoFinalReviewFn(func(*feature.Feature, ...agent.KBInfo) (chan *agent.OrchestratorResult, error) {
+				o.SetRunMultiRepoFinalReviewFn(func(*feature.Feature) (chan *agent.OrchestratorResult, error) {
 					return nil, nil
 				})
 			},
@@ -458,7 +433,7 @@ func TestFailureRecord_FinalReview_DispatchFailures(t *testing.T) {
 
 func TestFailureRecord_FinalReview_Failed(t *testing.T) {
 	fx := newFinalReviewFixture(t, "fr-failed")
-	fx.o.SetRunMultiRepoFinalReviewFn(func(*feature.Feature, ...agent.KBInfo) (chan *agent.OrchestratorResult, error) {
+	fx.o.SetRunMultiRepoFinalReviewFn(func(*feature.Feature) (chan *agent.OrchestratorResult, error) {
 		ch := make(chan *agent.OrchestratorResult, 1)
 		ch <- &agent.OrchestratorResult{
 			FinalStatus:  finalStatusFailed,

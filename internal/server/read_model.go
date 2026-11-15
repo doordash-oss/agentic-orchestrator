@@ -170,7 +170,6 @@ func (h *apiHandler) featureDetailDTO(f *feature.Feature) (FeatureDetail, error)
 	detail.Errors = ownedErrorsDTO(f, activeRelationshipChild)
 	detail.Description = SafeDisplayText(f.Description, 500)
 	detail.Summary = SafeDisplayText(f.Summary, 500)
-	detail.WaitReason = SafeDisplayText(f.KBWaitMessage, 240)
 	detail.Pipeline = string(f.Pipeline)
 	detail.Models = f.Models
 	detail.Effort = f.Effort
@@ -1276,7 +1275,7 @@ func (h *apiHandler) modelCatalogSnapshot() ModelCatalogResponse {
 				}
 			}
 		}
-		for _, role := range []llm.PhaseRole{llm.PhaseInquiry, llm.PhaseResearch, llm.PhasePlanning, llm.PhaseImplementation, llm.PhaseReview, llm.PhaseChat, llm.PhaseKBBuild, llm.PhaseAutomaticReview} {
+		for _, role := range []llm.PhaseRole{llm.PhaseInquiry, llm.PhaseResearch, llm.PhasePlanning, llm.PhaseImplementation, llm.PhaseReview, llm.PhaseChat, llm.PhaseAutomaticReview} {
 			resp.PhaseProviderModels[string(role)] = h.registry.EligibleModelsForPhase(role)
 		}
 	}

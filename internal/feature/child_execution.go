@@ -40,9 +40,7 @@ func (f *Feature) ChildSetupComplete() bool {
 
 // ChildExecutionCapability is a deliberate extension seam for enforcing the
 // supported child execution shape. All pipeline profiles (Medium, Large, and
-// Moonshot) may execute. Large and Moonshot children use disposable KB
-// workspaces seeded from the parent overlay or canonical KB, so the temporary
-// profile restriction is retired. The check is deterministic from the
+// Moonshot) may execute. The check is deterministic from the
 // durable record and is enforced identically by start, resume, retry, and
 // restart paths. It currently always returns nil; callers still invoke it
 // so future capability gates can be added without touching every call site.

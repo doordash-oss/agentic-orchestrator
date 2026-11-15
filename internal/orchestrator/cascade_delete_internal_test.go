@@ -218,13 +218,6 @@ func TestDeleteCascadeCleansChildrenThenParentAndConverges(t *testing.T) {
 	t.Parallel()
 
 	store, parent, child := saveCascadeTestRelationship(t)
-	overlay := feature.ParentOverlayPath(store.BaseDir, parent.ID, "repo-a")
-	if err := os.MkdirAll(overlay, 0o755); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(filepath.Join(overlay, "seed.txt"), []byte("fixture"), 0o644); err != nil {
-		t.Fatal(err)
-	}
 	worktrees := &cascadeTestWorktrees{
 		store: store,
 		refs:  map[string]string{"refs/heads/feature/parent": "candidate"},
@@ -241,9 +234,6 @@ func TestDeleteCascadeCleansChildrenThenParentAndConverges(t *testing.T) {
 	if worktrees.refs["refs/heads/feature/parent"] != "anchor" {
 		t.Fatalf("ref = %q, want anchor", worktrees.refs["refs/heads/feature/parent"])
 	}
-	if _, err := os.Stat(overlay); !os.IsNotExist(err) {
-		t.Fatalf("overlay still exists: %v", err)
-	}
 	if _, err := store.Load(child.ID); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("child load error = %v, want not exist", err)
 	}
@@ -254,6 +244,47 @@ func TestDeleteCascadeCleansChildrenThenParentAndConverges(t *testing.T) {
 	again, err := o.deleteCascade(parent.ID)
 	if err != nil || again.Status != feature.CascadeDeleteCompleted {
 		t.Fatalf("repeated delete = %+v, %v", again, err)
+	}
+}
+
+// TestDeleteCascadeLeavesRetiredKnowledgeResources resumes an intent recorded
+// by an older version that still lists knowledge-base resources: the delete
+// completes and leaves those directories on disk.
+func TestDeleteCascadeLeavesRetiredKnowledgeResources(t *testing.T) {
+	t.Parallel()
+
+	store, parent, _ := saveCascadeTestRelationship(t)
+	overlay := filepath.Join(filepath.Dir(store.BaseDir), "overlays", parent.ID, "repo-a")
+	if err := os.MkdirAll(overlay, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	intent, err := store.BeginCascadeDelete(parent.ID, time.Now())
+	if err != nil {
+		t.Fatalf("BeginCascadeDelete: %v", err)
+	}
+	intent.Resources = append([]feature.CascadeResource{
+		{ID: "overlay:parent:repo-a", Kind: "overlay", OwnerID: parent.ID, Repo: "repo-a", Path: overlay},
+		{ID: "kb-workspace:child:repo-a", Kind: "kb_workspace", OwnerID: "child", Repo: "repo-a"},
+		{ID: "promotion:child", Kind: "promotion", OwnerID: "child"},
+	}, intent.Resources...)
+	if err := store.SaveCascadeDelete(parent.ID, intent); err != nil {
+		t.Fatalf("SaveCascadeDelete: %v", err)
+	}
+	worktrees := &cascadeTestWorktrees{
+		store: store,
+		refs:  map[string]string{"refs/heads/feature/parent": "candidate"},
+	}
+	o := New(Deps{Store: store, Worktrees: worktrees}, Hooks{})
+
+	result, err := o.deleteCascade(parent.ID)
+	if err != nil {
+		t.Fatalf("DeleteCascade: %v", err)
+	}
+	if result.Status != feature.CascadeDeleteCompleted {
+		t.Fatalf("status = %q diagnostics = %+v, want completed", result.Status, result.Diagnostics)
+	}
+	if _, err := os.Stat(overlay); err != nil {
+		t.Fatalf("retired overlay directory was touched: %v", err)
 	}
 }
 
@@ -312,8 +343,7 @@ func TestDeleteCascadeHealsSymlinkSpelledJournalPaths(t *testing.T) {
 	for i := range intent.Resources {
 		r := &intent.Resources[i]
 		switch r.Kind {
-		case feature.CascadeResourceCopiedInput, feature.CascadeResourceOverlay,
-			feature.CascadeResourceKBWorkspace, feature.CascadeResourcePromotion:
+		case feature.CascadeResourceCopiedInput:
 			rel, relErr := filepath.Rel(root, r.Path)
 			if relErr != nil {
 				t.Fatalf("Rel(%q, %q): %v", root, r.Path, relErr)
@@ -504,20 +534,13 @@ func saveCascadeSymlinkFixture(t *testing.T, stateDir string) (*feature.Store, *
 	if err := store.Save(child); err != nil {
 		t.Fatal(err)
 	}
-	overlay := feature.ParentOverlayPath(stateDir, parent.ID, "repo-a")
-	kbWorkspace := feature.ChildKBWorkspaceDir(stateDir, child.ID, "repo-a")
-	promotion := filepath.Join(stateDir, child.ID, "promotion.yaml")
-	for _, dir := range []string{filepath.Dir(attachment), overlay, kbWorkspace} {
-		if err := os.MkdirAll(dir, 0o755); err != nil {
-			t.Fatal(err)
-		}
+	if err := os.MkdirAll(filepath.Dir(attachment), 0o755); err != nil {
+		t.Fatal(err)
 	}
-	for _, file := range []string{attachment, filepath.Join(overlay, "seed.txt"), promotion} {
-		if err := os.WriteFile(file, []byte("fixture"), 0o644); err != nil {
-			t.Fatal(err)
-		}
+	if err := os.WriteFile(attachment, []byte("fixture"), 0o644); err != nil {
+		t.Fatal(err)
 	}
-	return store, parent, child, []string{attachment, overlay, kbWorkspace, promotion}
+	return store, parent, child, []string{attachment}
 }
 
 func saveCascadeTestRelationship(t *testing.T) (*feature.Store, *feature.Feature, *feature.Feature) {

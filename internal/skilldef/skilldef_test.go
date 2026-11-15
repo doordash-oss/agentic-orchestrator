@@ -27,7 +27,7 @@ import (
 	skillsFS "github.com/doordash-oss/agentic-orchestrator/skills"
 )
 
-const expectedEmbeddedSkillCount = 27
+const expectedEmbeddedSkillCount = 25
 
 func TestParseSkillFile(t *testing.T) {
 	tests := []struct {

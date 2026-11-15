@@ -366,8 +366,7 @@ func TestOrchestrator_RestartPhase_InterruptedFeature_KeepsStatus(t *testing.T) 
 // TestOrchestrator_RestartPhase_CreatedFeature_DispatchesWithoutTransition
 // ---------------------------------------------------------------------------
 // Regression: a feature stranded in StatusCreated with a non-zero CurrentPhase
-// (e.g. wakeKBWaiters' allFresh path before the startPhase fix dropped the
-// PhaseSkipped recursion) must be recoverable via Restart. Pre-fix the default
+// must be recoverable via Restart. Pre-fix the default
 // branch attempted Created → Interrupted, which is not in
 // validTransitions[StatusCreated], so RestartPhase returned an error and the
 // restart did not occur.
@@ -377,7 +376,7 @@ func TestOrchestrator_RestartPhase_CreatedFeature_DispatchesWithoutTransition(t 
 	f := &feature.Feature{
 		ID:           "feat-1",
 		Status:       feature.StatusCreated,
-		CurrentPhase: feature.PhaseKnowledgeBase,
+		CurrentPhase: feature.PhaseInquire,
 	}
 	fs, lc := newStoredFeatureFixture(t, f)
 
@@ -393,12 +392,12 @@ func TestOrchestrator_RestartPhase_CreatedFeature_DispatchesWithoutTransition(t 
 	if outcome.Action != orchestrator.RestartDispatchPhase {
 		t.Fatalf("Action = %v, want RestartDispatchPhase", outcome.Action)
 	}
-	if outcome.Phase != feature.PhaseKnowledgeBase {
-		t.Errorf("Phase = %v, want PhaseKnowledgeBase", outcome.Phase)
+	if outcome.Phase != feature.PhaseInquire {
+		t.Errorf("Phase = %v, want PhaseInquire", outcome.Phase)
 	}
 	f = loadStoredFeature(t, fs, f.ID)
 	if f.Status != feature.StatusCreated {
-		t.Errorf("Status = %v, want Created (unchanged — startKB owns the forward transition)", f.Status)
+		t.Errorf("Status = %v, want Created (unchanged — the phase starter owns the forward transition)", f.Status)
 	}
 }
 
@@ -436,7 +435,7 @@ func TestOrchestrator_RestartPhase_CreatedFeature_DispatchesWithoutTransition(t 
 // StopSession loop has finished, the feature shows StatusInterrupted while
 // agent processes are still being SIGTERM'd. A racing RestartPhase used to
 // read that half-state, call StopFeatureSessions alongside the stop loop,
-// and dispatch a fresh KB phase the user never asked for; subsequent "r"
+// and dispatch a fresh phase the user never asked for; subsequent "r"
 // presses then killed the new sessions and started more, etc. The
 // busy-guard makes RestartPhase return ErrFeatureBusy whenever any session
 // for the feature is still active, so the caller can surface a wait hint
@@ -446,7 +445,7 @@ func TestOrchestrator_RestartPhase_RejectsWhileSessionsActive(t *testing.T) {
 	f := &feature.Feature{
 		ID:           "feat-busy",
 		Status:       feature.StatusInterrupted,
-		CurrentPhase: feature.PhaseKnowledgeBase,
+		CurrentPhase: feature.PhaseInquire,
 	}
 	fs, lc := newStoredFeatureFixture(t, f)
 
@@ -533,7 +532,7 @@ func TestOrchestrator_RestartPhase_ProceedsWhenSessionsInactive(t *testing.T) {
 	f := &feature.Feature{
 		ID:           "feat-failed",
 		Status:       feature.StatusFailed,
-		CurrentPhase: feature.PhaseKnowledgeBase,
+		CurrentPhase: feature.PhaseInquire,
 	}
 	fs, lc := newStoredFeatureFixture(t, f)
 
@@ -558,8 +557,8 @@ func TestOrchestrator_RestartPhase_ProceedsWhenSessionsInactive(t *testing.T) {
 	if outcome.Action != orchestrator.RestartDispatchPhase {
 		t.Errorf("Action = %v, want RestartDispatchPhase", outcome.Action)
 	}
-	if outcome.Phase != feature.PhaseKnowledgeBase {
-		t.Errorf("Phase = %v, want PhaseKnowledgeBase", outcome.Phase)
+	if outcome.Phase != feature.PhaseInquire {
+		t.Errorf("Phase = %v, want PhaseInquire", outcome.Phase)
 	}
 }
 

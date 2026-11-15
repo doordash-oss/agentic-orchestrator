@@ -873,8 +873,7 @@ func TestDiscoverProviderCatalogs_OpenCodeFallsBackOnDiscoveryFailure(t *testing
 
 // TestCanonicalizeStateDir_ResolvesSymlink guards the macOS /var ->
 // /private/var (and /tmp -> /private/tmp) class of bug: every path Agentico
-// derives from stateDir — worktrees, the knowledge-base tree, skills/
-// guidelines mounts — gets handed to providers as a workdir or a writable/
+// derives from stateDir — worktrees, skills/guidelines mounts — gets handed to providers as a workdir or a writable/
 // read root, and OpenCode's permission engine matches those paths
 // inconsistently against their raw and symlink-resolved forms (upstream
 // opencode#14473, opencode#20045). Resolving stateDir once up front avoids
@@ -1548,7 +1547,7 @@ func TestApplyCatalogModelDefaultsToConfig_OpenCodeOnlyPersistsBareBackendIDs(t 
 	got := cfg.Defaults.Models
 	for field, val := range map[string]string{
 		"inquiry": got.Inquiry, "research": got.Research, "planning": got.Planning, "implementation": got.Implementation,
-		"review": got.Review, chatName: got.Utilities, "kb_build": got.KBBuild,
+		"review": got.Review, chatName: got.Utilities,
 	} {
 		if val != want {
 			t.Errorf("%s = %q, want bare backend id %q (single provider → no opencode: prefix)", field, val, want)
@@ -1599,7 +1598,7 @@ func TestApplyCatalogModelDefaultsToConfig_ExistingConfigCanonicalizesAndFills(t
 		Inquiry:  "claude:SONNET", // explicit prefix + non-canonical case
 		Research: "claude:SONNET", // explicit prefix + non-canonical case
 		Review:   testModelGPT54,  // bare codex name
-		// Planning/Implementation/Utilities/KBBuild left empty → filled from defaults.
+		// Planning/Implementation/Utilities left empty → filled from defaults.
 	}
 
 	changed := applyCatalogModelDefaultsToConfig(cfg, reg, false)
@@ -1632,7 +1631,7 @@ func TestRemapUnresolvableModels(t *testing.T) {
 		// the only provider. The annotated Codex review default remains because
 		// ResolveModel falls back through its bare alias.
 		m := cfg.Defaults.Models
-		for _, field := range []string{m.Inquiry, m.Research, m.Planning, m.Implementation, m.Utilities, m.KBBuild} {
+		for _, field := range []string{m.Inquiry, m.Research, m.Planning, m.Implementation, m.Utilities} {
 			if field != testModelGPT54 {
 				t.Errorf("expected gpt-5.4, got %q", field)
 			}
@@ -1764,7 +1763,6 @@ func TestReconcileModelDefaults_ExistingConfigProviderFilterStaysRuntimeOnly(t *
 		Implementation: modelNameSonnet200K,
 		Review:         "gpt-5.4[272K]",
 		Utilities:      modelNameSonnet200K,
-		KBBuild:        modelNameSonnet200K,
 	}
 	path := filepath.Join(t.TempDir(), "config.yaml")
 	if err := config.Save(path, cfg); err != nil {

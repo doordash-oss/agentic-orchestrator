@@ -35,6 +35,14 @@ Path:
 
 `/skills/implement/SKILL.md`
 
+# Useful Resources
+
+The resources below are available for this assignment. Skim each catalog so you know what exists, and open specific leaf files only when a concrete question comes up during the work.
+
+## Repository Instructions
+
+A target repository's own instruction files for coding agents (such as `AGENTS.md` or `CLAUDE.md`, at its root and in the directories your work touches) state its conventions and how to verify changes. Read the ones that apply before relying on assumptions about that repository.
+
 
 ## Asking Questions
 

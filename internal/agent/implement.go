@@ -64,9 +64,6 @@ type ImplementConfig struct {
 	// injection of the legacy per-repo flow is gone.
 	AdditionalDirs []string
 
-	// KBInfos are repo knowledge base paths to include in prompts.
-	KBInfos []KBInfo
-
 	// PhaseType is the roadmap phase type ("tracer-bullet", "tdd-fill-in", "collapsed", or "").
 	// Used to inject phase-aware review criteria.
 	PhaseType string
@@ -509,7 +506,6 @@ func runImplementationLoop(cfg ImplementConfig, sm ports.SessionManager) (result
 				IterationDir:   iterDir,
 				SkillsDir:      cfg.SkillsDir,
 				GuidelinesDir:  cfg.GuidelinesDir,
-				KBInfos:        cfg.KBInfos,
 				AskingClause:   sessionConfig.AskingClause,
 				CompletionTool: sessionConfig.CompletionTool,
 				Frontend:       cfg.Feature != nil && cfg.Feature.RoadmapPhaseFrontend(cfg.Feature.CurrentRoadmapPhase),
@@ -616,7 +612,6 @@ func runImplementationLoop(cfg ImplementConfig, sm ports.SessionManager) (result
 			}
 			cfg.Observer.SessionStarted(implSessionCtx, "implement", sessionID, implProvider, sessionConfig.Model, cfg.RepoName, string(sessionConfig.EffectiveEffort), string(sessionConfig.EffortSource))
 			implTracker := &contextReadTracker{
-				KBBaseDir:     filepath.Join(filepath.Dir(cfg.StateDir), "knowledge-base"),
 				SkillsDir:     cfg.SkillsDir,
 				GuidelinesDir: cfg.GuidelinesDir,
 				Observer:      cfg.Observer,

@@ -379,7 +379,7 @@ func metricEnum(key, s string) string {
 		"interaction_kind":  {"permission": true, "question": true, "review_gate": true},
 		"decision":          {"allow": true, "deny": true, "approved": true, "rejected": true, "answered": true, "waived": true},
 		"automatic":         {"true": true, "false": true},
-		"phase":             {"setup": true, "knowledgebase": true, "inquire": true, "research": true, "design": true, "plan": true, "implement": true, "review": true, "final_review": true, "publish": true},
+		"phase":             {"setup": true, "inquire": true, "research": true, "design": true, "plan": true, "implement": true, "review": true, "final_review": true, "publish": true},
 		"outcome":           {"created": true, "started": true, "completed": true, "passed": true, "failed": true, "error": true, "ok": true, "success": true, "interrupted": true, "needuserinput": true, "codeready": true, "published": true, "done": true, "delivered": true, "ready": true, "resolved": true, "requested": true, "recorded": true, "unavailable": true, "blocked": true, "waived": true, "regression": true, "inherited_failure": true, "unclassified_failure": true, "missing_capability": true, "contract_error": true, "environment_limited": true, "flaky_failure": true},
 	}
 	if key == "model" {

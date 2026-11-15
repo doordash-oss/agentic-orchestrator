@@ -67,14 +67,9 @@ func TestPreflightBranchBehavior(t *testing.T) {
 		wantOmit     []string
 	}{
 		{
-			name: "kb_section_emitted_when_has_kb",
-			input: PreflightInput{
-				HasKB: true,
-				KBInfos: []KBView{
-					{Name: "web", IndexPath: "/kb/web/index.md", RootDir: "/kb/web"},
-				},
-			},
-			wantContains: []string{"## Knowledge Base", "/kb/web/index.md"},
+			name:         "repository_instructions_emitted_without_catalogs",
+			input:        PreflightInput{},
+			wantContains: []string{"# Useful Resources", "## Repository Instructions", "AGENTS.md"},
 			wantOmit:     []string{"## Guidelines", "## Additional Skills"},
 		},
 		{
@@ -84,7 +79,7 @@ func TestPreflightBranchBehavior(t *testing.T) {
 				Guidelines:    []GuidelineView{{Language: "Go", IndexPath: "/guidelines/go/index.md"}},
 			},
 			wantContains: []string{"## Guidelines", "/guidelines/go/index.md"},
-			wantOmit:     []string{"## Knowledge Base", "## Additional Skills"},
+			wantOmit:     []string{"## Additional Skills"},
 		},
 		{
 			name: "skills_section_emitted_when_has_skills",
@@ -93,7 +88,7 @@ func TestPreflightBranchBehavior(t *testing.T) {
 				Skills:    []SkillView{{Name: "skill", Description: "desc", Topics: "topic", Path: "/skills/skill/SKILL.md"}},
 			},
 			wantContains: []string{"## Additional Skills", "/skills/skill/SKILL.md"},
-			wantOmit:     []string{"## Knowledge Base", "## Guidelines"},
+			wantOmit:     []string{"## Guidelines"},
 		},
 		{
 			name: "skills_section_omitted_when_has_skills_false",
@@ -267,65 +262,6 @@ func TestInquirenessBranches(t *testing.T) {
 	}
 }
 
-func TestKBBuildModeBranches(t *testing.T) {
-	base := KBBuildUserInput{
-		RepoName:    "repo",
-		RepoPath:    "/repos/repo",
-		KBRootDir:   "/kb/repo",
-		KBIndexPath: "/kb/repo/index.md",
-	}
-	tests := []struct {
-		name         string
-		input        KBBuildUserInput
-		wantContains []string
-		wantOmit     []string
-	}{
-		{
-			name:         "kb_build_full_mode_when_existing_kb_and_last_commit_empty",
-			input:        base,
-			wantContains: []string{"## Mode: FULL BUILD"},
-			wantOmit:     []string{"## Mode: INCREMENTAL UPDATE", "Last built at commit"},
-		},
-		{
-			name: "kb_build_incremental_mode_when_existing_kb_and_last_commit_set",
-			input: KBBuildUserInput{
-				RepoName:       base.RepoName,
-				RepoPath:       base.RepoPath,
-				KBRootDir:      base.KBRootDir,
-				KBIndexPath:    base.KBIndexPath,
-				ExistingKBPath: "/kb/repo/index.md",
-				LastCommit:     "abc1234",
-			},
-			wantContains: []string{"## Mode: INCREMENTAL UPDATE", "Existing KB index: /kb/repo/index.md", "Last built at commit: `abc1234`"},
-			wantOmit:     []string{"## Mode: FULL BUILD"},
-		},
-		{
-			name: "kb_build_full_mode_when_only_existing_kb_set",
-			input: KBBuildUserInput{
-				RepoName:       base.RepoName,
-				RepoPath:       base.RepoPath,
-				KBRootDir:      base.KBRootDir,
-				KBIndexPath:    base.KBIndexPath,
-				ExistingKBPath: "/kb/repo/index.md",
-			},
-			wantContains: []string{"## Mode: FULL BUILD"},
-			wantOmit:     []string{"## Mode: INCREMENTAL UPDATE"},
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			got := MustRender(TemplateKBBuildUser, tt.input)
-			for _, want := range tt.wantContains {
-				requireContains(t, got, want)
-			}
-			for _, unwanted := range tt.wantOmit {
-				requireNotContains(t, got, unwanted)
-			}
-		})
-	}
-}
-
 func TestPromptBranchFixturesUseRegisteredImplementSkills(t *testing.T) {
 	got := MustRender(TemplateSystem, RoleSystemInput{
 		OutputRoots: []OutputRootView{{Name: "phase_dir", Path: "/phase"}},
@@ -339,6 +275,5 @@ func TestPromptBranchFixturesUseRegisteredImplementSkills(t *testing.T) {
 		t.Errorf("Preflight(implement skills) table cell markers = %d, want at least 4\n--- GOT ---\n%s", count, got)
 	}
 	requireContains(t, got, "frontend-design")
-	requireContains(t, got, "knowledge-reader")
 	requireContains(t, got, "guideline-reader")
 }

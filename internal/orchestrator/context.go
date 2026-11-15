@@ -37,30 +37,6 @@ func (o *Orchestrator) stateDir() string {
 	return o.deps.Store.BaseDir
 }
 
-// computeKBInfos builds KB info metadata for all feature repos.
-// For child features, the KB info points at the disposable workspace
-// instead of the canonical KB.
-func (o *Orchestrator) computeKBInfos(f *feature.Feature) []agent.KBInfo {
-	baseDir := o.stateDir()
-	if baseDir == "" {
-		return nil
-	}
-	var infos []agent.KBInfo
-	for _, repo := range f.Repos {
-		var kbDir string
-		if f.IsChild() {
-			kbDir = feature.ChildKBWorkspaceDir(baseDir, f.ID, repo.Name)
-		} else {
-			kbDir = agent.KBStateDir(baseDir, repo.Name)
-		}
-		indexPath := agent.KBPath(kbDir)
-		if _, err := os.Stat(indexPath); err == nil {
-			infos = append(infos, agent.KBInfo{Name: repo.Name, IndexPath: indexPath, RootDir: kbDir})
-		}
-	}
-	return infos
-}
-
 // resolveArtifactPath returns the absolute filesystem path to a phase
 // artifact without reading its content. It reads state from PhaseRunner.
 func (o *Orchestrator) resolveArtifactPath(f *feature.Feature, phase string) string {

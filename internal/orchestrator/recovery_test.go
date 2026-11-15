@@ -16,7 +16,6 @@ package orchestrator_test
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"os"
 	"path/filepath"
@@ -24,7 +23,6 @@ import (
 	"strings"
 	"sync"
 	"testing"
-	"time"
 
 	"github.com/doordash-oss/agentic-orchestrator/internal/agent"
 	"github.com/doordash-oss/agentic-orchestrator/internal/config"
@@ -580,90 +578,19 @@ func TestExecuteRecovery_Resume_InquiringFeature_RealManager_NoInvalidTransition
 	}
 }
 
-// ---------------------------------------------------------------------------
-// T15. Regression: resuming a crashed KB feature whose repos are now all
-// fresh must NOT attempt the forbidden StatusBuildingKB → StatusInquiring
-// transition.
-//
-// Background: `startKB`'s `allFresh` branch previously
-// returned PhaseSkipped → PhaseInquire while the feature was still in
-// StatusBuildingKB. The recursive `startPhase(PhaseInquire)` → `startInquire`
-// then called `Lifecycle.StartInquire`, which resolves to
-// `f.Transition(StatusInquiring)`. validTransitions[StatusBuildingKB]
-// (feature/feature.go:488) lists only {Created, Failed, Interrupted}, so
-// Inquiring is not a legal successor — the relaunch failed with:
-//   "relaunch <fid> phase knowledge_base:
-//    start inquire: invalid transition from building_kb to inquiring"
-//
-// The fix (orchestrator.go:488-496) introduces `finalizeKBForSkip`, which
-// invokes `CompleteKnowledgeBase` (BuildingKB → Created) whenever startKB
-// skips to Inquire from a recovered StatusBuildingKB feature. That bridge
-// keeps startInquire's subsequent Created → Inquiring transition legal.
-//
-// This regression uses the real `*feature.Manager` + `*feature.Store` so
-// the real transition rules are enforced — a future regression that removes
-// `finalizeKBForSkip` or breaks the call sites in startKB (no-repos /
-// allFresh) will surface as an "invalid transition from building_kb to
-// inquiring" error here. Mock-based tests do NOT catch this class of bug.
-//
-// Test shape:
-//   - Real git repo + matching head commit → fresh KB.
-//   - BuildSessionFn short-circuits RunInquire *after* StartInquire's
-//     transition has been applied, so we can observe that Inquiring was
-//     reached without needing a live claude CLI.
-//   - Post-condition: feature status == StatusInquiring (not BuildingKB or
-//     Created), proving both CompleteKnowledgeBase AND StartInquire fired.
-// ---------------------------------------------------------------------------
-
-func TestExecuteRecovery_Resume_BuildingKBFeature_AllFresh_RealManager_NoInvalidTransition(t *testing.T) {
-	if testing.Short() {
-		t.Skip("skipping real Store/Manager plus real-git KB freshness recovery regression in short mode; extended orchestrator run owns the transition-rule check")
-	}
-
-	// Real state dir with real Store + Manager so we exercise the real
-	// transition rules (BuildingKB → Inquiring is invalid; BuildingKB →
-	// Created → Inquiring is the legal path finalizeKBForSkip unlocks).
+// T15. A feature persisted mid-Knowledge Base by an older version resumes at
+// Inquire through the real Store and Manager transition rules.
+func TestExecuteRecovery_Resume_LegacyKnowledgeBaseFeature_StartsInquire(t *testing.T) {
 	stateDir := t.TempDir()
 	store := feature.NewStore(stateDir)
 	mgr := feature.NewManager(store, &config.Config{})
+	repoPath := t.TempDir()
 
-	// Real git repo so KB freshness check has a real HEAD to match against.
-	// InitGitRepo creates an initial commit; CommitFile returns the hash.
-	repoPath := testutil.InitGitRepo(t)
-	headCommit := testutil.CommitFile(t, repoPath, "kb-sync.txt", "sync", "KB sync commit")
-
-	// Seed fresh KB state.json + index.md for repo-a matched to headCommit so
-	// IsKBFresh returns true, forcing startKB down the allFresh branch.
-	kbDir := agent.KBStateDir(stateDir, repoName)
-	if err := os.MkdirAll(kbDir, 0o755); err != nil {
-		t.Fatalf("mkdir KB: %v", err)
-	}
-	kbState, _ := json.Marshal(map[string]any{
-		"head_commit":  headCommit,
-		"last_updated": time.Now().UTC().Format(time.RFC3339),
-		"version":      1,
-	})
-	if err := os.WriteFile(filepath.Join(kbDir, "state.json"), kbState, 0o644); err != nil {
-		t.Fatalf("write KB state: %v", err)
-	}
-	if err := os.WriteFile(agent.KBPath(kbDir), []byte("# KB\n"), 0o644); err != nil {
-		t.Fatalf("write KB index: %v", err)
-	}
-
-	// MockCommandRunner returning the real HEAD commit for any git invocation.
-	// IsKBFresh calls GetCurrentCommit via this runner — matching the seeded
-	// head_commit makes the check succeed.
-	cmd := mocks.NewMockCommandRunner()
-	cmd.RunFn = func(ctx context.Context, name string, args []string, opts ports.CommandOpts) ([]byte, error) {
-		return []byte(headCommit + "\n"), nil
-	}
-
-	// Seed a crashed BuildingKB feature directly via Store.Save.
 	f := &feature.Feature{
 		ID:            "feat-kb-resume",
-		Name:          "resume kb real manager",
-		Slug:          "resume-kb-real",
-		Status:        feature.StatusBuildingKB,
+		Name:          "resume legacy kb",
+		Slug:          "resume-legacy-kb",
+		Status:        feature.StatusInterrupted,
 		CurrentPhase:  feature.PhaseKnowledgeBase,
 		Pipeline:      feature.PipelineMoonshot,
 		Repos:         []feature.FeatureRepo{{Name: repoName, Path: repoPath}},
@@ -672,24 +599,23 @@ func TestExecuteRecovery_Resume_BuildingKBFeature_AllFresh_RealManager_NoInvalid
 	if err := store.Save(f); err != nil {
 		t.Fatalf("seed feature: %v", err)
 	}
+	loaded, err := store.Load(f.ID)
+	if err != nil {
+		t.Fatalf("load seeded feature: %v", err)
+	}
 
 	items := []ports.RecoveryItem{{
 		PIDFile:  session.PIDFile{PID: 999999997, FeatureID: f.ID, RepoName: repoName},
-		Feature:  f,
+		Feature:  loaded,
 		RepoName: repoName,
 	}}
 	actions := map[string]ports.RecoveryAction{
 		ports.RecoveryActionKey(f.ID, repoName): ports.RecoveryResume,
 	}
 
-	// PhaseRunner: StateDir + CommandRunner required by startKB's
-	// IsKBFresh path; SessionManager is a mock that never reaches
-	// StartSession (BuildSessionFn returns an error first).
-	//
-	// BuildSessionFn returns a sentinel error so RunInquire short-circuits
-	// *after* Lifecycle.StartInquire has already fired its transition.
-	// That lets us observe "the transitions succeeded" without needing a
-	// live claude CLI to drive RunInquire end-to-end.
+	// BuildSessionFn fails after StartInquire has applied its transition, so
+	// the transition is observable without a live provider.
+	cmd := mocks.NewMockCommandRunner()
 	pr := &agent.PhaseRunner{
 		StateDir:       stateDir,
 		CommandRunner:  cmd,
@@ -701,43 +627,24 @@ func TestExecuteRecovery_Resume_BuildingKBFeature_AllFresh_RealManager_NoInvalid
 		return nil, nil, nil, sentinelBuildErr
 	}
 
-	fakeRec := &fakeRecoveryOp{}
 	o := orchestrator.New(orchestrator.Deps{
-		Recovery:    fakeRec,
-		Manager:     mgr, // real *feature.Manager — enforces real transition rules
+		Recovery:    &fakeRecoveryOp{},
+		Manager:     mgr,
 		Store:       store,
 		PhaseRunner: pr,
 		CmdRunner:   cmd,
 	}, orchestrator.Hooks{})
 
-	err := o.ExecuteRecovery(context.Background(), items, actions)
-
-	// The error we expect is the test-only BuildSession shutdown propagated
-	// through RunInquire. The error we MUST NOT see is the invalid-transition
-	// message — that would prove finalizeKBForSkip didn't fire.
-	if err != nil {
-		if strings.Contains(err.Error(), "invalid transition from building_kb to inquiring") {
-			t.Fatalf("regression: BuildingKB → Inquiring transition attempted without finalizeKBForSkip bridge: %v", err)
-		}
-		if !strings.Contains(err.Error(), sentinelBuildErr.Error()) {
-			t.Errorf("unexpected error path (not the BuildSession short-circuit): %v", err)
-		}
+	if err := o.ExecuteRecovery(context.Background(), items, actions); err != nil && !strings.Contains(err.Error(), sentinelBuildErr.Error()) {
+		t.Fatalf("ExecuteRecovery: %v", err)
 	}
 
-	// Critical post-condition: both CompleteKnowledgeBase (BuildingKB →
-	// Created) AND StartInquire (Created → Inquiring) fired. A feature stuck
-	// in StatusBuildingKB would indicate finalizeKBForSkip never ran; a
-	// feature in StatusCreated would indicate finalizeKBForSkip ran but
-	// StartInquire then failed — both are regressions for this path.
-	loaded, err := store.Load(f.ID)
+	got, err := store.Load(f.ID)
 	if err != nil {
 		t.Fatalf("load feature after recovery: %v", err)
 	}
-	if loaded.Status != feature.StatusInquiring {
-		t.Fatalf("feature status = %s, want StatusInquiring (regression — expected CompleteKnowledgeBase + StartInquire to both fire, bridging BuildingKB → Created → Inquiring)", loaded.Status)
-	}
-	if loaded.CurrentPhase != feature.PhaseInquire {
-		t.Errorf("feature phase = %s, want PhaseInquire", loaded.CurrentPhase)
+	if got.Status != feature.StatusInquiring || got.CurrentPhase != feature.PhaseInquire {
+		t.Fatalf("feature = %s/%s, want Inquiring/Inquire", got.Status, got.CurrentPhase)
 	}
 }
 

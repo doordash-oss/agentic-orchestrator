@@ -49,8 +49,8 @@ func (f *fakeContextReadSession) SetOnFileRead(fn func(llm.FileReadEvent)) {
 
 func TestBuildPreflightInput(t *testing.T) {
 	// skillsDir="" suppresses the Additional Skills subsection regardless
-	// of phase, which lets these unit tests exercise the KB / Guidelines
-	// branches in isolation without depending on the embedded skill catalog.
+	// of phase, which lets these unit tests exercise the Guidelines
+	// branch in isolation without depending on the embedded skill catalog.
 	// The full skill-rendering path is covered by system prompt goldens.
 	//
 	// guidelinesDir uses a dummy path; resolveGuidelineViews inspects only
@@ -59,63 +59,14 @@ func TestBuildPreflightInput(t *testing.T) {
 	const guidelinesDir = "/state/guidelines"
 
 	t.Run("no context", func(t *testing.T) {
-		got := buildPreflightInput(feature.PhaseImplement, "", nil, "")
-		if got.HasKB || got.HasGuidelines || got.HasSkills {
+		got := buildPreflightInput(feature.PhaseImplement, "", "")
+		if got.HasGuidelines || got.HasSkills {
 			t.Errorf("buildPreflightInput() = %+v, want no enabled sections", got)
 		}
 	})
 
-	t.Run("kb paths included", func(t *testing.T) {
-		got := buildPreflightInput(feature.PhaseImplement, "", []KBInfo{
-			{Name: "repo-a", IndexPath: "/state/repo-a/kb/index.md", RootDir: "/state/repo-a/kb"},
-		}, "")
-		if !got.HasKB || len(got.KBInfos) != 1 {
-			t.Fatalf("buildPreflightInput().KBInfos = %+v, want one enabled KB", got.KBInfos)
-		}
-		kb := got.KBInfos[0]
-		if kb.Name != "repo-a" || kb.IndexPath != "/state/repo-a/kb/index.md" || kb.RootDir != "/state/repo-a/kb" {
-			t.Errorf("buildPreflightInput().KBInfos[0] = %+v", kb)
-		}
-	})
-
-	t.Run("multiple kb entries", func(t *testing.T) {
-		got := buildPreflightInput(feature.PhaseImplement, "", []KBInfo{
-			{Name: "repo-a", IndexPath: "/a/index.md", RootDir: "/a"},
-			{Name: "repo-b", IndexPath: "/b/index.md", RootDir: "/b"},
-		}, "")
-		if len(got.KBInfos) != 2 {
-			t.Fatalf("buildPreflightInput().KBInfos length = %d, want 2", len(got.KBInfos))
-		}
-		if got.KBInfos[0].Name != "repo-a" || got.KBInfos[1].Name != "repo-b" {
-			t.Errorf("buildPreflightInput().KBInfos = %+v, want stable input order", got.KBInfos)
-		}
-	})
-
-	t.Run("kb and guidelines", func(t *testing.T) {
-		got := buildPreflightInput(feature.PhaseImplement, "", []KBInfo{
-			{Name: "repo-a", IndexPath: "/idx", RootDir: "/root"},
-		}, guidelinesDir)
-		if !got.HasKB {
-			t.Error("HasKB = false, want true")
-		}
-		if !got.HasGuidelines {
-			t.Error("HasGuidelines = false, want true")
-		}
-		if len(got.Guidelines) == 0 {
-			t.Fatal("Guidelines length = 0, want embedded language rows")
-		}
-		for _, guideline := range got.Guidelines {
-			if !strings.HasPrefix(guideline.IndexPath, guidelinesDir+"/") {
-				t.Errorf("Guideline path %q does not live under %q", guideline.IndexPath, guidelinesDir)
-			}
-		}
-	})
-
 	t.Run("guidelines only", func(t *testing.T) {
-		got := buildPreflightInput(feature.PhaseImplement, "", nil, guidelinesDir)
-		if got.HasKB {
-			t.Error("HasKB = true, want false")
-		}
+		got := buildPreflightInput(feature.PhaseImplement, "", guidelinesDir)
 		if !got.HasGuidelines {
 			t.Error("HasGuidelines = false, want true")
 		}
@@ -138,7 +89,6 @@ func TestContextReadTracker_EmitsProviderFileRead(t *testing.T) {
 	obs := observerFromModule(t, true, stateDir, "agentic")
 	sc := observe.SpanContextForFeature(featureID, "", "", "").Child()
 	tracker := &contextReadTracker{
-		KBBaseDir:     filepath.Join(stateDir, "knowledge-base"),
 		SkillsDir:     filepath.Join(stateDir, "skills"),
 		GuidelinesDir: guidelinesDir,
 		Observer:      obs,
@@ -185,7 +135,7 @@ func TestSubagentProgressTracker_ForwardsProgress(t *testing.T) {
 	sc := observe.SpanContextForFeature(featureID, "", "", "").Child()
 
 	tracker := &subagentProgressTracker{
-		Observer: obs, SC: sc, Phase: "Knowledge Base", SessionID: "sess-kb",
+		Observer: obs, SC: sc, Phase: "Research", SessionID: "sess-research",
 	}
 	fake := &fakeSubagentSession{}
 	tracker.install(fake)

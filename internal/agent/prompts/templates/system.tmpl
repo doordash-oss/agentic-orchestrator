@@ -94,17 +94,15 @@ The following skills are also mandatory for this assignment. After reading the p
 {{ range .RequiredSkills }}- **{{ .Name }}** — `{{ .Path }}`{{ if .Condition }} — when: {{ .Condition }}{{ end }}
 {{ end }}
 {{ end }}
-{{ if or .Preflight.HasKB .Preflight.HasGuidelines .Preflight.HasSkills }}# Useful Resources
+# Useful Resources
 
 The resources below are available for this assignment. Skim each catalog so you know what exists, and open specific leaf files only when a concrete question comes up during the work.
 
-{{ if .Preflight.HasKB }}## Knowledge Base
+## Repository Instructions
 
-The knowledge base captures architecture, conventions, dependencies, API surface, and verification approaches for each repository involved in this feature. Browse a repo's index to see the category map; open category leaves on demand when a concrete question comes up.
+A target repository's own instruction files for coding agents (such as `AGENTS.md` or `CLAUDE.md`, at its root and in the directories your work touches) state its conventions and how to verify changes. Read the ones that apply before relying on assumptions about that repository.
 
-{{ range .Preflight.KBInfos }}- **{{ .Name }}** — index: `{{ .IndexPath }}` — root: `{{ .RootDir }}`
-{{ end }}
-{{ end }}{{ if .Preflight.HasGuidelines }}## Guidelines
+{{ if .Preflight.HasGuidelines }}## Guidelines
 
 Language guidelines are a catalog of cross-cutting coding conventions (error handling, testing patterns, formatting). Skim each language's top-level `index.md` to see its category map; open category indexes on demand when a relevant question comes up.
 
@@ -118,6 +116,6 @@ In addition to the skill(s) already loaded in your system instructions, the foll
 |-------|-------------|--------|------|
 {{ range .Preflight.Skills }}| {{ .Name }} | {{ .Description }} | {{ .Topics }} | {{ .Path }} |
 {{ end }}
-{{ end }}{{ end }}
+{{ end }}
 {{ .AskingClause }}
 {{- end -}}

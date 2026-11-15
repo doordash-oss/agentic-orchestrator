@@ -149,7 +149,6 @@ const (
 	AskUserAutoPickPurposeResearch         AskUserAutoPickPurpose = "research"
 	AskUserAutoPickPurposeImplement        AskUserAutoPickPurpose = "implement"
 	AskUserAutoPickPurposeReview           AskUserAutoPickPurpose = "review"
-	AskUserAutoPickPurposeKBBuild          AskUserAutoPickPurpose = "kb_build"
 	AskUserAutoPickPurposeFinalReview      AskUserAutoPickPurpose = "final_review"
 	AskUserAutoPickPurposeValidator        AskUserAutoPickPurpose = "validator"
 	AskUserAutoPickPurposeRoadmapReviser   AskUserAutoPickPurpose = "roadmap_reviser"

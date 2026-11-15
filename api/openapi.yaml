@@ -5366,8 +5366,6 @@ components:
           type: string
         utilities:
           type: string
-        kb_build:
-          type: string
     Publishability:
       type: object
       required: [manual_publish, repos]
@@ -6542,8 +6540,6 @@ components:
           type: string
         utilities:
           type: string
-        kb_build:
-          type: string
         automatic_review:
           type: string
     Timing:
@@ -6928,8 +6924,8 @@ components:
             categories are explicitly empty entries (an entry with an empty
             items array) rather than omitted, so the confirmation never
             implies hidden impact. child_discard uses sessions, worktrees,
-            branches, knowledge; parent_cascade_delete uses children,
-            sessions, worktrees, branches, history, knowledge.
+            branches; parent_cascade_delete uses children, sessions,
+            worktrees, branches, history.
           type: array
           items:
             $ref: "#/components/schemas/ActionImpactCategory"
@@ -6989,8 +6985,6 @@ components:
             description:
               type: string
             summary:
-              type: string
-            wait_reason:
               type: string
             pipeline:
               type: string

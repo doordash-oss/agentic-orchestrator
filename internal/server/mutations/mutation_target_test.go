@@ -1256,7 +1256,6 @@ func TestServerMutationTargetCreateFeaturePersistsSelectedRESTOptions(t *testing
 		Implementation: "default-implementation",
 		Review:         "default-review",
 		Utilities:      "default-utilities",
-		KBBuild:        "default-kb",
 	}
 	if err := config.Save(configPath, cfg); err != nil {
 		t.Fatalf("Save config error = %v", err)
@@ -1278,7 +1277,6 @@ func TestServerMutationTargetCreateFeaturePersistsSelectedRESTOptions(t *testing
 		Models: config.ModelConfig{
 			Research:       "claude:opus",
 			Implementation: testModelCodexGPT54,
-			KBBuild:        "claude:haiku",
 		},
 		Attachments:             []string{attachment},
 		UseCurrentBranch:        true,
@@ -1308,7 +1306,7 @@ func TestServerMutationTargetCreateFeaturePersistsSelectedRESTOptions(t *testing
 		t.Fatalf("created feature text config = desc:%q exit:%q inq:%q", created.Description, created.ExitCriteria, created.Inquireness)
 	}
 	if created.Models.Research != "claude:opus" || created.Models.Planning != testPlanningModelDefault ||
-		created.Models.Implementation != testModelCodexGPT54 || created.Models.KBBuild != "claude:haiku" {
+		created.Models.Implementation != testModelCodexGPT54 {
 		t.Fatalf("created feature models = %+v; want REST selections over defaults", created.Models)
 	}
 	if created.Pipeline != feature.PipelineMedium || created.CurrentPhase != feature.PhasePlan || created.RiskLevel != feature.RiskHigh {
@@ -1758,7 +1756,7 @@ func TestServerMutationTargetRetryFeatureDispatchesFailedPhase(t *testing.T) {
 		Manager: manager,
 		Store:   store,
 	}, orchestrator.Hooks{})
-	orch.SetRunMultiRepoImplFn(func(f *feature.Feature, planPath string, _ ...agent.KBInfo) (chan *agent.OrchestratorResult, error) {
+	orch.SetRunMultiRepoImplFn(func(f *feature.Feature, planPath string) (chan *agent.OrchestratorResult, error) {
 		dispatched = append(dispatched, f.ID+":"+planPath)
 		ch := make(chan *agent.OrchestratorResult)
 		close(ch)
@@ -2350,14 +2348,14 @@ func TestServerMutationTargetRewindActionUpgradePipelineBranch(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Load feature: %v", err)
 	}
-	if updated.Pipeline != feature.PipelineLarge || updated.CurrentPhase != feature.PhaseKnowledgeBase {
-		t.Fatalf("feature pipeline/current phase = %s/%s, want large/knowledge base", updated.Pipeline, updated.CurrentPhase)
+	if updated.Pipeline != feature.PipelineLarge || updated.CurrentPhase != feature.PhaseInquire {
+		t.Fatalf("feature pipeline/current phase = %s/%s, want large/inquire", updated.Pipeline, updated.CurrentPhase)
 	}
 	if got := strings.Join(sessions.stopCalls, ","); got != "session-upgrade-rewind" {
 		t.Fatalf("StopSession calls = %q, want session-upgrade-rewind", got)
 	}
-	if result.FeatureID != f.ID || result.TargetPhase != phaseNameInquire || result.UpgradePipeline != "large" || result.EffectivePhase != feature.PhaseKnowledgeBase.DirName() || result.Result != "rewound" {
-		t.Fatalf("RewindFeature() result = %+v; want large KB rewind", result)
+	if result.FeatureID != f.ID || result.TargetPhase != phaseNameInquire || result.UpgradePipeline != "large" || result.EffectivePhase != feature.PhaseInquire.DirName() || result.Result != "rewound" {
+		t.Fatalf("RewindFeature() result = %+v; want large Inquire rewind", result)
 	}
 }
 
@@ -2426,7 +2424,7 @@ func TestServerMutationTargetRestartFeatureDispatchesPhaseWork(t *testing.T) {
 		Manager: manager,
 		Store:   store,
 	}, orchestrator.Hooks{})
-	orch.SetRunMultiRepoImplFn(func(f *feature.Feature, planPath string, _ ...agent.KBInfo) (chan *agent.OrchestratorResult, error) {
+	orch.SetRunMultiRepoImplFn(func(f *feature.Feature, planPath string) (chan *agent.OrchestratorResult, error) {
 		dispatched = append(dispatched, f.ID+":"+planPath)
 		ch := make(chan *agent.OrchestratorResult)
 		close(ch)

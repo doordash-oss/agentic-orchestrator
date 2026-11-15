@@ -27,7 +27,7 @@ import (
 // TestOrchestrator_StartPhase_AllPhaseTypes (table-driven)
 // ---------------------------------------------------------------------------
 //
-// Tests the startPhase dispatcher for each of the 7 phase-runner phases. We
+// Tests the startPhase dispatcher for each phase-runner phase. We
 // drive dispatch via StartFeature by setting Status=StatusInterrupted and
 // CurrentPhase=X (StartFeature uses CurrentPhase for non-StatusCreated features).
 // Publish dispatch is covered in TestOrchestrator_StartPublish_* tests.
@@ -45,9 +45,9 @@ func TestOrchestrator_StartPhase_AllPhaseTypes(t *testing.T) {
 		wantError         bool
 	}{
 		{
-			name:              "KB_NoReposSkipsToInquire",
+			name:              "LegacyKnowledgeBaseResumesAtInquire",
 			phase:             feature.PhaseKnowledgeBase,
-			setupFeature:      func(f *feature.Feature) { f.Repos = nil },
+			setupFeature:      func(f *feature.Feature) {},
 			wantStatus:        feature.StatusInquiring,
 			wantPhaseStarted:  true,
 			wantDispatchPhase: feature.PhaseInquire,

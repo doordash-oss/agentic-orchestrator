@@ -452,7 +452,6 @@ type planLoopConfig struct {
 	// ResearchArtifactPath the initial planning research path.
 	DesignArtifactPath string
 	QAFilePaths        []string // paths to Q&A files from inquire/research/design
-	KBInfos            []KBInfo // repo knowledge base info
 	WorkDir            string   // repo working directory
 	AdditionalDirs     []string // additional directories for claude --add-dir
 
@@ -1632,7 +1631,6 @@ attemptLoop:
 				IterationDir:   attemptDir,
 				SkillsDir:      cfg.SkillsDir,
 				GuidelinesDir:  cfg.GuidelinesDir,
-				KBInfos:        cfg.KBInfos,
 				AskingClause:   cfg.AskingClause,
 				CompletionTool: cfg.CompletionTool,
 			})
@@ -1701,7 +1699,6 @@ attemptLoop:
 				}
 				cfg.Observer.SessionStarted(planSessionCtx, "plan", sessionID, providerName, cfg.Feature.Models.Planning, cfg.RepoName, string(cfg.EffectiveEffort), string(cfg.EffortSource))
 				(&contextReadTracker{
-					KBBaseDir:     filepath.Join(filepath.Dir(cfg.StateDir), "knowledge-base"),
 					SkillsDir:     cfg.SkillsDir,
 					GuidelinesDir: cfg.GuidelinesDir,
 					Observer:      cfg.Observer,

@@ -264,7 +264,7 @@ func carryForwardArtifactKeyForPartialImplement(key string, targetRoadmapPhase i
 // carryForwardCostKey reports whether a PhaseCosts/PhaseTimings/SessionCosts
 // key survives a rewind to `target` (`targetRoadmapPhase` > 0 for partial
 // implement rewinds). Mirrors the artifact matrices, extended with the
-// cost-only keys ("knowledgebase", "phase-N-impl"): time and money already
+// cost-only keys (legacy "knowledgebase", "phase-N-impl"): time and money already
 // spent on phases whose outputs are kept stay visible on the new run. Spend
 // on phases being redone stays only on the sealed run's ledger.
 func carryForwardCostKey(key string, target Phase, targetRoadmapPhase int) bool {

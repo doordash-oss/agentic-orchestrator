@@ -507,68 +507,6 @@ func TestContractRegistryHasNoLegacyRefactorPlanRole(t *testing.T) {
 	}
 }
 
-func TestContractKnowledgeBaseBuilderRequiresIndexPresence(t *testing.T) {
-	kbDir := t.TempDir()
-	if err := os.WriteFile(filepath.Join(kbDir, "index.md"), []byte("# repo kb\n"), 0o644); err != nil {
-		t.Fatalf("write index.md: %v", err)
-	}
-
-	contract, ok := lookup(feature.PhaseKnowledgeBase, RoleKnowledgeBaseBuilder)
-	if !ok {
-		t.Fatal("Lookup(PhaseKnowledgeBase, RoleKnowledgeBaseBuilder) ok = false, want true")
-	}
-	if contract.Role != RoleKnowledgeBaseBuilder {
-		t.Fatalf("Lookup(PhaseKnowledgeBase, RoleKnowledgeBaseBuilder).Role = %q, want %q", contract.Role, RoleKnowledgeBaseBuilder)
-	}
-
-	out, violations, err := Validate(feature.PhaseKnowledgeBase, RoleKnowledgeBaseBuilder, kbDir)
-	if err != nil {
-		t.Fatalf("Validate() error = %v", err)
-	}
-	if !out.OK {
-		t.Fatalf("Validate() OK = false, violations = %#v", violations)
-	}
-	if len(violations) != 0 {
-		t.Fatalf("Validate() violations = %#v, want none", violations)
-	}
-}
-
-func TestContractKnowledgeBaseBuilderReportsMissingIndex(t *testing.T) {
-	kbDir := t.TempDir()
-
-	out, violations, err := Validate(feature.PhaseKnowledgeBase, RoleKnowledgeBaseBuilder, kbDir)
-	if err != nil {
-		t.Fatalf("Validate() error = %v", err)
-	}
-	if out.OK {
-		t.Fatal("Validate() OK = true, want false")
-	}
-	if len(violations) != 1 {
-		t.Fatalf("Validate() violations = %#v, want one", violations)
-	}
-	if violations[0].Artifact != "index.md" {
-		t.Fatalf("ProtocolViolation.Artifact = %q, want index.md", violations[0].Artifact)
-	}
-	if !strings.Contains(violations[0].Reason, "missing") {
-		t.Fatalf("ProtocolViolation.Reason = %q, want missing index reason", violations[0].Reason)
-	}
-}
-
-func TestContractKnowledgeBaseBuilderIndexPresenceOnly(t *testing.T) {
-	kbDir := t.TempDir()
-	if err := os.WriteFile(filepath.Join(kbDir, "index.md"), nil, 0o644); err != nil {
-		t.Fatalf("write empty index.md: %v", err)
-	}
-
-	out, violations, err := Validate(feature.PhaseKnowledgeBase, RoleKnowledgeBaseBuilder, kbDir)
-	if err != nil {
-		t.Fatalf("Validate() error = %v", err)
-	}
-	if !out.OK || len(violations) != 0 {
-		t.Fatalf("Validate() = outcome=%#v violations=%#v, want presence-only success", out, violations)
-	}
-}
-
 func TestContractRegistryArtifactPhaseRolesRequireMarkdown(t *testing.T) {
 	tests := []struct {
 		name     string

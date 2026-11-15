@@ -166,7 +166,7 @@ func TestReviewSessionServiceCreateUsesFeatureRootDescriptionReviewForRewindToIn
 		ID:            "feat-rewind-description-review",
 		Name:          "Rewind description review",
 		Status:        feature.StatusPromptNeedsReview,
-		CurrentPhase:  feature.PhaseKnowledgeBase,
+		CurrentPhase:  feature.PhaseInquire,
 		ActiveRun:     1,
 		RunCount:      1,
 		Pipeline:      feature.PipelineMoonshot,

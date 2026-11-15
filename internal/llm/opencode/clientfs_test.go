@@ -56,11 +56,11 @@ func TestWriteTextFile_WithinWritableRootWritesAndReplies(t *testing.T) {
 	dir := t.TempDir()
 	p, buf := fsProtocol(t, dir)
 
-	target := filepath.Join(dir, "knowledge-base", "index.md")
+	target := filepath.Join(dir, "artifacts", "index.md")
 	msgs := mustParse(t, p, serverRequestLine(t, 1, writeTextFileMethod, map[string]any{
 		"sessionId": "ses_x",
 		"path":      target,
-		"content":   "# KB\n",
+		"content":   "# Artifact\n",
 	}))
 	if len(msgs) != 0 {
 		t.Fatalf("fs/write_text_file produced %+v, want no SDK messages", msgs)
@@ -70,8 +70,8 @@ func TestWriteTextFile_WithinWritableRootWritesAndReplies(t *testing.T) {
 	if err != nil {
 		t.Fatalf("file not written: %v", err)
 	}
-	if string(got) != "# KB\n" {
-		t.Fatalf("file content = %q, want %q", got, "# KB\n")
+	if string(got) != "# Artifact\n" {
+		t.Fatalf("file content = %q, want %q", got, "# Artifact\n")
 	}
 
 	result, errObj := fsResponse(t, buf)

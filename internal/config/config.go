@@ -163,7 +163,6 @@ type ModelConfig struct {
 	Implementation string `yaml:"implementation" json:"implementation,omitempty"`
 	Review         string `yaml:"review" json:"review,omitempty"`
 	Utilities      string `yaml:"utilities" json:"utilities,omitempty"`
-	KBBuild        string `yaml:"kb_build" json:"kb_build,omitempty"`
 	// AutomaticReview is the optional reviewer model for automatic Bash review.
 	// An empty value is meaningful: it means "Automatic" (resolve the first
 	// eligible provider's preferred inexpensive model at review time). It is
@@ -181,7 +180,6 @@ func (m ModelConfig) IsEmpty() bool {
 		m.Implementation == "" &&
 		m.Review == "" &&
 		m.Utilities == "" &&
-		m.KBBuild == "" &&
 		m.AutomaticReview == ""
 }
 
@@ -197,7 +195,6 @@ type EffortConfig struct {
 	Implementation string `yaml:"implementation,omitempty" json:"implementation,omitempty"`
 	Review         string `yaml:"review,omitempty" json:"review,omitempty"`
 	Utilities      string `yaml:"utilities,omitempty" json:"utilities,omitempty"`
-	KBBuild        string `yaml:"kb_build,omitempty" json:"kb_build,omitempty"`
 }
 
 // role is one model-and-effort role, keyed by the role string the provider
@@ -218,7 +215,6 @@ var Roles = []role{
 	{"implementation", func(m *ModelConfig) *string { return &m.Implementation }, func(e *EffortConfig) *string { return &e.Implementation }},
 	{"review", func(m *ModelConfig) *string { return &m.Review }, func(e *EffortConfig) *string { return &e.Review }},
 	{"chat", func(m *ModelConfig) *string { return &m.Utilities }, func(e *EffortConfig) *string { return &e.Utilities }},
-	{"kb_build", func(m *ModelConfig) *string { return &m.KBBuild }, func(e *EffortConfig) *string { return &e.KBBuild }},
 }
 
 // RoleNamed returns the role with the given name and whether it exists.

@@ -15,7 +15,6 @@
 package orchestrator_test
 
 import (
-	"context"
 	"errors"
 	"fmt"
 	"io"
@@ -53,7 +52,6 @@ const (
 	finalStatusInterrupted = "interrupted"
 	reviewStatusPassed     = "review_passed"
 	finalStatusFailed      = "failed"
-	kbStatusCompleted      = "completed"
 	apiRepoWorkPath        = "/tmp/api"
 	repoAWorktreePath      = "/tmp/repo-a-worktree"
 )
@@ -90,297 +88,10 @@ func countPublisherCalls(m *mocks.MockRemoteOps, method string) int {
 	return n
 }
 
-func passingFinalReview(*feature.Feature, ...agent.KBInfo) (chan *agent.OrchestratorResult, error) {
+func passingFinalReview(*feature.Feature) (chan *agent.OrchestratorResult, error) {
 	ch := make(chan *agent.OrchestratorResult, 1)
 	ch <- &agent.OrchestratorResult{FinalStatus: "all_passed"}
 	return ch, nil
-}
-
-// ---------------------------------------------------------------------------
-// Category A — KB completion
-// ---------------------------------------------------------------------------
-
-func writeKBCompletionArtifacts(t *testing.T, stateDir, repoName string, withIndex bool) string {
-	t.Helper()
-	kbDir := agent.KBStateDir(stateDir, repoName)
-	if err := os.MkdirAll(kbDir, 0o755); err != nil {
-		t.Fatalf("mkdir kb dir: %v", err)
-	}
-	if withIndex {
-		if err := os.WriteFile(agent.KBPath(kbDir), []byte("# repo kb\n"), 0o644); err != nil {
-			t.Fatalf("write index.md: %v", err)
-		}
-	}
-	return kbDir
-}
-
-// onKBCompleted success + not-all-done: PhaseCompleted is NOT emitted yet;
-// advance is NOT called. Just MarkRepoKBCompleted is recorded.
-func TestOrchestrator_HandlePhaseCompletion_KB_Success_NotAllDone(t *testing.T) {
-	stateDir := t.TempDir()
-	writeKBCompletionArtifacts(t, stateDir, repoName, true)
-
-	f := &feature.Feature{
-		ID:           "feat-kb1",
-		Status:       feature.StatusBuildingKB,
-		CurrentPhase: feature.PhaseKnowledgeBase,
-		Pipeline:     feature.PipelineLarge,
-		Repos: []feature.FeatureRepo{
-			{Name: repoName, Path: repoAPath},
-			{Name: repoNameB, Path: repoBPath},
-		},
-		KBStatus: map[string]string{repoName: "pending", repoNameB: "pending"},
-	}
-	fs, lc := newStoredFeatureFixture(t, f)
-
-	o := orchestrator.New(orchestrator.Deps{
-		Manager:     lc,
-		Store:       fs,
-		PhaseRunner: &agent.PhaseRunner{StateDir: stateDir},
-		CmdRunner:   mocks.NewMockCommandRunner(),
-	}, orchestrator.Hooks{})
-
-	err := o.HandlePhaseCompletion("feat-kb1", orchestrator.PhaseCompletionInput{
-		Phase:     feature.PhaseKnowledgeBase,
-		SessionID: "feat-kb1-kb-repo-a",
-		Success:   true,
-	})
-	if err != nil {
-		t.Fatalf("HandlePhaseCompletion: %v", err)
-	}
-
-	stored := loadStoredFeature(t, fs, f.ID)
-	if stored.KBStatus[repoName] != kbStatusCompleted || stored.KBStatus[repoNameB] == kbStatusCompleted {
-		t.Fatalf("KB status = %v, want only repo-a completed", stored.KBStatus)
-	}
-
-	events := drainEvents(o)
-	if hasEventType(events, ports.PhaseCompleted) {
-		t.Error("PhaseCompleted should NOT fire while other KBs are still pending")
-	}
-
-	// Regression guard: without a resolved stateDir, onKBCompleted must NOT
-	// scribble a knowledge-base/ tree into the test's working directory.
-	// See completion.go — MarkKBFresh is skipped when baseDir == "".
-	if _, err := os.Stat("knowledge-base"); !os.IsNotExist(err) {
-		t.Errorf("onKBCompleted leaked ./knowledge-base into CWD (stat err=%v)", err)
-	}
-}
-
-// A canonical KB is generated from the feature worktree, so completion must
-// stamp that worktree's HEAD even when the original checkout is on a different
-// branch. Otherwise a later refactor child rejects the reusable KB baseline as
-// unrelated and falls back to a full build.
-func TestOrchestrator_HandlePhaseCompletion_KB_RecordsWorktreeCommit(t *testing.T) {
-	stateDir := t.TempDir()
-	kbDir := writeKBCompletionArtifacts(t, stateDir, repoName, true)
-	originalPath := filepath.Join(t.TempDir(), "original-checkout")
-	worktreePath := filepath.Join(t.TempDir(), "feature-worktree")
-
-	f := &feature.Feature{
-		ID:           "feat-worktree-head",
-		Status:       feature.StatusBuildingKB,
-		CurrentPhase: feature.PhaseKnowledgeBase,
-		Pipeline:     feature.PipelineLarge,
-		Repos: []feature.FeatureRepo{{
-			Name:         repoName,
-			Path:         originalPath,
-			WorktreePath: worktreePath,
-		}},
-		KBStatus: map[string]string{repoName: "pending", "another-repo": "pending"},
-	}
-	fs := feature.NewStore(stateDir)
-	lc := feature.NewManager(fs, config.NewDefault())
-	f.SchemaVersion = feature.SchemaVersionCurrent
-	if err := fs.Save(f); err != nil {
-		t.Fatalf("save feature: %v", err)
-	}
-	cmd := mocks.NewMockCommandRunner()
-	cmd.RunFn = func(_ context.Context, name string, args []string, opts ports.CommandOpts) ([]byte, error) {
-		if name != "git" || strings.Join(args, " ") != "rev-parse HEAD" {
-			return nil, errors.New("unexpected command")
-		}
-		switch opts.Dir {
-		case originalPath:
-			return []byte("original-checkout-head\n"), nil
-		case worktreePath:
-			return []byte("feature-worktree-head\n"), nil
-		default:
-			return nil, errors.New("unexpected git directory")
-		}
-	}
-
-	o := orchestrator.New(orchestrator.Deps{
-		Manager:     lc,
-		Store:       fs,
-		PhaseRunner: &agent.PhaseRunner{StateDir: stateDir},
-		CmdRunner:   cmd,
-	}, orchestrator.Hooks{})
-
-	if err := o.HandlePhaseCompletion(f.ID, orchestrator.PhaseCompletionInput{
-		Phase:     feature.PhaseKnowledgeBase,
-		SessionID: f.ID + "-kb-" + repoName,
-		Success:   true,
-	}); err != nil {
-		t.Fatalf("HandlePhaseCompletion: %v", err)
-	}
-
-	state, err := agent.LoadKBState(kbDir)
-	if err != nil {
-		t.Fatalf("LoadKBState: %v", err)
-	}
-	if state == nil {
-		t.Fatal("LoadKBState = nil, want persisted freshness state")
-	}
-	if state.HeadCommit != "feature-worktree-head" {
-		t.Fatalf("HeadCommit = %q, want feature-worktree-head", state.HeadCommit)
-	}
-}
-
-// onKBCompleted success + all done: emits PhaseCompleted, marks feature KB done,
-// clears ForceKBRebuild, and drives advanceToNextPhase.
-func TestOrchestrator_HandlePhaseCompletion_KB_Success_AllDone(t *testing.T) {
-	stateDir := t.TempDir()
-	writeKBCompletionArtifacts(t, stateDir, repoName, true)
-
-	f := &feature.Feature{
-		ID:             "feat-kb2",
-		Status:         feature.StatusBuildingKB,
-		CurrentPhase:   feature.PhaseKnowledgeBase,
-		Pipeline:       feature.PipelineLarge,
-		ForceKBRebuild: true,
-		Repos: []feature.FeatureRepo{
-			{Name: repoName, Path: repoAPath},
-		},
-	}
-	fs, lc := newStoredFeatureFixture(t, f)
-	sm := mocks.NewMockSessionManager()
-	sm.StartSessionFn = func(id, featureID string, phase feature.Phase, command []string, workdir string, env []string, opts ...*session.SessionOpts) (ports.SessionHandle, error) {
-		return newStubSessionHandle(id, featureID, phase, ""), nil
-	}
-	pr := &agent.PhaseRunner{
-		StateDir:       stateDir,
-		SessionManager: sm,
-		BuildSessionFn: func(opts agent.BuildSessionOpts) ([]string, []string, *ports.SessionOpts, error) {
-			return nil, nil, &ports.SessionOpts{}, nil
-		},
-	}
-
-	var phaseCompletedFeatureID string
-	var phaseCompletedPhase feature.Phase
-	o := orchestrator.New(orchestrator.Deps{
-		Manager:     lc,
-		Store:       fs,
-		Sessions:    sm,
-		PhaseRunner: pr,
-		CmdRunner:   mocks.NewMockCommandRunner(),
-	}, orchestrator.Hooks{
-		OnPhaseCompleted: func(id string, p feature.Phase, _ error) {
-			phaseCompletedFeatureID = id
-			phaseCompletedPhase = p
-		},
-	})
-
-	if err := o.HandlePhaseCompletion("feat-kb2", orchestrator.PhaseCompletionInput{
-		Phase:     feature.PhaseKnowledgeBase,
-		SessionID: "feat-kb2-kb-repo-a",
-		Success:   true,
-	}); err != nil {
-		t.Fatalf("HandlePhaseCompletion: %v", err)
-	}
-
-	// PhaseCompleted hook fired.
-	if phaseCompletedFeatureID != "feat-kb2" || phaseCompletedPhase != feature.PhaseKnowledgeBase {
-		t.Errorf("OnPhaseCompleted got (%q, %v), want (feat-kb2, PhaseKnowledgeBase)",
-			phaseCompletedFeatureID, phaseCompletedPhase)
-	}
-	// CompleteKnowledgeBase recorded.
-
-	events := drainEvents(o)
-	if !hasEventType(events, ports.PhaseCompleted) {
-		t.Error("expected PhaseCompleted event")
-	}
-
-	// Feature.ForceKBRebuild was cleared via Store.Modify.
-	if loadStoredFeature(t, fs, f.ID).ForceKBRebuild {
-		t.Error("ForceKBRebuild should be cleared after KB completion")
-	}
-}
-
-func TestOrchestrator_HandlePhaseCompletion_KB_Terminal_Interrupted(t *testing.T) {
-	f := &feature.Feature{
-		ID:           "feat-kb-int",
-		Status:       feature.StatusInterrupted,
-		CurrentPhase: feature.PhaseKnowledgeBase,
-		Pipeline:     feature.PipelineLarge,
-		Repos:        []feature.FeatureRepo{{Name: repoName, Path: repoAPath}},
-	}
-	fs, lc := newStoredFeatureFixture(t, f)
-
-	o := orchestrator.New(orchestrator.Deps{Manager: lc, Store: fs}, orchestrator.Hooks{})
-
-	if err := o.HandlePhaseCompletion("feat-kb-int", orchestrator.PhaseCompletionInput{
-		Phase:     feature.PhaseKnowledgeBase,
-		SessionID: "feat-kb-int-kb-repo-a",
-		Success:   true,
-	}); err != nil {
-		t.Fatalf("HandlePhaseCompletion: %v", err)
-	}
-
-	// MarkRepoKBCompleted still recorded before the terminal-state check, but
-	// CompleteKnowledgeBase must not run when status is not BuildingKB.
-	events := drainEvents(o)
-	if hasEventType(events, ports.PhaseCompleted) {
-		t.Error("PhaseCompleted should NOT fire for terminal-state KB completion")
-	}
-}
-
-// onKBCompleted failure path: MarkRepoKBFailed + markFailedWithEvent + emits
-// PhaseCompleted(err) and FeatureFailed.
-func TestOrchestrator_HandlePhaseCompletion_KB_Failure(t *testing.T) {
-	f := &feature.Feature{
-		ID:           "feat-kb-fail",
-		Status:       feature.StatusBuildingKB,
-		CurrentPhase: feature.PhaseKnowledgeBase,
-		Pipeline:     feature.PipelineLarge,
-		Repos:        []feature.FeatureRepo{{Name: repoName, Path: repoAPath}},
-	}
-	fs, lc := newStoredFeatureFixture(t, f)
-
-	var failureCode errcat.Code
-	var errMsg string
-	o := orchestrator.New(orchestrator.Deps{Manager: lc, Store: fs}, orchestrator.Hooks{
-		OnFeatureFailed: func(id string, code errcat.Code, class errcat.Class, em string) {
-			failureCode = code
-			errMsg = em
-		},
-	})
-
-	if err := o.HandlePhaseCompletion("feat-kb-fail", orchestrator.PhaseCompletionInput{
-		Phase:       feature.PhaseKnowledgeBase,
-		SessionID:   "feat-kb-fail-kb-repo-a",
-		Success:     false,
-		ErrorDetail: "kb tanked",
-	}); err != nil {
-		t.Fatalf("HandlePhaseCompletion: %v", err)
-	}
-	if stored := loadStoredFeature(t, fs, f.ID); stored.Status != feature.StatusFailed {
-		t.Fatalf("status = %s, want failed", stored.Status)
-	}
-	if failureCode != errcat.SessionCrashed {
-		t.Errorf("failure code = %q, want %q", failureCode, errcat.SessionCrashed)
-	}
-	if errMsg != "kb tanked" {
-		t.Errorf("error message = %q, want %q", errMsg, "kb tanked")
-	}
-
-	events := drainEvents(o)
-	if !hasEventType(events, ports.PhaseCompleted) {
-		t.Error("expected PhaseCompleted event on KB failure")
-	}
-	if !hasEventType(events, ports.FeatureFailed) {
-		t.Error("expected FeatureFailed event")
-	}
 }
 
 // ---------------------------------------------------------------------------
@@ -477,7 +188,7 @@ func TestOrchestrator_HandlePhaseCompletion_ArtifactPhaseSuccessRecordsRegistryA
 }
 
 // Inquire success: advances to next phase. Design would be the next
-// phase for PipelineMoonshot (KB→Inquire→Research→Design), but on
+// phase for PipelineMoonshot (Inquire→Research→Design), but on
 // PipelineLarge (no design) it is Research.
 func TestOrchestrator_HandlePhaseCompletion_Inquire_Success_Advances(t *testing.T) {
 	stateDir := t.TempDir()
@@ -1538,7 +1249,7 @@ func TestOrchestrator_HandlePhaseCompletion_Plan_PerPhaseApproved_EmitsFeatureAd
 	fs, lc := newStoredFeatureFixture(t, f)
 
 	o := orchestrator.New(orchestrator.Deps{Manager: lc, Store: fs}, orchestrator.Hooks{})
-	o.SetRunMultiRepoImplFn(func(*feature.Feature, string, ...agent.KBInfo) (chan *agent.OrchestratorResult, error) {
+	o.SetRunMultiRepoImplFn(func(*feature.Feature, string) (chan *agent.OrchestratorResult, error) {
 		return make(chan *agent.OrchestratorResult, 1), nil
 	})
 

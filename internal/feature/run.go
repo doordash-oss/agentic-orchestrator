@@ -199,12 +199,6 @@ type Run struct {
 	// feature leaves Failed. It only means something while Status is Failed.
 	AutoResume *AutoResume `yaml:"auto_resume,omitempty"`
 
-	// KB transient flags (moved from Feature — actual KB data lives in a
-	// sibling knowledge-base/ directory outside the feature dir, untouched).
-	KBWaitMessage  string            `yaml:"kb_wait_message,omitempty"`
-	ForceKBRebuild bool              `yaml:"force_kb_rebuild,omitempty"`
-	KBStatus       map[string]string `yaml:"kb_status,omitempty"`
-
 	// Deferrals is the cross-phase work ledger. Entries are added when
 	// a phase's plan or implement output declares that specific work
 	// should land in a later phase; they are carried forward into the

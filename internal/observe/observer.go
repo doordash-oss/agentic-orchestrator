@@ -1295,8 +1295,8 @@ func (o *Observer) RecoveryAction(sc SpanContext, action string, phase string, p
 }
 
 // ContextFileRead emits a context.file_read event when an agent reads a
-// KB leaf file, skill SKILL.md, or guideline file during its session.
-// category is one of "kb", "skill", or "guideline".
+// skill SKILL.md or guideline file during its session.
+// category is "skill" or "guideline".
 func (o *Observer) ContextFileRead(sc SpanContext, phase, sessionID, category, filePath string, metas ...ContextFileReadMeta) {
 	if o == nil || !o.enabled {
 		return
@@ -1743,7 +1743,6 @@ func configSnapshotAttrs(s feature.ConfigSnapshot) map[string]any {
 			"implementation": s.Models.Implementation,
 			"review":         s.Models.Review,
 			"utilities":      s.Models.Utilities,
-			"kb_build":       s.Models.KBBuild,
 		},
 		"inquireness":         string(s.Inquireness),
 		"input_notifications": string(feature.NormalizeInputNotificationsMode(s.InputNotifications)),

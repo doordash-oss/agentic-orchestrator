@@ -478,7 +478,7 @@ func newResponseShapeImplementTarget(t *testing.T, name string, mutate func(*fea
 		t.Fatalf("prepare feature: %v", err)
 	}
 	orch := orchestrator.New(orchestrator.Deps{Manager: manager, Store: store}, orchestrator.Hooks{})
-	orch.SetRunMultiRepoImplFn(func(*feature.Feature, string, ...agent.KBInfo) (chan *agent.OrchestratorResult, error) {
+	orch.SetRunMultiRepoImplFn(func(*feature.Feature, string) (chan *agent.OrchestratorResult, error) {
 		ch := make(chan *agent.OrchestratorResult)
 		close(ch)
 		return ch, nil

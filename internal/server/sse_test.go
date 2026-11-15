@@ -662,7 +662,7 @@ func TestSessionStartedPublishesSnapshotRequiredSessionUpdate(t *testing.T) {
 	evt := eventDTOFromRuntime(session.SessionStartedMsg{
 		SessionID: fixtureSessionID,
 		FeatureID: fixtureFeatureID,
-		Phase:     feature.PhaseKnowledgeBase,
+		Phase:     feature.PhaseInquire,
 	})
 	if evt.Kind != sseEventSessionUpdated || !evt.SnapshotRequired {
 		t.Fatalf("eventDTOFromRuntime = %+v, want snapshot-required session.updated", evt)
@@ -670,8 +670,8 @@ func TestSessionStartedPublishesSnapshotRequiredSessionUpdate(t *testing.T) {
 	if evt.Resource.Type != resourceTypeSession || evt.Resource.ID != fixtureSessionID || evt.Resource.FeatureID != fixtureFeatureID {
 		t.Fatalf("event resource = %+v, want session resource for %q/%q", evt.Resource, fixtureFeatureID, fixtureSessionID)
 	}
-	if evt.Resource.Phase != feature.PhaseKnowledgeBase.String() {
-		t.Fatalf("event phase = %q, want %q", evt.Resource.Phase, feature.PhaseKnowledgeBase.String())
+	if evt.Resource.Phase != feature.PhaseInquire.String() {
+		t.Fatalf("event phase = %q, want %q", evt.Resource.Phase, feature.PhaseInquire.String())
 	}
 }
 

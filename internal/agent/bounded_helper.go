@@ -312,7 +312,7 @@ func (pr *PhaseRunner) runBoundedHelperSessionOnce(ctx context.Context, cfg boun
 			effortSource = string(cfg.sessOpts.EffortSource)
 		}
 		pr.Observer.SessionStarted(sessionCtx, observerPhase, cfg.sessionID, providerName, cfg.model, cfg.repoName, effort, effortSource)
-		pr.installContextReadTracker(sess, sessionCtx, observerPhase, cfg.sessionID, pr.StateDir)
+		pr.installContextReadTracker(sess, sessionCtx, observerPhase, cfg.sessionID)
 		pr.installSubagentProgressTracker(sess, sessionCtx, observerPhase, cfg.sessionID)
 	}
 

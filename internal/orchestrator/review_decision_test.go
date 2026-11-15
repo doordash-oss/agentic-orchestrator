@@ -704,55 +704,44 @@ func TestOrchestrator_ProceedFromRewindReview_MediumToPlan_OverwritesDescription
 	}
 }
 
-// ProceedFromRewindReview on an Medium-upgraded feature, given the
+// ProceedFromRewindReview on a Medium-upgraded feature, given the
 // already-escalated effective target. Manager.RewindWithRequest runs before the
 // artifact review opens and resolves the escalation (pre-plan targets on
-// Medium-upgraded features return PhaseKnowledgeBase). The orchestrator receives the
-// escalated target directly. This test verifies that ProceedFromRewindReview
-// dispatches PhaseKnowledgeBase rather than treating the input as a pre-plan
-// phase.
-func TestOrchestrator_ProceedFromRewindReview_DispatchesEscalatedKBTarget(t *testing.T) {
+// Medium-upgraded features restart at the pipeline's first phase). The
+// orchestrator receives the escalated target directly and dispatches it.
+func TestOrchestrator_ProceedFromRewindReview_DispatchesEscalatedTarget(t *testing.T) {
 	unpub := false
 	f := &feature.Feature{
-		ID:                   "feat-rd-rewind-kb",
+		ID:                   "feat-rd-rewind-escalated",
 		Status:               feature.StatusCreated,
 		Pipeline:             feature.PipelineLarge,
 		PipelineUpgradedFrom: feature.PipelineMedium,
-		ForceKBRebuild:       true, // skip KB freshness check so startKB enters the mixed-fresh path
 		Repos: []feature.FeatureRepo{
 			{Name: "r1", Path: "/tmp/r1", Publishable: &unpub},
 		},
 	}
 	fs, lc := newStoredFeatureFixture(t, f)
 
-	// PhaseRunner is nil: startKB short-circuits after StartPhaseKnowledgeBase +
-	// InitKBStatus and returns PhaseStarted cleanly.
+	// PhaseRunner is nil: startInquire short-circuits after the lifecycle
+	// transition and returns PhaseStarted cleanly.
 	o := orchestrator.New(orchestrator.Deps{Manager: lc, Store: fs}, orchestrator.Hooks{})
 
-	// Effective target propagated from the earlier RewindWithRequest result.
-	if err := o.ProceedFromRewindReview("feat-rd-rewind-kb", feature.PhaseKnowledgeBase); err != nil {
+	if err := o.ProceedFromRewindReview(f.ID, feature.PhaseInquire); err != nil {
 		t.Fatalf("ProceedFromRewindReview: %v", err)
 	}
 
-	// KB was dispatched → StartPhaseKnowledgeBase must have fired.
-	// Inquire dispatch must NOT have happened (would indicate the escalated
-	// target was ignored).
-	// RewindWithRequest must NOT be called because the rewind already happened
-	// before this entry point ran.
-
 	events := drainEvents(o)
-	// FeatureAdvanced carries the effective target (KB).
-	sawKBAdvance := false
+	sawAdvance := false
 	for _, ev := range events {
-		if ev.Type == ports.FeatureAdvanced && ev.Phase == feature.PhaseKnowledgeBase {
-			sawKBAdvance = true
-		}
 		if ev.Type == ports.FeatureAdvanced && ev.Phase == feature.PhaseInquire {
-			t.Errorf("unexpected FeatureAdvanced(PhaseInquire); escalated KB target must not be ignored")
+			sawAdvance = true
 		}
 	}
-	if !sawKBAdvance {
-		t.Errorf("expected FeatureAdvanced(PhaseKnowledgeBase); got events: %+v", events)
+	if !sawAdvance {
+		t.Errorf("expected FeatureAdvanced(PhaseInquire); got events: %+v", events)
+	}
+	if hasPhaseStarted(events, feature.PhaseInquire) == nil {
+		t.Error("expected PhaseStarted event for PhaseInquire")
 	}
 }
 
@@ -1045,76 +1034,5 @@ func TestOrchestrator_ProceedFromRewindReview_ToImplement_NonRoadmap_CompletesPl
 	f = loadStoredFeature(t, fs, f.ID)
 	if f.Status != feature.StatusImplementing {
 		t.Errorf("legacy rewind status = %s, want implementing", f.Status)
-	}
-}
-
-// Rewind-to-pre-plan path where KB is immediately skipped: a pre-plan
-// rewind target escalates to PhaseKnowledgeBase
-// (feature/manager.go:1115-1121), but startKB sees no repos and returns
-// PhaseSkipped → PhaseInquire; startPhase recurses and actually launches
-// PhaseInquire. FeatureAdvanced MUST carry the actually started phase
-// (Inquire), not the requested target (KnowledgeBase). Emitting the
-// requested-but-skipped phase breaks the same phase-sequencing contract
-// The completion contract treats a missing FeatureAdvanced event as blocking — wrong phase
-// is the same class of defect for downstream subscribers.
-//
-// Pre-fix behavior (hardcoded `Phase: target`) emitted
-// FeatureAdvanced(PhaseKnowledgeBase) even though startPhase actually
-// dispatched Inquire. This test fails against that bug and passes once
-// startPhase returns the actual started phase.
-func TestOrchestrator_ProceedFromRewindReview_ToKB_Skipped_EmitsAdvancedForActualPhase(t *testing.T) {
-	f := &feature.Feature{
-		ID:                   "feat-rd-rewind-kb-skip",
-		Status:               feature.StatusCreated,
-		Pipeline:             feature.PipelineLarge,
-		PipelineUpgradedFrom: feature.PipelineMedium,
-		// No repos: startKB short-circuits at len(f.Repos)==0 and returns
-		// PhaseSkipped → PhaseInquire without needing a CmdRunner or KB
-		// freshness fixtures (orchestrator.go:329-331).
-		Repos: nil,
-	}
-	fs, lc := newStoredFeatureFixture(t, f)
-	// StartPhaseInquire is invoked by startInquire after the recursive dispatch
-	// from the skipped KB; wire it up so the recursion completes cleanly.
-
-	// PhaseRunner is nil: startInquire short-circuits after the lifecycle
-	// transition and returns PhaseStarted cleanly.
-	o := orchestrator.New(orchestrator.Deps{Manager: lc, Store: fs}, orchestrator.Hooks{})
-
-	// Effective target after the earlier rewind resolved the Medium-upgraded
-	// escalation and propagated PhaseKnowledgeBase.
-	if err := o.ProceedFromRewindReview("feat-rd-rewind-kb-skip", feature.PhaseKnowledgeBase); err != nil {
-		t.Fatalf("ProceedFromRewindReview: %v", err)
-	}
-
-	// Lifecycle path: Inquire was dispatched (recursive start after KB skip);
-	// KB was NOT started because startKB short-circuited before calling
-	// StartPhaseKnowledgeBase.
-
-	events := drainEvents(o)
-	// FeatureAdvanced must carry the actually started phase (Inquire). The
-	// pre-fix code emitted FeatureAdvanced(PhaseKnowledgeBase) because it
-	// used the requested target instead of startPhase's returned phase.
-	sawInquireAdvance := false
-	for _, ev := range events {
-		if ev.Type == ports.FeatureAdvanced {
-			switch ev.Phase {
-			case feature.PhaseInquire:
-				sawInquireAdvance = true
-			case feature.PhaseKnowledgeBase:
-				t.Errorf("unexpected FeatureAdvanced(PhaseKnowledgeBase); KB was skipped — FeatureAdvanced must carry the actually started phase (Inquire)")
-			}
-		}
-	}
-	if !sawInquireAdvance {
-		t.Errorf("expected FeatureAdvanced(PhaseInquire) after KB skipped; got events: %+v", events)
-	}
-	// PhaseStarted must only fire for Inquire (the actually started phase);
-	// no PhaseStarted should fire for the skipped KB.
-	if hasPhaseStarted(events, feature.PhaseKnowledgeBase) != nil {
-		t.Error("unexpected PhaseStarted event for PhaseKnowledgeBase (KB was skipped)")
-	}
-	if hasPhaseStarted(events, feature.PhaseInquire) == nil {
-		t.Error("expected PhaseStarted event for PhaseInquire (actually started phase)")
 	}
 }

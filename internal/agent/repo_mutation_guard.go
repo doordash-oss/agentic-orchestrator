@@ -63,11 +63,11 @@ const (
 
 // RecordReadOnlyRepoBaseline snapshots managed repo worktrees before a
 // read-only role runs so mutations can be detected and restored later.
-func RecordReadOnlyRepoBaseline(ctx context.Context, runner ports.CommandRunner, f *feature.Feature, phaseDir string, repoNames ...string) error {
+func RecordReadOnlyRepoBaseline(ctx context.Context, runner ports.CommandRunner, f *feature.Feature, phaseDir string) error {
 	if f == nil || phaseDir == "" {
 		return nil
 	}
-	snapshots, err := captureReadOnlyRepoSnapshots(ctx, runner, f, repoNames...)
+	snapshots, err := captureReadOnlyRepoSnapshots(ctx, runner, f)
 	if err != nil {
 		return err
 	}
@@ -92,11 +92,11 @@ func RecordReadOnlyRepoBaseline(ctx context.Context, runner ports.CommandRunner,
 
 // EnforceReadOnlyRepoMutations detects changes made by a read-only role,
 // saves the attempted diff, restores the baseline, and returns violations.
-func EnforceReadOnlyRepoMutations(ctx context.Context, runner ports.CommandRunner, f *feature.Feature, phase feature.Phase, phaseDir string, repoNames ...string) ([]ProtocolViolation, error) {
+func EnforceReadOnlyRepoMutations(ctx context.Context, runner ports.CommandRunner, f *feature.Feature, phase feature.Phase, phaseDir string) ([]ProtocolViolation, error) {
 	if f == nil || phaseDir == "" || phase == feature.PhaseImplement {
 		return nil, nil
 	}
-	current, err := captureReadOnlyRepoSnapshots(ctx, runner, f, repoNames...)
+	current, err := captureReadOnlyRepoSnapshots(ctx, runner, f)
 	if err != nil {
 		return nil, err
 	}
@@ -134,24 +134,13 @@ func EnforceReadOnlyRepoMutations(ctx context.Context, runner ports.CommandRunne
 	return violations, nil
 }
 
-func captureReadOnlyRepoSnapshots(ctx context.Context, runner ports.CommandRunner, f *feature.Feature, repoNames ...string) ([]readOnlyRepoSnapshot, error) {
+func captureReadOnlyRepoSnapshots(ctx context.Context, runner ports.CommandRunner, f *feature.Feature) ([]readOnlyRepoSnapshot, error) {
 	if f == nil {
 		return nil, nil
-	}
-	filter := make(map[string]struct{}, len(repoNames))
-	for _, name := range repoNames {
-		if strings.TrimSpace(name) != "" {
-			filter[name] = struct{}{}
-		}
 	}
 
 	var snapshots []readOnlyRepoSnapshot
 	for _, repo := range f.Repos {
-		if len(filter) > 0 {
-			if _, ok := filter[repo.Name]; !ok {
-				continue
-			}
-		}
 		if strings.TrimSpace(repo.WorktreePath) == "" {
 			continue
 		}

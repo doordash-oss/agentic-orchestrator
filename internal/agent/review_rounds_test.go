@@ -298,24 +298,23 @@ func TestReviewDecisionPairsKeepsDisputesAndTheHandoff(t *testing.T) {
 	}
 }
 
-func TestAppendReviewDecisionsReplacesARerunSession(t *testing.T) {
+func TestAppendReviewDecisionsKeepsARerunSessionsEarlierAnswers(t *testing.T) {
 	t.Parallel()
 	path := filepath.Join(t.TempDir(), reviewDecisionsFile)
-	for _, answer := range []string{"Fix it", "Accept as is"} {
-		if _, err := appendReviewDecisions(path, "Iteration 1 fix", []ports.QAPair{{Question: "Dispute: drop the banner?", Answer: answer}}); err != nil {
+	guidance := ports.QAPair{Question: "How should Final Review proceed?", Answer: "Drop the banner and keep the export."}
+	dispute := ports.QAPair{Question: "Dispute: drop the banner?", Answer: "Accept as is"}
+	for _, qa := range [][]ports.QAPair{{guidance}, {dispute}, {dispute}} {
+		if _, err := appendReviewDecisions(path, "Iteration 2 handoff", qa); err != nil {
 			t.Fatal(err)
 		}
-	}
-	if _, err := appendReviewDecisions(path, "Iteration 2 handoff", []ports.QAPair{{Question: "How should Final Review proceed?", Answer: "Stop"}}); err != nil {
-		t.Fatal(err)
 	}
 	data, err := os.ReadFile(path)
 	if err != nil {
 		t.Fatal(err)
 	}
 	body := string(data)
-	if strings.Count(body, "## Iteration 1 fix") != 1 || strings.Contains(body, "**A:** Fix it") || !strings.Contains(body, "**A:** Accept as is") || !strings.Contains(body, "## Iteration 2 handoff") {
-		t.Fatalf("decisions after a rerun:\n%s", body)
+	if strings.Count(body, "## Iteration 2 handoff") != 1 || !strings.Contains(body, guidance.Answer) || strings.Count(body, "**A:** Accept as is") != 1 {
+		t.Fatalf("decisions after a rerun session:\n%s", body)
 	}
 }
 

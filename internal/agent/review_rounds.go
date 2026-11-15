@@ -256,37 +256,45 @@ func reviewDecisionPairs(qa []ports.QAPair, handoffQuestion string) []ports.QAPa
 	return decisions
 }
 
-// appendReviewDecisions records one session's decisions under heading,
-// replacing an earlier section with the same heading so a rerun session
-// does not record twice. It reports whether any were recorded.
+// appendReviewDecisions records one session's decisions under heading. A
+// rerun session adds only answers its section does not hold yet, so nothing
+// recorded earlier is lost or doubled. It reports whether the section holds
+// any decisions.
 func appendReviewDecisions(path, heading string, qa []ports.QAPair) (bool, error) {
-	if len(qa) == 0 {
-		return false, nil
-	}
 	data, err := os.ReadFile(path)
 	if err != nil && !os.IsNotExist(err) {
 		return false, fmt.Errorf("reading review decisions: %w", err)
 	}
 	body := string(data)
-	if body == "" {
-		body = "# Review Decisions\n\nThe user made these decisions during review. They override the design's acceptance criteria and earlier findings; a finding accepted as is is not raised again.\n"
-	}
 	marker := "\n## " + heading + "\n"
-	if start := strings.Index(body, marker); start >= 0 {
+	head, section, tail := body, "", ""
+	start := strings.Index(body, marker)
+	if start >= 0 {
 		rest := body[start+len(marker):]
-		end := len(body)
+		end := len(rest)
 		if next := strings.Index(rest, "\n## "); next >= 0 {
-			end = start + len(marker) + next
+			end = next
 		}
-		body = body[:start] + body[end:]
+		head, section, tail = body[:start+len(marker)], rest[:end], rest[end:]
 	}
-	var b strings.Builder
-	b.WriteString(body)
-	fmt.Fprintf(&b, "\n## %s\n", heading)
+	added := false
 	for _, pair := range qa {
-		fmt.Fprintf(&b, "\n**Q:** %s\n\n**A:** %s\n", strings.TrimSpace(pair.Question), strings.TrimSpace(pair.Answer))
+		block := fmt.Sprintf("\n**Q:** %s\n\n**A:** %s\n", strings.TrimSpace(pair.Question), strings.TrimSpace(pair.Answer))
+		if !strings.Contains(section, block) {
+			section += block
+			added = true
+		}
 	}
-	if err := os.WriteFile(path, []byte(b.String()), 0o644); err != nil {
+	if !added {
+		return start >= 0, nil
+	}
+	if start < 0 {
+		if head == "" {
+			head = "# Review Decisions\n\nThe user made these decisions during review. They override the design's acceptance criteria and earlier findings; a finding accepted as is is not raised again.\n"
+		}
+		head += marker
+	}
+	if err := os.WriteFile(path, []byte(head+section+tail), 0o644); err != nil {
 		return false, fmt.Errorf("writing review decisions: %w", err)
 	}
 	return true, nil

@@ -32,6 +32,10 @@ import (
 // specific session adapter package.
 var ErrSessionShuttingDown = errors.New("session manager is shutting down")
 
+// ErrProviderExitedBeforeHandshake reports a provider process that exited
+// before its protocol handshake completed.
+var ErrProviderExitedBeforeHandshake = errors.New("provider exited before the handshake completed")
+
 // SessionStatus enumerates session lifecycle states. Defined in ports so
 // domain code can reason about sessions without importing internal/session.
 type SessionStatus int

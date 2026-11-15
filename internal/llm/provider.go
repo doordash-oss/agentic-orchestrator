@@ -247,6 +247,13 @@ type StdoutInterposer interface {
 	InterposeStdout(stdout io.ReadCloser) io.ReadCloser
 }
 
+// DiagnosticSanitizer is implemented by protocols whose process output may
+// echo provider credentials; the session passes provider text through it
+// before surfacing that text.
+type DiagnosticSanitizer interface {
+	SanitizeDiagnostic(text string) string
+}
+
 // RememberingControlResponder is implemented by protocols whose provider can
 // itself remember an approval for the rest of the session. The session calls
 // it instead of RespondToControl(allow=true) when the user approves and asks

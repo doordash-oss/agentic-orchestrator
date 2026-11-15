@@ -199,6 +199,9 @@ func NewProtocol(opts llm.ProtocolOpts) *Protocol {
 	return p
 }
 
+// SanitizeDiagnostic implements llm.DiagnosticSanitizer.
+func (p *Protocol) SanitizeDiagnostic(text string) string { return sanitizeDiagnostic(text) }
+
 func (p *Protocol) SetStdin(w io.Writer) {
 	p.mu.Lock()
 	p.stdin = w

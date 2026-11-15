@@ -99,6 +99,8 @@ type Session struct {
 	initialPrompt  string            // the user prompt that started this session (for display in attach view)
 	providerName   string            // "claude" or "codex" (for display/logging)
 	stderrPath     string            // optional: capture stderr to this file
+	stderrTail     *stderrTail       // last stderr bytes when stderrPath is unset
+	launchSecrets  []string          // credential values from the launch env, scrubbed from diagnostics
 	kind           ports.SessionKind // informational classification; zero value = KindPhase
 	turnMode       ports.SessionTurnMode
 	label          string // context-specific sub-label (validator domain, helper target, …)
@@ -821,6 +823,7 @@ func (s *Session) Start(command []string, workdir string, env []string, onMessag
 	cmd := exec.Command(command[0], command[1:]...)
 	cmd.Dir = workdir
 	cmd.Env = append(os.Environ(), env...)
+	s.launchSecrets = launchSecretValues(env)
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 
 	stdinPipe, err := cmd.StdinPipe()
@@ -842,6 +845,11 @@ func (s *Session) Start(command []string, workdir string, env []string, onMessag
 			cmd.Stderr = stderrFile
 			defer func() { _ = stderrFile.Close() }()
 		}
+	} else if r, w, pipeErr := os.Pipe(); pipeErr == nil {
+		// Kept only to explain a child that exits before its handshake.
+		cmd.Stderr = w
+		defer func() { _ = w.Close() }()
+		s.stderrTail = newStderrTail(r)
 	} else {
 		devNull, devErr := os.OpenFile(os.DevNull, os.O_WRONLY, 0)
 		if devErr == nil {

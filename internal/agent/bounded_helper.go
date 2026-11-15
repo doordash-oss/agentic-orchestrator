@@ -544,8 +544,8 @@ func isMissingOutcomeViolationError(err error) bool {
 	return len(violations) == 1 && violations[0].Reason == boundedHelperMissingOutcomeReason
 }
 
-// boundedHelperRetryAllowed reports whether the helper's contract role owns a
-// structured iteration state and may therefore emit the retry outcome.
+// boundedHelperRetryAllowed reports whether the helper's contract role may
+// emit the retry outcome.
 func boundedHelperRetryAllowed(cfg boundedHelperRunConfig) bool {
 	if cfg.contractRole == "" {
 		return false
@@ -554,7 +554,7 @@ func boundedHelperRetryAllowed(cfg boundedHelperRunConfig) bool {
 	if !ok {
 		return false
 	}
-	return spec.IterationState
+	return spec.AllowsRetry
 }
 
 // isRetryableProviderNetworkFailure recognizes transient provider transport

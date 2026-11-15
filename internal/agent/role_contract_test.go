@@ -83,7 +83,7 @@ func TestRoleContractsResolveArtifactPaths(t *testing.T) {
 		wantPaths map[string]string
 	}
 	tests := []contractCase{
-		{feature.PhaseImplement, roleImplementer, implementIter, map[string]string{"progress": filepath.Join(base, "phase-01", "implement", "progress.md")}},
+		{feature.PhaseImplement, roleImplementer, implementIter, map[string]string{}},
 		{feature.PhasePlan, RolePlanRoadmapPlanner, roadmapAttempt, roadmapPaths},
 		{feature.PhasePlan, rolePlanRoadmapReviser, roadmapAttempt, roadmapPaths},
 		{feature.PhasePlan, RolePlanPhasePlanner, phasePlanAttempt, phasePlanPaths},
@@ -207,11 +207,11 @@ func TestRoleManifestCoverage(t *testing.T) {
 	}
 }
 
-func TestOnlyIterationStateRolesAllowRetry(t *testing.T) {
+func TestOnlyImplementerAllowsRetry(t *testing.T) {
 	t.Parallel()
 	for _, spec := range roleSpecs {
-		if got, want := spec.IterationState, spec.Role == roleImplementer; got != want {
-			t.Fatalf("%q IterationState = %v, want %v", spec.Role, got, want)
+		if got, want := spec.AllowsRetry, spec.Role == roleImplementer; got != want {
+			t.Fatalf("%q AllowsRetry = %v, want %v", spec.Role, got, want)
 		}
 	}
 }

@@ -737,7 +737,7 @@ func TestImplementLoopMoonshotAcceptanceReviewerRunsPlanVerification(t *testing.
 	agentScript := testutil.WriteScript(t, scriptsDir, "agent.sh", testutil.JSONLInit+`
 for _d in "`+artifactDir+`"/iteration-*; do :; done
 if [ "$(basename "$_d")" = "iteration-02" ]; then touch "`+readyPath+`"; fi
-`+testutil.WriteImplementSuccessArtifacts(artifactDir)+"\n"+testutil.JSONLSuccess+"\n")
+`+testutil.WriteImplementNotes(artifactDir)+"\n"+testutil.JSONLSuccess+"\n")
 	approved := testutil.StructuredReviewFeedback("", "", "APPROVED")
 	changesRequested := testutil.StructuredReviewFeedback("- **High**: Automated Verification `test -f ready.txt` fails; see evidence/verify.log.", "", "CHANGES_REQUESTED")
 

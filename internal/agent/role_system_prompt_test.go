@@ -95,14 +95,14 @@ func TestImplementSystemPromptKeepsFrontendDesignOptionalForNonFrontendPhase(t *
 
 func TestRoleSystemPromptIncludesArtifactPreflightCommand(t *testing.T) {
 	got := buildRoleSystemPrompt(roleSystemPromptInput{
-		Spec:         finalReviewFixerRoleSpec,
-		IterationDir: "/state/feat-x/runs/run-001/review/iteration-03",
+		Spec:         researcherRoleSpec,
+		IterationDir: "/state/feat-x/runs/run-001/research",
 		SkillsDir:    "/skills",
 	})
 	for _, want := range []string{
 		"## Artifact Preflight",
 		"`AGENTICO_BIN` is set to the current Agentico executable",
-		`"$AGENTICO_BIN" validate-artifacts --phase review --role final_review_fixer --dir "/state/feat-x/runs/run-001/review/iteration-03"`,
+		`"$AGENTICO_BIN" validate-artifacts --phase research --role researcher --dir "/state/feat-x/runs/run-001/research"`,
 		"run it before emitting the outcome tag",
 	} {
 		if !strings.Contains(got, want) {
@@ -111,10 +111,23 @@ func TestRoleSystemPromptIncludesArtifactPreflightCommand(t *testing.T) {
 	}
 }
 
+func TestRoleSystemPromptOmitsPreflightWithoutValidatedArtifacts(t *testing.T) {
+	for _, spec := range []roleSpec{implementRoleSpec, finalReviewFixerRoleSpec} {
+		got := buildRoleSystemPrompt(roleSystemPromptInput{
+			Spec:         spec,
+			IterationDir: "/state/feat-x/run-001/iteration-02",
+			SkillsDir:    "/skills",
+		})
+		if strings.Contains(got, "## Artifact Preflight") || strings.Contains(got, "validate-artifacts") {
+			t.Fatalf("%s prompt has an artifact preflight with nothing to validate:\n%s", spec.Role, got)
+		}
+	}
+}
+
 // TestRoleSystemPromptAdvertisesOnlyValidOutcomeVerbs pins the root cause of
 // a live failure: a final-review validator was shown the retry outcome by the
 // shared completion clause, emitted it, and the harness rejected it at commit
-// time. Only roles whose contract carries iteration state may see retry.
+// time. Only roles that allow another pass may see retry.
 func TestRoleSystemPromptAdvertisesOnlyValidOutcomeVerbs(t *testing.T) {
 	implementPrompt := buildRoleSystemPrompt(roleSystemPromptInput{
 		Spec:         implementRoleSpec,

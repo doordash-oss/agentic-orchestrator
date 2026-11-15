@@ -108,7 +108,7 @@ func TestRunImplementationLoop_GrantsOnlyActiveRunState(t *testing.T) {
 
 	agentScript := testutil.WriteScript(t, scriptsDir, "agent.sh",
 		testutil.JSONLInit+"\n"+
-			testutil.WriteImplementSuccessArtifacts(artifactDir)+"\n"+
+			testutil.WriteImplementNotes(artifactDir)+"\n"+
 			testutil.JSONLSuccess+"\n")
 	buildSession, captured := capturingBuildSession(agentScript, "")
 	f := &feature.Feature{
@@ -218,7 +218,7 @@ func TestFrontendImplementationRequiresFrontendDesignAndKeepsVisualReferences(t 
 
 	agentScript := testutil.WriteScript(t, scriptsDir, "agent.sh",
 		testutil.JSONLInit+"\n"+testutil.JSONLAssistant("Working...")+"\n"+
-			testutil.WriteImplementSuccessArtifacts(artifactDir)+"\n"+testutil.JSONLSuccess+"\n")
+			testutil.WriteImplementNotes(artifactDir)+"\n"+testutil.JSONLSuccess+"\n")
 	reviewScript := testutil.WriteScript(t, scriptsDir, "review.sh",
 		testutil.JSONLInit+"\n"+testutil.WriteReviewApproved(artifactDir)+"\n"+testutil.JSONLSuccess+"\n")
 
@@ -517,7 +517,7 @@ func TestImplementLoopCodexRouting(t *testing.T) {
 			// Agent script: writes progress.md and emits stream-json success.
 			agentScript := testutil.WriteScript(t, scriptsDir, "agent.sh",
 				testutil.JSONLInit+"\n"+testutil.JSONLAssistant("Working...")+"\n"+
-					testutil.WriteImplementSuccessArtifacts(artifactDir)+"\n"+testutil.JSONLSuccess+"\n")
+					testutil.WriteImplementNotes(artifactDir)+"\n"+testutil.JSONLSuccess+"\n")
 
 			// Review script: approves immediately
 			reviewScript := testutil.WriteScript(t, scriptsDir, "review.sh",
@@ -772,7 +772,7 @@ while IFS= read -r _line; do
       ;;
   esac
 done
-`, testutil.JSONLInit, finishOrViolateNudgeCasePattern, testutil.WriteImplementSuccessArtifacts(artifactDir), testutil.JSONLSuccess))
+`, testutil.JSONLInit, finishOrViolateNudgeCasePattern, testutil.WriteImplementNotes(artifactDir), testutil.JSONLSuccess))
 
 	f := &feature.Feature{
 		ID:            "test-fov-001",
@@ -1241,7 +1241,7 @@ func TestRunImplementationLoop_SuccessIgnoresCleanupFailedSessionStatus(t *testi
 		},
 		SessionStartFunc: func(id, featureID string, phase feature.Phase, command []string, workdir string, env []string, opts ...*session.SessionOpts) (ports.SessionHandle, error) {
 			iterDir := filepath.Join(artifactDir, "iteration-01")
-			testutil.WriteImplementHandoffFiles(t, artifactDir, iterDir, agentStatusSuccess)
+			testutil.WriteImplementHandoffFiles(t, artifactDir, iterDir)
 			sess.setRootIntent(validSuccessCompletionIntent())
 			sess.CostVal = &llm.ResultMessage{Subtype: testResultSuccessValue, StopReason: "end_turn"}
 			sess.StatusChVal <- agentStatusSuccess
@@ -1361,7 +1361,7 @@ func TestImplementLoop_CrashResumeRecoversDeadSession(t *testing.T) {
 		}
 		// The resumed process finishes the iteration.
 		iterDir := filepath.Join(artifactDir, "iteration-01")
-		testutil.WriteImplementHandoffFiles(t, artifactDir, iterDir, agentStatusSuccess)
+		testutil.WriteImplementHandoffFiles(t, artifactDir, iterDir)
 		resumed := newUtilityTestSession()
 		resumed.setRootIntent(validSuccessCompletionIntent())
 		resumed.CostVal = &llm.ResultMessage{Subtype: testResultSuccessValue, StopReason: "end_turn"}
@@ -1484,7 +1484,7 @@ func TestImplementLoopSkipIterationReview(t *testing.T) {
 	// Agent script: emits SUCCESS
 	agentScript := testutil.WriteScript(t, scriptsDir, "agent.sh",
 		testutil.JSONLInit+"\n"+testutil.JSONLAssistant("Working...")+"\n"+
-			testutil.WriteImplementSuccessArtifacts(artifactDir)+"\n"+testutil.JSONLSuccess+"\n")
+			testutil.WriteImplementNotes(artifactDir)+"\n"+testutil.JSONLSuccess+"\n")
 
 	// Review script: should NOT be called when SkipIterationReview is true
 	reviewScript := testutil.WriteScript(t, scriptsDir, "review.sh",
@@ -1566,7 +1566,7 @@ func TestImplementLoopNoSkipIterationReview(t *testing.T) {
 	// Agent script: emits SUCCESS
 	agentScript := testutil.WriteScript(t, scriptsDir, "agent.sh",
 		testutil.JSONLInit+"\n"+testutil.JSONLAssistant("Working...")+"\n"+
-			testutil.WriteImplementSuccessArtifacts(artifactDir)+"\n"+testutil.JSONLSuccess+"\n")
+			testutil.WriteImplementNotes(artifactDir)+"\n"+testutil.JSONLSuccess+"\n")
 
 	// Review script: approves immediately
 	reviewScript := testutil.WriteScript(t, scriptsDir, "review.sh",
@@ -1664,7 +1664,7 @@ func TestImplementLoopReviewHelperUsesChildDirAndHarnessReceipt(t *testing.T) {
 	}
 
 	agentScript := testutil.WriteScript(t, scriptsDir, "agent.sh",
-		testutil.JSONLInit+"\n"+testutil.WriteImplementSuccessArtifacts(artifactDir)+"\n"+testutil.JSONLSuccess+"\n")
+		testutil.JSONLInit+"\n"+testutil.WriteImplementNotes(artifactDir)+"\n"+testutil.JSONLSuccess+"\n")
 	reviewScript := testutil.WriteScript(t, scriptsDir, "review.sh",
 		testutil.JSONLInit+"\n"+testutil.WriteReviewApproved(artifactDir)+"\n"+testutil.JSONLSuccess+"\n")
 
@@ -1735,7 +1735,7 @@ func TestImplementLoopReviewHelperMissingRootOutcomeCountsConsecutiveFailure(t *
 	}
 
 	agentScript := testutil.WriteScript(t, scriptsDir, "agent.sh",
-		testutil.JSONLInit+"\n"+testutil.WriteImplementSuccessArtifacts(artifactDir)+"\n"+testutil.JSONLSuccess+"\n")
+		testutil.JSONLInit+"\n"+testutil.WriteImplementNotes(artifactDir)+"\n"+testutil.JSONLSuccess+"\n")
 	reviewScript := testutil.WriteScript(t, scriptsDir, "review-no-outcome.sh",
 		testutil.JSONLInit+"\n"+testutil.WriteReviewApproved(artifactDir)+"\n"+testutil.JSONLResult("")+"\n")
 
@@ -1808,7 +1808,7 @@ func TestImplementLoopReviewHelperMissingRootOutcomeCountsConsecutiveFailure(t *
 
 // mixedFailureCrash and mixedFailureDrift are the mixedFailureScript sequence
 // keywords that make the mock agent CLI exit without a result (a process crash)
-// or emit a protocol-violation progress.md (drift). A terminal API-error result
+// or end the turn without a completion outcome (drift). A terminal API-error result
 // is an explicit failed turn, not a crash eligible for iteration recovery.
 const (
 	mixedFailureCrash = "crash"
@@ -1905,7 +1905,7 @@ case "$_step" in
 		b.WriteString(")\n")
 		switch failure {
 		case mixedFailureDrift:
-			b.WriteString(testutil.JSONLSuccess)
+			b.WriteString(testutil.JSONLResult("All done."))
 		case mixedFailureCrash:
 			b.WriteString("exit 1")
 		}
@@ -1941,7 +1941,7 @@ func TestImplementLoopReviewInfraFailureParksForReviewOnlyResume(t *testing.T) {
 		t.Fatal(err)
 	}
 	agentScript := testutil.WriteScript(t, scriptsDir, "agent.sh",
-		testutil.JSONLInit+"\n"+testutil.WriteImplementSuccessArtifacts(artifactDir)+"\n"+testutil.JSONLSuccess+"\n")
+		testutil.JSONLInit+"\n"+testutil.WriteImplementNotes(artifactDir)+"\n"+testutil.JSONLSuccess+"\n")
 	reviewScript := testutil.WriteScript(t, scriptsDir, "review.sh",
 		testutil.JSONLInit+"\n"+testutil.JSONLError("Unable to connect to API (ENOTFOUND)")+"\n")
 	f := &feature.Feature{
@@ -2090,7 +2090,7 @@ func TestImplementLoop_SkillReadInstruction(t *testing.T) {
 
 	agentScript := testutil.WriteScript(t, scriptsDir, "agent.sh",
 		testutil.JSONLInit+"\n"+
-			testutil.WriteImplementSuccessArtifacts(artifactDir)+"\n"+
+			testutil.WriteImplementNotes(artifactDir)+"\n"+
 			testutil.JSONLSuccess+"\n")
 	_ = iterDir
 

@@ -63,35 +63,75 @@ func TestCommitPhaseOutcome_ValidatesArtifactsThenWritesHarnessReceipt(t *testin
 	}
 }
 
-func TestCommitPhaseOutcome_RejectsIntentThatDisagreesWithProgress(t *testing.T) {
-	phaseDir := t.TempDir()
-	iterDir := filepath.Join(phaseDir, "iteration-01")
-	if err := os.MkdirAll(iterDir, 0o755); err != nil {
+func TestCommitPhaseOutcome_ImplementerOutcomeAloneDecides(t *testing.T) {
+	legacySuccessNotes := "## Iteration Handoff\n- done\n\n## Iteration State\n\nSUCCESS\n"
+	tests := []struct {
+		name   string
+		notes  string
+		status llm.CompletionIntentStatus
+	}{
+		{name: "success without notes", status: llm.CompletionIntentSuccess},
+		{name: "retry without notes", status: llm.CompletionIntentRetry},
+		{name: "success with free-form notes", notes: "Handler wired; nothing left.\n", status: llm.CompletionIntentSuccess},
+		{name: "retry over legacy success state", notes: legacySuccessNotes, status: llm.CompletionIntentRetry},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			phaseDir := t.TempDir()
+			iterDir := filepath.Join(phaseDir, "iteration-01")
+			if err := os.MkdirAll(iterDir, 0o755); err != nil {
+				t.Fatal(err)
+			}
+			if tt.notes != "" {
+				if err := os.WriteFile(filepath.Join(phaseDir, "progress.md"), []byte(tt.notes), 0o644); err != nil {
+					t.Fatal(err)
+				}
+			}
+
+			_, receipt, violations, err := CommitPhaseOutcome(CompletionCommitInput{
+				Phase:       feature.PhaseImplement,
+				Role:        roleImplementer,
+				ArtifactDir: iterDir,
+				SessionID:   "root-session-1",
+				Intent:      llm.CompletionIntent{Found: true, Status: tt.status},
+			})
+			if err != nil {
+				t.Fatalf("CommitPhaseOutcome() error = %v", err)
+			}
+			if len(violations) != 0 {
+				t.Fatalf("violations = %+v, want none", violations)
+			}
+			if receipt.Status != tt.status {
+				t.Fatalf("receipt status = %q, want %q", receipt.Status, tt.status)
+			}
+			if got := committedRetry(iterDir); got != (tt.status == llm.CompletionIntentRetry) {
+				t.Fatalf("committedRetry() = %v, want %v", got, tt.status == llm.CompletionIntentRetry)
+			}
+		})
+	}
+}
+
+func TestCommitPhaseOutcome_RejectsRetryFromRoleWithoutAnotherPass(t *testing.T) {
+	artifactDir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(artifactDir, "research.md"), []byte("# Research\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	writeValidProgress(t, filepath.Join(phaseDir, "progress.md"), stateRetry)
 
-	outcome, _, violations, err := CommitPhaseOutcome(CompletionCommitInput{
-		Phase:       feature.PhaseImplement,
-		Role:        roleImplementer,
-		ArtifactDir: iterDir,
+	_, _, violations, err := CommitPhaseOutcome(CompletionCommitInput{
+		Phase:       feature.PhaseResearch,
+		Role:        RoleResearcher,
+		ArtifactDir: artifactDir,
 		SessionID:   "root-session-1",
-		Intent: llm.CompletionIntent{
-			Found:  true,
-			Status: llm.CompletionIntentSuccess,
-		},
+		Intent:      llm.CompletionIntent{Found: true, Status: llm.CompletionIntentRetry},
 	})
 	if err != nil {
 		t.Fatalf("CommitPhaseOutcome() error = %v", err)
 	}
-	if !outcome.OK {
-		t.Fatalf("artifact contract should be valid before intent comparison: %+v", outcome)
-	}
 	if len(violations) != 1 || violations[0].Artifact != "agentico-outcome" {
-		t.Fatalf("violations = %+v, want intent/progress mismatch", violations)
+		t.Fatalf("violations = %+v, want one agentico-outcome violation", violations)
 	}
-	if _, err := readCompletionReceipt(iterDir); err == nil {
-		t.Fatal("phase_complete written for mismatched root intent and progress state")
+	if _, err := readCompletionReceipt(artifactDir); err == nil {
+		t.Fatal("phase_complete written for a retry the role cannot request")
 	}
 }
 

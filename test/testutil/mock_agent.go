@@ -65,163 +65,46 @@ func JSONLError(errMsg string) string {
 	return fmt.Sprintf(`echo '{"type":"result","subtype":"error","error":"%s"}'`, escaped)
 }
 
-// WriteImplementSuccessArtifacts returns a shell snippet that creates the
-// latest iteration-* dir under artifactDir and writes progress.md in
-// artifactDir (the path the harness configures) with the mandatory sections
-// and `## Iteration State: SUCCESS`.
-//
-// Use this in mock agents that should drive the implement loop to a
-// review_passed outcome. Tests that need specific deferral/handoff behaviour
-// should write their own progress.md instead.
-func WriteImplementSuccessArtifacts(artifactDir string) string {
-	return writeImplArtifacts(artifactDir, "SUCCESS")
-}
-
-// WriteImplementRetryArtifacts returns a shell snippet for a RETRY iteration:
-// same structure as success, but `## Iteration State: RETRY`. The harness
-// loops back to a fresh implement iteration without invoking the review
-// gate.
-func WriteImplementRetryArtifacts(artifactDir string) string {
-	return writeImplArtifacts(artifactDir, "RETRY")
-}
-
-// WriteImplementMalformedProgress returns a shell snippet that writes a
-// malformed progress.md. Use it to exercise the "artifact present but
-// contract-invalid" branch.
-func WriteImplementMalformedProgress(artifactDir string) string {
+// WriteImplementNotes returns a shell snippet that creates the latest
+// iteration-* dir under artifactDir and writes free-form progress notes in
+// artifactDir (the path the harness configures). The iteration's result comes
+// from the outcome the mock emits, not from these notes.
+func WriteImplementNotes(artifactDir string) string {
 	return fmt.Sprintf(`for _d in "%s"/iteration-*; do :; done
 mkdir -p "$_d"
-cat > "%s/progress.md" <<PROGRESS_EOF
-# Iteration Progress
-
-## Iteration Handoff
-
-### Completed this iteration
-- malformed progress
+cat > "%s/progress.md" <<'PROGRESS_EOF'
+Did the mock work; nothing is left.
 PROGRESS_EOF`, artifactDir, artifactDir)
 }
 
-// WriteMultiRepoImplementSuccess returns a shell snippet that writes the
-// minimal valid progress.md for every fresh `<repo>/iteration-*` directory
-// under artifactBase, at artifactBase/<repo>/progress.md (the harness reads
-// it from the per-repo ArtifactDir).
+// WriteMultiRepoImplementNotes returns a shell snippet that writes progress
+// notes for every fresh `<repo>/iteration-*` directory under artifactBase, at
+// artifactBase/<repo>/progress.md (the per-repo ArtifactDir).
 //
 // Use this in multi-repo orchestrator tests where one mock agent script
 // services every repo.
-func WriteMultiRepoImplementSuccess(artifactBase string) string {
+func WriteMultiRepoImplementNotes(artifactBase string) string {
 	return fmt.Sprintf(`for d in "%s"/*/iteration-*; do
   _repo_dir=$(dirname "$d")
-  cat > "$_repo_dir/progress.md" <<PROGRESS_EOF
-# Iteration Progress
-
-## Iteration Handoff
-
-### Completed this iteration
-- mock work
-
-### Remaining from the plan
-
-### Where I stopped
-
-
-### Gotchas / blockers / in-flight decisions
-
-## Deferrals
-
-%syaml
-deferrals: []
-closed_deferrals: []
-%s
-
-## Iteration State
-
-SUCCESS
-PROGRESS_EOF
-done`, artifactBase, "~~~", "~~~")
+  echo 'Did the mock work; nothing is left.' > "$_repo_dir/progress.md"
+done`, artifactBase)
 }
 
-// WriteImplementHandoffFiles writes the minimal valid progress.md into
-// progressDir (typically the implement loop's ArtifactDir) and creates
-// iterDir, directly via os.WriteFile (no shell). Use from Go test setup paths
-// that don't drive a mock agent script — for example, when seeding a resume
-// scenario whose harness receipt already exists but the agent never runs.
-// state must be "SUCCESS" or "RETRY".
-func WriteImplementHandoffFiles(t *testing.T, progressDir, iterDir, state string) {
+// WriteImplementHandoffFiles writes progress notes into progressDir
+// (typically the implement loop's ArtifactDir) and creates iterDir, directly
+// via os.WriteFile (no shell). Use from Go test setup paths that don't drive a
+// mock agent script — for example, when seeding a resume scenario whose
+// harness receipt already exists but the agent never runs.
+func WriteImplementHandoffFiles(t *testing.T, progressDir, iterDir string) {
 	t.Helper()
 	for _, dir := range []string{progressDir, iterDir} {
 		if err := os.MkdirAll(dir, 0o755); err != nil {
 			t.Fatalf("mkdir %s: %v", dir, err)
 		}
 	}
-	progress := fmt.Sprintf(`# Iteration Progress
-
-## Iteration Handoff
-
-### Completed this iteration
-- mock work
-
-### Remaining from the plan
-
-### Where I stopped
-
-
-### Gotchas / blockers / in-flight decisions
-
-## Deferrals
-
-`+"```yaml"+`
-deferrals: []
-closed_deferrals: []
-`+"```"+`
-
-## Iteration State
-
-%s
-`, state)
-	if err := os.WriteFile(filepath.Join(progressDir, "progress.md"), []byte(progress), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(progressDir, "progress.md"), []byte("Did the mock work; nothing is left.\n"), 0o644); err != nil {
 		t.Fatalf("write progress.md: %v", err)
 	}
-}
-
-// WriteImplementProgressMd returns a shell snippet that creates the latest
-// iteration dir and writes only the minimal valid progress.md, for tests that
-// write the rest of the iteration's artifacts themselves.
-func WriteImplementProgressMd(artifactDir, state string) string {
-	return writeImplArtifacts(artifactDir, state)
-}
-
-func writeImplArtifacts(artifactDir, state string) string {
-	// A non-quoted heredoc lets $_d expand; tilde fences around the YAML
-	// block avoid shell command substitution while still satisfying the
-	// progress parser.
-	return fmt.Sprintf(`for _d in "%s"/iteration-*; do :; done
-mkdir -p "$_d"
-cat > "%s/progress.md" <<PROGRESS_EOF
-# Iteration Progress
-
-## Iteration Handoff
-
-### Completed this iteration
-- mock work
-
-### Remaining from the plan
-
-### Where I stopped
-
-
-### Gotchas / blockers / in-flight decisions
-
-## Deferrals
-
-%syaml
-deferrals: []
-closed_deferrals: []
-%s
-
-## Iteration State
-
-%s
-PROGRESS_EOF`, artifactDir, artifactDir, "~~~", "~~~", state)
 }
 
 // WritePhasePlanSuccessArtifacts returns a shell snippet that writes the

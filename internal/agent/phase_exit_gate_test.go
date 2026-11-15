@@ -55,7 +55,7 @@ func phaseExitGateLoopConfig(t *testing.T, id string, skipReview bool) (Implemen
 
 	agentScript := testutil.WriteScript(t, scriptsDir, "agent.sh",
 		testutil.JSONLInit+"\n"+testutil.JSONLAssistant("Working...")+"\n"+
-			testutil.WriteImplementSuccessArtifacts(artifactDir)+"\n"+testutil.JSONLSuccess+"\n")
+			testutil.WriteImplementNotes(artifactDir)+"\n"+testutil.JSONLSuccess+"\n")
 	reviewScript := testutil.WriteScript(t, scriptsDir, "review.sh",
 		testutil.JSONLInit+"\n"+testutil.WriteReviewApproved(artifactDir)+"\n"+testutil.JSONLSuccess+"\n")
 

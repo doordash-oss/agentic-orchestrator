@@ -582,7 +582,6 @@ func runImplementationLoop(cfg ImplementConfig, sm ports.SessionManager) (result
 						})
 						return violations, err
 					},
-					MissingArtifacts:     []string{"progress.md"},
 					RetryOutcomeAllowed:  true,
 					EnableContextHandoff: true,
 					OnContextHandoff: func(snap contextSnapshot) {
@@ -760,7 +759,7 @@ func runImplementationLoop(cfg ImplementConfig, sm ports.SessionManager) (result
 		if agentStatus == agentStatusProtocolViolation {
 			violations := waitResult.ProtocolViolations
 			if len(violations) == 0 {
-				violations = completionIntentViolations(rootCompletionIntent(sess), []string{"progress.md"})
+				violations = completionIntentViolations(rootCompletionIntent(sess), nil)
 			}
 			lastErr := formatProtocolViolationError(roleImplementer, iterDir, violations)
 			if done := recordProtocolViolationIteration(am, summaryPath, iterDir, aggregateLogPath, &meta, i, cfg, iterCtx, cost, iterStart, violations, lastErr, &consecutiveFailures, &reviewerFeedback, roundCommits); done != nil {
@@ -770,24 +769,11 @@ func runImplementationLoop(cfg ImplementConfig, sm ports.SessionManager) (result
 		}
 
 		if agentStatus == agentStatusSuccess {
-			outcome, violations, validateErr := Validate(feature.PhaseImplement, roleImplementer, iterDir)
-			if validateErr != nil {
-				return nil, fmt.Errorf("validating implementer contract: %w", validateErr)
-			}
-			if !outcome.OK {
-				lastErr := formatProtocolViolationError(roleImplementer, iterDir, violations)
-				if done := recordProtocolViolationIteration(am, summaryPath, iterDir, aggregateLogPath, &meta, i, cfg, iterCtx, cost, iterStart, violations, lastErr, &consecutiveFailures, &reviewerFeedback, roundCommits); done != nil {
-					return done, nil
-				}
-				continue
-			}
-			parsed := outcome.Progress
-
-			// RETRY: skip the review gate entirely; the agent is telling
-			// us the iteration is intentionally partial. The next loop
-			// iteration starts fresh against the just-emitted progress.md
-			// (no reviewer feedback — RETRY is not a rejection).
-			if parsed.State == stateRetry {
+			// RETRY: skip the review gate entirely; the committed outcome
+			// says the iteration is intentionally partial. The next loop
+			// iteration starts fresh from the progress notes (no reviewer
+			// feedback — RETRY is not a rejection).
+			if committedRetry(iterDir) {
 				madeProgress = pt.observeRetryOutcome(retryProgressFingerprints(progressPath, cfg))
 				meta.ReviewStatus = "skipped_retry"
 				meta.AgentStatus = "RETRY"
@@ -795,9 +781,9 @@ func runImplementationLoop(cfg ImplementConfig, sm ports.SessionManager) (result
 				_ = am.writeMeta(iterDir, meta)
 				_ = am.writeSummary(summaryPath, meta)
 				consecutiveFailures = 0
-				// Don't re-inject the full feedback (the RETRY handoff may
+				// Don't re-inject the full feedback (the RETRY iteration may
 				// have partially addressed it), but don't drop it either —
-				// the progress.md handoff is not guaranteed to carry every
+				// the progress notes are not guaranteed to carry every
 				// finding. Point the next iteration at the on-disk feedback
 				// so it re-verifies what remains.
 				reviewerFeedback = retryReviewFeedbackReminder(cfg.ArtifactDir, lastChangesRequestedIter)
@@ -1180,8 +1166,8 @@ func recordProtocolViolationIteration(
 // retryReviewFeedbackReminder builds the reviewer-feedback text carried into
 // iterations that follow a RETRY. Re-injecting the full CHANGES_REQUESTED
 // feedback every iteration is wasteful — some findings may already be
-// addressed — but dropping it entirely trusts the RETRY handoff in
-// progress.md to have captured every finding, which is not guaranteed.
+// addressed — but dropping it entirely trusts the progress notes to have
+// captured every finding, which is not guaranteed.
 // Instead, point the implementer at the on-disk feedback so it re-reads and
 // re-verifies what remains in its own context. Returns "" when no reviewed
 // iteration precedes the RETRY or its feedback file is gone.
@@ -1193,14 +1179,21 @@ func retryReviewFeedbackReminder(artifactDir string, reviewedIter int) string {
 	if _, err := os.Stat(path); err != nil {
 		return ""
 	}
-	return fmt.Sprintf("The iteration %d review requested changes, and the intervening RETRY iteration(s) may not have addressed every finding. Re-read the full feedback at %s and verify each finding against the current tree; progress.md alone is not authoritative for what remains. Do not declare SUCCESS while any finding is unaddressed.", reviewedIter, path)
+	return fmt.Sprintf("The iteration %d review requested changes, and the intervening RETRY iteration(s) may not have addressed every finding. Re-read the full feedback at %s and verify each finding against the current tree; the progress notes alone are not authoritative for what remains. Do not declare SUCCESS while any finding is unaddressed.", reviewedIter, path)
+}
+
+// committedRetry reports whether the iteration's committed outcome asks
+// for another pass.
+func committedRetry(iterDir string) bool {
+	receipt, err := readCompletionReceipt(iterDir)
+	return err == nil && receipt.Status == llm.CompletionIntentRetry
 }
 
 // retryProgressFingerprints gathers the stall-evidence signals for a RETRY
-// iteration: the progress.md handoff-narrative fingerprint and a hash of
-// every feature worktree's uncommitted state.
+// iteration: a hash of the progress notes and of every feature worktree's
+// uncommitted state.
 func retryProgressFingerprints(progressPath string, cfg ImplementConfig) (string, string) {
-	narrativeFP, _ := progressFingerprint(progressPath)
+	narrativeFP, _ := fingerprint(progressPath)
 	return narrativeFP, worktreeStateFingerprint(context.Background(), cfg.CommandRunner, implementWorktreePaths(cfg))
 }
 
@@ -1642,20 +1635,17 @@ var contextHandoffPollInterval = 2 * time.Second
 
 // contextHandoffMessageBody is the instruction template injected when the
 // session's context utilization first crosses its provider-specific threshold.
-// A fresh iteration will pick up from the updated progress.md with a clean
-// context, so the agent should stop taking new work and leave a good handoff
-// — and emit `## Iteration State: RETRY` so the harness skips the review
+// A fresh iteration will pick up from the updated progress notes with a
+// clean context, so the agent should stop taking new work, leave a good
+// handoff, and end with the retry outcome so the harness skips the review
 // gate and routes straight to the next iteration.
-const contextHandoffMessageBody = `Wind this iteration down now so the next iteration can resume with a fresh context; the outer loop will spawn a new session seeded with progress.md.
+const contextHandoffMessageBody = `Wind this iteration down now so the next iteration can resume with a fresh context; the outer loop will spawn a new session that reads your progress notes.
 
 Do this, in order:
 
 1. Do NOT start new implementation work or new substantial tool calls.
-2. Write progress.md per skills/implement/SKILL.md's section schema:
-   - ` + "`" + `## Iteration Handoff` + "`" + ` (Completed / Remaining / Where I stopped / Gotchas).
-   - ` + "`" + `## Deferrals` + "`" + ` (a fenced YAML block; ` + "`" + `deferrals: []` + "`" + ` and ` + "`" + `closed_deferrals: []` + "`" + ` if you have nothing to declare).
-   - ` + "`" + `## Iteration State` + "`" + ` set to ` + "`" + `RETRY` + "`" + ` so the harness skips review and starts the next iteration with no reviewer feedback.
-3. %s. Do not create or edit ` + "`" + `phase_complete` + "`" + `; the harness writes the receipt after validation.`
+2. Update progress.md with short notes a fresh session can pick up from: what was done, what is left, and anything surprising.
+3. %s so the harness skips review and starts the next iteration with no reviewer feedback. Do not create or edit ` + "`" + `phase_complete` + "`" + `; the harness writes the receipt after validation.`
 
 type contextSnapshot struct {
 	Pct            int
@@ -1672,12 +1662,11 @@ type PhaseOutcomeWaitOptions struct {
 	// writes the harness-owned completion receipt. A nil callback is a
 	// protocol error for a completed autonomous turn.
 	CommitOutcome func(llm.CompletionIntent) ([]ProtocolViolation, error)
-	// RetryOutcomeAllowed mirrors the role's iteration-state capability so a
+	// RetryOutcomeAllowed mirrors the role's AllowsRetry so a
 	// commit-rejection nudge offers only the outcome verbs the role may use.
-	// Leave false for every role without a progress artifact.
 	RetryOutcomeAllowed bool
 	// EnableContextHandoff arms the context-utilization wind-down nudge.
-	// The handoff message references the implement progress.md schema, so
+	// The handoff message references the implement progress notes, so
 	// only Implementation-phase sessions should set this true. Plan,
 	// roadmap, and final-review sessions produce different
 	// artifacts and have heavy required-reading loads that would trip the
@@ -1807,7 +1796,7 @@ func WaitForPhaseOutcome(sess ports.SessionHandle, opts PhaseOutcomeWaitOptions)
 	// Periodically sample the session's context-window utilization and, on
 	// first crossing of the provider-specific threshold, nudge the agent to
 	// wrap up cleanly. Sending once is enough — the outer loop will restart
-	// a fresh iteration from the updated progress.md.
+	// a fresh iteration from the updated progress notes.
 	//
 	// Gated on EnableContextHandoff: only Implementation-phase sessions
 	// arm the nudge. When disabled, handoffSent starts true so the ticker

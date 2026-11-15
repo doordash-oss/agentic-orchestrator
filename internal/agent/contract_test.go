@@ -15,7 +15,6 @@
 package agent
 
 import (
-	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -34,8 +33,8 @@ func TestContractRegistryImplementerLookup(t *testing.T) {
 	if contract.Role != roleImplementer {
 		t.Fatalf("Lookup(PhaseImplement, RoleImplementer).Role = %q, want %q", contract.Role, roleImplementer)
 	}
-	if len(contract.Required) != 1 {
-		t.Fatalf("Lookup(PhaseImplement, RoleImplementer) required artifacts = %d, want 1", len(contract.Required))
+	if len(contract.Required) != 0 {
+		t.Fatalf("Lookup(PhaseImplement, RoleImplementer) required artifacts = %d, want 0", len(contract.Required))
 	}
 }
 
@@ -625,72 +624,31 @@ func TestContractRegistryArtifactPhaseRolesSelectNewestMarkdown(t *testing.T) {
 	}
 }
 
-func TestContractRegistryImplementer(t *testing.T) {
-	iterDir := t.TempDir()
-	artifactDir := filepath.Dir(iterDir)
-	progressPath := filepath.Join(artifactDir, "progress.md")
-	writeValidProgress(t, progressPath, stateSuccess)
-
-	out, violations, err := Validate(feature.PhaseImplement, roleImplementer, iterDir)
-	if err != nil {
-		t.Fatalf("Validate() error = %v", err)
+func TestContractRegistryImplementerAcceptsAnyProgressNotes(t *testing.T) {
+	tests := []struct {
+		name  string
+		notes string
+	}{
+		{name: "missing"},
+		{name: "free-form", notes: "Wired the handler; the migration is still left.\n"},
+		{name: "legacy template", notes: "# Iteration Progress\n\n## Iteration Handoff\n- done\n\n## Iteration State\n\nSUCCESS\n"},
 	}
-	if len(violations) != 0 {
-		t.Fatalf("Validate() violations = %v, want none", violations)
-	}
-	if !out.OK || out.Progress == nil {
-		t.Fatalf("Validate() outcome = %+v, want parsed progress only", out)
-	}
-}
-
-func TestContractRegistryImplementerReportsMissingArtifacts(t *testing.T) {
-	iterDir := t.TempDir()
-
-	out, violations, err := Validate(feature.PhaseImplement, roleImplementer, iterDir)
-	if err != nil {
-		t.Fatalf("Validate() error = %v", err)
-	}
-	if out.OK {
-		t.Fatal("Validate() OK = true, want false")
-	}
-	got := joinProtocolViolations(violations)
-	if !strings.Contains(got, "progress.md") {
-		t.Fatalf("JoinProtocolViolations() = %q, want progress.md", got)
-	}
-}
-
-func TestContractRegistryImplementerReportsMalformedProgress(t *testing.T) {
-	iterDir := t.TempDir()
-	artifactDir := filepath.Dir(iterDir)
-	progressPath := filepath.Join(artifactDir, "progress.md")
-
-	if err := os.WriteFile(progressPath, []byte("# Iteration Progress\n\n## Iteration Handoff\n- malformed\n"), 0o644); err != nil {
-		t.Fatalf("write malformed progress: %v", err)
-	}
-
-	out, violations, err := Validate(feature.PhaseImplement, roleImplementer, iterDir)
-	if err != nil {
-		t.Fatalf("Validate() error = %v", err)
-	}
-	if out.OK {
-		t.Fatal("Validate() OK = true, want false")
-	}
-	got := joinProtocolViolations(violations)
-	if !strings.Contains(got, "progress.md") || !strings.Contains(got, "Iteration State") {
-		t.Fatalf("JoinProtocolViolations() = %q, want progress.md Iteration State violation", got)
-	}
-}
-
-func TestContractRegistryImplementerAllowsRetry(t *testing.T) {
-	iterDir := t.TempDir()
-	writeValidProgress(t, filepath.Join(filepath.Dir(iterDir), "progress.md"), stateRetry)
-
-	out, violations, err := Validate(feature.PhaseImplement, roleImplementer, iterDir)
-	if err != nil {
-		t.Fatalf("Validate() error = %v", err)
-	}
-	if len(violations) != 0 || !out.OK {
-		t.Fatalf("Validate() = (%+v, %v), want OK for RETRY", out, violations)
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			iterDir := t.TempDir()
+			if tt.notes != "" {
+				if err := os.WriteFile(filepath.Join(filepath.Dir(iterDir), "progress.md"), []byte(tt.notes), 0o644); err != nil {
+					t.Fatalf("write progress: %v", err)
+				}
+			}
+			out, violations, err := Validate(feature.PhaseImplement, roleImplementer, iterDir)
+			if err != nil {
+				t.Fatalf("Validate() error = %v", err)
+			}
+			if len(violations) != 0 || !out.OK {
+				t.Fatalf("Validate() = (%+v, %v), want OK", out, violations)
+			}
+		})
 	}
 }
 
@@ -819,40 +777,6 @@ func writeReviewFeedbackFile(t *testing.T, path, body string) {
 	t.Helper()
 	if err := os.WriteFile(path, []byte(body), 0o644); err != nil {
 		t.Fatalf("write review feedback: %v", err)
-	}
-}
-
-func writeValidProgress(t *testing.T, path string, state iterationState) {
-	t.Helper()
-	body := fmt.Sprintf(`# Iteration Progress
-
-## Iteration Handoff
-
-### Completed this iteration
-- registry test
-
-### Remaining from the plan
-- none
-
-### Where I stopped
-- complete
-
-### Gotchas / blockers / in-flight decisions
-- none
-
-## Deferrals
-
-`+"```"+`yaml
-deferrals: []
-closed_deferrals: []
-`+"```"+`
-
-## Iteration State
-
-%s
-`, state.String())
-	if err := os.WriteFile(path, []byte(body), 0o644); err != nil {
-		t.Fatalf("write progress: %v", err)
 	}
 }
 

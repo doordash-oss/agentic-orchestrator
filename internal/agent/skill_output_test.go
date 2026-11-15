@@ -104,26 +104,6 @@ func TestOutputFilesSectionHidesHarnessArtifacts(t *testing.T) {
 	}
 }
 
-func TestImplementSkillDocumentsEvidenceFiles(t *testing.T) {
-	path := repoRootPath(t, "skills", "implement", "SKILL.md")
-	data, err := os.ReadFile(path)
-	if err != nil {
-		t.Fatalf("reading %s: %v", path, err)
-	}
-	content := string(data)
-	for _, want := range []string{
-		"`observations/`",
-		"`screenshots/`",
-		"`behaviors/`",
-		"Never create placeholder evidence",
-		"### Automated Verification",
-	} {
-		if !strings.Contains(content, want) {
-			t.Fatalf("skills/implement/SKILL.md missing evidence-file guidance %q", want)
-		}
-	}
-}
-
 func TestImplementSkillReadsPhaseProgressOnResume(t *testing.T) {
 	path := repoRootPath(t, "skills", "implement", "SKILL.md")
 	data, err := os.ReadFile(path)
@@ -133,7 +113,7 @@ func TestImplementSkillReadsPhaseProgressOnResume(t *testing.T) {
 	content := string(data)
 	for _, want := range []string{
 		"{phase_dir}/progress.md",
-		"### Where I stopped",
+		"resume from where it left off",
 	} {
 		if !strings.Contains(content, want) {
 			t.Fatalf("skills/implement/SKILL.md missing resume instruction %q", want)

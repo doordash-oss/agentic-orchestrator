@@ -223,7 +223,7 @@ func TestImplementLoopEmitsFullEventSequence(t *testing.T) {
 	scriptDir := t.TempDir()
 	agentScript := testutil.WriteScript(t, scriptDir, "agent.sh",
 		testutil.JSONLInit+"\n"+
-			testutil.WriteImplementSuccessArtifacts(artifactDir)+"\n"+
+			testutil.WriteImplementNotes(artifactDir)+"\n"+
 			testutil.JSONLSuccess+"\n")
 
 	reviewScript := testutil.WriteScript(t, scriptDir, "review.sh",
@@ -667,7 +667,7 @@ if [ ! -f "$PROGRESS_FILE" ]; then
     echo "Step 1 done" >> "$PROGRESS_FILE"
 else
     echo "Step 2 done" >> "$PROGRESS_FILE"
-    `+testutil.WriteImplementSuccessArtifacts(artifactDir)+`
+    `+testutil.WriteImplementNotes(artifactDir)+`
     `+testutil.JSONLSuccess+`
 fi
 `)

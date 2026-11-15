@@ -228,7 +228,7 @@ func TestRestartIterationResolution(t *testing.T) {
 			}
 			if tc.writePhaseDone {
 				writeTestCompletionReceiptFor(t, it1, feature.PhaseImplement, roleImplementer)
-				testutil.WriteImplementHandoffFiles(t, dir, it1, agentStatusSuccess)
+				testutil.WriteImplementHandoffFiles(t, dir, it1)
 			}
 			if tc.writeMeta {
 				if err := am.writeMeta(it1, iterationMeta{Iteration: 1, AgentStatus: agentStatusSuccess, ReviewStatus: tc.reviewStatus}); err != nil {

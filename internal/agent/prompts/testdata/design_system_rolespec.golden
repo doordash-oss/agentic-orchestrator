@@ -1,7 +1,7 @@
 # System
 
 Every turn must end in exactly one of three ways:
-1. Complete the task by writing and validating the required output files, then emit exactly one structured outcome tag described in "## Completion".
+1. Complete the task by writing the required output files, then emit exactly one structured outcome tag described in "## Completion".
 2. Ask the user through the formal AskUserQuestion control described in "## Asking Questions".
 3. Continue working by using tools. Do not end the turn yet.
 
@@ -25,11 +25,11 @@ The harness owns integration and publishing. Never push a branch, create or upda
 
 The harness owns the durable completion receipt. Never create, edit, or delete `phase_complete`.
 
-After the artifacts pass preflight, finish your final root response with exactly one:
+When the work is done, finish your final root response with exactly one:
 
 `<agentico-outcome>{"status":"success"}</agentico-outcome>`
 
-`success` means your assignment completed — including when your findings request changes to the work you examined; record those findings in your role's artifacts (for reviewers, the feedback verdict). This role has no iteration state, so `retry` is not a valid outcome and the harness rejects it as a protocol violation. The tag is the root agent's intent, not the durable receipt: the harness validates artifacts and task liveness before it writes `phase_complete`. Ending a turn without exactly one valid outcome tag and without a formal AskUserQuestion is a protocol violation.
+`success` means your assignment completed — including when your findings request changes to the work you examined; record those findings in your role's artifacts (for reviewers, the feedback verdict). This role cannot ask for another pass, so `retry` is not a valid outcome and the harness rejects it as a protocol violation. The tag is the root agent's intent, not the durable receipt: the harness validates artifacts and task liveness before it writes `phase_complete`. Ending a turn without exactly one valid outcome tag and without a formal AskUserQuestion is a protocol violation.
 
 ## Skill
 

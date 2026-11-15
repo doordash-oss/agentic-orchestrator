@@ -136,9 +136,8 @@ type Session struct {
 
 	// statusCh carries the SDK-derived session lifecycle status:
 	// "SUCCESS" / "API_ERROR" / "FAILED" (see resultSubtypeToStatus).
-	// It does NOT carry "RETRY" — the implement loop's RETRY routing
-	// is driven by parsing progress.md after the session ends, not by
-	// the session subtype itself.
+	// It does NOT carry "RETRY" — the implement loop routes a retry from
+	// the committed completion receipt, not from the session subtype.
 	statusCh     chan string
 	cleanupFuncs []func() // functions to call on session exit
 

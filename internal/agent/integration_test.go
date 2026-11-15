@@ -80,7 +80,7 @@ func TestImplementLoopSuccessFirstIteration(t *testing.T) {
 	// success outcome. The harness validates both before committing its receipt.
 	agentScript := testutil.WriteScript(t, scriptsDir, "agent.sh",
 		testutil.JSONLInit+"\n"+testutil.JSONLAssistant("Working on implementation...")+"\n"+
-			testutil.WriteImplementSuccessArtifacts(artifactDir)+"\n"+testutil.JSONLSuccess+"\n")
+			testutil.WriteImplementNotes(artifactDir)+"\n"+testutil.JSONLSuccess+"\n")
 
 	// Review script: writes the structured APPROVED review-feedback.md handoff
 	reviewScript := testutil.WriteScript(t, scriptsDir, "review.sh",
@@ -175,7 +175,7 @@ if [ ! -f "$PROGRESS_FILE" ]; then
     echo "Step 1 done" >> "$PROGRESS_FILE"
 else
     echo "Step 2 done" >> "$PROGRESS_FILE"
-    `+testutil.WriteImplementSuccessArtifacts(artifactDir)+`
+    `+testutil.WriteImplementNotes(artifactDir)+`
     `+testutil.JSONLSuccess+`
 fi
 `)
@@ -312,7 +312,7 @@ func TestImplementLoopSafetyRailNoProgress(t *testing.T) {
 	// iteration) so the no-progress fingerprint never changes; review
 	// keeps requesting changes, eventually tripping the safety rail.
 	agentScript := testutil.WriteScript(t, scriptsDir, "agent.sh",
-		testutil.JSONLInit+"\n"+testutil.WriteImplementSuccessArtifacts(artifactDir)+"\n"+testutil.JSONLSuccess+"\n")
+		testutil.JSONLInit+"\n"+testutil.WriteImplementNotes(artifactDir)+"\n"+testutil.JSONLSuccess+"\n")
 
 	// Review script: always requests changes (triggering no-progress safety rail)
 	reviewScript := testutil.WriteScript(t, scriptsDir, "review.sh",
@@ -376,7 +376,7 @@ PROGRESS_FILE="`+progressFile+`"
 ITER=$(($(cat "$PROGRESS_FILE" 2>/dev/null | wc -l) + 1))
 echo "iteration $ITER" >> "$PROGRESS_FILE"
 `+testutil.JSONLInit+`
-`+testutil.WriteImplementSuccessArtifacts(artifactDir)+`
+`+testutil.WriteImplementNotes(artifactDir)+`
 `+testutil.JSONLSuccess+`
 `)
 
@@ -458,7 +458,7 @@ PROGRESS_FILE="`+progressFile+`"
 ITER=$(($(cat "$PROGRESS_FILE" 2>/dev/null | wc -l) + 1))
 echo "iteration $ITER" >> "$PROGRESS_FILE"
 `+testutil.JSONLInit+`
-`+testutil.WriteImplementSuccessArtifacts(artifactDir)+`
+`+testutil.WriteImplementNotes(artifactDir)+`
 `+testutil.JSONLSuccess+`
 `)
 
@@ -611,7 +611,7 @@ func TestImplementLoopMaxIterations(t *testing.T) {
 PROGRESS_FILE="`+progressFile+`"
 echo "more progress $(date +%s%N)" >> "$PROGRESS_FILE"
 `+testutil.JSONLInit+`
-`+testutil.WriteImplementSuccessArtifacts(artifactDir)+`
+`+testutil.WriteImplementNotes(artifactDir)+`
 `+testutil.JSONLSuccess+`
 `)
 
@@ -671,7 +671,7 @@ func TestImplementLoopEventRouting(t *testing.T) {
 
 	// Agent script: writes the iteration handoff and emits stream-json success
 	agentScript := testutil.WriteScript(t, scriptsDir, "agent.sh",
-		testutil.JSONLInit+"\n"+testutil.WriteImplementSuccessArtifacts(artifactDir)+"\n"+testutil.JSONLSuccess+"\n")
+		testutil.JSONLInit+"\n"+testutil.WriteImplementNotes(artifactDir)+"\n"+testutil.JSONLSuccess+"\n")
 
 	reviewScript := testutil.WriteScript(t, scriptsDir, "review.sh",
 		testutil.JSONLInit+"\n"+testutil.WriteReviewApproved(artifactDir)+"\n"+testutil.JSONLSuccess+"\n")
@@ -753,7 +753,7 @@ func TestImplementLoopReviewWithShellSpecialChars(t *testing.T) {
 
 	agentScript := testutil.WriteScript(t, scriptsDir, "agent.sh",
 		testutil.JSONLInit+"\n"+
-			testutil.WriteImplementProgressMd(artifactDir, agentStatusSuccess)+"\n"+
+			testutil.WriteImplementNotes(artifactDir)+"\n"+
 			testutil.JSONLSuccess+"\n")
 
 	// Review script: emits stream-json APPROVED
@@ -820,7 +820,7 @@ func TestImplementLoopResumesFromLatestIteration(t *testing.T) {
 
 	// Agent script: writes the iteration handoff and emits stream-json success
 	agentScript := testutil.WriteScript(t, scriptsDir, "agent.sh",
-		testutil.JSONLInit+"\n"+testutil.WriteImplementSuccessArtifacts(artifactDir)+"\n"+testutil.JSONLSuccess+"\n")
+		testutil.JSONLInit+"\n"+testutil.WriteImplementNotes(artifactDir)+"\n"+testutil.JSONLSuccess+"\n")
 	reviewScript := testutil.WriteScript(t, scriptsDir, "review.sh",
 		testutil.JSONLInit+"\n"+testutil.WriteReviewApproved(artifactDir)+"\n"+testutil.JSONLSuccess+"\n")
 
@@ -891,7 +891,7 @@ func TestImplementLoopResumesReviewerFeedback(t *testing.T) {
 
 	// Agent script: writes the iteration handoff and emits stream-json success
 	agentScript := testutil.WriteScript(t, scriptsDir, "agent.sh",
-		testutil.JSONLInit+"\n"+testutil.WriteImplementSuccessArtifacts(artifactDir)+"\n"+testutil.JSONLSuccess+"\n")
+		testutil.JSONLInit+"\n"+testutil.WriteImplementNotes(artifactDir)+"\n"+testutil.JSONLSuccess+"\n")
 	reviewScript := testutil.WriteScript(t, scriptsDir, "review.sh",
 		testutil.JSONLInit+"\n"+testutil.WriteReviewApproved(artifactDir)+"\n"+testutil.JSONLSuccess+"\n")
 
@@ -975,7 +975,7 @@ func TestImplementLoopResumesReviewerFeedbackAcrossFailures(t *testing.T) {
 
 	// Agent script: writes the iteration handoff and emits stream-json success
 	agentScript := testutil.WriteScript(t, scriptsDir, "agent.sh",
-		testutil.JSONLInit+"\n"+testutil.WriteImplementSuccessArtifacts(artifactDir)+"\n"+testutil.JSONLSuccess+"\n")
+		testutil.JSONLInit+"\n"+testutil.WriteImplementNotes(artifactDir)+"\n"+testutil.JSONLSuccess+"\n")
 	reviewScript := testutil.WriteScript(t, scriptsDir, "review.sh",
 		testutil.JSONLInit+"\n"+testutil.WriteReviewApproved(artifactDir)+"\n"+testutil.JSONLSuccess+"\n")
 
@@ -1064,7 +1064,7 @@ func TestImplementLoopResumesFeedbackReminderAcrossRetry(t *testing.T) {
 	})
 
 	agentScript := testutil.WriteScript(t, scriptsDir, "agent.sh",
-		testutil.JSONLInit+"\n"+testutil.WriteImplementSuccessArtifacts(artifactDir)+"\n"+testutil.JSONLSuccess+"\n")
+		testutil.JSONLInit+"\n"+testutil.WriteImplementNotes(artifactDir)+"\n"+testutil.JSONLSuccess+"\n")
 	reviewScript := testutil.WriteScript(t, scriptsDir, "review.sh",
 		testutil.JSONLInit+"\n"+testutil.WriteReviewApproved(artifactDir)+"\n"+testutil.JSONLSuccess+"\n")
 
@@ -1200,7 +1200,7 @@ func TestImplementLoopWithEscapeSequences(t *testing.T) {
 
 	// Agent script: writes the iteration handoff and emits stream-json success
 	agentScript := testutil.WriteScript(t, scriptsDir, "agent.sh",
-		testutil.JSONLInit+"\n"+testutil.WriteImplementSuccessArtifacts(artifactDir)+"\n"+testutil.JSONLSuccess+"\n")
+		testutil.JSONLInit+"\n"+testutil.WriteImplementNotes(artifactDir)+"\n"+testutil.JSONLSuccess+"\n")
 
 	reviewScript := testutil.WriteScript(t, scriptsDir, "review.sh",
 		testutil.JSONLInit+"\n"+testutil.WriteReviewApproved(artifactDir)+"\n"+testutil.JSONLSuccess+"\n")
@@ -1413,7 +1413,7 @@ func TestImplementLoop_ResumesReviewWhenImplementAlreadyComplete(t *testing.T) {
 	// The implement turn is being skipped on resume, so the harness still
 	// needs a parseable progress.md on disk to route iteration-02 into the
 	// review gate.
-	testutil.WriteImplementHandoffFiles(t, artifactDir, iter2Dir, agentStatusSuccess)
+	testutil.WriteImplementHandoffFiles(t, artifactDir, iter2Dir)
 
 	// Agent script would fail if called — proves the implement session
 	// is skipped on resume.
@@ -1487,7 +1487,7 @@ func TestImplementLoop_ReviewViaAssistantText(t *testing.T) {
 	agentScript := testutil.WriteScript(t, scriptsDir, "agent.sh",
 		testutil.JSONLInit+"\n"+
 			`mkdir -p "`+iterDir+`"`+"\n"+
-			testutil.WriteImplementSuccessArtifacts(artifactDir)+"\n"+
+			testutil.WriteImplementNotes(artifactDir)+"\n"+
 			testutil.JSONLAssistant("Implementation done")+"\n"+testutil.JSONLSuccess+"\n")
 
 	// Review writes the structured handoff file (verdict lives there, not stdout)
@@ -1545,7 +1545,7 @@ func TestImplementLoop_CostAccumulation(t *testing.T) {
 	agentScript := testutil.WriteScript(t, scriptsDir, "agent.sh",
 		testutil.JSONLInit+"\n"+
 			`mkdir -p "`+iterDir+`"`+"\n"+
-			testutil.WriteImplementSuccessArtifacts(artifactDir)+"\n"+
+			testutil.WriteImplementNotes(artifactDir)+"\n"+
 			testutil.JSONLAssistant(`<agentico-outcome>{"status":"success"}</agentico-outcome>`)+"\n"+
 			`echo '{"type":"result","subtype":"success","session_id":"mock","total_cost_usd":0.05}'`+"\n")
 

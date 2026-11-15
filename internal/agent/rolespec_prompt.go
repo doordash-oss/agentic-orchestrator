@@ -111,14 +111,16 @@ func buildRoleSystemPrompt(in roleSystemPromptInput) string {
 		Preflight:            buildPreflightInput(spec.Phase, in.SkillsDir, in.GuidelinesDir, in.RequiredSkillNames...),
 		ReadOnlyOutsideRoots: spec.ReadOnlyOutsideRoots,
 		SubagentsAvailable:   !in.SuppressSubagents,
-		RetryOutcomeAllowed:  spec.IterationState,
+		RetryOutcomeAllowed:  spec.AllowsRetry,
 		AskingClause:         in.AskingClause,
 		CompletionTool:       in.CompletionTool,
 	})
 }
 
+// artifactPreflightCommand returns "" for a role with no artifact the
+// harness validates.
 func artifactPreflightCommand(spec roleSpec, iterationDir string) string {
-	if spec.Role == "" || iterationDir == "" {
+	if spec.Role == "" || iterationDir == "" || !spec.hasValidatedArtifact() {
 		return ""
 	}
 	return fmt.Sprintf(`"$AGENTICO_BIN" validate-artifacts --phase %s --role %s --dir %q`,

@@ -27,17 +27,7 @@ var implementRoleSpec = roleSpec{
 		iterationParentOutputRoot("phase_dir", "Phase-level implement artifact root shared across iterations."),
 		iterationOutputRoot("iteration_dir", "Active iteration artifact directory."),
 	},
-	Artifacts: []roleArtifactSpec{
-		{
-			Name:         "progress",
-			DisplayPath:  "progress.md",
-			RootName:     "phase_dir",
-			RelativePath: "progress.md",
-			Description:  "structured progress markdown with iteration handoff, deferrals, and iteration state",
-			Validate:     validateProgressArtifact,
-		},
-	},
-	IterationState: true,
+	AllowsRetry: true,
 }
 
 // implementUserInput is the data passed to implement.user.tmpl.

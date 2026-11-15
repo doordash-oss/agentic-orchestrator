@@ -51,7 +51,6 @@ type ProtocolViolation struct {
 // Outcome carries parsed artifacts from a successful contract validation.
 type Outcome struct {
 	OK                bool
-	Progress          *parsedProgress
 	ReviewFeedback    *parsedReviewFeedback
 	RoadmapPhases     []RoadmapPhase
 	PlanAttemptMeta   *PlanAttemptMeta
@@ -646,18 +645,6 @@ func newestPhaseMarkdownArtifact(dir string) string {
 	return bestPath
 }
 
-func validateProgressArtifact(_ roleArtifactSpec, iterDir, path string, out *Outcome) ([]ProtocolViolation, error) {
-	parsed, err := parseProgressMd(path)
-	if err != nil {
-		return nil, err
-	}
-	out.Progress = parsed
-	if parsed == nil || !parsed.ok() {
-		return progressViolations(parsed), nil
-	}
-	return nil, nil
-}
-
 func validateReviewFeedbackArtifact(artifact roleArtifactSpec, _ string, path string, out *Outcome) ([]ProtocolViolation, error) {
 	parsed, err := parseReviewFeedback(path)
 	if err != nil {
@@ -672,17 +659,6 @@ func validateReviewFeedbackArtifact(artifact roleArtifactSpec, _ string, path st
 		violations = append(violations, ProtocolViolation{Artifact: artifact.DisplayPath, Reason: reason})
 	}
 	return violations, nil
-}
-
-func progressViolations(parsed *parsedProgress) []ProtocolViolation {
-	if parsed == nil {
-		return []ProtocolViolation{{Artifact: "progress.md", Reason: "progress.md could not be parsed"}}
-	}
-	out := make([]ProtocolViolation, 0, len(parsed.ProtocolViolations))
-	for _, reason := range parsed.ProtocolViolations {
-		out = append(out, ProtocolViolation{Artifact: "progress.md", Reason: reason})
-	}
-	return out
 }
 
 type protocolViolationError struct {

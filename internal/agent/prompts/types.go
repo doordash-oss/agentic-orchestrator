@@ -74,9 +74,8 @@ type RoleSystemInput struct {
 	SubagentsAvailable bool
 
 	// RetryOutcomeAllowed advertises the "retry" completion outcome. Only
-	// roles whose artifact contract carries a structured iteration state may
-	// see it; offering it to any other role invites a protocol violation the
-	// harness will reject at commit time.
+	// roles that allow retry may see it; offering it to any other role
+	// invites a protocol violation the harness will reject at commit time.
 	RetryOutcomeAllowed bool
 
 	AskingClause   string

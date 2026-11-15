@@ -24,7 +24,7 @@ Cumulative diff base: main
 Scope guidance:
 - Judge the whole assembled feature across all repositories in the workspace.
 - Use the approved roadmap as scope context for the completed feature, not as a reason to ignore feature-level gaps.
-- Do not apply per-phase deferral criteria; the full feature is in scope at Final Review.
+- The whole feature is in scope at Final Review, including work no single phase covered.
 Read the approved roadmap at: /state/feat-x/run-1/roadmap/plan.md
 
 Read the implementation plan at: /state/feat-x/run-1/phase-2/plan.md

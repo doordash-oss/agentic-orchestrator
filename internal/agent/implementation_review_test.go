@@ -350,7 +350,7 @@ func TestBuildImplementationReviewAxisPromptLiveRunPerPhaseGuidance(t *testing.T
 		"Approved design: /design.md",
 		"Approved intent:\nFrontend app intent.",
 		"Use the live-run posture: build, launch, run, drive, screenshot, and record evidence as needed.",
-		"For visual judgments, use the attached baseline images plus the captured `### Visual Evidence` screenshots under this iteration's `screenshots/` directory.",
+		"For visual judgments, use the attached baseline images plus the screenshots captured for the plan's verification under the implementation iteration directories.",
 	} {
 		if !strings.Contains(got, want) {
 			t.Fatalf("BuildImplementationReviewAxisPromptWithOpts() missing %q in:\n%s", want, got)
@@ -373,7 +373,7 @@ func TestBuildImplementationReviewAxisPromptReadOnlyOmitsLiveRunGuidance(t *test
 
 	for _, unwanted := range []string{
 		"Use the live-run posture",
-		"captured `### Visual Evidence` screenshots",
+		"screenshots captured for the plan's verification",
 	} {
 		if strings.Contains(got, unwanted) {
 			t.Fatalf("read-only prompt unexpectedly included %q in:\n%s", unwanted, got)

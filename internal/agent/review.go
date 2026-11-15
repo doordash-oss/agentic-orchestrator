@@ -318,8 +318,8 @@ func formatStructuredReviewFeedback(title, findings, suggestions string, verdict
 }
 
 // firstNonBlankLine returns the first non-empty line in body, trimmed. Used
-// to extract the canonical token from `## Verdict` / `## Iteration State`
-// section bodies where free-form prose may follow.
+// to extract the verdict token from a `## Verdict` section body where
+// free-form prose may follow.
 func firstNonBlankLine(body string) string {
 	for _, line := range strings.Split(body, "\n") {
 		trimmed := strings.TrimSpace(line)

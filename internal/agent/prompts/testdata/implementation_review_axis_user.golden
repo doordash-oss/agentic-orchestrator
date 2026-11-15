@@ -8,7 +8,7 @@ Iteration artifacts directory: /state/feat-x/run-1/phase-1/implement/iteration-0
 
 - Use the live-run posture: build, launch, run, drive, screenshot, and record evidence as needed.
 - Treat the source tree as read-only. Write captured evidence only under the live-run evidence root named in this prompt.
-- For visual judgments, use the attached baseline images plus the captured `### Visual Evidence` screenshots under this iteration's `screenshots/` directory.
+- For visual judgments, use the attached baseline images plus the screenshots captured for the plan's verification under the implementation iteration directories.
 
 ## Approved Roadmap
 

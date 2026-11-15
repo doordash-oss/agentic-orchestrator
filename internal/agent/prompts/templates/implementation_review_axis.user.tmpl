@@ -24,7 +24,7 @@ Iteration artifacts directory: {{ .IterDir }}
 
 - Use the live-run posture: build, launch, run, drive, screenshot, and record evidence as needed.
 - Treat the source tree as read-only. Write captured evidence only under the live-run evidence root named in this prompt.
-- For visual judgments, use the attached baseline images plus the captured `### Visual Evidence` screenshots under this iteration's `screenshots/` directory.
+- For visual judgments, use the attached baseline images plus the screenshots captured for the plan's verification under the implementation iteration directories.
 
 {{ else }}## Review Posture
 
@@ -44,7 +44,7 @@ Review the assembled feature across the cumulative cross-repo diff.
 Scope guidance:
 - Judge the whole assembled feature across all repositories in the workspace.
 - Use the approved roadmap as scope context for the completed feature, not as a reason to ignore feature-level gaps.
-- Do not apply per-phase deferral criteria; the full feature is in scope at Final Review.
+- The whole feature is in scope at Final Review, including work no single phase covered.
 {{ if .RoadmapPath }}Read the approved roadmap at: {{ .RoadmapPath }}
 
 {{ end }}{{ if .PlanPath }}Read the implementation plan at: {{ .PlanPath }}

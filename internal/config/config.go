@@ -279,6 +279,9 @@ func Load(path string) (*Config, error) {
 	if err := yaml.Unmarshal(data, &cfg); err != nil {
 		return nil, fmt.Errorf("parsing config: %w", err)
 	}
+	for role := range retiredRoles {
+		delete(cfg.ModelRecommendations, role)
+	}
 	if err := validateModelRecommendations(cfg.ModelRecommendations); err != nil {
 		return nil, err
 	}
@@ -488,6 +491,10 @@ func overlayModelConfig(base, override ModelConfig) ModelConfig {
 	}
 	return base
 }
+
+// retiredRoles are phases that no longer exist; configs written before their
+// removal may still name them, so Load drops them instead of failing.
+var retiredRoles = map[string]bool{"kb_build": true}
 
 // validateModelRecommendations rejects typos instead of silently falling back
 // to an unrelated model. Missing catalog entries remain valid fallbacks: access

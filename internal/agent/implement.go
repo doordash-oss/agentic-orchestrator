@@ -338,7 +338,19 @@ func runImplementationLoop(cfg ImplementConfig, sm ports.SessionManager) (result
 	// a crash-resumed loop labels rounds identically to the interrupted run.
 	roundCommits := newImplementRoundCommitTracker(am, cfg.ArtifactDir, startIter)
 
-	for i := startIter + 1; i <= cfg.MaxIterations; i++ {
+	// Moonshot's per-phase review narrows its rounds and hands off to the
+	// user when it stops converging; its state is replayed from the metas. A
+	// pending handoff is asked again by a fresh session.
+	var gate *phaseReviewGate
+	if !cfg.SkipIterationReview {
+		gate = newPhaseReviewGate(cfg, am, startIter)
+		if gate.pending != nil {
+			skipImplement = false
+		}
+	}
+
+	// A pending review handoff is asked even past MaxIterations.
+	for i := startIter + 1; i <= cfg.MaxIterations || (gate != nil && gate.pending != nil); i++ {
 		iterStart := time.Now()
 		iterCtx := phaseCtx.Child()
 		cfg.Observer.IterationStarted(iterCtx, i)
@@ -380,6 +392,8 @@ func runImplementationLoop(cfg ImplementConfig, sm ports.SessionManager) (result
 			exitCode     int
 			sess         ports.SessionHandle
 			waitResult   PhaseOutcomeWaitResult
+			// The implementer's closing note, kept by the review gate.
+			implementerNote string
 		)
 		if skipImplement {
 			// Resume point: implement phase already finished in the prior run.
@@ -424,6 +438,9 @@ func runImplementationLoop(cfg ImplementConfig, sm ports.SessionManager) (result
 				if block := visualReferencesSection(cfg.Feature.Images, "implementing this iteration"); block != "" {
 					prompt = block + prompt
 				}
+			}
+			if gate != nil {
+				prompt = gate.implementContext() + prompt
 			}
 			// Remove a stale harness receipt before starting a new root turn.
 			removeCompletionReceipt(iterDir)
@@ -591,6 +608,11 @@ func runImplementationLoop(cfg ImplementConfig, sm ports.SessionManager) (result
 			// phase completion.
 			waitResult = WaitForPhaseOutcome(sess, implWaitOptions(sess, implSessionCtx, sessionID))
 			agentStatus = waitResult.Status
+			// Review decisions are recorded before any interrupt check, so a
+			// stop right after the user answers keeps the answer.
+			if gate != nil {
+				implementerNote = gate.recordSession(i, iterDir, sess)
+			}
 
 			// App shutdown should not serialize an in-flight iteration as FAILED.
 			// Leaving the iteration incomplete (no meta.yaml) allows restart to replay
@@ -643,6 +665,9 @@ func runImplementationLoop(cfg ImplementConfig, sm ports.SessionManager) (result
 
 						waitResult = WaitForPhaseOutcome(sess, implWaitOptions(sess, implSessionCtx, sessionID))
 						agentStatus = waitResult.Status
+						if gate != nil {
+							implementerNote = gate.recordSession(i, iterDir, sess)
+						}
 						if agentStatus == agentStatusFailed && sm != nil && waitForShutdownIntent(sm, shutdownDetectionGrace) {
 							return &LoopResult{FinalStatus: "interrupted", Iterations: i - 1}, nil
 						}
@@ -739,6 +764,38 @@ func runImplementationLoop(cfg ImplementConfig, sm ports.SessionManager) (result
 			cfg.Observer.IterationEnded(iterCtx, i, toSessionUsage(cost), time.Since(iterStart), agentStatus)
 			return nil, fmt.Errorf("waiting for implementer outcome: %w", waitResult.Err)
 		}
+		if asked := gatePending(gate); asked != nil && sess != nil {
+			switch gate.resolveHandoff() {
+			case handoffAccept:
+				meta.Handoff = reviewHandoffAccepted
+			case handoffContinue:
+				meta.Handoff = reviewHandoffContinued
+			case handoffStop:
+				meta.Handoff = reviewHandoffStopped
+				meta.ReviewStatus = reviewChangesRequested.String()
+				carryOpenFindings(iterDir, gate.openFindings(reviewerFeedback))
+				_ = am.writeMeta(iterDir, meta)
+				_ = am.writeSummary(summaryPath, meta)
+				cfg.Observer.IterationEnded(iterCtx, i, toSessionUsage(cost), time.Since(iterStart), finalStatusStopped)
+				return &LoopResult{FinalStatus: finalStatusStopped, Iterations: i, LastError: asked.Reason}, nil
+			default:
+				// A session that ended without an answer leaves the handoff
+				// pending: a failed one retries next iteration, a completed
+				// one parks the feature so resuming asks again.
+				if agentStatus == agentStatusSuccess {
+					meta.ReviewStatus = reviewChangesRequested.String()
+					carryOpenFindings(iterDir, gate.openFindings(reviewerFeedback))
+					_ = am.writeMeta(iterDir, meta)
+					_ = am.writeSummary(summaryPath, meta)
+					cfg.Observer.IterationEnded(iterCtx, i, toSessionUsage(cost), time.Since(iterStart), finalStatusStopped)
+					return &LoopResult{
+						FinalStatus: finalStatusStopped,
+						Iterations:  i,
+						LastError:   fmt.Sprintf("%s needs your decision, and the handoff question has no answer yet: %s Resume the feature to ask again; see %s.", gate.label(), asked.Reason, asked.NotePath),
+					}, nil
+				}
+			}
+		}
 		if agentStatus == agentStatusProtocolViolation {
 			violations := waitResult.ProtocolViolations
 			if len(violations) == 0 {
@@ -825,6 +882,30 @@ func runImplementationLoop(cfg ImplementConfig, sm ports.SessionManager) (result
 				}, nil
 			}
 
+			// A fix iteration that changed nothing and recorded no decision
+			// would only repeat the open findings: ask the user instead.
+			if gate.awaitingFix() && !gate.decided && !gate.changedSinceReview() {
+				findings := gate.openFindings(reviewerFeedback)
+				h := reviewHandoff{
+					Reason:    fmt.Sprintf("Fix iteration %d made no code changes, so another review round would repeat the same findings.", i),
+					Findings:  findings,
+					FixerNote: implementerNote,
+				}
+				if err := gate.raiseHandoff(i, iterDir, h); err != nil {
+					return nil, err
+				}
+				carryOpenFindings(iterDir, findings)
+				meta.Handoff = reviewHandoffAsked
+				meta.ReviewStatus = reviewChangesRequested.String()
+				_ = am.writeMeta(iterDir, meta)
+				_ = am.writeSummary(summaryPath, meta)
+				consecutiveFailures = 0
+				lastChangesRequestedIter = i
+				roundCommits.changesRequested++
+				cfg.Observer.IterationEnded(iterCtx, i, toSessionUsage(cost), time.Since(iterStart), "review_handoff")
+				continue
+			}
+
 			// Moonshot: run per-iteration review gate.
 			//
 			// Before starting, re-check interruption state. The implement
@@ -863,7 +944,9 @@ func runImplementationLoop(cfg ImplementConfig, sm ports.SessionManager) (result
 			reviewCfg.ReviewEffortSource = reviewSessionConfig.EffortSource
 			reviewCfg.AskingClause = reviewSessionConfig.AskingClause
 			reviewCfg.CompletionTool = reviewSessionConfig.CompletionTool
-			reviewStatus, feedback, reviewErr := runReviewGate(reviewCfg, sm, i, iterDir, reviewCtx)
+			reviewState := currentRepoState(gate.repos)
+			codeChanged := gate.changedSinceReview()
+			reviewStatus, feedback, verdicts, reviewErr := runReviewGate(reviewCfg, sm, i, iterDir, reviewCtx, gate, reviewState, codeChanged)
 			cfg.Observer.ReviewCompleted(reviewCtx, i, reviewStatus.String(), time.Since(reviewStart))
 
 			// Clear the reviewing flag
@@ -925,6 +1008,9 @@ func runImplementationLoop(cfg ImplementConfig, sm ports.SessionManager) (result
 				}, nil
 			}
 
+			gate.recordReview(i, verdicts, reviewState, codeChanged)
+			meta.AxisVerdicts, meta.ReviewHeads, meta.ReviewDirt, meta.CodeChanged = verdicts, reviewState.Heads, reviewState.Dirt, codeChanged
+
 			switch reviewStatus {
 			case ReviewApproved:
 				// Phase-exit gate: an approving review does not override
@@ -950,6 +1036,21 @@ func runImplementationLoop(cfg ImplementConfig, sm ports.SessionManager) (result
 			case reviewChangesRequested:
 				meta.MadeProgress = observeVerifiedImplementationOutcome(pt, countBlockingReviewFindings(feedback), cfg)
 				meta.ReviewStatus = reviewStatus.String()
+				// An axis that keeps requesting changes hands off to the user;
+				// the next implement session asks. The no-progress rail, when
+				// it trips in the same round, still wins.
+				railTripped := pt.consecutiveNoProgress() >= cfg.MaxConsecNoProgress
+				if axis, stalled := gate.history.stalledAxis(gate.axes); stalled && !railTripped {
+					h := reviewHandoff{
+						Reason:    fmt.Sprintf("The %s axis requested changes in %d consecutive rounds.", axis.Name, axisStallLimit),
+						Findings:  feedback,
+						FixerNote: gate.latestNote(i),
+					}
+					if err := gate.raiseHandoff(i, iterDir, h); err != nil {
+						return nil, err
+					}
+					meta.Handoff = reviewHandoffAsked
+				}
 				_ = am.writeMeta(iterDir, meta)
 				_ = am.writeSummary(summaryPath, meta)
 				consecutiveFailures = 0
@@ -957,7 +1058,7 @@ func runImplementationLoop(cfg ImplementConfig, sm ports.SessionManager) (result
 				lastChangesRequestedIter = i
 				roundCommits.changesRequested++
 				// Check no-progress safety rail
-				if pt.consecutiveNoProgress() >= cfg.MaxConsecNoProgress {
+				if railTripped {
 					cfg.Observer.IterationEnded(iterCtx, i, toSessionUsage(cost), time.Since(iterStart), "changes_requested")
 					return &LoopResult{
 						FinalStatus: "safety_rail",
@@ -1228,27 +1329,44 @@ func sessionErrFromLogicalAgentStatus(status string, sess ports.SessionView) err
 	return sessionErrFromAgentStatus(status)
 }
 
-// runReviewGate runs the per-phase review axes against the iteration. The
-// reviewers inspect the repository and iteration artifacts with their own
-// tools rather than receiving the diff inline.
-func runReviewGate(cfg ImplementConfig, sm ports.SessionManager, iteration int, iterDir string, reviewCtx observe.SpanContext) (reviewStatus, string, error) {
+// runReviewGate runs the iteration's planned review round against the
+// iteration. When it approves while earlier approvals predate later changes,
+// those axes confirm once in a second round. The reviewers inspect the
+// repository and iteration artifacts with their own tools rather than
+// receiving the diff inline. The returned verdicts cover every axis that ran.
+func runReviewGate(cfg ImplementConfig, sm ports.SessionManager, iteration int, iterDir string, reviewCtx observe.SpanContext, gate *phaseReviewGate, state repoState, changed bool) (reviewStatus, string, map[string]string, error) {
+	plan := gate.plan(state)
+	if len(plan) == 0 {
+		return ReviewApproved, formatStructuredReviewFeedback("Implementation Review", "", "", ReviewApproved), nil, nil
+	}
 	reviewDir := filepath.Join(iterDir, "review")
 	if err := os.MkdirAll(reviewDir, 0o755); err != nil {
-		return reviewFailed, "", fmt.Errorf("creating review helper directory: %w", err)
+		return reviewFailed, "", nil, fmt.Errorf("creating review helper directory: %w", err)
 	}
 	removeCompletionReceipt(reviewDir)
 
 	parentFeedbackPath := filepath.Join(iterDir, "review-feedback.md")
-	reviewStatus, feedback, err := runImplementationReviewAxes(cfg, sm, iteration, iterDir, reviewDir, reviewCtx, implementationReviewInput{
-		ProgressPath: filepath.Join(cfg.ArtifactDir, "progress.md"),
-	})
+	reviewStatus, feedback, verdicts, err := runImplementationReviewAxes(cfg, sm, iteration, iterDir, reviewDir, reviewCtx, gate.reviewInput(iteration, plan))
+	if err == nil && reviewStatus == ReviewApproved {
+		if confirm := gate.confirmPlan(iteration, verdicts, state, changed); len(confirm) > 0 {
+			confirmDir := filepath.Join(reviewDir, confirmRoundDir)
+			if mkErr := os.MkdirAll(confirmDir, 0o755); mkErr != nil {
+				return reviewFailed, "", nil, fmt.Errorf("creating confirmation review directory: %w", mkErr)
+			}
+			var confirmVerdicts map[string]string
+			reviewStatus, feedback, confirmVerdicts, err = runImplementationReviewAxes(cfg, sm, iteration, iterDir, confirmDir, reviewCtx, gate.reviewInput(iteration, confirm))
+			for slug, verdict := range confirmVerdicts {
+				verdicts[slug] = verdict
+			}
+		}
+	}
 	if strings.TrimSpace(feedback) != "" {
 		_ = os.WriteFile(parentFeedbackPath, []byte(feedback), 0o644)
 	}
 	if err != nil {
-		return reviewStatus, feedback, fmt.Errorf("running review gate: %w", err)
+		return reviewStatus, feedback, nil, fmt.Errorf("running review gate: %w", err)
 	}
-	return reviewStatus, feedback, nil
+	return reviewStatus, feedback, verdicts, nil
 }
 
 // buildImplementPrompt constructs the per-call prompt for an implementation

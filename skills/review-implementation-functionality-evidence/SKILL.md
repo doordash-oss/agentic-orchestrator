@@ -40,6 +40,10 @@ Apply phase-aware criteria:
 - Tracer-bullet phases must prove the named vertical path; intentional stubs are acceptable only when the plan explicitly calls for them.
 - Tdd-fill-in and collapsed phases must implement the assigned real behavior and retire stubs assigned to this phase.
 
+## Review Rounds
+
+When your prompt has an Acceptance Authority section, the decisions it names outrank acceptance criteria, and a finding the decisions file records as accepted as is is not raised again. When it has a Round Scope section, that section narrows this skill's scope for the round: in a follow-up, judge your open findings and what the delta changed; in a confirmation, request changes only for a regression the delta introduced.
+
 ## Non-Goals
 
 - Do not edit the source tree or fix what you find.

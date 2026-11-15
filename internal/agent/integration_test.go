@@ -631,7 +631,7 @@ echo "more progress $(date +%s%N)" >> "$PROGRESS_FILE"
 		Feature:             f,
 		WorkDir:             workDir,
 		PlanPath:            planPath,
-		MaxIterations:       3, // Small limit for test speed
+		MaxIterations:       2, // Below the review stall limit, which hands off instead
 		MaxConsecFails:      10,
 		MaxConsecNoProgress: 10,
 		ExitCriteria:        "Tests pass",
@@ -650,8 +650,8 @@ echo "more progress $(date +%s%N)" >> "$PROGRESS_FILE"
 	if result.FinalStatus != "max_iterations" {
 		t.Errorf("expected FinalStatus=max_iterations, got %s", result.FinalStatus)
 	}
-	if result.Iterations != 3 {
-		t.Errorf("expected Iterations=3, got %d", result.Iterations)
+	if result.Iterations != 2 {
+		t.Errorf("expected Iterations=2, got %d", result.Iterations)
 	}
 }
 

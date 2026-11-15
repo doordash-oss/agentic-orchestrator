@@ -15,12 +15,16 @@
 package agent
 
 import (
+	"context"
 	"fmt"
+	"maps"
 	"os"
 	"path/filepath"
 	"regexp"
 	"sort"
 	"strings"
+
+	"gopkg.in/yaml.v3"
 
 	"github.com/doordash-oss/agentic-orchestrator/internal/agent/prompts"
 	"github.com/doordash-oss/agentic-orchestrator/internal/git"
@@ -38,7 +42,7 @@ const (
 type reviewAxisRecord struct {
 	verdict    string
 	lastReview int
-	lastHeads  map[string]string
+	lastState  repoState
 	streak     int
 }
 
@@ -53,7 +57,7 @@ type reviewRoundHistory struct {
 func loadReviewRoundHistory(am *artifactManager, artifactDir string, upTo int) *reviewRoundHistory {
 	h := &reviewRoundHistory{axes: map[string]*reviewAxisRecord{}}
 	scanIterationMetas(am, artifactDir, upTo, func(meta iterationMeta) {
-		h.recordReview(meta.Iteration, meta.AxisVerdicts, meta.ReviewHeads)
+		h.recordReview(meta.Iteration, meta.AxisVerdicts, metaRepoState(meta))
 		h.recordFix(meta.Iteration, meta.MadeProgress)
 		if meta.Handoff != "" {
 			h.resetStreaks()
@@ -65,7 +69,7 @@ func loadReviewRoundHistory(am *artifactManager, artifactDir string, upTo int) *
 	return h
 }
 
-func (h *reviewRoundHistory) recordReview(iteration int, verdicts, heads map[string]string) {
+func (h *reviewRoundHistory) recordReview(iteration int, verdicts map[string]string, state repoState) {
 	for slug, verdict := range verdicts {
 		rec := h.axes[slug]
 		if rec == nil {
@@ -74,7 +78,7 @@ func (h *reviewRoundHistory) recordReview(iteration int, verdicts, heads map[str
 		}
 		rec.verdict = verdict
 		rec.lastReview = iteration
-		rec.lastHeads = heads
+		rec.lastState = state
 		if verdict == reviewChangesRequested.String() {
 			rec.streak++
 		} else {
@@ -120,30 +124,83 @@ type reviewAxisRun struct {
 	SinceHeads map[string]string
 }
 
-// planRound picks the next round's axes. Axes without an approval run, in
-// full the first time and scoped to their open findings after that.
-// Approvals stick: once every axis has approved, each approval older than the
-// last code-changing fix confirms once. An empty plan means approval.
-func (h *reviewRoundHistory) planRound(axes []implementationReviewAxis) []reviewAxisRun {
+// planRound picks the next round's axes given the repos' current state.
+// Axes without an approval run, scoped to their open findings after the
+// first round. Approvals stick until the repos differ from what the axis
+// approved, or a recorded fix landed after it; once nothing is open, each
+// stale approval confirms once. An axis whose delta is unknown reruns in
+// full. An empty plan means approval.
+func (h *reviewRoundHistory) planRound(axes []implementationReviewAxis, now repoState) []reviewAxisRun {
 	if h.accepted {
 		return nil
 	}
 	var open, confirm []reviewAxisRun
 	for _, axis := range axes {
 		rec := h.axes[axis.Slug]
-		switch {
-		case rec == nil:
+		if rec == nil {
 			open = append(open, reviewAxisRun{Axis: axis, Mode: reviewRoundFull})
+			continue
+		}
+		scoped := rec.lastState.known() && now.known()
+		run := reviewAxisRun{Axis: axis, Mode: reviewRoundFull}
+		if scoped {
+			run = reviewAxisRun{Axis: axis, Since: rec.lastReview, SinceHeads: rec.lastState.Heads}
+		}
+		switch {
 		case rec.verdict != ReviewApproved.String():
-			open = append(open, reviewAxisRun{Axis: axis, Mode: reviewRoundFollowUp, Since: rec.lastReview, SinceHeads: rec.lastHeads})
-		case h.lastFixChange >= rec.lastReview:
-			confirm = append(confirm, reviewAxisRun{Axis: axis, Mode: reviewRoundConfirm, Since: rec.lastReview, SinceHeads: rec.lastHeads})
+			if scoped {
+				run.Mode = reviewRoundFollowUp
+			}
+			open = append(open, run)
+		case h.lastFixChange >= rec.lastReview || (scoped && now.differs(rec.lastState)):
+			if scoped {
+				run.Mode = reviewRoundConfirm
+			}
+			confirm = append(confirm, run)
 		}
 	}
 	if len(open) > 0 {
 		return open
 	}
 	return confirm
+}
+
+// repoState is what a review saw: every repo's HEAD plus a fingerprint of
+// its uncommitted work. Nil Heads means the state is unknown.
+type repoState struct {
+	Heads map[string]string
+	Dirt  string
+}
+
+func (s repoState) known() bool { return s.Heads != nil }
+
+// differs reports whether s and other may hold different code; unknown
+// state always differs.
+func (s repoState) differs(other repoState) bool {
+	return !s.known() || !other.known() || !maps.Equal(s.Heads, other.Heads) || s.Dirt != other.Dirt
+}
+
+func metaRepoState(meta iterationMeta) repoState {
+	return repoState{Heads: meta.ReviewHeads, Dirt: meta.ReviewDirt}
+}
+
+func currentRepoState(repos map[string]string) repoState {
+	heads := repoHeads(repos)
+	if heads == nil {
+		return repoState{}
+	}
+	names := make([]string, 0, len(repos))
+	for name, path := range repos {
+		if path != "" {
+			names = append(names, name)
+		}
+	}
+	sort.Strings(names)
+	paths := make([]string, 0, len(names))
+	for _, name := range names {
+		paths = append(paths, repos[name])
+	}
+	return repoState{Heads: heads, Dirt: worktreeStateFingerprint(context.Background(), nil, paths)}
 }
 
 // repoHeads returns every repo's HEAD, or nil when any is unreadable.
@@ -165,52 +222,66 @@ func repoHeads(repos map[string]string) map[string]string {
 	return heads
 }
 
-// reposChangedSince reports whether any repo moved off before or holds
-// uncommitted work. Unknown state counts as changed.
-func reposChangedSince(repos, before map[string]string) bool {
-	after := repoHeads(repos)
-	if before == nil || after == nil {
-		return true
-	}
-	for name, sha := range before {
-		if after[name] != sha {
-			return true
-		}
-	}
-	for _, path := range repos {
-		if path == "" {
-			continue
-		}
-		dirty, err := git.HasUncommittedChangesExcludingUntracked(path, FinalReviewRootOrchestrationArtifacts...)
-		if err != nil || dirty {
-			return true
-		}
-	}
-	return false
+// reposChangedSince reports whether the repos may hold different code than
+// before. Unknown state counts as changed.
+func reposChangedSince(repos map[string]string, before repoState) bool {
+	return currentRepoState(repos).differs(before)
 }
 
 const reviewDecisionsFile = "review-decisions.md"
 
-// appendReviewDecisions records the user's answers from one session in the
-// loop's decisions file and reports whether any were recorded.
+// disputeQuestionPrefix marks a fixer's or implementer's question disputing
+// a review finding; the skills require it.
+const disputeQuestionPrefix = "dispute:"
+
+// reviewDecisionPairs keeps the answers that are review decisions: disputes
+// and the handoff question. Clarifying questions and auto-picked answers
+// are not decisions.
+func reviewDecisionPairs(qa []ports.QAPair, handoffQuestion string) []ports.QAPair {
+	var decisions []ports.QAPair
+	for _, pair := range qa {
+		if pair.AutoPicked || strings.TrimSpace(pair.Answer) == "" {
+			continue
+		}
+		dispute := strings.HasPrefix(strings.ToLower(strings.TrimSpace(pair.Question)), disputeQuestionPrefix)
+		if dispute || isHandoffPair(pair, handoffQuestion) {
+			decisions = append(decisions, pair)
+		}
+	}
+	return decisions
+}
+
+// appendReviewDecisions records one session's decisions under heading,
+// replacing an earlier section with the same heading so a rerun session
+// does not record twice. It reports whether any were recorded.
 func appendReviewDecisions(path, heading string, qa []ports.QAPair) (bool, error) {
 	if len(qa) == 0 {
 		return false, nil
 	}
-	var b strings.Builder
-	if _, err := os.Stat(path); os.IsNotExist(err) {
-		b.WriteString("# Review Decisions\n\nThe user made these decisions during review. They override the design's acceptance criteria and earlier findings; a finding accepted as is is not raised again.\n")
+	data, err := os.ReadFile(path)
+	if err != nil && !os.IsNotExist(err) {
+		return false, fmt.Errorf("reading review decisions: %w", err)
 	}
+	body := string(data)
+	if body == "" {
+		body = "# Review Decisions\n\nThe user made these decisions during review. They override the design's acceptance criteria and earlier findings; a finding accepted as is is not raised again.\n"
+	}
+	marker := "\n## " + heading + "\n"
+	if start := strings.Index(body, marker); start >= 0 {
+		rest := body[start+len(marker):]
+		end := len(body)
+		if next := strings.Index(rest, "\n## "); next >= 0 {
+			end = start + len(marker) + next
+		}
+		body = body[:start] + body[end:]
+	}
+	var b strings.Builder
+	b.WriteString(body)
 	fmt.Fprintf(&b, "\n## %s\n", heading)
 	for _, pair := range qa {
 		fmt.Fprintf(&b, "\n**Q:** %s\n\n**A:** %s\n", strings.TrimSpace(pair.Question), strings.TrimSpace(pair.Answer))
 	}
-	f, err := os.OpenFile(path, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644)
-	if err != nil {
-		return false, fmt.Errorf("opening review decisions: %w", err)
-	}
-	defer f.Close()
-	if _, err := f.WriteString(b.String()); err != nil {
+	if err := os.WriteFile(path, []byte(b.String()), 0o644); err != nil {
 		return false, fmt.Errorf("writing review decisions: %w", err)
 	}
 	return true, nil
@@ -263,9 +334,10 @@ func sessionClosingNote(sess ports.SessionView) string {
 }
 
 const (
-	handoffContinueLabel = "Continue with guidance"
-	handoffAcceptLabel   = "Accept and proceed to Publish"
-	handoffStopLabel     = "Stop"
+	handoffContinueLabel    = "Continue with guidance"
+	handoffAcceptLabel      = "Accept and proceed to Publish"
+	phaseHandoffAcceptLabel = "Accept and finish the phase"
+	handoffStopLabel        = "Stop"
 )
 
 // Handoff outcomes persisted in iteration metas.
@@ -284,18 +356,90 @@ const (
 	handoffStop
 )
 
-// classifyHandoffAnswer maps the user's handoff answer to the way forward;
-// any answer other than accept or stop is guidance.
-func classifyHandoffAnswer(qa []ports.QAPair) reviewHandoffChoice {
-	if len(qa) == 0 {
+// handoffQuestionMarker is the closing line of every handoff question.
+func handoffQuestionMarker(gateLabel string) string {
+	return fmt.Sprintf("How should %s proceed?", gateLabel)
+}
+
+// isHandoffPair reports whether pair answers the handoff question: it
+// carries the question's closing line, or its answer is one of the options.
+func isHandoffPair(pair ports.QAPair, handoffQuestion string) bool {
+	if handoffQuestion == "" {
+		return false
+	}
+	lines := strings.Split(strings.TrimSpace(handoffQuestion), "\n")
+	if marker := strings.TrimSpace(lines[len(lines)-1]); marker != "" && strings.Contains(pair.Question, marker) {
+		return true
+	}
+	_, exact := handoffLabelChoice(answerLabel(pair.Answer))
+	return exact
+}
+
+// handoffAnswer returns the user's answer to the handoff question, if any.
+func handoffAnswer(qa []ports.QAPair, handoffQuestion string) (string, bool) {
+	for i := len(qa) - 1; i >= 0; i-- {
+		if !qa[i].AutoPicked && strings.TrimSpace(qa[i].Answer) != "" && isHandoffPair(qa[i], handoffQuestion) {
+			return qa[i].Answer, true
+		}
+	}
+	return "", false
+}
+
+var handoffChoices = map[string]reviewHandoffChoice{
+	strings.ToLower(handoffContinueLabel):    handoffContinue,
+	strings.ToLower(handoffAcceptLabel):      handoffAccept,
+	strings.ToLower(phaseHandoffAcceptLabel): handoffAccept,
+	strings.ToLower(handoffStopLabel):        handoffStop,
+}
+
+// handoffLabelChoice matches an option label, its leading word, or a
+// shortened label.
+func handoffLabelChoice(label string) (reviewHandoffChoice, bool) {
+	if choice, ok := handoffChoices[label]; ok {
+		return choice, true
+	}
+	if len(label) < 4 {
+		return 0, false
+	}
+	var found reviewHandoffChoice
+	matched := false
+	for option, choice := range handoffChoices {
+		if !strings.HasPrefix(option, label) {
+			continue
+		}
+		if matched && found != choice {
+			return 0, false
+		}
+		found, matched = choice, true
+	}
+	return found, matched
+}
+
+// classifyHandoffAnswer maps the handoff answer to the way forward. An
+// answer naming more than one option is not an answer; any other text is
+// guidance.
+func classifyHandoffAnswer(answer string) reviewHandoffChoice {
+	label := answerLabel(answer)
+	if label == "" {
 		return handoffUnanswered
 	}
-	for _, pair := range qa {
-		switch answerLabel(pair.Answer) {
-		case strings.ToLower(handoffAcceptLabel):
-			return handoffAccept
-		case strings.ToLower(handoffStopLabel):
-			return handoffStop
+	if choice, ok := handoffLabelChoice(label); ok {
+		return choice
+	}
+	if parts := strings.Split(label, ", "); len(parts) > 1 {
+		seen := map[reviewHandoffChoice]bool{}
+		for _, part := range parts {
+			choice, ok := handoffLabelChoice(strings.TrimSpace(part))
+			if !ok {
+				return handoffContinue
+			}
+			seen[choice] = true
+		}
+		if len(seen) > 1 {
+			return handoffUnanswered
+		}
+		for choice := range seen {
+			return choice
 		}
 	}
 	return handoffContinue
@@ -303,7 +447,8 @@ func classifyHandoffAnswer(qa []ports.QAPair) reviewHandoffChoice {
 
 func answerLabel(answer string) string {
 	label := strings.ToLower(strings.TrimSpace(answer))
-	return strings.TrimSpace(strings.TrimSuffix(label, "(recommended)"))
+	label = strings.TrimSpace(strings.TrimSuffix(label, "(recommended)"))
+	return strings.TrimRight(label, ". ")
 }
 
 // reviewHandoff is why a review loop stopped converging and what it leaves
@@ -330,6 +475,68 @@ func writeHandoffNote(path string, iteration int, h reviewHandoff) error {
 	return nil
 }
 
+// reviewHandoffPromptInput is the data for the review_handoff partial.
+type reviewHandoffPromptInput struct {
+	GateLabel     string
+	AcceptOutcome string
+	Reason        string
+	Question      string
+	NotePath      string
+	ContinueLabel string
+	AcceptLabel   string
+	StopLabel     string
+	// Answer is the user's answer once given, so a rerun session acts on it
+	// instead of asking again.
+	Answer string
+}
+
+const handoffPromptFile = "handoff.yaml"
+
+func saveHandoffPrompt(dir string, prompt *reviewHandoffPromptInput) error {
+	data, err := yaml.Marshal(prompt)
+	if err != nil {
+		return fmt.Errorf("encoding review handoff: %w", err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, handoffPromptFile), data, 0o644); err != nil {
+		return fmt.Errorf("writing review handoff: %w", err)
+	}
+	return nil
+}
+
+func loadHandoffPrompt(dir string) *reviewHandoffPromptInput {
+	data, err := os.ReadFile(filepath.Join(dir, handoffPromptFile))
+	if err != nil {
+		return nil
+	}
+	var prompt reviewHandoffPromptInput
+	if err := yaml.Unmarshal(data, &prompt); err != nil || prompt.Question == "" {
+		return nil
+	}
+	return &prompt
+}
+
+// prepareHandoff writes the handoff note under dir and returns the prompt
+// that has the session ask the user.
+func prepareHandoff(dir string, iteration int, h reviewHandoff, gateLabel, acceptLabel, acceptOutcome string) (*reviewHandoffPromptInput, error) {
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return nil, fmt.Errorf("creating review handoff directory: %w", err)
+	}
+	notePath := filepath.Join(dir, "handoff.md")
+	if err := writeHandoffNote(notePath, iteration, h); err != nil {
+		return nil, err
+	}
+	return &reviewHandoffPromptInput{
+		GateLabel:     gateLabel,
+		AcceptOutcome: acceptOutcome,
+		Reason:        h.Reason,
+		Question:      handoffQuestion(gateLabel, h, notePath),
+		NotePath:      notePath,
+		ContinueLabel: handoffContinueLabel,
+		AcceptLabel:   acceptLabel,
+		StopLabel:     handoffStopLabel,
+	}, nil
+}
+
 const (
 	handoffMaxFindings   = 8
 	handoffMaxLineLength = 240
@@ -348,7 +555,7 @@ func handoffQuestion(gateLabel string, h reviewHandoff, notePath string) string 
 	if h.FixerNote != "" {
 		fmt.Fprintf(&b, "\nFixer's note: %s\n", truncateText(h.FixerNote, handoffMaxNoteLength))
 	}
-	fmt.Fprintf(&b, "\nDetails: %s\n\nHow should %s proceed?", notePath, gateLabel)
+	fmt.Fprintf(&b, "\nDetails: %s\n\n%s", notePath, handoffQuestionMarker(gateLabel))
 	return b.String()
 }
 
@@ -400,6 +607,7 @@ func truncateText(s string, limit int) string {
 // reviewRoundUserInput is the data passed to review_round.user.tmpl.
 type reviewRoundUserInput struct {
 	GateLabel         string
+	AcceptanceSource  string
 	Mode              reviewRoundMode
 	LiveRun           bool
 	Since             int

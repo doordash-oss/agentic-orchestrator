@@ -81,6 +81,14 @@ type iterationMeta struct {
 	AxisVerdicts map[string]string `yaml:"axis_verdicts,omitempty"`
 	ReviewHeads  map[string]string `yaml:"review_heads,omitempty"`
 	Handoff      string            `yaml:"handoff,omitempty"`
+	// CodeChanged marks a per-phase review that followed code changes made
+	// after the previous review.
+	CodeChanged bool `yaml:"code_changed,omitempty"`
+	// ReviewDirt fingerprints the uncommitted work the review saw.
+	ReviewDirt string `yaml:"review_dirt,omitempty"`
+	// Pending names the stage a review iteration still owes after its
+	// review ("fix" or "handoff"), so a resumed loop runs only that stage.
+	Pending string `yaml:"pending,omitempty"`
 }
 
 type contextMeta struct {

@@ -218,7 +218,7 @@ func TestRunFeatureFinalReviewLoop_NoChangeFixHandsOff(t *testing.T) {
 	}{
 		{name: "stop", answer: handoffStopLabel, ask: true, wantStatus: finalStatusStopped},
 		{name: "accept", answer: handoffAcceptLabel, ask: true, wantStatus: finalStatusReviewPassed},
-		{name: "unanswered", wantStatus: "safety_rail"},
+		{name: "unanswered", wantStatus: finalStatusStopped},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -266,8 +266,11 @@ func TestRunFeatureFinalReviewLoop_NoChangeFixHandsOff(t *testing.T) {
 			finish()
 			decisions := filepath.Join(artDir, reviewDecisionsFile)
 			if !tt.ask {
-				if !strings.Contains(result.LastError, "handoff question went unanswered") || !strings.Contains(result.LastError, "handoff.md") {
-					t.Fatalf("LastError = %q, want the unanswered-handoff reason and note path", result.LastError)
+				if !strings.Contains(result.LastError, "has no answer yet") || !strings.Contains(result.LastError, "handoff.md") {
+					t.Fatalf("LastError = %q, want the pending-handoff reason and note path", result.LastError)
+				}
+				if meta, err := (&artifactManager{}).readMeta(filepath.Join(artDir, "iteration-01")); err != nil || meta.Pending != pendingHandoff {
+					t.Fatalf("iteration 1 meta = %+v, %v; want the handoff still pending", meta, err)
 				}
 				if _, err := os.Stat(decisions); !os.IsNotExist(err) {
 					t.Fatalf("decisions file written without an answer: %v", err)
@@ -288,7 +291,7 @@ func TestRunFeatureFinalReviewLoop_DisputedFindingRecordsDecisionForLaterReviewe
 	env := newFRLoopEnv(t)
 	store, f, _, artDir := newFRGitFeature(t, env, "fr-dispute")
 	reviewScript := frReviewerScript(t, env, artDir, map[string]string{"iteration-01/craft": "CSV export is missing"})
-	const dispute = "Craft: the CSV export is out of scope per the roadmap. Fix it anyway?"
+	const dispute = "Dispute: Craft: the CSV export is out of scope per the roadmap. Fix it anyway?"
 	fixScript := frFixerScript(t, env, artDir,
 		frAskUser(dispute, "Fix it", "Accept as is", "Change the scope")+"\n"+testutil.JSONLAssistant("Disputed the CSV finding; the user accepted it as is."),
 		":")

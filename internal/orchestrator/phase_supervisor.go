@@ -35,6 +35,7 @@ const (
 	finalStatusAllPassed   = "all_passed"
 	finalStatusFailed      = "failed"
 	finalStatusInterrupted = "interrupted"
+	finalStatusStopped     = "stopped"
 	finalStatusNoOp        = "no_op"
 )
 
@@ -198,7 +199,7 @@ func (s *phaseSupervisor) superviseImplementationLoop(featureID string, resultCh
 				continue
 			}
 			switch res.FinalStatus {
-			case finalStatusAllPassed, "awaiting_final_review", finalStatusFailed, finalStatusInterrupted:
+			case finalStatusAllPassed, "awaiting_final_review", finalStatusFailed, finalStatusInterrupted, finalStatusStopped:
 				s.complete(featureID, PhaseCompletionInput{
 					Phase:           feature.PhaseImplement,
 					MultiRepoResult: res,

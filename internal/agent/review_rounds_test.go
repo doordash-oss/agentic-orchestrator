@@ -49,9 +49,13 @@ func plannedAxes(plan []reviewAxisRun) []plannedAxis {
 	return out
 }
 
-func requirePlan(t *testing.T, h *reviewRoundHistory, want ...plannedAxis) {
+func stateAt(head string) repoState {
+	return repoState{Heads: map[string]string{"api": head}}
+}
+
+func requirePlan(t *testing.T, h *reviewRoundHistory, now repoState, want ...plannedAxis) {
 	t.Helper()
-	got := plannedAxes(h.planRound(finalGateAxesForTest()))
+	got := plannedAxes(h.planRound(finalGateAxesForTest(), now))
 	if len(got) != len(want) {
 		t.Fatalf("plan = %+v, want %+v", got, want)
 	}
@@ -66,40 +70,73 @@ func TestReviewRoundHistoryStickyApprovalsConfirmOnce(t *testing.T) {
 	t.Parallel()
 	h := &reviewRoundHistory{axes: map[string]*reviewAxisRecord{}}
 
-	requirePlan(t, h,
+	requirePlan(t, h, stateAt("aaa"),
 		plannedAxis{"craft", reviewRoundFull, 0},
 		plannedAxis{"cleanliness", reviewRoundFull, 0},
 		plannedAxis{"qa", reviewRoundFull, 0})
 
-	h.recordReview(1, map[string]string{"craft": verdictChanges, "cleanliness": verdictApproved, "qa": verdictApproved}, nil)
+	h.recordReview(1, map[string]string{"craft": verdictChanges, "cleanliness": verdictApproved, "qa": verdictApproved}, stateAt("aaa"))
 	h.recordFix(1, true)
-	requirePlan(t, h, plannedAxis{"craft", reviewRoundFollowUp, 1})
+	requirePlan(t, h, stateAt("bbb"), plannedAxis{"craft", reviewRoundFollowUp, 1})
 
-	h.recordReview(2, map[string]string{"craft": verdictApproved}, nil)
-	requirePlan(t, h,
+	h.recordReview(2, map[string]string{"craft": verdictApproved}, stateAt("bbb"))
+	requirePlan(t, h, stateAt("bbb"),
 		plannedAxis{"cleanliness", reviewRoundConfirm, 1},
 		plannedAxis{"qa", reviewRoundConfirm, 1})
 
-	h.recordReview(3, map[string]string{"cleanliness": verdictApproved, "qa": verdictApproved}, nil)
-	requirePlan(t, h)
+	h.recordReview(3, map[string]string{"cleanliness": verdictApproved, "qa": verdictApproved}, stateAt("bbb"))
+	requirePlan(t, h, stateAt("bbb"))
+}
+
+// An approval is stale whenever the repos differ from what the axis
+// approved, even with no recorded fix round.
+func TestReviewRoundHistoryRepoStateStalesApprovals(t *testing.T) {
+	t.Parallel()
+	h := &reviewRoundHistory{axes: map[string]*reviewAxisRecord{}}
+	h.recordReview(1, map[string]string{"craft": verdictApproved, "cleanliness": verdictApproved, "qa": verdictApproved}, stateAt("aaa"))
+	requirePlan(t, h, stateAt("aaa"))
+	requirePlan(t, h, stateAt("bbb"),
+		plannedAxis{"craft", reviewRoundConfirm, 1},
+		plannedAxis{"cleanliness", reviewRoundConfirm, 1},
+		plannedAxis{"qa", reviewRoundConfirm, 1})
+	dirty := stateAt("aaa")
+	dirty.Dirt = "edited"
+	requirePlan(t, h, dirty,
+		plannedAxis{"craft", reviewRoundConfirm, 1},
+		plannedAxis{"cleanliness", reviewRoundConfirm, 1},
+		plannedAxis{"qa", reviewRoundConfirm, 1})
+}
+
+// Without a known delta, an axis with open findings or a stale approval
+// reruns in full rather than against a delta it cannot name.
+func TestReviewRoundHistoryUnknownDeltaRunsFull(t *testing.T) {
+	t.Parallel()
+	h := &reviewRoundHistory{axes: map[string]*reviewAxisRecord{}}
+	h.recordReview(1, map[string]string{"craft": verdictChanges, "cleanliness": verdictApproved, "qa": verdictApproved}, repoState{})
+	h.recordFix(1, true)
+	requirePlan(t, h, stateAt("bbb"), plannedAxis{"craft", reviewRoundFull, 0})
+	h.recordReview(2, map[string]string{"craft": verdictApproved}, stateAt("bbb"))
+	requirePlan(t, h, repoState{},
+		plannedAxis{"cleanliness", reviewRoundFull, 0},
+		plannedAxis{"qa", reviewRoundFull, 0})
 }
 
 func TestReviewRoundHistoryApprovalWithoutLaterFixNeedsNoConfirmation(t *testing.T) {
 	t.Parallel()
 	h := &reviewRoundHistory{axes: map[string]*reviewAxisRecord{}}
 
-	h.recordReview(1, map[string]string{"craft": verdictChanges, "cleanliness": verdictApproved, "qa": verdictApproved}, nil)
+	h.recordReview(1, map[string]string{"craft": verdictChanges, "cleanliness": verdictApproved, "qa": verdictApproved}, stateAt("aaa"))
 	// The fix only recorded decisions; no code moved.
 	h.recordFix(1, false)
-	h.recordReview(2, map[string]string{"craft": verdictApproved}, nil)
-	requirePlan(t, h)
+	h.recordReview(2, map[string]string{"craft": verdictApproved}, stateAt("aaa"))
+	requirePlan(t, h, stateAt("aaa"))
 }
 
 func TestReviewRoundHistoryRoundOneApprovalIsFinal(t *testing.T) {
 	t.Parallel()
 	h := &reviewRoundHistory{axes: map[string]*reviewAxisRecord{}}
-	h.recordReview(1, map[string]string{"craft": verdictApproved, "cleanliness": verdictApproved, "qa": verdictApproved}, nil)
-	requirePlan(t, h)
+	h.recordReview(1, map[string]string{"craft": verdictApproved, "cleanliness": verdictApproved, "qa": verdictApproved}, stateAt("aaa"))
+	requirePlan(t, h, stateAt("aaa"))
 }
 
 func TestReviewRoundHistoryStallsAtThreeConsecutiveRounds(t *testing.T) {
@@ -107,12 +144,12 @@ func TestReviewRoundHistoryStallsAtThreeConsecutiveRounds(t *testing.T) {
 	axes := finalGateAxesForTest()
 	h := &reviewRoundHistory{axes: map[string]*reviewAxisRecord{}}
 
-	h.recordReview(1, map[string]string{"craft": verdictApproved, "cleanliness": verdictApproved, "qa": verdictChanges}, nil)
-	h.recordReview(2, map[string]string{"qa": verdictChanges}, nil)
+	h.recordReview(1, map[string]string{"craft": verdictApproved, "cleanliness": verdictApproved, "qa": verdictChanges}, repoState{})
+	h.recordReview(2, map[string]string{"qa": verdictChanges}, repoState{})
 	if _, stalled := h.stalledAxis(axes); stalled {
 		t.Fatal("stalled after two rounds, want three")
 	}
-	h.recordReview(3, map[string]string{"qa": verdictChanges}, nil)
+	h.recordReview(3, map[string]string{"qa": verdictChanges}, repoState{})
 	axis, stalled := h.stalledAxis(axes)
 	if !stalled || axis.Slug != "qa" {
 		t.Fatalf("stalledAxis = %q, %v; want qa stalled", axis.Slug, stalled)
@@ -128,10 +165,10 @@ func TestReviewRoundHistoryApprovalBreaksStreak(t *testing.T) {
 	t.Parallel()
 	axes := finalGateAxesForTest()
 	h := &reviewRoundHistory{axes: map[string]*reviewAxisRecord{}}
-	h.recordReview(1, map[string]string{"craft": verdictChanges}, nil)
-	h.recordReview(2, map[string]string{"craft": verdictChanges}, nil)
-	h.recordReview(3, map[string]string{"craft": verdictApproved}, nil)
-	h.recordReview(4, map[string]string{"craft": verdictChanges}, nil)
+	h.recordReview(1, map[string]string{"craft": verdictChanges}, repoState{})
+	h.recordReview(2, map[string]string{"craft": verdictChanges}, repoState{})
+	h.recordReview(3, map[string]string{"craft": verdictApproved}, repoState{})
+	h.recordReview(4, map[string]string{"craft": verdictChanges}, repoState{})
 	if _, stalled := h.stalledAxis(axes); stalled {
 		t.Fatal("stalled although an approval broke the streak")
 	}
@@ -144,7 +181,7 @@ func TestLoadReviewRoundHistoryReplaysIterationMetas(t *testing.T) {
 	metas := []iterationMeta{
 		{Iteration: 1, ReviewStatus: frMetaChangesRequested, MadeProgress: true, AxisVerdicts: map[string]string{"craft": verdictApproved, "cleanliness": verdictApproved, "qa": verdictChanges}, ReviewHeads: map[string]string{"api": "aaa"}},
 		{Iteration: 2, ReviewStatus: frMetaChangesRequested, MadeProgress: true, AxisVerdicts: map[string]string{"qa": verdictChanges}, ReviewHeads: map[string]string{"api": "bbb"}},
-		{Iteration: 3, ReviewStatus: frMetaChangesRequested, AxisVerdicts: map[string]string{"qa": verdictChanges}, Handoff: reviewHandoffContinued},
+		{Iteration: 3, ReviewStatus: frMetaChangesRequested, AxisVerdicts: map[string]string{"qa": verdictChanges}, ReviewHeads: map[string]string{"api": "ccc"}, Handoff: reviewHandoffContinued},
 	}
 	for _, meta := range metas {
 		iterDir, err := am.createIterationDir(meta.Iteration)
@@ -160,13 +197,13 @@ func TestLoadReviewRoundHistoryReplaysIterationMetas(t *testing.T) {
 	if _, stalled := h.stalledAxis(finalGateAxesForTest()); stalled {
 		t.Fatal("replayed history is stalled although the handoff reset it")
 	}
-	plan := h.planRound(finalGateAxesForTest())
+	plan := h.planRound(finalGateAxesForTest(), stateAt("ccc"))
 	if len(plan) != 1 || plan[0].Axis.Slug != "qa" || plan[0].Mode != reviewRoundFollowUp || plan[0].Since != 3 {
 		t.Fatalf("plan = %+v, want qa follow-up since iteration 3", plannedAxes(plan))
 	}
 
 	partial := loadReviewRoundHistory(am, dir, 1)
-	plan = partial.planRound(finalGateAxesForTest())
+	plan = partial.planRound(finalGateAxesForTest(), stateAt("bbb"))
 	if len(plan) != 1 || plan[0].SinceHeads["api"] != "aaa" {
 		t.Fatalf("plan after iteration 1 = %+v, want qa follow-up from api@aaa", plan)
 	}
@@ -183,7 +220,7 @@ func TestLoadReviewRoundHistoryAcceptedHandoffApproves(t *testing.T) {
 	if err := am.writeMeta(iterDir, iterationMeta{Iteration: 1, ReviewStatus: "approved", Handoff: reviewHandoffAccepted, AxisVerdicts: map[string]string{"qa": verdictChanges}}); err != nil {
 		t.Fatal(err)
 	}
-	if plan := loadReviewRoundHistory(am, dir, 1).planRound(finalGateAxesForTest()); len(plan) != 0 {
+	if plan := loadReviewRoundHistory(am, dir, 1).planRound(finalGateAxesForTest(), stateAt("aaa")); len(plan) != 0 {
 		t.Fatalf("plan after an accepted handoff = %+v, want none", plannedAxes(plan))
 	}
 }
@@ -199,7 +236,7 @@ func TestLoadReviewRoundHistoryLegacyMetasRunFullRound(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(iterDir, "meta.yaml"), []byte("iteration: 1\nreview_status: changes_requested\nmade_progress: false\nlegacy_field: ignored\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	plan := loadReviewRoundHistory(am, dir, 1).planRound(finalGateAxesForTest())
+	plan := loadReviewRoundHistory(am, dir, 1).planRound(finalGateAxesForTest(), stateAt("aaa"))
 	if len(plan) != 3 {
 		t.Fatalf("plan after legacy meta = %+v, want every axis", plannedAxes(plan))
 	}
@@ -213,25 +250,71 @@ func TestLoadReviewRoundHistoryLegacyMetasRunFullRound(t *testing.T) {
 func TestClassifyHandoffAnswer(t *testing.T) {
 	t.Parallel()
 	tests := []struct {
-		name string
-		qa   []ports.QAPair
-		want reviewHandoffChoice
+		name   string
+		answer string
+		want   reviewHandoffChoice
 	}{
 		{name: "unanswered", want: handoffUnanswered},
-		{name: "accept", qa: []ports.QAPair{{Answer: "Accept and proceed to Publish"}}, want: handoffAccept},
-		{name: "accept recommended", qa: []ports.QAPair{{Answer: "Accept and proceed to Publish (Recommended)"}}, want: handoffAccept},
-		{name: "stop", qa: []ports.QAPair{{Answer: " stop "}}, want: handoffStop},
-		{name: "continue label", qa: []ports.QAPair{{Answer: "Continue with guidance"}}, want: handoffContinue},
-		{name: "free text guidance", qa: []ports.QAPair{{Answer: "Drop the CSV export; it is out of scope."}}, want: handoffContinue},
-		{name: "dispute accept is not a handoff accept", qa: []ports.QAPair{{Answer: "Accept as is"}}, want: handoffContinue},
+		{name: "accept", answer: "Accept and proceed to Publish", want: handoffAccept},
+		{name: "phase accept", answer: "Accept and finish the phase", want: handoffAccept},
+		{name: "accept recommended", answer: "Accept and proceed to Publish (Recommended)", want: handoffAccept},
+		{name: "shortened accept", answer: "Accept", want: handoffAccept},
+		{name: "stop", answer: " Stop. ", want: handoffStop},
+		{name: "continue label", answer: "Continue with guidance", want: handoffContinue},
+		{name: "shortened continue", answer: "continue", want: handoffContinue},
+		{name: "free text guidance", answer: "Drop the CSV export; it is out of scope.", want: handoffContinue},
+		{name: "dispute accept is not a handoff accept", answer: "Accept as is", want: handoffContinue},
+		{name: "two options is no answer", answer: "Accept and proceed to Publish, Stop", want: handoffUnanswered},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
-			if got := classifyHandoffAnswer(tt.qa); got != tt.want {
-				t.Fatalf("classifyHandoffAnswer() = %v, want %v", got, tt.want)
+			if got := classifyHandoffAnswer(tt.answer); got != tt.want {
+				t.Fatalf("classifyHandoffAnswer(%q) = %v, want %v", tt.answer, got, tt.want)
 			}
 		})
+	}
+}
+
+func TestReviewDecisionPairsKeepsDisputesAndTheHandoff(t *testing.T) {
+	t.Parallel()
+	question := handoffQuestion("Final Review", reviewHandoff{Reason: "QA stalled."}, "/handoff.md")
+	qa := []ports.QAPair{
+		{Question: "Which logger should the export use?", Answer: "slog"},
+		{Question: "Dispute: Craft: **High**: the CSV export is out of scope.", Answer: "Accept as is"},
+		{Question: "Dispute: auto-picked", Answer: "Fix it", AutoPicked: true},
+		{Question: "Final Review needs your decision. QA stalled.\n\nHow should Final Review proceed?", Answer: "Stop"},
+	}
+	got := reviewDecisionPairs(qa, question)
+	if len(got) != 2 || got[0].Answer != "Accept as is" || got[1].Answer != "Stop" {
+		t.Fatalf("reviewDecisionPairs() = %+v, want the dispute and the handoff answer", got)
+	}
+	if answer, ok := handoffAnswer(qa, question); !ok || answer != "Stop" {
+		t.Fatalf("handoffAnswer() = %q, %v; want Stop", answer, ok)
+	}
+	if _, ok := handoffAnswer(qa[:2], question); ok {
+		t.Fatal("handoffAnswer() matched a dispute answer")
+	}
+}
+
+func TestAppendReviewDecisionsReplacesARerunSession(t *testing.T) {
+	t.Parallel()
+	path := filepath.Join(t.TempDir(), reviewDecisionsFile)
+	for _, answer := range []string{"Fix it", "Accept as is"} {
+		if _, err := appendReviewDecisions(path, "Iteration 1 fix", []ports.QAPair{{Question: "Dispute: drop the banner?", Answer: answer}}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := appendReviewDecisions(path, "Iteration 2 handoff", []ports.QAPair{{Question: "How should Final Review proceed?", Answer: "Stop"}}); err != nil {
+		t.Fatal(err)
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	body := string(data)
+	if strings.Count(body, "## Iteration 1 fix") != 1 || strings.Contains(body, "**A:** Fix it") || !strings.Contains(body, "**A:** Accept as is") || !strings.Contains(body, "## Iteration 2 handoff") {
+		t.Fatalf("decisions after a rerun:\n%s", body)
 	}
 }
 
@@ -278,9 +361,9 @@ func TestReposChangedSince(t *testing.T) {
 	t.Parallel()
 	repo := testutil.InitGitRepo(t)
 	repos := map[string]string{"api": repo}
-	before := repoHeads(repos)
-	if before == nil {
-		t.Fatal("repoHeads() = nil for a git repo")
+	before := currentRepoState(repos)
+	if !before.known() {
+		t.Fatal("currentRepoState() unknown for a git repo")
 	}
 	if reposChangedSince(repos, before) {
 		t.Fatal("unchanged clean repo reported as changed")
@@ -292,6 +375,9 @@ func TestReposChangedSince(t *testing.T) {
 	if !reposChangedSince(repos, before) {
 		t.Fatal("dirty worktree reported as unchanged")
 	}
+	if dirty := currentRepoState(repos); reposChangedSince(repos, dirty) {
+		t.Fatal("the same uncommitted work reported as changed")
+	}
 
 	cmd := exec.Command("git", "-C", repo, "commit", "-qam", "edit")
 	cmd.Env = append(os.Environ(), testutil.GitTestEnv()...)
@@ -302,7 +388,7 @@ func TestReposChangedSince(t *testing.T) {
 		t.Fatal("new commit reported as unchanged")
 	}
 
-	if !reposChangedSince(map[string]string{"plain": t.TempDir()}, nil) {
+	if !reposChangedSince(map[string]string{"plain": t.TempDir()}, repoState{}) {
 		t.Fatal("unknown repo state must count as changed")
 	}
 }

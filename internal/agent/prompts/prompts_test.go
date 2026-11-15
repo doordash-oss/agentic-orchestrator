@@ -231,16 +231,25 @@ type FinalFixUserInput struct {
 }
 
 type FinalFixHandoffInput struct {
+	GateLabel     string
+	AcceptOutcome string
 	Reason        string
 	Question      string
 	NotePath      string
 	ContinueLabel string
 	AcceptLabel   string
 	StopLabel     string
+	Answer        string
+}
+
+type ImplementReviewUserInput struct {
+	Handoff       *FinalFixHandoffInput
+	DecisionsPath string
 }
 
 type ReviewRoundUserInput struct {
 	GateLabel         string
+	AcceptanceSource  string
 	Mode              string
 	LiveRun           bool
 	Since             int
@@ -613,10 +622,11 @@ func TestGoldenSnapshots(t *testing.T) {
 			name: "review_round_user_full",
 			render: func() string {
 				return MustRender(TemplateReviewRoundUser, ReviewRoundUserInput{
-					GateLabel:       "Final Review",
-					Mode:            "full",
-					RoadmapPath:     "/state/feat-x/run-1/roadmap/plan.md",
-					UserAnswerPaths: []string{"/state/feat-x/run-1/design/qa-answers.md"},
+					GateLabel:        "Final Review",
+					AcceptanceSource: "the design's acceptance criteria",
+					Mode:             "full",
+					RoadmapPath:      "/state/feat-x/run-1/roadmap/plan.md",
+					UserAnswerPaths:  []string{"/state/feat-x/run-1/design/qa-answers.md"},
 				})
 			},
 		},
@@ -625,6 +635,7 @@ func TestGoldenSnapshots(t *testing.T) {
 			render: func() string {
 				return MustRender(TemplateReviewRoundUser, ReviewRoundUserInput{
 					GateLabel:         "Final Review",
+					AcceptanceSource:  "the design's acceptance criteria",
 					Mode:              "follow_up",
 					Since:             2,
 					PriorFeedbackPath: "/state/feat-x/run-1/review/iteration-02/craft/review-feedback.md",
@@ -644,6 +655,7 @@ func TestGoldenSnapshots(t *testing.T) {
 			render: func() string {
 				return MustRender(TemplateReviewRoundUser, ReviewRoundUserInput{
 					GateLabel:         "Final Review",
+					AcceptanceSource:  "the design's acceptance criteria",
 					Mode:              "confirm",
 					LiveRun:           true,
 					Since:             1,
@@ -665,6 +677,8 @@ func TestGoldenSnapshots(t *testing.T) {
 					UserAnswerPaths:  []string{"/state/feat-x/run-1/design/qa-answers.md"},
 					DecisionsPath:    "/state/feat-x/run-1/review/review-decisions.md",
 					Handoff: &FinalFixHandoffInput{
+						GateLabel:     "Final Review",
+						AcceptOutcome: "the feature moves on to Publish",
 						Reason:        "The QA axis requested changes in 3 consecutive rounds.",
 						Question:      "Final Review needs your decision. The QA axis requested changes in 3 consecutive rounds.\n\nOpen findings:\n- QA: **High**: export button stays disabled.\n\nDetails: /state/feat-x/run-1/review/iteration-03/handoff/handoff.md\n\nHow should Final Review proceed?",
 						NotePath:      "/state/feat-x/run-1/review/iteration-03/handoff/handoff.md",
@@ -672,6 +686,67 @@ func TestGoldenSnapshots(t *testing.T) {
 						AcceptLabel:   "Accept and proceed to Publish",
 						StopLabel:     "Stop",
 					},
+				})
+			},
+		},
+		{
+			name: "implement_review_user_handoff",
+			render: func() string {
+				return MustRender(TemplateImplementReviewUser, ImplementReviewUserInput{
+					DecisionsPath: "/state/feat-x/run-1/phase-02/implement/review-decisions.md",
+					Handoff: &FinalFixHandoffInput{
+						GateLabel:     "Phase 2 review",
+						AcceptOutcome: "the phase passes",
+						Reason:        "Fix iteration 3 made no code changes, so another review round would repeat the same findings.",
+						Question:      "Phase 2 review needs your decision. Fix iteration 3 made no code changes, so another review round would repeat the same findings.\n\nOpen findings:\n- Craft: **High**: retry loop has no backoff.\n\nDetails: /state/feat-x/run-1/phase-02/implement/iteration-03/handoff/handoff.md\n\nHow should Phase 2 review proceed?",
+						NotePath:      "/state/feat-x/run-1/phase-02/implement/iteration-03/handoff/handoff.md",
+						ContinueLabel: "Continue with guidance",
+						AcceptLabel:   "Accept and finish the phase",
+						StopLabel:     "Stop",
+					},
+				})
+			},
+		},
+		{
+			name: "implement_review_user_handoff_answered",
+			render: func() string {
+				return MustRender(TemplateImplementReviewUser, ImplementReviewUserInput{
+					Handoff: &FinalFixHandoffInput{
+						GateLabel:     "Phase 2 review",
+						AcceptOutcome: "the phase passes",
+						Reason:        "The Craft axis requested changes in 3 consecutive rounds.",
+						Question:      "Phase 2 review needs your decision.\n\nHow should Phase 2 review proceed?",
+						NotePath:      "/state/feat-x/run-1/phase-02/implement/iteration-03/handoff/handoff.md",
+						ContinueLabel: "Continue with guidance",
+						AcceptLabel:   "Accept and finish the phase",
+						StopLabel:     "Stop",
+						Answer:        "Use exponential backoff with jitter.",
+					},
+				})
+			},
+		},
+		{
+			name: "implement_review_user_decisions",
+			render: func() string {
+				return MustRender(TemplateImplementReviewUser, ImplementReviewUserInput{
+					DecisionsPath: "/state/feat-x/run-1/phase-02/implement/review-decisions.md",
+				})
+			},
+		},
+		{
+			name: "review_round_user_per_phase_follow_up",
+			render: func() string {
+				return MustRender(TemplateReviewRoundUser, ReviewRoundUserInput{
+					GateLabel:         "Per-Phase Implementation Review",
+					AcceptanceSource:  "the acceptance criteria in the design and the phase plan",
+					Mode:              "follow_up",
+					LiveRun:           true,
+					Since:             2,
+					PriorFeedbackPath: "/state/feat-x/run-1/phase-02/implement/iteration-02/review/functionality-evidence/review-feedback.md",
+					Deltas:            []ReviewRoundDelta{{Repo: "api", Path: "/state/wt/api", Base: "1111111"}},
+					FixNotePaths:      []string{"/state/feat-x/run-1/phase-02/implement/iteration-03/fix-notes.md"},
+					RoadmapPath:       "/state/feat-x/run-1/roadmap/plan.md",
+					DecisionsPath:     "/state/feat-x/run-1/phase-02/implement/review-decisions.md",
 				})
 			},
 		},

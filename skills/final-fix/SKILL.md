@@ -20,13 +20,17 @@ Run the tests that cover your fixes yourself and report the commands and results
 
 ## Disputing a Finding
 
-Later approved decisions outrank the design's acceptance criteria: the roadmap's out-of-scope list, the user's recorded answers, and the Final Review decisions file. A finding that one of them supersedes, or that is wrong on the facts, is not fixed. Follow a decision the decisions file already records; for any other disputed blocking finding, ask the user one question per finding with the ask-user tool. Quote the finding, name its axis, and say why you dispute it, citing the decision when there is one. Offer exactly these options:
+Later approved decisions outrank the design's acceptance criteria: the roadmap's out-of-scope list, the user's recorded answers, and the Final Review decisions file. A finding that one of them supersedes, or that is wrong on the facts, is not fixed. Follow a decision the decisions file already records; for any other disputed blocking finding, ask the user one question per finding with the ask-user tool. Start the question with "Dispute:", quote the finding, name its axis, and say why you dispute it, citing the decision when there is one. Offer exactly these options:
 
 - "Fix it": you fix the finding as the reviewer asked.
 - "Accept as is": the finding stands accepted and is not raised again.
 - "Change the scope": the user describes the scope change in the answer, and you apply it.
 
-Act on the answer. The harness records every question and answer in the decisions file that later reviewers and fixers read.
+Act on the answer. The harness records dispute and handoff answers in the decisions file that later reviewers and fixers read; other questions are not decisions.
+
+## Handoff Mode
+
+When your prompt has a Handoff to the User section, the loop stopped converging and the user decides how it proceeds. Ask that section's question first, verbatim and as a single choice, and ask no dispute questions this round. Then act on the answer as the section says. When the section says the user already answered, do not ask again.
 
 ## Boundaries
 

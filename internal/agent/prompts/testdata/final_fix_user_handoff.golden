@@ -6,7 +6,7 @@ This is fix iteration 3.
 
 Final Review stopped its automatic loop: The QA axis requested changes in 3 consecutive rounds.
 
-Before any other work, ask the user exactly one question with the ask-user tool described under Asking Questions. Use this question text verbatim:
+Before any other work, ask the user exactly one single-choice question with the ask-user tool described under Asking Questions. Ask no dispute questions this round. Use this question text verbatim:
 
 > Final Review needs your decision. The QA axis requested changes in 3 consecutive rounds.
 > 
@@ -22,7 +22,7 @@ Offer exactly these options, with these labels:
 - "Accept and proceed to Publish": the open findings are accepted as they are and the feature moves on to Publish.
 - "Stop": Final Review stops; the user resumes or rewinds the feature later.
 
-If the answer is "Accept and proceed to Publish" or "Stop", make no changes and finish. Any other answer is the user's guidance: apply it as this round's fix, using the open findings as reviewer feedback where the guidance leaves something open, then finish. The harness records the answer in the decisions file.
+If the answer is "Accept and proceed to Publish" or "Stop", make no changes and finish. Any other answer is the user's guidance: apply it as this round's fix, using the open findings as reviewer feedback where the guidance leaves something open, then finish. "Continue with guidance" with no further text means fix the open findings. The harness records the answer in the decisions file.
 
 Open findings and the previous fixer's note: /state/feat-x/run-1/review/iteration-03/handoff/handoff.md
 

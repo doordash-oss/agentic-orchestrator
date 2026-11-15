@@ -392,11 +392,13 @@ func TestRunImplementationReviewAxesUsesLiveRunPostureForAcceptanceAndDesign(t *
 	reviewDir := filepath.Join(iterDir, "review")
 	stateDir := filepath.Join(tmpDir, "state")
 	scriptsDir := filepath.Join(tmpDir, "scripts")
-	for _, dir := range []string{workDir, iterDir, scriptsDir} {
+	npmCache := filepath.Join(tmpDir, "home", ".npm")
+	for _, dir := range []string{workDir, iterDir, scriptsDir, npmCache} {
 		if err := os.MkdirAll(dir, 0o755); err != nil {
 			t.Fatalf("mkdir %s: %v", dir, err)
 		}
 	}
+	t.Setenv("HOME", filepath.Dir(npmCache))
 
 	progressPath := filepath.Join(artifactDir, "progress.md")
 	if err := os.WriteFile(progressPath, []byte("# Iteration Progress\n\n## Iteration State\n\nSUCCESS\n"), 0o644); err != nil {
@@ -438,7 +440,7 @@ func TestRunImplementationReviewAxesUsesLiveRunPostureForAcceptanceAndDesign(t *
 		BuildSession: buildSession,
 		Observer:     observerFromModule(t, false, "", "test"),
 	}
-	status, feedback, err := runImplementationReviewAxes(
+	status, feedback, _, err := runImplementationReviewAxes(
 		cfg,
 		sm,
 		1,
@@ -483,12 +485,15 @@ func TestRunImplementationReviewAxesUsesLiveRunPostureForAcceptanceAndDesign(t *
 		for _, want := range []string{
 			filepath.Join(axisDir, "review-feedback.md"),
 			filepath.Join(axisDir, "evidence"),
-			filepath.Join(axisDir, "build-cache"),
 			filepath.Join(axisDir, "tmp"),
+			npmCache,
 		} {
 			if !sliceContains(opts.WritableRoots, want) {
 				t.Fatalf("%s WritableRoots missing %q in %#v", axis, want, opts.WritableRoots)
 			}
+		}
+		if sliceContains(opts.WritableRoots, filepath.Join(axisDir, "build-cache")) {
+			t.Fatalf("%s WritableRoots include a throwaway build cache: %#v", axis, opts.WritableRoots)
 		}
 		requirePermissionDecision(t, opts.PermHandler, "Bash", `{"command":"npm install && npm run build > out.log"}`, "allow")
 		requirePermissionDecision(t, opts.PermHandler, "Write", `{"file_path":"`+filepath.Join(axisDir, "evidence", "home.png")+`"}`, "allow")
@@ -552,7 +557,7 @@ func TestRunImplementationReviewAxesEmitsEventsAndPersistsStatus(t *testing.T) {
 		BuildSession: mockBuildSession("", reviewScript),
 		Observer:     observerFromModule(t, true, observeDir, "test"),
 	}
-	status, feedback, err := runImplementationReviewAxes(
+	status, feedback, _, err := runImplementationReviewAxes(
 		cfg,
 		sm,
 		1,
@@ -680,7 +685,7 @@ func TestRunImplementationReviewAxesPerPhaseGateOmitsAcceptanceClause(t *testing
 		BuildSession: buildSession,
 		Observer:     observerFromModule(t, false, "", "test"),
 	}
-	status, feedback, err := runImplementationReviewAxes(
+	status, feedback, _, err := runImplementationReviewAxes(
 		cfg,
 		sm,
 		1,

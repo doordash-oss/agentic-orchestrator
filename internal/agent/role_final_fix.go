@@ -54,16 +54,5 @@ type finalFixUserInput struct {
 	RoadmapPath     string
 	UserAnswerPaths []string
 	DecisionsPath   string
-	Handoff         *finalFixHandoffInput
-}
-
-// finalFixHandoffInput turns a fix session into the loop's handoff: it asks
-// the user how to proceed before doing anything else.
-type finalFixHandoffInput struct {
-	Reason        string
-	Question      string
-	NotePath      string
-	ContinueLabel string
-	AcceptLabel   string
-	StopLabel     string
+	Handoff         *reviewHandoffPromptInput
 }

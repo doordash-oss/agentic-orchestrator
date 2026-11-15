@@ -7,7 +7,7 @@
 {{- define "review_round.user" -}}
 ## Acceptance Authority
 
-Later approved decisions override the design's acceptance criteria: the roadmap's out-of-scope list, the user's recorded answers, and the {{ .GateLabel }} decisions file. Where one of them conflicts with an acceptance criterion, judge against the later decision. Do not raise again a finding the decisions file records as accepted as is.
+Later approved decisions override {{ .AcceptanceSource }}: the roadmap's out-of-scope list, the user's recorded answers, and the {{ .GateLabel }} decisions file. Where one of them conflicts with an acceptance criterion, judge against the later decision. Do not raise again a finding the decisions file records as accepted as is.
 {{ if .RoadmapPath }}
 Roadmap: {{ .RoadmapPath }}
 {{ end }}{{ if .UserAnswerPaths }}

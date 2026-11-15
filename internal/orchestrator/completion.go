@@ -64,10 +64,6 @@ func isTerminalForCompletion(f *feature.Feature) bool {
 // to give that caller an unambiguous short-circuit signal.
 var errFinalReviewInterrupted = errors.New("final review interrupted")
 
-// finalReviewStatusStopped is the Final Review result when the user chose to
-// stop at a review handoff.
-const finalReviewStatusStopped = "stopped"
-
 // finalReviewRootOrchestrationArtifacts are the repo-root files the publish
 // path scrubs and the Final Review approval dirty-check tolerates; the
 // canonical list lives with the agent-side round-commit contract.
@@ -528,6 +524,8 @@ func (o *Orchestrator) onMultiRepoImplementDone(featureID string, result *agent.
 		// Graceful shutdown — shutdownFeatures will transition the feature to
 		// StatusInterrupted. We must NOT mark the feature Failed here.
 		return nil
+	case finalStatusStopped:
+		return o.parkStoppedAtHandoff(featureID, feature.PhaseImplement)
 	case "failed":
 		errMsg := result.LastError
 		if errMsg == "" {
@@ -1000,17 +998,10 @@ func (o *Orchestrator) finishDeferredFinalReviewResult(featureID string, res *ag
 		// failure_type=infrastructure.
 		o.emitPhaseCompleted(featureID, feature.PhaseFinalReview, nil)
 		return errFinalReviewInterrupted
-	case finalReviewStatusStopped:
-		// The user chose to stop at a review handoff: park the feature as a
-		// pause-stop would, so resuming re-enters Final Review.
-		if err := o.deps.Manager.Transition(featureID, feature.StatusInterrupted); err != nil {
-			return fmt.Errorf("stop after final review handoff: %w", err)
+	case finalStatusStopped:
+		if err := o.parkStoppedAtHandoff(featureID, feature.PhaseFinalReview); err != nil {
+			return err
 		}
-		o.emitPhaseCompleted(featureID, feature.PhaseFinalReview, nil)
-		if o.hooks.OnFeatureInterrupted != nil {
-			o.hooks.OnFeatureInterrupted(featureID)
-		}
-		o.emitEvent(ports.Event{Type: ports.FeatureInterrupted, FeatureID: featureID})
 		return errFinalReviewInterrupted
 	case "failed":
 		errMsg := res.LastError
@@ -1377,4 +1368,18 @@ func safeCompletionTruncate(s string, max int) string {
 		max--
 	}
 	return s[:max]
+}
+
+// parkStoppedAtHandoff parks a feature whose user chose to stop at a review
+// handoff the way a pause-stop does, so resuming re-enters the phase.
+func (o *Orchestrator) parkStoppedAtHandoff(featureID string, phase feature.Phase) error {
+	if err := o.deps.Manager.Transition(featureID, feature.StatusInterrupted); err != nil {
+		return fmt.Errorf("stop after %s review handoff: %w", phase, err)
+	}
+	o.emitPhaseCompleted(featureID, phase, nil)
+	if o.hooks.OnFeatureInterrupted != nil {
+		o.hooks.OnFeatureInterrupted(featureID)
+	}
+	o.emitEvent(ports.Event{Type: ports.FeatureInterrupted, FeatureID: featureID})
+	return nil
 }

@@ -25,7 +25,11 @@ Own only intrinsic code quality:
 
 Consult the relevant language guidelines and the repository's own instruction files before judging local conventions.
 
-At the Final gate, judge Craft over the whole assembled feature and cumulative cross-repo diff. Do not limit review to a single implementation iteration.
+At the Final gate, judge Craft over the whole assembled feature and cumulative cross-repo diff. Do not limit review to a single implementation iteration unless a Round Scope section narrows the round.
+
+## Review Rounds
+
+When your prompt has an Acceptance Authority section, the decisions it names outrank acceptance criteria, and a finding the decisions file records as accepted as is is not raised again. When it has a Round Scope section, that section narrows this skill's scope for the round: in a follow-up, judge your open findings and what the delta changed; in a confirmation, request changes only for a regression the delta introduced.
 
 ### Code Smells
 

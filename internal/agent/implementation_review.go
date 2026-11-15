@@ -323,6 +323,7 @@ func runImplementationReviewAxis(cfg ImplementConfig, sm ports.SessionManager, i
 		Kind:                   ports.KindValidator,
 		Label:                  axis.Name,
 		Posture:                axis.ExecutionPosture,
+		SharedCaches:           axis.ExecutionPosture == reviewPostureLiveRun,
 		OnRetry: func(_ int, err error) {
 			if cfg.Feature != nil {
 				markMultiAxisValidatorRetrying(cfg.FeatureStore, cfg.Feature.ID, axis.Name, err)

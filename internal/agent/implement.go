@@ -345,9 +345,6 @@ func runImplementationLoop(cfg ImplementConfig, sm ports.SessionManager) (result
 	owedRound := false
 	if !cfg.SkipIterationReview {
 		gate = newPhaseReviewGate(cfg, am, startIter)
-		if gate.pending != nil {
-			skipImplement = false
-		}
 		owedRound = skipImplement || gate.stoppedAt == startIter && startIter > 0
 	}
 
@@ -423,6 +420,12 @@ func runImplementationLoop(cfg ImplementConfig, sm ports.SessionManager) (result
 			iterDir, createErr = am.createIterationDir(i)
 			if createErr != nil {
 				return nil, fmt.Errorf("creating iteration dir: %w", createErr)
+			}
+			// Verdicts from an earlier attempt at this iteration saw other code.
+			if gate != nil {
+				if err := os.RemoveAll(filepath.Join(iterDir, "review")); err != nil {
+					return nil, fmt.Errorf("clearing stale review of iteration %d: %w", i, err)
+				}
 			}
 			// Build prompt
 			prompt := buildImplementPrompt(

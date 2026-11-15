@@ -235,6 +235,58 @@ func TestImplementLoopPhaseReview_SavedAnswerResolvesWithoutASession(t *testing.
 	}
 }
 
+// A review verdict cached in an iteration is never reused for code a rerun
+// implement session changed.
+func TestImplementLoopPhaseReview_ResumeAfterGuidanceKeepsReviewTruthful(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping loop test in short mode")
+	}
+	// The asking iteration's session finished; its review is resumed over
+	// the same code, without another session.
+	t.Run("finished_session_is_not_rerun", func(t *testing.T) {
+		env := newPhaseGateEnv(t, "feat-phase-guidance-resume", feature.PipelineMoonshot)
+		first := phaseGateAskedHandoff(t, env, phaseGateHandoffAsk()+"\n"+phaseGateCommit(env.repo), "Add exponential backoff.")
+		if first.result.FinalStatus != finalStatusReviewPassed {
+			t.Fatalf("first run = %+v, want review_passed", first.result)
+		}
+		if err := os.Remove(filepath.Join(env.artifactDir, "iteration-03", "meta.yaml")); err != nil {
+			t.Fatal(err)
+		}
+		resumed := runPhaseGate(t, env, 5, nil, nil, nil)
+		if resumed.result.FinalStatus != finalStatusReviewPassed {
+			t.Fatalf("resumed = %+v, want review_passed", resumed.result)
+		}
+		if len(resumed.implementPrompts) != 0 {
+			t.Fatalf("resume ran %d implement sessions for a finished asking session", len(resumed.implementPrompts))
+		}
+	})
+	// A session that reruns in an iteration whose review already ran makes
+	// that review's verdicts stale.
+	t.Run("rerun_session_is_reviewed_again", func(t *testing.T) {
+		env := newPhaseGateEnv(t, "feat-phase-guidance-rerun", feature.PipelineMoonshot)
+		first := phaseGateAskedHandoff(t, env, phaseGateHandoffAsk()+"\n"+phaseGateCommit(env.repo), "Add exponential backoff.")
+		if first.result.FinalStatus != finalStatusReviewPassed {
+			t.Fatalf("first run = %+v, want review_passed", first.result)
+		}
+		iterDir := filepath.Join(env.artifactDir, "iteration-03")
+		for _, name := range []string{"meta.yaml", PhaseCompleteFile} {
+			if err := os.Remove(filepath.Join(iterDir, name)); err != nil {
+				t.Fatal(err)
+			}
+		}
+		resumed := runPhaseGate(t, env, 5, []string{phaseGateCommit(env.repo)}, nil, nil)
+		if resumed.result.FinalStatus != finalStatusReviewPassed {
+			t.Fatalf("resumed = %+v, want review_passed", resumed.result)
+		}
+		if len(resumed.implementPrompts) != 1 {
+			t.Fatalf("implement sessions = %d, want the rerun session", len(resumed.implementPrompts))
+		}
+		if _, ok := resumed.reviewPrompts["iteration-03/craft"]; !ok {
+			t.Fatalf("the rerun session's changes passed on a cached Craft verdict; reviewed %v", resumed.reviewed())
+		}
+	})
+}
+
 // Decisions from a phase's review reach Final Review.
 func TestRunFeatureFinalReviewLoop_SeesPhaseReviewDecisions(t *testing.T) {
 	if testing.Short() {

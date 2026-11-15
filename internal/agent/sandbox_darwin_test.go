@@ -25,6 +25,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/doordash-oss/agentic-orchestrator/internal/feature"
 	"github.com/doordash-oss/agentic-orchestrator/internal/ports"
 )
 
@@ -42,8 +43,12 @@ func TestMaybeWrapHelperSandbox_EnabledWrapsWithSandboxExec(t *testing.T) {
 	if !sandboxExecAvailable() {
 		t.Skip("sandbox-exec not available on this host")
 	}
+	stateRoot := filepath.Join(t.TempDir(), "features")
+	if err := os.MkdirAll(feature.WorktreesDir(stateRoot), 0o755); err != nil {
+		t.Fatalf("mkdir worktrees: %v", err)
+	}
 	cmd := []string{"helper", "run"}
-	got, sandboxed, cleanup := maybeWrapHelperSandbox(cmd, true, "/Users/x/.agentic-workflow/features")
+	got, sandboxed, _, cleanup := maybeWrapHelperSandbox(cmd, true, stateRoot)
 	defer cleanup()
 	if !sandboxed {
 		t.Fatalf("sandboxed=false, want true on darwin")
@@ -103,8 +108,12 @@ func TestProbeSandboxExecClassifiesOutcomes(t *testing.T) {
 func TestWrapHelperSandboxPassesThroughWhenProbeFails(t *testing.T) {
 	stubSandboxUnavailable(t, "nested")
 	command := []string{"/bin/echo", "hi"}
-	if got, sandboxed, cleanup := maybeWrapHelperSandbox(command, true, filepath.Join(t.TempDir(), "state")); sandboxed || got[0] != "/bin/echo" {
-		t.Fatalf("maybeWrapHelperSandbox = (%v, %v); want passthrough", got, sandboxed)
+	stateRoot := filepath.Join(t.TempDir(), "state")
+	if err := os.MkdirAll(feature.WorktreesDir(stateRoot), 0o755); err != nil {
+		t.Fatalf("mkdir worktrees: %v", err)
+	}
+	if got, sandboxed, reason, cleanup := maybeWrapHelperSandbox(command, true, stateRoot); sandboxed || got[0] != "/bin/echo" || reason != "nested" {
+		t.Fatalf("maybeWrapHelperSandbox = (%v, %v, %q); want passthrough with the probe reason", got, sandboxed, reason)
 	} else {
 		cleanup()
 	}

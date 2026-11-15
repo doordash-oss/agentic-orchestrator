@@ -43,13 +43,10 @@ import type { CanonicalError } from '../../../../shared/ipc';
 import {
   AttentionDetail,
   OwnerAwareAttention,
-  attentionActionNotice,
   attentionErrorMessage,
   runAttentionSubmit,
   type AttentionDrafts,
 } from '../AttentionInbox';
-import { useAttentionDraftSaves } from '../useAttentionDraftSaves';
-import { NeedUserInputModal, type AttentionGate } from '../NeedUserInputModal';
 import {
   QuestionComposer,
   QuestionConversationTurn,
@@ -262,8 +259,6 @@ interface RefactorPassWorkspaceProps {
    * 3 deferred since review"); informational only, never blocks the pass.
    */
   launchReceipt?: string | null;
-  /** Inbox jump into an attention item; reopens a dismissed gate. */
-  attentionPreviewRequest?: { requestId: number; attentionId?: string } | null;
   attentionItems: AttentionItem[];
   refreshAttention(): Promise<AttentionItem[]>;
   attentionDrafts: AttentionDrafts;
@@ -292,7 +287,6 @@ export function RefactorPassWorkspace({
   pass,
   active = true,
   launchReceipt = null,
-  attentionPreviewRequest = null,
   attentionItems,
   refreshAttention,
   attentionDrafts,
@@ -302,28 +296,12 @@ export function RefactorPassWorkspace({
   onCloseInspector,
 }: RefactorPassWorkspaceProps): React.ReactElement | null {
   const [attentionBusy, setAttentionBusy] = useState<string | null>(null);
-  const [dismissedGateId, setDismissedGateId] = useState<string | undefined>();
   const [runMetrics, setRunMetrics] = useState<RunMetrics | null>(null);
   const [attentionNotice, setAttentionNotice] = useState<string | null>(null);
   // Stage-bar slots the live surface's view toggle, refresh, and expand
   // controls portal into, exactly like the cockpit's stage bar.
   const [liveControlsHost, setLiveControlsHost] = useState<HTMLDivElement | null>(null);
   const [liveExpandHost, setLiveExpandHost] = useState<HTMLDivElement | null>(null);
-
-  const saveAttentionDraft = useAttentionDraftSaves({
-    notify: (result, options) => setAttentionNotice(attentionActionNotice(result, options)),
-    notifyError: (error) => setAttentionNotice(attentionErrorMessage(error)),
-    onAlreadyResolved: async () => {
-      await refreshAttention();
-      pass.reload();
-    },
-  });
-
-  useEffect(() => {
-    if (attentionPreviewRequest?.attentionId !== undefined) {
-      setDismissedGateId(undefined);
-    }
-  }, [attentionPreviewRequest]);
 
   const view = pass.view;
   const registeredInlineError = attentionItems.find(
@@ -342,9 +320,7 @@ export function RefactorPassWorkspace({
   const passAttentionItems = attentionItems.filter(
     (item) => item.kind !== 'recovery' && item.kind !== 'review' && item.featureId === view.id,
   );
-  const gate = passAttentionItems.find((item): item is AttentionGate => item.kind === 'gate');
-  const activeGate = gate?.id === dismissedGateId ? undefined : gate;
-  const inlineAttention = passAttentionItems.find((item) => item.kind !== 'gate');
+  const inlineAttention = passAttentionItems[0];
   const questionsAttention = inlineAttention?.kind === 'questions' ? inlineAttention : undefined;
   const pendingQuestion = questionsAttention?.questions[0];
   const suppressQuestion =
@@ -359,7 +335,7 @@ export function RefactorPassWorkspace({
 
   // The pass's own phase rail, computed exactly like the cockpit's: the hold
   // looks at every open item this child owns (including review items — the
-  // question/gate list above filters those out), the segments come from the
+  // question list above filters those out), the segments come from the
   // child's own pipeline, and the trio reads the live run metrics.
   const railOpenAttentionItems = attentionItems.filter(
     (item) => attentionOwnerFeatureId(item) === view.id,
@@ -559,18 +535,6 @@ export function RefactorPassWorkspace({
             state.sentence !== '' ? (
             <p className="refactor-pass__state" role="status" data-tone={state.tone}>
               {state.sentence}
-              {gate !== undefined && activeGate === undefined ? (
-                <>
-                  {' '}
-                  <button
-                    type="button"
-                    className="refactor-pass__answer-now"
-                    onClick={() => setDismissedGateId(undefined)}
-                  >
-                    Answer now
-                  </button>
-                </>
-              ) : null}
             </p>
           ) : null}
 
@@ -662,9 +626,6 @@ export function RefactorPassWorkspace({
                   busy={attentionBusy === inlineAttention.id}
                   drafts={attentionDrafts}
                   setDrafts={setAttentionDrafts}
-                  saveDraft={(action, options) =>
-                    saveAttentionDraft(inlineAttention.id, action, options)
-                  }
                   submit={(action, options) =>
                     void submitAttention(inlineAttention, action, options)
                   }
@@ -704,10 +665,7 @@ export function RefactorPassWorkspace({
                 currentPhase={child.currentPhase}
                 currentRoadmapPhase={child.currentRoadmapPhase}
                 currentIteration={child.currentIteration}
-                phaseStatus={child.phaseStatus}
                 reviewGate={child.reviewGate}
-                verificationItems={child.verificationItems}
-                waitReason={child.waitReason}
                 shouldStream={stopEnabled}
                 expandHost={liveExpandHost}
                 controlsHost={liveControlsHost}
@@ -744,9 +702,6 @@ export function RefactorPassWorkspace({
                         busy={attentionBusy === inlineAttention.id}
                         drafts={attentionDrafts}
                         setDrafts={setAttentionDrafts}
-                        saveDraft={(action, options) =>
-                          saveAttentionDraft(inlineAttention.id, action, options)
-                        }
                         submit={(action, options) =>
                           void submitAttention(inlineAttention, action, options)
                         }
@@ -779,22 +734,6 @@ export function RefactorPassWorkspace({
           </aside>
         ) : null}
       </div>
-
-      {activeGate !== undefined ? (
-        <NeedUserInputModal
-          item={activeGate}
-          busy={attentionBusy === activeGate.id}
-          drafts={attentionDrafts}
-          setDrafts={setAttentionDrafts}
-          phase={child?.currentPhase}
-          onAnswerLater={() => setDismissedGateId(activeGate.id)}
-          onResolved={async () => {
-            setDismissedGateId(activeGate.id);
-            await refreshAttention();
-            pass.reload();
-          }}
-        />
-      ) : null}
 
       {pass.discardOpen && pass.discardAction !== undefined ? (
         <DiscardPassDialog

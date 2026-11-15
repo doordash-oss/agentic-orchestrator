@@ -136,8 +136,8 @@ describe('ConfigService effort routing', () => {
       api_version: 'v1',
       feature_id: 'feat-1',
       current: {
-        models: { implementation: 'claude:opus', kb_build: 'claude:sonnet' },
-        effort: { implementation: 'high', kb_build: 'medium' },
+        models: { implementation: 'claude:opus', research: 'claude:sonnet' },
+        effort: { implementation: 'high', research: 'medium' },
         inquireness: 'medium',
         checkpoints,
         pipeline: 'large',
@@ -160,15 +160,15 @@ describe('ConfigService effort routing', () => {
     );
 
     const snapshot = await service.getFeatureConfig('feat-1');
-    expect(snapshot.current.effort).toEqual({ implementation: 'high', kbBuild: 'medium' });
+    expect(snapshot.current.effort).toEqual({ implementation: 'high', research: 'medium' });
 
     await service.updateFeatureConfig({
       featureId: 'feat-1',
-      config: { ...snapshot.current, effort: { implementation: 'max', kbBuild: 'low' } },
+      config: { ...snapshot.current, effort: { implementation: 'max', research: 'low' } },
     });
     expect(calls[1]?.init?.body).toEqual(
       expect.objectContaining({
-        effort: expect.objectContaining({ implementation: 'max', kb_build: 'low' }),
+        effort: expect.objectContaining({ implementation: 'max', research: 'low' }),
       }),
     );
   });

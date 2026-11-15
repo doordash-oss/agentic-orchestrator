@@ -1437,7 +1437,6 @@ function attentionSummary(
   if (counts.questions > 0) return `Answer ${counts.questions} question${plural(counts.questions)}`;
   if (counts.permission > 0)
     return `Approve ${counts.permission} request${plural(counts.permission)}`;
-  if (counts.gate > 0) return `Resolve ${counts.gate} gate${plural(counts.gate)}`;
   if (counts.help > 0) return `Respond to ${counts.help} prompt${plural(counts.help)}`;
   if (counts.review > 0) return `Review ${counts.review} item${plural(counts.review)}`;
   return undefined;

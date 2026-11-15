@@ -368,7 +368,6 @@ describe('FeatureConfigPanel', () => {
     expect(screen.queryByLabelText('Clarify model')).toBeNull();
     expect(screen.queryByLabelText('Research model')).toBeNull();
     expect(screen.queryByLabelText('Utilities model')).toBeNull();
-    expect(screen.queryByLabelText('KB Build model')).toBeNull();
 
     const roadmap = await screen.findByRole('checkbox', { name: /Roadmap review/ });
     // Medium pipeline: inquiry/research/design gates are not applicable.

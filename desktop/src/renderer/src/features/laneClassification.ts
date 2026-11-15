@@ -70,7 +70,7 @@ function childIsRunning(snapshot: FeatureSnapshot): boolean {
  *    error that stopped work. Status strings never classify this lane.
  * 2. `waiting` ("Waiting on you") — dashboardState's intervention bucket (a
  *    needs_action owned error, or the status-driven pauses that are not
- *    errors: Interrupted, `*NeedsReview`, NeedUserInput).
+ *    errors: Interrupted, `*NeedsReview`).
  * 3. `running` — a top-level status in ACTIVE_STATUSES, durable setup
  *    still running, or an active child pass genuinely in flight. This is
  *    checked before the Published/Done checks below, so a Published

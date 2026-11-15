@@ -281,8 +281,7 @@ function RepoInstrumentScene() {
   );
 }
 
-type RunGaugeMode =
-  'active' | 'reviewing' | 'verifying' | 'rest' | 'final-review' | 'held-question' | 'paused';
+type RunGaugeMode = 'active' | 'reviewing' | 'rest' | 'final-review' | 'held-question' | 'paused';
 
 function RunGaugeScene({
   mode = 'active',
@@ -295,10 +294,9 @@ function RunGaugeScene({
   const atRest = mode === 'rest';
   const finalReview = mode === 'final-review';
   const reviewing = mode === 'reviewing';
-  const verifying = mode === 'verifying';
   const heldQuestion = mode === 'held-question';
   const paused = mode === 'paused';
-  // Paused (NeedUserInput) reads like the at-rest/final-review renders for
+  // Paused (Interrupted) reads like the at-rest/final-review renders for
   // the iteration/phaseStatus fields below: the run isn't mid-iteration
   // work right now, it's parked waiting on a person.
   const restLike = atRest || finalReview || paused;
@@ -308,7 +306,7 @@ function RunGaugeScene({
     : finalReview
       ? 'FinalReviewing'
       : paused
-        ? 'NeedUserInput'
+        ? 'Interrupted'
         : 'Implementing';
   const railSnapshot = {
     ...CYCLES_FEATURE_SNAPSHOT,
@@ -320,7 +318,7 @@ function RunGaugeScene({
       ? {}
       : {
           currentIteration: 3,
-          phaseStatus: reviewing ? 'reviewing' : verifying ? 'verifying' : 'implementing',
+          phaseStatus: reviewing ? 'reviewing' : 'implementing',
         }),
     reviewGate: {
       reviewingGate: reviewing,
@@ -338,7 +336,7 @@ function RunGaugeScene({
   };
   // Held-question: the run is still executing (an active status) with an
   // open question — classifyHold reads this as `waiting`. Paused: the
-  // status itself (NeedUserInput) is the hold — classifyHold reads this as
+  // status itself (Interrupted) is the hold — classifyHold reads this as
   // `paused` regardless of the open item's kind, but a waitingSince is
   // still needed for the trio to show a duration rather than an empty value.
   const openAttentionItems: AttentionItem[] = heldQuestion
@@ -353,7 +351,7 @@ function RunGaugeScene({
       ? [
           {
             ...FEATURE_QUESTION_ITEM,
-            id: 'rail-paused-need-input',
+            id: 'rail-paused-question',
             waitingSince: new Date(Date.now() - 47 * 60_000).toISOString(),
           },
         ]
@@ -406,22 +404,8 @@ function RunGaugeScene({
                       ? {}
                       : {
                           currentIteration: 3,
-                          phaseStatus: reviewing
-                            ? 'reviewing'
-                            : verifying
-                              ? 'verifying'
-                              : 'implementing',
                         })}
                     reviewGate={railSnapshot.reviewGate}
-                    verificationItems={
-                      verifying
-                        ? [
-                            { name: 'npm run typecheck', state: 'passed' },
-                            { name: 'npm run build', state: 'running' },
-                            { name: 'make test-fast', state: 'pending' },
-                          ]
-                        : undefined
-                    }
                     shouldStream={false}
                     mode={filesView ? 'files' : 'live'}
                   />
@@ -1001,113 +985,6 @@ function FeatureQuestionScene({ scene }: { scene: string }): React.ReactElement 
   );
 }
 
-/**
- * The gate sheet's two branches. The plain branch carries two questions, a
- * known phase/iteration/stop time (so the dynamic lede renders in full), and
- * one drafted answer; the verification branch carries real blockers so the
- * structured decision renders.
- */
-function gateSceneItems(scene: string): AttentionItem[] {
-  if (scene === 'post-cycle-gate') {
-    return [
-      {
-        kind: 'gate',
-        id: 'post-cycle-gate',
-        featureId: 'abcd1234ef567890',
-        waitingSince: '2026-07-25T10:00:00.000Z',
-        repoName: 'agentic-orchestrator',
-        summary: 'The agent needs one decision before it can finish the rebase.',
-        questions: [
-          {
-            index: 1,
-            prompt: 'Which compatibility behavior should remain explicit?',
-            answer: '',
-          },
-        ],
-      },
-    ];
-  }
-  if (scene === 'gate-sheet-plain') {
-    return [
-      {
-        kind: 'gate',
-        id: 'gate-sheet-plain',
-        featureId: 'abcd1234ef567890',
-        waitingSince: new Date(Date.now() - 11 * 60_000).toISOString(),
-        repoName: 'agentic-orchestrator',
-        iteration: 3,
-        questions: [
-          {
-            index: 1,
-            prompt:
-              'The style guide requires the formal register (Lei), but three code comments quote informal user copy verbatim. Translate those quotes, or leave them as written?',
-            answer: 'Leave the quoted copy in English and add a translator note above each one.',
-          },
-          {
-            index: 2,
-            prompt:
-              'There is no established Italian term for "slop removal pass". What wording should be used consistently?',
-            answer: '',
-          },
-        ],
-      },
-    ];
-  }
-  if (scene === 'gate-sheet-verification') {
-    return [
-      {
-        kind: 'gate',
-        id: 'gate-sheet-verification',
-        featureId: 'abcd1234ef567890',
-        waitingSince: new Date(Date.now() - 24 * 60_000).toISOString(),
-        repoName: 'agentic-orchestrator',
-        iteration: 3,
-        questions: [{ index: 1, prompt: 'How should Agentico continue?', answer: '' }],
-        verification: {
-          blockers: [
-            {
-              itemId: 'deploy-smoke',
-              name: 'Deployment smoke test',
-              repoName: 'agentic-orchestrator',
-              command: 'make deploy-smoke',
-              reason: 'missing declared capability "Okta session"',
-              capabilities: ['Okta session'],
-              remediation: 'Make an Okta session available, then retry verification.',
-            },
-          ],
-          allowedActions: ['RETRY_AFTER_AUTH', 'WAIVE'],
-        },
-      },
-    ];
-  }
-  return [];
-}
-
-function PostImplementationScene({ scene }: { scene: string }) {
-  const [drafts, setDrafts] = React.useState(emptyAttentionDrafts);
-  const gateItems = React.useMemo(() => gateSceneItems(scene), [scene]);
-  return (
-    <div className="app-frame">
-      <div className="workspace">
-        <div className="sidebar" aria-hidden="true" />
-        <div className="content-column">
-          <header className="toolbar" aria-hidden="true" />
-          <FeatureCockpit
-            featureId="abcd1234ef567890"
-            titleHint="Configure per-phase effort level"
-            onClose={() => undefined}
-            onLoadedName={() => undefined}
-            attentionItems={gateItems}
-            refreshAttention={() => Promise.resolve(gateItems)}
-            attentionDrafts={drafts}
-            setAttentionDrafts={setDrafts}
-          />
-        </div>
-      </div>
-    </div>
-  );
-}
-
 function CycleModalScene() {
   const snapshot = CYCLES_FEATURE_SNAPSHOT;
   const title = 'Start refactor';
@@ -1630,9 +1507,6 @@ function CaptureApp() {
   if (scene === 'run-gauge-reviewing') {
     return <RunGaugeScene mode="reviewing" />;
   }
-  if (scene === 'run-gauge-verifying') {
-    return <RunGaugeScene mode="verifying" />;
-  }
   if (scene === 'run-gauge-rest') {
     return <RunGaugeScene mode="rest" />;
   }
@@ -1684,9 +1558,6 @@ function CaptureApp() {
   }
   if (scene === 'feature-question' || scene === 'feature-question-bench') {
     return <FeatureQuestionScene scene={scene} />;
-  }
-  if (scene.startsWith('post-cycle-') || scene.startsWith('gate-sheet-')) {
-    return <PostImplementationScene scene={scene} />;
   }
   if (scene === 'refactor-launch') {
     return <CycleModalScene />;

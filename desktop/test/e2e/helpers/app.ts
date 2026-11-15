@@ -584,7 +584,7 @@ async function captureWindow(handle: AppHandle, target: string, page: Page): Pro
 }
 
 /**
- * Final testing-contract evidence is deliberately opt-in: normal packaged
+ * Final evidence screenshots are deliberately opt-in: normal packaged
  * journeys do not mutate the phase evidence directory or spend time laying
  * out screenshot-only viewports.
  */

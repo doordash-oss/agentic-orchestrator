@@ -610,7 +610,8 @@ func TestLoadConfigWithRetiredKBBuildRole(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "config.yaml")
 
-	content := []byte("defaults:\n  models:\n    research: opus\n    kb_build: haiku\n  effort:\n    kb_build: high\n")
+	content := []byte("model_recommendations:\n  research: [\"claude:opus\"]\n  kb_build: [\"claude:haiku\"]\n" +
+		"defaults:\n  models:\n    research: opus\n    kb_build: haiku\n  effort:\n    kb_build: high\n")
 	if err := os.WriteFile(path, content, 0o644); err != nil {
 		t.Fatal(err)
 	}
@@ -621,6 +622,12 @@ func TestLoadConfigWithRetiredKBBuildRole(t *testing.T) {
 	}
 	if cfg.Defaults.Models.Research != "opus" {
 		t.Errorf("Research = %q, want opus", cfg.Defaults.Models.Research)
+	}
+	if _, ok := cfg.ModelRecommendations["kb_build"]; ok {
+		t.Errorf("ModelRecommendations kept retired kb_build: %v", cfg.ModelRecommendations)
+	}
+	if got := cfg.ModelRecommendations["research"]; len(got) != 1 || got[0] != "claude:opus" {
+		t.Errorf("ModelRecommendations research = %v, want [claude:opus]", got)
 	}
 }
 

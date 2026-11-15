@@ -24,7 +24,6 @@ import {
   AttentionInbox,
   OwnerAwareAttention,
   emptyAttentionDrafts,
-  type AttentionAction,
   type AttentionDrafts,
 } from './AttentionInbox';
 import { installAgenticoMock } from '../test/agenticoMock';
@@ -50,30 +49,6 @@ const reviewItem: AttentionItem = {
   waitingSince: '2026-07-15T10:00:00.000Z',
   reviewKind: 'Phase plan',
   phase: 'plan',
-};
-
-const gateItem: Extract<AttentionItem, { kind: 'gate' }> = {
-  kind: 'gate',
-  id: 'verification-gate-1',
-  featureId: 'abcd1234ef567890',
-  waitingSince: '2026-07-29T00:00:00Z',
-  repoName: 'repo-a',
-  summary: 'Verification could not finish.',
-  questions: [{ index: 1, prompt: 'How should Agentico continue?', answer: '' }],
-  verification: {
-    blockers: [
-      {
-        itemId: 'deploy',
-        name: 'Deployment smoke test',
-        repoName: 'repo-a',
-        command: 'make deploy-smoke',
-        reason: 'missing declared capability "Okta session"',
-        capabilities: ['Okta session'],
-        remediation: 'Make Okta session available, then retry verification.',
-      },
-    ],
-    allowedActions: ['WAIVE', 'RETRY_AFTER_AUTH'],
-  },
 };
 
 const questionsItem: Extract<AttentionItem, { kind: 'questions' }> = {
@@ -119,10 +94,10 @@ const errorItem: Extract<AttentionItem, { kind: 'error' }> = {
 
 const helpQuestionItem: Extract<AttentionItem, { kind: 'help' }> = {
   kind: 'help',
-  id: 'feature-1:kb1234567890abcdef',
+  id: 'feature-1:rs1234567890abcdef',
   featureId: 'feature-1',
-  sessionId: 'kb1234567890abcdef',
-  phase: 'Knowledge Base',
+  sessionId: 'rs1234567890abcdef',
+  phase: 'Research',
   waitingSince: '2026-07-15T10:00:00.000Z',
   prompt: 'Where should the config live?',
   waitingKind: 'question',
@@ -130,7 +105,7 @@ const helpQuestionItem: Extract<AttentionItem, { kind: 'help' }> = {
 
 const helpWaitingItem: Extract<AttentionItem, { kind: 'help' }> = {
   ...helpQuestionItem,
-  id: 'feature-1:kb1234567890abcdef:waiting',
+  id: 'feature-1:rs1234567890abcdef:waiting',
   prompt: 'Agent has a question',
   waitingKind: 'coordinating',
   runningTasks: ['Indexing repository layout', 'Summarizing packages'],
@@ -152,29 +127,6 @@ function Harness({
       drafts={drafts}
       setDrafts={setDrafts}
       onJump={onJump}
-    />
-  );
-}
-
-function GateDetailHarness({
-  item = gateItem,
-}: {
-  item?: Extract<AttentionItem, { kind: 'gate' }>;
-}): React.ReactElement {
-  const [drafts, setDrafts] = useState<AttentionDrafts>(emptyAttentionDrafts);
-  const run = (action: AttentionAction): void => {
-    void action();
-  };
-  return (
-    <AttentionDetail
-      item={item}
-      busy={false}
-      submit={run}
-      saveDraft={async (action) => {
-        await action();
-      }}
-      drafts={drafts}
-      setDrafts={setDrafts}
     />
   );
 }
@@ -626,97 +578,6 @@ describe('AttentionInbox navigation', () => {
   });
 });
 
-describe('AttentionInbox gate detail', () => {
-  it('persists retry immediately and resumes through the exact cycle route', async () => {
-    const mock = installAgenticoMock();
-    mock.api.saveGateDraft.mockResolvedValue({ result: 'saved' });
-    mock.api.resolveGate.mockResolvedValue({ result: 'resumed' });
-    const user = userEvent.setup();
-    render(<GateDetailHarness />);
-
-    expect(screen.getByRole('heading', { name: 'Deployment smoke test' })).toBeVisible();
-    expect(screen.getByText('missing declared capability "Okta session"')).toBeVisible();
-    expect(screen.getByRole('button', { name: 'Retry verification' })).toBeDisabled();
-
-    await user.click(screen.getByRole('radio', { name: /retry verification/ }));
-    await waitFor(() =>
-      expect(mock.api.saveGateDraft).toHaveBeenCalledWith({
-        featureId: gateItem.featureId,
-        repoName: 'repo-a',
-        answers: { '1': 'RETRY_AFTER_AUTH' },
-      }),
-    );
-
-    await user.click(screen.getByRole('button', { name: 'Retry verification' }));
-    await waitFor(() =>
-      expect(mock.api.resolveGate).toHaveBeenCalledWith({
-        featureId: gateItem.featureId,
-        repoName: 'repo-a',
-      }),
-    );
-  });
-
-  it('uses the warning waiver label without exposing gate-specific abort controls', async () => {
-    const mock = installAgenticoMock();
-    mock.api.saveGateDraft.mockResolvedValue({ result: 'saved' });
-    const user = userEvent.setup();
-    render(<GateDetailHarness />);
-
-    await user.click(screen.getByRole('radio', { name: /Waive blocked checks/ }));
-    const waiveAndResume = screen.getByRole('button', { name: 'Waive and resume' });
-    expect(waiveAndResume).toBeEnabled();
-    expect(waiveAndResume).toHaveAttribute('data-tone', 'warning');
-    await waitFor(() =>
-      expect(mock.api.saveGateDraft).toHaveBeenCalledWith({
-        featureId: gateItem.featureId,
-        repoName: 'repo-a',
-        answers: { '1': 'WAIVE' },
-      }),
-    );
-
-    expect(screen.queryByRole('button', { name: 'Abort gate' })).not.toBeInTheDocument();
-    expect(screen.queryByRole('dialog', { name: 'Confirm abort' })).not.toBeInTheDocument();
-  });
-
-  it('persists a legacy gate answer on blur', async () => {
-    const mock = installAgenticoMock();
-    mock.api.saveGateDraft.mockResolvedValue({ result: 'saved' });
-    const user = userEvent.setup();
-    const legacyGate = {
-      ...gateItem,
-      id: 'legacy-gate-blur',
-      questions: [{ index: 1, prompt: 'Deployment window?', answer: '' }],
-      verification: undefined,
-    };
-    render(<GateDetailHarness item={legacyGate} />);
-
-    await user.type(screen.getByLabelText(/Deployment window/), 'Tuesday');
-    await user.tab();
-    await waitFor(() =>
-      expect(mock.api.saveGateDraft).toHaveBeenCalledWith({
-        featureId: gateItem.featureId,
-        repoName: 'repo-a',
-        answers: { '1': 'Tuesday' },
-      }),
-    );
-  });
-
-  it('keeps legacy gate textareas and the resume action', () => {
-    installAgenticoMock();
-    const legacyGate = {
-      ...gateItem,
-      id: 'legacy-gate-1',
-      questions: [{ index: 1, prompt: 'Deployment window?', answer: '' }],
-      verification: undefined,
-    };
-
-    render(<GateDetailHarness item={legacyGate} />);
-
-    expect(screen.getByLabelText(/Deployment window/)).toBeVisible();
-    expect(screen.getByRole('button', { name: 'Resume' })).toBeVisible();
-  });
-});
-
 describe('AttentionInbox help detail', () => {
   function HelpDetailHarness({ item }: { item: Extract<AttentionItem, { kind: 'help' }> }) {
     const [drafts, setDrafts] = useState<AttentionDrafts>(emptyAttentionDrafts);
@@ -747,15 +608,15 @@ describe('AttentionInbox help detail', () => {
     expect(within(tasks).getByText('Summarizing packages')).toBeVisible();
 
     const meta = screen.getByLabelText('Attention context');
-    expect(meta).toHaveTextContent('session kb123456…');
-    expect(meta).toHaveTextContent('Knowledge Base');
+    expect(meta).toHaveTextContent('session rs123456…');
+    expect(meta).toHaveTextContent('Research');
     expect(meta).toHaveTextContent(/waiting/);
 
     await user.type(screen.getByLabelText('Message to the agent'), 'carry on');
     await user.click(screen.getByRole('button', { name: 'Send message' }));
     expect(mock.api.sendHelp).toHaveBeenCalledWith({
       featureId: 'feature-1',
-      sessionId: 'kb1234567890abcdef',
+      sessionId: 'rs1234567890abcdef',
       message: 'carry on',
     });
   });
@@ -769,8 +630,8 @@ describe('AttentionInbox help detail', () => {
     expect(screen.getByRole('button', { name: 'Send reply' })).toBeVisible();
     expect(screen.queryByText('Agent is waiting')).not.toBeInTheDocument();
     const meta = screen.getByLabelText('Attention context');
-    expect(meta).toHaveTextContent('session kb123456…');
-    expect(meta).toHaveTextContent('Knowledge Base');
+    expect(meta).toHaveTextContent('session rs123456…');
+    expect(meta).toHaveTextContent('Research');
   });
 
   it('keeps waiting sessions out of the inbox rows and the badge', async () => {
@@ -979,10 +840,7 @@ describe('error items', () => {
 
   it('jumps from the detail Open control with the item id', async () => {
     const onJump = vi.fn();
-    const [drafts, setDrafts] = [
-      { questions: {}, help: {}, gates: {} } as AttentionDrafts,
-      undefined,
-    ];
+    const [drafts, setDrafts] = [{ questions: {}, help: {} } as AttentionDrafts, undefined];
     void drafts;
     void setDrafts;
     render(

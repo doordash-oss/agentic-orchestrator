@@ -20,23 +20,14 @@ import {
   type ServerPermissionSnapshot,
   PromptSnapshotResponseSchema,
   SessionListResponseSchema,
-  TestingContractResponseSchema,
   validateWithSchema,
   type ServerSessionSummary,
-  type ServerTestingContractItem,
 } from '../shared/api/parse';
 import {
   AskUserAnswerRequestSchema,
   AttentionSnapshotSchema,
-  GateDraftRequestSchema,
-  GateResumeRequestSchema,
   HelpAnswerRequestSchema,
   PermissionDecisionRequestSchema,
-  TestingContractRequestSchema,
-  TestingContractSnapshotSchema,
-  TestingContractWaiveRequestSchema,
-  TestingContractWaiveResultSchema,
-  VerificationGateActionSchema,
   ATTENTION_ALREADY_RESOLVED_NOTICE,
   SUPERVISOR_FEATURE_ID,
   isPendingReviewStatus,
@@ -46,17 +37,9 @@ import {
   type AttentionItem,
   type AttentionSnapshot,
   type AskUserAnswerRequest,
-  type GateDraftRequest,
-  type GateResumeRequest,
   type HelpAnswerRequest,
   type PermissionDecisionRequest,
   type SupervisorPendingRequest,
-  type TestingContractItem,
-  type TestingContractRequest,
-  type TestingContractSnapshot,
-  type TestingContractWaiveRequest,
-  type TestingContractWaiveResult,
-  type VerificationGateAction,
 } from '../shared/ipc';
 import { CanonicalErrorException } from '../shared/errors';
 import type { ApiRequestInit } from './gateway/runtimeGateway';
@@ -83,31 +66,6 @@ function helpWaitingKind(help: { kind?: string; question: string }): 'question' 
 
 const WAITING_TURN_STATES = new Set(['waiting_input', 'waiting_question']);
 
-function toTestingContractItem(item: ServerTestingContractItem): TestingContractItem {
-  return {
-    itemId: item.item_id,
-    source: item.source,
-    owner: item.owner,
-    ...defined('repo', item.repo),
-    name: item.name,
-    command: item.command,
-    required: item.required,
-    allowSubstitution: item.allow_substitution,
-    allowBlocked: item.allow_blocked,
-    allowWaiver: item.allow_waiver,
-    ...(item.disposition === undefined
-      ? {}
-      : {
-          disposition: {
-            status: item.disposition.status,
-            ...defined('reason', item.disposition.reason),
-            ...defined('changedBy', item.disposition.changed_by),
-          },
-        }),
-    capabilities: item.capabilities,
-  };
-}
-
 function waitingSessionFor(
   sessions: readonly ServerSessionSummary[],
   help: { feature_id: string; session_id?: string },
@@ -128,15 +86,6 @@ function runningTaskDescriptions(session: ServerSessionSummary | undefined): str
     .filter((task) => task.state === 'running')
     .map((task) => task.description ?? '')
     .filter((description) => description !== '');
-}
-
-function supportedVerificationActions(actions: string[]): VerificationGateAction[] {
-  const supported = new Set<VerificationGateAction>();
-  for (const action of actions) {
-    const parsed = VerificationGateActionSchema.safeParse(action.trim().toUpperCase());
-    if (parsed.success) supported.add(parsed.data);
-  }
-  return [...supported];
 }
 
 type ServerControlRequest = ServerPermissionSnapshot['requests'][number];
@@ -394,40 +343,6 @@ export class AttentionService {
             ...(runningTasks.length === 0 ? {} : { runningTasks }),
           };
         }),
-      ...promptsRaw.need_user_inputs
-        .filter((gate) => gate.open && hasRequiredListedFeature(gate.feature_id))
-        .map((gate) => ({
-          kind: 'gate' as const,
-          id: `${gate.feature_id}:${gate.repo_name ?? ''}`,
-          featureId: gate.feature_id!,
-          ...parentOf(gate.feature_id),
-          waitingSince: gate.waiting_since ?? fallbackTime,
-          ...defined('scope', gate.scope),
-          ...defined('repoName', gate.repo_name),
-          ...defined('iteration', gate.iteration),
-          ...defined('summary', gate.summary),
-          ...(gate.verification === undefined
-            ? {}
-            : {
-                verification: {
-                  blockers: gate.verification.blockers.map((blocker) => ({
-                    itemId: blocker.item_id,
-                    name: blocker.name,
-                    ...defined('repoName', blocker.repo_name),
-                    command: blocker.command,
-                    reason: blocker.reason,
-                    capabilities: blocker.capabilities,
-                    remediation: blocker.remediation,
-                  })),
-                  allowedActions: supportedVerificationActions(gate.verification.allowed_actions),
-                },
-              }),
-          questions: (gate.questions ?? []).map((question, index) => ({
-            index: question.index,
-            prompt: question.prompt ?? `Question ${index + 1}`,
-            answer: question.answer ?? '',
-          })),
-        })),
       ...featuresRaw.features
         .filter((feature) => isPendingReviewStatus(feature.status))
         .map((feature) => ({
@@ -446,10 +361,9 @@ export class AttentionService {
       recovery: 0,
       permission: 1,
       questions: 2,
-      gate: 3,
-      review: 4,
-      error: 5,
-      help: 6,
+      review: 3,
+      error: 4,
+      help: 5,
     };
     return validateWithSchema(
       {
@@ -492,74 +406,6 @@ export class AttentionService {
       message: input.message,
     });
   }
-  async saveGateDraft(request: GateDraftRequest): Promise<AttentionActionResult> {
-    const input = validateWithSchema(request, GateDraftRequestSchema);
-    return this.mutate(`/api/v1/features/${input.featureId}/actions/need-user-input-draft`, {
-      ...defined('repo_name', input.repoName),
-      answers: input.answers,
-    });
-  }
-  async resolveGate(request: GateResumeRequest): Promise<AttentionActionResult> {
-    const input = validateWithSchema(request, GateResumeRequestSchema);
-    return this.mutate(`/api/v1/features/${input.featureId}/actions/need-user-input`, {
-      ...defined('repo_name', input.repoName),
-    });
-  }
-  async waiveTestingContract(
-    request: TestingContractWaiveRequest,
-  ): Promise<TestingContractWaiveResult> {
-    const input = validateWithSchema(request, TestingContractWaiveRequestSchema);
-    const response = await serverRequest(
-      this.transport,
-      `/api/v1/features/${input.featureId}/actions/testing-contract-waive`,
-      {
-        method: 'POST',
-        body: {
-          item_ids: input.itemIds,
-          reason: input.reason,
-          active_run: input.activeRun,
-          roadmap_phase: input.roadmapPhase,
-          contract_revision: input.contractRevision,
-        },
-      } as ApiRequestInit,
-    );
-    const value = response as {
-      result?: unknown;
-      contract_revision?: unknown;
-      waived_items?: unknown;
-    };
-    return TestingContractWaiveResultSchema.parse({
-      result: typeof value.result === 'string' ? value.result : 'waived',
-      contractRevision: value.contract_revision,
-      waivedItems: Array.isArray(value.waived_items) ? value.waived_items : [],
-    });
-  }
-
-  /** Reads the current phase's compiled contract; a missing contract is a result, not an error. */
-  async getTestingContract(request: TestingContractRequest): Promise<TestingContractSnapshot> {
-    const input = validateWithSchema(request, TestingContractRequestSchema);
-    let body;
-    try {
-      body = await this.get(
-        `/api/v1/features/${input.featureId}/testing-contract`,
-        TestingContractResponseSchema,
-      );
-    } catch (err) {
-      if (err instanceof CanonicalErrorException && err.canonical.code === 'not_found') {
-        return { available: false };
-      }
-      throw err;
-    }
-    return TestingContractSnapshotSchema.parse({
-      available: true,
-      featureId: body.feature_id,
-      activeRun: body.active_run,
-      roadmapPhase: body.roadmap_phase,
-      revision: body.revision,
-      items: body.items.map(toTestingContractItem),
-    });
-  }
-
   private async get<T extends { api_version: string }>(
     path: string,
     schema: { parse: (value: unknown) => T },

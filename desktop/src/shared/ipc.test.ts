@@ -54,7 +54,6 @@ import {
   isSupervisorAttentionItem,
   type AttentionItem,
   FeatureSnapshotSchema,
-  GateResumeRequestSchema,
   SessionIdSchema,
   SessionTranscriptRequestSchema,
   SessionOutputEventSchema,
@@ -722,18 +721,6 @@ describe('IPC channel registry', () => {
 });
 
 describe('operational IPC schemas', () => {
-  it('accepts only the gate target when resuming and rejects legacy decisions', () => {
-    const target = {
-      featureId: 'abcd1234',
-      repoName: 'repo-a',
-    };
-
-    expect(GateResumeRequestSchema.parse(target)).toStrictEqual(target);
-    for (const decision of ['resume', 'abort']) {
-      expect(GateResumeRequestSchema.safeParse({ ...target, decision }).success).toBe(false);
-    }
-  });
-
   it('allows only audited feature action catalogue entries', () => {
     expect(
       FeatureActionRequestSchema.parse({ featureId: 'abcd1234', action: 'start' }),
@@ -2262,18 +2249,14 @@ describe('ask-user and gate answer keys', () => {
     ).toBe(false);
   });
 
-  it('accepts only one-based decimal index keys on answers and gate drafts', () => {
+  it('accepts only one-based decimal index keys on answers', () => {
     const ask = (answers: Record<string, string>) =>
       ipcModule.AskUserAnswerRequestSchema.safeParse({ requestId: 'ask-1', answers }).success;
-    const draft = (answers: Record<string, string>) =>
-      ipcModule.GateDraftRequestSchema.safeParse({ featureId: 'abcd1234', answers }).success;
-    for (const check of [ask, draft]) {
-      expect(check({ '1': 'main', '2': 'a, b' })).toBe(true);
-      expect(check({ 'Which branch?': 'main' })).toBe(false);
-      expect(check({ '0': 'main' })).toBe(false);
-      expect(check({ '01': 'main' })).toBe(false);
-      expect(check({})).toBe(false);
-    }
+    expect(ask({ '1': 'main', '2': 'a, b' })).toBe(true);
+    expect(ask({ 'Which branch?': 'main' })).toBe(false);
+    expect(ask({ '0': 'main' })).toBe(false);
+    expect(ask({ '01': 'main' })).toBe(false);
+    expect(ask({})).toBe(false);
   });
 
   it('validates explicit ask-user option indexes alongside text answers', () => {

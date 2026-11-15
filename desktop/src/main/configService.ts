@@ -65,7 +65,6 @@ function toPhaseModels(models: z.output<typeof ServerModelDefaultsSchema>): Phas
     ),
     ...defined('review', entry(models.review) === undefined ? undefined : models.review),
     ...defined('utilities', entry(models.utilities) === undefined ? undefined : models.utilities),
-    ...defined('kbBuild', entry(models.kb_build) === undefined ? undefined : models.kb_build),
     ...defined(
       'automaticReview',
       entry(models.automatic_review) === undefined ? undefined : models.automatic_review,
@@ -81,7 +80,6 @@ function toServerModels(models: PhaseModels): Record<string, string> {
     implementation: models.implementation ?? '',
     review: models.review ?? '',
     utilities: models.utilities ?? '',
-    kb_build: models.kbBuild ?? '',
     automatic_review: models.automaticReview ?? '',
   };
 }
@@ -112,7 +110,6 @@ function toPhaseEffort(
   const implementation = effortEntry(effort.implementation);
   const review = effortEntry(effort.review);
   const utilities = effortEntry(effort.utilities);
-  const kbBuild = effortEntry(effort.kb_build);
   return {
     ...defined('inquiry', inquiry),
     ...defined('research', research),
@@ -120,7 +117,6 @@ function toPhaseEffort(
     ...defined('implementation', implementation),
     ...defined('review', review),
     ...defined('utilities', utilities),
-    ...defined('kbBuild', kbBuild),
   };
 }
 
@@ -132,7 +128,6 @@ function toServerEffort(effort: PhaseEffort): Record<string, string> {
     implementation: effort.implementation ?? '',
     review: effort.review ?? '',
     utilities: effort.utilities ?? '',
-    kb_build: effort.kbBuild ?? '',
   };
 }
 

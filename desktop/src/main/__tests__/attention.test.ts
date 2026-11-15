@@ -59,217 +59,6 @@ describe('AttentionService mutations', () => {
     },
   );
 
-  it('posts testing-contract waivers and reads the revised contract envelope', async () => {
-    const apiRequest = vi.fn(() =>
-      Promise.resolve({
-        status: 200,
-        body: {
-          api_version: 'v1',
-          feature_id: 'abcd1234ef567890',
-          result: 'waived',
-          contract_revision: 3,
-          waived_items: ['deploy-smoke', 'ui-capture'],
-        },
-      }),
-    );
-    const service = new AttentionService({ apiRequest } satisfies ServerTransport);
-
-    await expect(
-      service.waiveTestingContract({
-        featureId: 'abcd1234ef567890',
-        itemIds: ['deploy-smoke', 'ui-capture'],
-        reason: 'Vendor UI is unreachable from CI.',
-        activeRun: 1,
-        roadmapPhase: 2,
-        contractRevision: 2,
-      }),
-    ).resolves.toEqual({
-      result: 'waived',
-      contractRevision: 3,
-      waivedItems: ['deploy-smoke', 'ui-capture'],
-    });
-    expect(apiRequest).toHaveBeenCalledWith(
-      '/api/v1/features/abcd1234ef567890/actions/testing-contract-waive',
-      expect.objectContaining({
-        method: 'POST',
-        body: {
-          item_ids: ['deploy-smoke', 'ui-capture'],
-          reason: 'Vendor UI is unreachable from CI.',
-          active_run: 1,
-          roadmap_phase: 2,
-          contract_revision: 2,
-        },
-      }),
-    );
-  });
-
-  it('reads the testing contract and maps rows to the renderer shape', async () => {
-    const apiRequest = vi.fn(() =>
-      Promise.resolve({
-        status: 200,
-        body: {
-          api_version: 'v1',
-          feature_id: 'abcd1234ef567890',
-          active_run: 1,
-          roadmap_phase: 2,
-          revision: 3,
-          items: [
-            {
-              item_id: 'deploy-smoke',
-              source: 'plan',
-              owner: 'harness',
-              repo: 'svc',
-              name: 'Deployment smoke test',
-              command: 'make smoke',
-              required: true,
-              allow_substitution: true,
-              allow_blocked: false,
-              allow_waiver: true,
-              disposition: { status: 'waived', reason: 'Offline.', changed_by: 'user' },
-              capabilities: ['network'],
-            },
-            {
-              item_id: 'unit',
-              source: 'plan',
-              owner: 'agent',
-              name: 'Unit tests',
-              command: 'make test',
-              required: true,
-              allow_substitution: false,
-              allow_blocked: false,
-              allow_waiver: false,
-              capabilities: [],
-            },
-          ],
-        },
-      }),
-    );
-    const service = new AttentionService({ apiRequest } satisfies ServerTransport);
-
-    await expect(service.getTestingContract({ featureId: 'abcd1234ef567890' })).resolves.toEqual({
-      available: true,
-      featureId: 'abcd1234ef567890',
-      activeRun: 1,
-      roadmapPhase: 2,
-      revision: 3,
-      items: [
-        {
-          itemId: 'deploy-smoke',
-          source: 'plan',
-          owner: 'harness',
-          repo: 'svc',
-          name: 'Deployment smoke test',
-          command: 'make smoke',
-          required: true,
-          allowSubstitution: true,
-          allowBlocked: false,
-          allowWaiver: true,
-          disposition: { status: 'waived', reason: 'Offline.', changedBy: 'user' },
-          capabilities: ['network'],
-        },
-        {
-          itemId: 'unit',
-          source: 'plan',
-          owner: 'agent',
-          name: 'Unit tests',
-          command: 'make test',
-          required: true,
-          allowSubstitution: false,
-          allowBlocked: false,
-          allowWaiver: false,
-          capabilities: [],
-        },
-      ],
-    });
-    expect(apiRequest).toHaveBeenCalledWith(
-      '/api/v1/features/abcd1234ef567890/testing-contract',
-      undefined,
-    );
-  });
-
-  it('reports a missing testing contract as unavailable instead of throwing', async () => {
-    const service = new AttentionService({
-      apiRequest: () => Promise.resolve({ status: 404, body: canonicalBody('not_found') }),
-    } satisfies ServerTransport);
-
-    await expect(service.getTestingContract({ featureId: 'abcd1234ef567890' })).resolves.toEqual({
-      available: false,
-    });
-  });
-
-  it('propagates other testing-contract read failures and rejects malformed rows', async () => {
-    const conflict = new AttentionService({
-      apiRequest: () => Promise.resolve({ status: 409, body: canonicalBody('conflict') }),
-    } satisfies ServerTransport);
-    const err = await conflict
-      .getTestingContract({ featureId: 'abcd1234ef567890' })
-      .catch((e: unknown) => e);
-    expect(err).toBeInstanceOf(CanonicalErrorException);
-    expect((err as CanonicalErrorException).canonical.code).toBe('conflict');
-
-    const malformed = new AttentionService({
-      apiRequest: () =>
-        Promise.resolve({
-          status: 200,
-          body: {
-            api_version: 'v1',
-            feature_id: 'abcd1234ef567890',
-            active_run: 1,
-            roadmap_phase: 0,
-            items: [],
-          },
-        }),
-    } satisfies ServerTransport);
-    await expect(malformed.getTestingContract({ featureId: 'abcd1234ef567890' })).rejects.toThrow();
-  });
-
-  it('rejects testing-contract waivers without items, a reason, or a contract binding before any request', async () => {
-    const apiRequest = vi.fn(() => Promise.resolve({ status: 200, body: {} }));
-    const service = new AttentionService({ apiRequest } satisfies ServerTransport);
-
-    await expect(
-      service.waiveTestingContract({
-        featureId: 'abcd1234ef567890',
-        itemIds: [],
-        reason: 'x',
-        activeRun: 1,
-        roadmapPhase: 1,
-        contractRevision: 1,
-      }),
-    ).rejects.toThrow();
-    await expect(
-      service.waiveTestingContract({
-        featureId: 'abcd1234ef567890',
-        itemIds: ['deploy-smoke'],
-        reason: '   ',
-        activeRun: 1,
-        roadmapPhase: 1,
-        contractRevision: 1,
-      }),
-    ).rejects.toThrow();
-    await expect(
-      service.waiveTestingContract({
-        featureId: 'abcd1234ef567890',
-        itemIds: ['deploy-smoke'],
-        reason: 'x',
-        activeRun: 1,
-        roadmapPhase: 0,
-        contractRevision: 1,
-      }),
-    ).rejects.toThrow();
-    await expect(
-      service.waiveTestingContract({
-        featureId: 'abcd1234ef567890',
-        itemIds: ['deploy-smoke'],
-        reason: 'x',
-        activeRun: 0,
-        roadmapPhase: 1,
-        contractRevision: 1,
-      }),
-    ).rejects.toThrow();
-    expect(apiRequest).not.toHaveBeenCalled();
-  });
-
   it('does not classify a plain error message as an already-resolved item', async () => {
     const service = new AttentionService({
       apiRequest: () => Promise.reject(new Error('conflict while submitting attention response')),
@@ -287,10 +76,10 @@ describe('AttentionService waiting sessions', () => {
     features: [
       {
         id: 'feature-1',
-        name: 'Knowledge base build',
-        slug: 'knowledge-base-build',
-        status: 'BuildingKB',
-        current_phase: 'Knowledge Base',
+        name: 'Research run',
+        slug: 'research-run',
+        status: 'Researching',
+        current_phase: 'Research',
         repos: ['repo-a'],
         created_at: '2026-07-16T10:00:00Z',
         active_run: 1,
@@ -303,10 +92,10 @@ describe('AttentionService waiting sessions', () => {
     api_version: 'v1',
     sessions: [
       {
-        id: 'kb1234567890abcdef',
+        id: 'rs1234567890abcdef',
         feature_id: 'feature-1',
         run_number: 1,
-        phase: 'Knowledge Base',
+        phase: 'Research',
         kind: 'phase',
         status: 'waiting',
         turn_state: 'waiting_input',
@@ -353,7 +142,6 @@ describe('AttentionService waiting sessions', () => {
                     time: '2026-07-16T10:05:00Z',
                   },
                 ],
-                need_user_inputs: [],
               }
             : path === '/api/v1/permissions'
               ? { api_version: 'v1', requests: [] }
@@ -373,8 +161,8 @@ describe('AttentionService waiting sessions', () => {
       expect.objectContaining({
         kind: 'help',
         featureId: 'feature-1',
-        sessionId: 'kb1234567890abcdef',
-        phase: 'Knowledge Base',
+        sessionId: 'rs1234567890abcdef',
+        phase: 'Research',
         waitingKind: 'coordinating',
         runningTasks: ['Indexing repository layout'],
       }),
@@ -412,8 +200,8 @@ describe('AttentionService waiting sessions', () => {
       expect.objectContaining({
         kind: 'help',
         prompt: 'Which deploy target?',
-        sessionId: 'kb1234567890abcdef',
-        phase: 'Knowledge Base',
+        sessionId: 'rs1234567890abcdef',
+        phase: 'Research',
         waitingKind: 'question',
       }),
     ]);
@@ -437,97 +225,6 @@ describe('AttentionService waiting sessions', () => {
 });
 
 describe('AttentionService review items', () => {
-  it('normalizes supported actions and keeps all-unknown actions on generic fallback', async () => {
-    const service = new AttentionService({
-      apiRequest: (path) => {
-        const body =
-          path === '/api/v1/prompts'
-            ? {
-                api_version: 'v1',
-                ask_user_questions: [],
-                help_queue: [],
-                need_user_inputs: [
-                  {
-                    feature_id: 'feature-1',
-                    repo_name: 'unknown-action',
-                    open: true,
-                    questions: [{ index: 1, prompt: 'How should Agentico continue?', answer: '' }],
-                    verification: {
-                      blockers: [
-                        {
-                          item_id: 'deploy',
-                          name: 'Deployment smoke test',
-                          command: 'make deploy-smoke',
-                          reason: 'a newer server needs another decision',
-                          capabilities: [],
-                          remediation: 'Choose a supported action or answer the generic prompt.',
-                        },
-                      ],
-                      allowed_actions: ['REQUEST_ADMIN_ESCALATION', 'ASK_OWNER'],
-                    },
-                  },
-                  {
-                    feature_id: 'feature-1',
-                    repo_name: 'supported-actions',
-                    open: true,
-                    questions: [{ index: 1, prompt: 'How should Agentico continue?', answer: '' }],
-                    verification: {
-                      blockers: [
-                        {
-                          item_id: 'codesign',
-                          name: 'Package signature',
-                          command: 'make package-verify',
-                          reason: 'keychain access is unavailable',
-                          capabilities: [],
-                          remediation: 'Grant access or waive the blocked check.',
-                        },
-                      ],
-                      allowed_actions: [' retry_after_auth ', 'WAIVE'],
-                    },
-                  },
-                ],
-              }
-            : path === '/api/v1/permissions'
-              ? { api_version: 'v1', requests: [] }
-              : {
-                  api_version: 'v1',
-                  features: [
-                    {
-                      id: 'feature-1',
-                      name: 'Active feature',
-                      slug: 'active-feature',
-                      status: 'NeedUserInput',
-                      current_phase: 'implement',
-                      repos: ['unknown-action', 'supported-actions'],
-                      created_at: '2026-07-16T10:00:00Z',
-                      active_run: 1,
-                      run_count: 1,
-                      progress: {},
-                    },
-                  ],
-                };
-        return Promise.resolve({ status: 200, body });
-      },
-    } satisfies ServerTransport);
-
-    const snapshot = await service.getSnapshot();
-    const unknownActionGate = snapshot.items.find(
-      (item) => item.kind === 'gate' && item.repoName === 'unknown-action',
-    );
-    const supportedActionsGate = snapshot.items.find(
-      (item) => item.kind === 'gate' && item.repoName === 'supported-actions',
-    );
-    if (unknownActionGate?.kind !== 'gate' || supportedActionsGate?.kind !== 'gate') {
-      throw new Error('expected both verification gates');
-    }
-
-    expect(unknownActionGate.verification?.allowedActions).toEqual([]);
-    expect(supportedActionsGate.verification?.allowedActions).toEqual([
-      'RETRY_AFTER_AUTH',
-      'WAIVE',
-    ]);
-  });
-
   it('omits feature-scoped attention whose feature is no longer listed', async () => {
     const service = new AttentionService({
       apiRequest: (path) => {
@@ -568,32 +265,6 @@ describe('AttentionService review items', () => {
                     feature_id: '__chat__',
                     question: 'chat help',
                     pending: true,
-                  },
-                ],
-                need_user_inputs: [
-                  {
-                    feature_id: 'missing-feature',
-                    open: true,
-                    questions: [{ index: 1, prompt: 'orphaned gate' }],
-                  },
-                  {
-                    feature_id: 'feature-1',
-                    open: true,
-                    questions: [{ index: 1, prompt: 'active gate' }],
-                    verification: {
-                      blockers: [
-                        {
-                          item_id: 'deploy',
-                          name: 'Deployment smoke test',
-                          repo_name: 'repo-a',
-                          command: 'make deploy-smoke',
-                          reason: 'missing declared capability "Okta session"',
-                          capabilities: ['Okta session'],
-                          remediation: 'Make Okta session available, then retry verification.',
-                        },
-                      ],
-                      allowed_actions: ['WAIVE', 'RETRY_AFTER_AUTH'],
-                    },
                   },
                 ],
               }
@@ -645,55 +316,16 @@ describe('AttentionService review items', () => {
     const ids = snapshot.items.map((item) => item.id);
 
     expect(ids).toEqual(
-      expect.arrayContaining([
-        'ask-runtime',
-        'feature-1:',
-        'feature-1:session-2',
-        'perm-active',
-        'perm-runtime',
-      ]),
+      expect.arrayContaining(['ask-runtime', 'feature-1:session-2', 'perm-active', 'perm-runtime']),
     );
-    expect(ids).toHaveLength(5);
+    expect(ids).toHaveLength(4);
     expect(ids).not.toContain('__chat__:');
     expect(ids).not.toContain('ask-orphan');
-    expect(ids).not.toContain('missing-feature::');
     expect(ids).not.toContain('missing-feature:session-1');
     expect(ids).not.toContain('perm-orphan');
-    expect(snapshot.items).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({
-          kind: 'gate',
-          id: 'feature-1:',
-          questions: [{ index: 1, prompt: 'active gate', answer: '' }],
-          verification: {
-            blockers: [
-              {
-                itemId: 'deploy',
-                name: 'Deployment smoke test',
-                repoName: 'repo-a',
-                command: 'make deploy-smoke',
-                reason: 'missing declared capability "Okta session"',
-                capabilities: ['Okta session'],
-                remediation: 'Make Okta session available, then retry verification.',
-              },
-            ],
-            allowedActions: ['WAIVE', 'RETRY_AFTER_AUTH'],
-          },
-        }),
-      ]),
-    );
   });
 
   it.each([
-    {
-      name: 'a gate question without its stored index',
-      prompts: {
-        ask_user_questions: [],
-        need_user_inputs: [
-          { feature_id: 'feature-1', open: true, questions: [{ prompt: 'active gate' }] },
-        ],
-      },
-    },
     {
       name: 'an ask-user question without its index',
       prompts: {
@@ -706,7 +338,6 @@ describe('AttentionService review items', () => {
             questions: [{ question: 'Which branch?' }],
           },
         ],
-        need_user_inputs: [],
       },
     },
   ])('rejects $name instead of synthesizing a position', async ({ prompts }) => {
@@ -761,13 +392,6 @@ describe('AttentionService review items', () => {
                     pending: true,
                   },
                 ],
-                need_user_inputs: [
-                  {
-                    feature_id: 'child-1',
-                    open: true,
-                    questions: [{ index: 1, prompt: 'pass gate' }],
-                  },
-                ],
               }
             : path === '/api/v1/permissions'
               ? { api_version: 'v1', requests: [] }
@@ -808,7 +432,6 @@ describe('AttentionService review items', () => {
     const snapshot = await service.getSnapshot();
     expect(snapshot.items.map((item) => item.id).sort()).toEqual([
       'ask-pass',
-      'child-1:',
       'child-1:child-1-fix-01',
     ]);
     // Prompts keep the child's featureId (the session owner) and carry the
@@ -858,7 +481,7 @@ describe('AttentionService review items', () => {
       apiRequest: (path) => {
         const body =
           path === '/api/v1/prompts'
-            ? { api_version: 'v1', ask_user_questions: [], help_queue: [], need_user_inputs: [] }
+            ? { api_version: 'v1', ask_user_questions: [], help_queue: [] }
             : path === '/api/v1/permissions'
               ? { api_version: 'v1', requests: [] }
               : {
@@ -963,7 +586,7 @@ describe('AttentionService error items', () => {
       apiRequest: (path) => {
         const body =
           path === '/api/v1/prompts'
-            ? { api_version: 'v1', ask_user_questions: [], help_queue: [], need_user_inputs: [] }
+            ? { api_version: 'v1', ask_user_questions: [], help_queue: [] }
             : path === '/api/v1/permissions'
               ? { api_version: 'v1', requests: [] }
               : path === '/api/v1/sessions'
@@ -1101,7 +724,6 @@ describe('AttentionService supervisor items', () => {
                     },
                   ],
                   help_queue: [],
-                  need_user_inputs: [],
                 }
               : path === '/api/v1/permissions'
                 ? {

@@ -620,10 +620,6 @@ export function ConversationTranscript({
           <FileChangeCard key={item.key} change={item.change} />
         ) : item.kind === 'subagents' ? (
           <SubagentGroupCard key={item.key} agents={item.agents} />
-        ) : item.kind === 'verification-tick' ? (
-          <p key={item.key} className="conversation__verification-tick" data-tone={item.tone}>
-            <span aria-hidden="true">{item.symbol}</span> {item.name}
-          </p>
         ) : item.kind === 'verdict' ? (
           <p key={item.key} className="conversation__verdict" data-outcome={item.outcome}>
             <span className="conversation__verdict-mark" aria-hidden="true">

@@ -802,7 +802,8 @@ func (m *Manager) MarkFailed(featureID string, failure errcat.FailureRecord) err
 	})
 }
 
-// phaseBeforeTarget returns the phase that precedes the target in logical order.
+// phaseBeforeTarget returns the phase that precedes the target in logical
+// order. Inquire, the first phase, and unknown targets yield Inquire.
 func phaseBeforeTarget(target Phase) Phase {
 	switch target {
 	case PhaseResearch:

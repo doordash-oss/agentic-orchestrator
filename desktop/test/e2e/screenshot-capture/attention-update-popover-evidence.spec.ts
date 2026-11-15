@@ -84,36 +84,19 @@ test('attention and update popover visual evidence', async ({ page }) => {
   skipWithoutEvidenceDir();
 
   // The inbox open from the bell over a running cockpit: a non-zero badge on
-  // the bell and a genuinely mixed list (gate, permission, review).
+  // the bell and a genuinely mixed list (questions, permission, review).
   await openAttentionScene(page, 'dark');
   await openInbox(page);
   await expect(page.locator('.attention-bell__count')).toBeVisible();
   await expect(page.locator('.attention-bell__count')).toHaveText('3');
   await expect(page.locator('.attention-popover__item')).toHaveCount(3);
-  await expect(page.locator('.attention-popover__kind', { hasText: 'Input gate' })).toBeVisible();
+  await expect(page.locator('.attention-popover__kind', { hasText: 'Questions' })).toBeVisible();
   await expect(page.locator('.attention-popover__kind', { hasText: 'Permission' })).toBeVisible();
   await expect(page.locator('.attention-popover__kind', { hasText: 'Review' })).toBeVisible();
   await settle(page);
   await shoot(
     page,
     'attention-popover-open-from-the-bell-over-a-feature-cockpit-badge-showing-a-non-1440x900',
-  );
-
-  // The ownerless gate expanded inline — the only item kind the popover answers
-  // in place — showing the structured verification decision branch.
-  await openAttentionScene(page, 'light');
-  await openInbox(page);
-  await page.locator('.attention-popover__item', { hasText: 'Input gate' }).click();
-  await expect(page.locator('.need-input-verification')).toBeVisible();
-  await expect(page.getByText('Deployment smoke test')).toBeInViewport();
-  // The popover scrolls past 34rem, so the decision branch has to be in frame,
-  // not merely rendered.
-  await expect(page.getByRole('radio', { name: /granted access/ })).toBeInViewport();
-  await expect(page.getByRole('radio', { name: /Waive blocked checks/ })).toBeInViewport();
-  await settle(page);
-  await shoot(
-    page,
-    'attention-popover-with-an-ownerless-item-expanded-inline-gate-detail-with-the-ve-1440x900',
   );
 
   // The update popover open from its toolbar trigger with all three actions,

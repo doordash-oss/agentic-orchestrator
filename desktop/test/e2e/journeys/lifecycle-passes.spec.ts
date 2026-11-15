@@ -15,9 +15,8 @@ limitations under the License.
 */
 
 /**
- * Lifecycle passes journey: resume, retry, restart, guarded rebase, child
- * refactor launch, and repository NEED_USER_INPUT journey against the
- * packaged app and real bundled server.
+ * Lifecycle passes journey: resume, retry, restart, guarded rebase, and child
+ * refactor launch against the packaged app and real bundled server.
  *
  * The feature is seeded to Published status so the server enables pass
  * actions (rebase and refactor) which are only available

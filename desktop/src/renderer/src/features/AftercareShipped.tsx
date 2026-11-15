@@ -23,13 +23,7 @@ import type {
 import { archiveRailSegments } from './phaseRail';
 import { PhaseRailTrack } from './PhaseRailRow';
 import { spineStages } from './featureView';
-import {
-  changesFact,
-  phasesFact,
-  pullRequestRows,
-  verificationFact,
-  type ChangesFact,
-} from './aftercareReceipt';
+import { changesFact, phasesFact, pullRequestRows, type ChangesFact } from './aftercareReceipt';
 import type { AftercareEvidence } from './useAftercareEvidence';
 
 interface AftercareShippedProps {
@@ -61,7 +55,6 @@ export function AftercareShipped({
   onOpenPullRequest,
 }: AftercareShippedProps): React.ReactElement {
   const changes = changesFact(evidence.diffs, preflight);
-  const verification = verificationFact(snapshot.verificationItems);
   const prRows = pullRequestRows(snapshot, preflight, evidence.reviewFeedback);
   const phases = phasesFact(snapshot, run);
   // Fully completed at rest: the pip row draws the pipeline, not progress.
@@ -81,16 +74,9 @@ export function AftercareShipped({
             </ShippedRow>
           )}
           <ShippedRow label="Verification" action="View run record" onAction={onOpenRunRecord}>
-            {verification === null ? (
-              <span className="aftercare-shipped__placeholder">
-                Check results stay in the run record
-              </span>
-            ) : (
-              <>
-                <span className="aftercare-shipped__fact-text">{verification.summary}</span>
-                <span className="aftercare-shipped__meta">{verification.names.join(' · ')}</span>
-              </>
-            )}
+            <span className="aftercare-shipped__placeholder">
+              Check results stay in the run record
+            </span>
           </ShippedRow>
           {prRows.map((row) => (
             <ShippedRow

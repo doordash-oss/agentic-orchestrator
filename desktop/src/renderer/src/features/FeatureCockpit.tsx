@@ -68,8 +68,6 @@ import { InspectorContent } from './CockpitInspector';
 import { RepositoryInstrument } from './RepositoryInstrument';
 import { InspectorDrawer } from './InspectorDrawer';
 import { ImpactPreviewList } from './ImpactPreviewList';
-import { NeedUserInputModal, type AttentionGate } from './NeedUserInputModal';
-import { TestingContractWaiveDialog } from './TestingContractWaiveDialog';
 import {
   resolvePostImplementationMode,
   type AftercareAction,
@@ -100,13 +98,11 @@ import type { FeatureActionResult, PublishFeatureActionRequest } from '../../../
 import {
   AttentionDetail,
   OwnerAwareAttention,
-  attentionActionNotice,
   attentionErrorMessage,
   runAttentionSubmit,
   type AttentionDrafts,
 } from './AttentionInbox';
 import { QuestionComposer, QuestionConversationTurn, questionAnswersRequest } from './QuestionTurn';
-import { useAttentionDraftSaves } from './useAttentionDraftSaves';
 import type { AttentionItem } from '../../../shared/ipc';
 import {
   actionById,
@@ -1009,8 +1005,6 @@ export function FeatureCockpit({
   const [publishTimeoutLocked, setPublishTimeoutLocked] = useState(false);
   const [runRecordOpen, setRunRecordOpen] = useState(false);
   const [changesOpen, setChangesOpen] = useState(false);
-  const [dismissedGateId, setDismissedGateId] = useState<string | undefined>();
-  const [contractWaiveOpen, setContractWaiveOpen] = useState(false);
   const [configOpen, setConfigOpen] = useState(false);
   const [runMetrics, setRunMetrics] = useState<RunMetrics | null>(null);
   const [aftercareRun, setAftercareRun] = useState<RunDetailView | null>(null);
@@ -1081,12 +1075,6 @@ export function FeatureCockpit({
     setActiveSurface('document');
     onAttentionPreviewClose?.();
   }, [attentionPreviewRequest, onAttentionPreviewClose]);
-
-  useEffect(() => {
-    if (attentionPreviewRequest?.attentionId !== undefined) {
-      setDismissedGateId(undefined);
-    }
-  }, [attentionPreviewRequest]);
 
   const runFeatureRefresh = useCallback(
     (options: { silent?: boolean } = {}) => {
@@ -1505,15 +1493,6 @@ export function FeatureCockpit({
     stopButtonRef.current?.focus();
   }, []);
 
-  const saveAttentionDraft = useAttentionDraftSaves({
-    notify: (result, options) => setAnnouncement(attentionActionNotice(result, options)),
-    notifyError: (error) => setAnnouncement(attentionErrorMessage(error)),
-    onAlreadyResolved: async () => {
-      await refreshAttention();
-      await refreshFeature({ silent: true });
-    },
-  });
-
   const closeInspector = useCallback(() => {
     setInspectorOpen(false);
     requestAnimationFrame(() => inspectorButtonRef.current?.focus());
@@ -1555,10 +1534,7 @@ export function FeatureCockpit({
     attentionPreviewRequest === null || attentionPreviewRequest.attentionId === undefined
       ? undefined
       : featureAttentionItems.find((item) => item.id === attentionPreviewRequest.attentionId);
-  const activeAttentionItem =
-    routedAttentionItem?.kind === 'gate'
-      ? featureAttentionItems.find((item) => item.kind !== 'gate')
-      : (routedAttentionItem ?? featureAttentionItems.find((item) => item.kind !== 'gate'));
+  const activeAttentionItem = routedAttentionItem ?? featureAttentionItems[0];
   const activeAttentionOwnerIsVisible = useRegisteredErrorCard(
     activeAttentionItem?.kind === 'error' ? activeAttentionItem.ref : undefined,
   );
@@ -1678,8 +1654,8 @@ export function FeatureCockpit({
   const isArchiveMode = isArchiveRunSelected(selectedRunNumber);
 
   // The rail's hold looks at every open item this feature owns (including a
-  // refactor pass's routed items), not the review-filtered list the question/
-  // gate modals use — a paused *NeedsReview checkpoint still needs its review
+  // refactor pass's routed items), not the review-filtered list the question
+  // surfaces use — a paused *NeedsReview checkpoint still needs its review
   // item's `waitingSince` for the Paused Nm duration.
   const railOpenAttentionItems = attentionItems.filter(
     (item) => attentionOwnerFeatureId(item) === featureId,
@@ -1735,12 +1711,6 @@ export function FeatureCockpit({
       });
   };
 
-  const preferredGate =
-    routedAttentionItem?.kind === 'gate'
-      ? routedAttentionItem
-      : featureAttentionItems.find((item): item is AttentionGate => item.kind === 'gate');
-  const activeGate = preferredGate?.id === dismissedGateId ? undefined : preferredGate;
-
   const submitAttention = async (
     item: AttentionItem,
     action: Parameters<typeof runAttentionSubmit>[0],
@@ -1794,10 +1764,7 @@ export function FeatureCockpit({
   const availableSurfaceIds = stageSurfaces
     .filter((surface) => surface.available)
     .map((surface) => surface.id);
-  const forcedLive =
-    attentionPreviewRequest?.attentionId !== undefined &&
-    routedAttentionItem?.kind !== 'gate' &&
-    liveAvailable;
+  const forcedLive = attentionPreviewRequest?.attentionId !== undefined && liveAvailable;
   const resolvedSurface: 'live' | 'changes' | 'document' | 'files' | null = forcedLive
     ? 'live'
     : ready
@@ -2224,9 +2191,6 @@ export function FeatureCockpit({
             busy={attentionBusy === activeAttentionItem.id}
             drafts={attentionDrafts}
             setDrafts={setAttentionDrafts}
-            saveDraft={(action, options) =>
-              saveAttentionDraft(activeAttentionItem.id, action, options)
-            }
             submit={(action, options) => void submitAttention(activeAttentionItem, action, options)}
             onJump={openAttentionOwner}
           />
@@ -2303,7 +2267,6 @@ export function FeatureCockpit({
                     ? passLaunchReceipt.text
                     : null
                 }
-                attentionPreviewRequest={attentionPreviewRequest}
                 attentionItems={attentionItems}
                 refreshAttention={refreshAttention}
                 attentionDrafts={attentionDrafts}
@@ -2405,26 +2368,6 @@ export function FeatureCockpit({
             <FeatureConfigPanel featureId={featureId} />
           </CockpitModal>
         ) : null}
-
-        {activeGate === undefined ? null : (
-          <NeedUserInputModal
-            item={activeGate}
-            busy={attentionBusy === activeGate.id}
-            drafts={attentionDrafts}
-            setDrafts={setAttentionDrafts}
-            phase={snapshot.currentPhase}
-            onAnswerLater={() => {
-              setDismissedGateId(activeGate.id);
-              onAttentionPreviewClose?.();
-            }}
-            onResolved={async () => {
-              setDismissedGateId(activeGate.id);
-              await refreshAttention();
-              await refreshFeature({ silent: true });
-              onAttentionPreviewClose?.();
-            }}
-          />
-        )}
         {runRecordOpen ? (
           <CockpitModal
             title={`Run ${snapshot.activeRun} record`}
@@ -2439,10 +2382,7 @@ export function FeatureCockpit({
               currentPhase={snapshot.currentPhase}
               currentRoadmapPhase={snapshot.currentRoadmapPhase}
               currentIteration={snapshot.currentIteration}
-              phaseStatus={snapshot.phaseStatus}
               reviewGate={snapshot.reviewGate}
-              verificationItems={snapshot.verificationItems}
-              waitReason={snapshot.waitReason}
               shouldStream={false}
               presentation="record"
             />
@@ -2737,16 +2677,12 @@ export function FeatureCockpit({
                       currentPhase={snapshot.currentPhase}
                       currentRoadmapPhase={snapshot.currentRoadmapPhase}
                       currentIteration={snapshot.currentIteration}
-                      phaseStatus={snapshot.phaseStatus}
                       reviewGate={snapshot.reviewGate}
-                      verificationItems={snapshot.verificationItems}
-                      waitReason={snapshot.waitReason}
                       shouldStream={stopAction !== undefined}
                       expandHost={liveExpandHost}
                       controlsHost={liveControlsHost}
                       attentionRequestId={
-                        attentionPreviewRequest?.attentionId === undefined ||
-                        routedAttentionItem?.kind === 'gate'
+                        attentionPreviewRequest?.attentionId === undefined
                           ? undefined
                           : attentionPreviewRequest.requestId
                       }
@@ -2785,9 +2721,6 @@ export function FeatureCockpit({
                               busy={attentionBusy === activeAttentionItem.id}
                               drafts={attentionDrafts}
                               setDrafts={setAttentionDrafts}
-                              saveDraft={(action, options) =>
-                                saveAttentionDraft(activeAttentionItem.id, action, options)
-                              }
                               submit={(action, options) =>
                                 void submitAttention(activeAttentionItem, action, options)
                               }
@@ -2831,17 +2764,11 @@ export function FeatureCockpit({
                       currentPhase={snapshot.currentPhase}
                       currentRoadmapPhase={snapshot.currentRoadmapPhase}
                       currentIteration={snapshot.currentIteration}
-                      phaseStatus={snapshot.phaseStatus}
                       reviewGate={snapshot.reviewGate}
-                      verificationItems={snapshot.verificationItems}
-                      waitReason={snapshot.waitReason}
                       // The files surface renders no transcript, so it never
                       // subscribes to cohort output.
                       shouldStream={false}
                       mode="files"
-                      {...((snapshot.currentRoadmapPhase ?? 0) > 0
-                        ? { onWaiveTestingContract: () => setContractWaiveOpen(true) }
-                        : {})}
                     />
                   </div>
                 ) : null}
@@ -2948,37 +2875,6 @@ export function FeatureCockpit({
             >
               <FeatureConfigPanel featureId={featureId} />
             </CockpitModal>
-          ) : null}
-
-          {activeGate === undefined ? null : (
-            <NeedUserInputModal
-              item={activeGate}
-              busy={attentionBusy === activeGate.id}
-              drafts={attentionDrafts}
-              setDrafts={setAttentionDrafts}
-              phase={snapshot.currentPhase}
-              onAnswerLater={() => {
-                setDismissedGateId(activeGate.id);
-                onAttentionPreviewClose?.();
-              }}
-              onResolved={async () => {
-                setDismissedGateId(activeGate.id);
-                await refreshAttention();
-                await refreshFeature({ silent: true });
-                onAttentionPreviewClose?.();
-              }}
-            />
-          )}
-
-          {contractWaiveOpen ? (
-            <TestingContractWaiveDialog
-              featureId={featureId}
-              onClose={() => setContractWaiveOpen(false)}
-              onWaived={async () => {
-                await refreshAttention();
-                await refreshFeature({ silent: true });
-              }}
-            />
           ) : null}
 
           {stopDialog ? (

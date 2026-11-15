@@ -364,10 +364,9 @@ export function featureSnapshot(overrides: Partial<FeatureSnapshot> = {}): Featu
           attempt: 1,
         },
         {
-          key: 'kb:repo-a',
-          kind: 'kb',
-          label: 'Build knowledge base',
-          repo: 'repo-a',
+          key: 'image:diagram.png',
+          kind: 'image',
+          label: 'Stage diagram.png',
           status: 'running',
           attempt: 1,
         },
@@ -450,10 +449,6 @@ export interface AgenticoMock {
     answerPermission: ReturnType<typeof vi.fn>;
     answerQuestions: ReturnType<typeof vi.fn>;
     sendHelp: ReturnType<typeof vi.fn>;
-    saveGateDraft: ReturnType<typeof vi.fn>;
-    resolveGate: ReturnType<typeof vi.fn>;
-    waiveTestingContract: ReturnType<typeof vi.fn>;
-    getTestingContract: ReturnType<typeof vi.fn>;
     getSupervisorState: ReturnType<typeof vi.fn>;
     updateSupervisorSettings: ReturnType<typeof vi.fn>;
     cancelSupervisorPendingChange: ReturnType<typeof vi.fn>;
@@ -869,12 +864,6 @@ export function installAgenticoMock(
     answerPermission: vi.fn(() => Promise.resolve({ result: 'submitted' })),
     answerQuestions: vi.fn(() => Promise.resolve({ result: 'submitted' })),
     sendHelp: vi.fn(() => Promise.resolve({ result: 'submitted' })),
-    saveGateDraft: vi.fn(() => Promise.resolve({ result: 'drafted' })),
-    resolveGate: vi.fn(() => Promise.resolve({ result: 'resolved' })),
-    waiveTestingContract: vi.fn(() =>
-      Promise.resolve({ result: 'waived', contractRevision: 2, waivedItems: [] }),
-    ),
-    getTestingContract: vi.fn(() => Promise.resolve({ available: false as const })),
     listSessions: vi.fn(() => Promise.resolve(sessions)),
     getSession: vi.fn((sessionId: string) => {
       if (overrides.session !== undefined) return Promise.resolve(overrides.session);

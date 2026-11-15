@@ -37,7 +37,7 @@ type RailSegmentState = 'completed' | 'current' | 'upcoming';
 
 export interface RailSegment {
   id: string;
-  /** Rail-scale label, already passed through `railSegmentLabel`. */
+  /** Rail-scale label; CSS ellipsis handles overflow. */
   label: string;
   state: RailSegmentState;
   /** True only on the current segment while a hold is open. */
@@ -78,7 +78,7 @@ function buildRailSegments(
     const held = state === 'current' && hold !== null;
     return {
       id: stage.id,
-      label: railSegmentLabel(stage.label),
+      label: stage.label,
       state,
       held,
       accessibleName: accessibleSegmentName(stage.label, state, held),
@@ -120,21 +120,6 @@ export function stepSegments(
   return buildRailSegments(steps, activeIndex, false, null);
 }
 
-// --- Rail-scale label helper -------------------------------------------------
-
-const RAIL_LABEL_OVERRIDES: Readonly<Record<string, string>> = {
-  'Knowledge Base': 'Knowledge',
-};
-
-/**
- * The single compact-label code path left in the renderer: shortens labels
- * that read too wide at rail scale, verbatim otherwise. The caller applies
- * CSS ellipsis for any label that still overflows its segment.
- */
-export function railSegmentLabel(label: string): string {
-  return RAIL_LABEL_OVERRIDES[label] ?? label;
-}
-
 // --- Hold classification -----------------------------------------------------
 
 type HoldKind = 'waiting' | 'paused';
@@ -157,8 +142,8 @@ const HUMAN_BLOCKING_KINDS = new Set<AttentionItem['kind']>(['permission', 'ques
  *   a stale attention item is still open.
  * - `waiting`: the run is still executing (status in `ACTIVE_STATUSES`) and
  *   a human-blocking item (question/permission/help) is open.
- * - `paused`: the run is parked for a human — `NeedUserInput`, any
- *   `*NeedsReview` checkpoint, or `Interrupted` — regardless of whether an
+ * - `paused`: the run is parked for a human — any `*NeedsReview`
+ *   checkpoint, or `Interrupted` — regardless of whether an
  *   attention item happens to be open (a plain `Interrupted` still pauses).
  * - Anything else (at-rest, `Created`, setup-in-progress with no open item,
  *   active with no open item) is not a hold.
@@ -181,7 +166,7 @@ export function classifyHold(
     return { kind: 'waiting', waitingSince: oldestWaitingSince(items) };
   }
 
-  if (status === 'NeedUserInput' || status === 'Interrupted' || status.endsWith('NeedsReview')) {
+  if (status === 'Interrupted' || status.endsWith('NeedsReview')) {
     const waitingSince = oldestWaitingSince(items);
     return waitingSince === undefined ? { kind: 'paused' } : { kind: 'paused', waitingSince };
   }

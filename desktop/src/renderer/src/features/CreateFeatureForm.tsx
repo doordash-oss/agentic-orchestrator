@@ -109,7 +109,6 @@ import {
   checkpointSummary,
   checkpointsForPipeline,
   isPipeline,
-  modelConfigKey,
   type CheckpointState,
   type Pipeline,
 } from './runContract';
@@ -250,7 +249,6 @@ const DEFAULT_MODEL_LABELS: ReadonlyArray<readonly [string, PhaseKey]> = [
   ['Implementation', 'implementation'],
   ['Review', 'review'],
   ['Utilities', 'utilities'],
-  ['Knowledge base', 'kbBuild'],
 ];
 
 function defaultModelsByKey(defaults: CreationDefaults): Partial<Record<PhaseKey, string>> {
@@ -1806,9 +1804,9 @@ export function CreateFeatureForm({
     const effort: Record<string, EffortLevel> = {};
     for (const field of applicablePhaseFields(pipeline, false)) {
       const chosen = modelChoices[field.key] ?? '';
-      if (chosen !== '') models[modelConfigKey(field.key)] = chosen;
+      if (chosen !== '') models[field.key] = chosen;
       const chosenEffort = effortChoices[field.key];
-      if (chosenEffort !== undefined) effort[modelConfigKey(field.key)] = chosenEffort;
+      if (chosenEffort !== undefined) effort[field.key] = chosenEffort;
     }
     const submittedGates = applicableGates(pipeline);
     void (async () => {

@@ -280,7 +280,7 @@ func appendReviewDecisions(path, heading string, qa []ports.QAPair) (bool, error
 	}
 	added := false
 	for _, pair := range qa {
-		block := fmt.Sprintf("\n**Q:** %s\n\n**A:** %s\n", strings.TrimSpace(pair.Question), strings.TrimSpace(pair.Answer))
+		block := fmt.Sprintf("\n**Q:** %s\n\n**A:** %s\n", decisionText(pair.Question), decisionText(pair.Answer))
 		if !strings.Contains(section, block) {
 			section += block
 			added = true
@@ -299,6 +299,19 @@ func appendReviewDecisions(path, heading string, qa []ports.QAPair) (bool, error
 		return false, fmt.Errorf("writing review decisions: %w", err)
 	}
 	return true, nil
+}
+
+// decisionText escapes heading lines so recorded text never starts a
+// section of the decisions file.
+func decisionText(text string) string {
+	lines := strings.Split(strings.TrimSpace(text), "\n")
+	for i, line := range lines {
+		rest := strings.TrimLeft(line, " \t")
+		if strings.HasPrefix(rest, "#") {
+			lines[i] = line[:len(line)-len(rest)] + "\\" + rest
+		}
+	}
+	return strings.Join(lines, "\n")
 }
 
 var decisionHeadingPattern = regexp.MustCompile(`(?m)^## Iteration (\d+) `)

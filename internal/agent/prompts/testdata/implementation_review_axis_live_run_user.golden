@@ -13,9 +13,9 @@ Launch a polished settings dashboard.
 
 ## Live-Run Posture
 
-- Use the live-run posture: build, launch, drive, screenshot, and record evidence as needed.
+- Use the live-run posture: build, launch, run, drive, screenshot, and record evidence as needed.
 - Treat the source tree as read-only. Write captured evidence only under the live-run evidence root named in this prompt.
-- Judge from the attached baseline images plus the captured `### Visual Evidence` screenshots under this iteration's `screenshots/` directory.
+- For visual judgments, use the attached baseline images plus the captured `### Visual Evidence` screenshots under this iteration's `screenshots/` directory.
 
 ## Approved Roadmap
 

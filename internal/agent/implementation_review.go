@@ -92,7 +92,7 @@ var implementationReviewAxisRegistry = []implementationReviewAxis{
 		Slug:             "functionality-evidence",
 		SkillName:        "review-implementation-functionality-evidence",
 		Role:             roleImplementationReviewFunctionalityEvidence,
-		ExecutionPosture: reviewPostureReadOnly,
+		ExecutionPosture: reviewPostureLiveRun,
 		Memberships: []implementationReviewGateMembership{
 			{Gate: implementationReviewGatePerPhase, Order: 20, Applies: moonshotImplementationReviewAxis},
 		},

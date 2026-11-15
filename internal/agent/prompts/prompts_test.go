@@ -598,6 +598,7 @@ func TestGoldenSnapshots(t *testing.T) {
 					Iteration:    2,
 					IterDir:      "/state/feat-x/run-1/phase-1/implement/iteration-02",
 					AxisLabel:    "Functionality/Evidence",
+					LiveRunAxis:  true,
 					RoadmapPath:  "/state/feat-x/run-1/roadmap/plan.md",
 					PlanPath:     "/state/feat-x/run-1/phase-1/plan.md",
 					ExitCriteria: "Relevant tests pass.",

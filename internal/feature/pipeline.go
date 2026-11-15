@@ -131,15 +131,6 @@ func (p PipelineProfile) ShouldSkipIterationReview() bool {
 	return p == PipelineMedium || p == PipelineLarge
 }
 
-// ShouldContractAgentEvidence returns true if phase plans may contract
-// agent-owned evidence (visual matrices, manual observations, behavioral
-// journey artifacts). Moonshot only — its per-phase acceptance reviewer runs
-// and observes that evidence. Medium and Large plans contract automated test
-// commands only.
-func (p PipelineProfile) ShouldContractAgentEvidence() bool {
-	return p == PipelineMoonshot
-}
-
 // DefaultCheckpointsForProfile returns the default checkpoints for a profile.
 func DefaultCheckpointsForProfile(profile PipelineProfile) Checkpoints {
 	switch profile {

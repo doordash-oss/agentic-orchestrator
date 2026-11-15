@@ -18,17 +18,15 @@ You run with a live-run posture. Build, run, launch, drive, and capture whatever
 
 Own functionality and acceptance for the current phase:
 - every task's `#### Acceptance criteria` in the phase plan
-- the phase's `## Success Criteria`: Automated Verification, Manual Verification, Visual Evidence, and Behavioral Evidence
+- the phase plan's `## Verification` section
 - the exit criteria in your prompt
 - per-phase criteria for tracer-bullet, tdd-fill-in, and collapsed phases
 
 ## Process
 
-1. Read the phase plan, the roadmap scope guidance, the progress handoff, and the iteration's diff so you know what changed and what was promised.
-2. Run every Automated Verification command yourself, from the repository root of the repo its `[repo: <name>]` tag names (the only repo when untagged). Save each command's output under the evidence root.
-3. Exercise every Behavioral Evidence item: run its packaged command when it has one, otherwise drive the journey it describes. Capture every Visual Evidence item at its declared size. Write the results under the evidence root.
-4. Perform the Manual Verification judgment yourself wherever the environment allows it.
-5. Check each acceptance criterion and exit criterion against what you observed and against the diff. Implementer-captured evidence and progress notes are context, not proof: confirm the claim yourself.
+1. Read the phase plan, the roadmap scope guidance, the progress notes when they exist, and the iteration's diff so you know what changed and what was promised.
+2. Follow the `## Verification` section yourself: run each command from the root of the repository it belongs to (the only repo when the feature has one), and drive and look at what it asks you to look at. Save command output, screenshots, and notes under the evidence root.
+3. Check each acceptance criterion and exit criterion against what you observed and against the diff. Implementer-captured evidence and progress notes are context, not proof: confirm the claim yourself.
 
 ## Judging
 

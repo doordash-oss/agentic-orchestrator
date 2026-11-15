@@ -402,3 +402,62 @@ func TestImplementLoop_Routing_ProtocolViolation_ResumesFailureBudget(t *testing
 		t.Fatalf("iteration-04 should not run after recovered protocol-violation budget trips: stat err = %v", err)
 	}
 }
+
+// TestImplementLoop_ResumesLegacyPlanAndProgress locks in that a run started
+// under the old plan and progress formats resumes: the old notes are read as
+// notes and the outcome alone decides the iteration.
+func TestImplementLoop_ResumesLegacyPlanAndProgress(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping integration test in short mode")
+	}
+	tmpDir := t.TempDir()
+	workDir := filepath.Join(tmpDir, "work")
+	artifactDir := filepath.Join(tmpDir, "artifacts")
+	stateDir := filepath.Join(tmpDir, "state", "test-feat-legacy-resume")
+	scriptsDir := filepath.Join(tmpDir, "scripts")
+	for _, d := range []string{workDir, artifactDir, stateDir, scriptsDir} {
+		_ = os.MkdirAll(d, 0o755)
+	}
+
+	am := newArtifactManager(artifactDir)
+	iterDir, err := am.createIterationDir(1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := am.writeMeta(iterDir, iterationMeta{Iteration: 1, AgentStatus: "RETRY", ReviewStatus: "skipped_retry"}); err != nil {
+		t.Fatal(err)
+	}
+	legacyProgress := "# Iteration Progress\n\n## Iteration Handoff\n\n### Completed this iteration\n- chunk 1\n\n" +
+		"### Where I stopped\nchunk 2\n\n## Deferrals\n\n```yaml\ndeferrals: []\nclosed_deferrals: []\n```\n\n## Iteration State\n\nRETRY\n"
+	if err := os.WriteFile(filepath.Join(artifactDir, "progress.md"), []byte(legacyProgress), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	planPath := filepath.Join(artifactDir, "plan.md")
+	if err := os.WriteFile(planPath, []byte(legacyPhasePlanText()), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	agentScript := testutil.WriteScript(t, scriptsDir, "agent.sh",
+		testutil.JSONLInit+"\n"+testutil.JSONLSuccess+"\n")
+	reviewScript := testutil.WriteScript(t, scriptsDir, "review.sh",
+		testutil.JSONLInit+"\n"+testutil.WriteReviewApproved(artifactDir)+"\n"+testutil.JSONLSuccess+"\n")
+
+	eventCh := make(chan interface{}, 100)
+	sm := session.NewManager(eventCh)
+	defer sm.Shutdown()
+
+	cfg := ImplementConfig{
+		Feature: newTestFeature(t, workDir), WorkDir: workDir, PlanPath: planPath,
+		MaxIterations: 5, MaxConsecFails: 3, MaxConsecNoProgress: 3, ExitCriteria: "Relevant tests pass",
+		Model: "agent", ReviewModel: "reviewer",
+		ArtifactDir: artifactDir, StateDir: stateDir,
+		BuildSession: mockBuildSession(agentScript, reviewScript),
+	}
+	result, err := runImplementationLoop(cfg, sm)
+	if err != nil {
+		t.Fatalf("loop error: %v", err)
+	}
+	if result.FinalStatus != finalStatusReviewPassed || result.Iterations != 2 {
+		t.Fatalf("result = %+v, want review_passed on iteration 2", result)
+	}
+}

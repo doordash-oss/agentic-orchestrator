@@ -2015,59 +2015,6 @@ func TestImplementLoopReviewInfraFailureParksForReviewOnlyResume(t *testing.T) {
 	}
 }
 
-func TestImplementLoopUnscopedMultiRepoVerificationRoutesPlanRevisionBeforeImplementer(t *testing.T) {
-	tmpDir := t.TempDir()
-	artifactDir := filepath.Join(tmpDir, "artifacts")
-	stateRoot := filepath.Join(tmpDir, "state")
-	stateDir := filepath.Join(stateRoot, "unscoped-multi")
-	for _, dir := range []string{artifactDir, stateDir} {
-		if err := os.MkdirAll(dir, 0o755); err != nil {
-			t.Fatal(err)
-		}
-	}
-	plan := strings.Join([]string{
-		"## Tasks",
-		"### Task 1: API", "**Repo:** api",
-		"### Task 2: Web", "**Repo:** web",
-		"## Success Criteria",
-		"### Automated Verification",
-		"- [ ] Tests pass: `make test`",
-	}, "\n")
-	planPath := filepath.Join(tmpDir, "phase-plan.md")
-	if err := os.WriteFile(planPath, []byte(plan), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	f := &feature.Feature{
-		ID: "unscoped-multi", Name: "Unscoped Multi", Status: feature.StatusImplementing,
-		Repos: []feature.FeatureRepo{{Name: "api", Path: t.TempDir()}, {Name: "web", Path: t.TempDir()}},
-	}
-	store := feature.NewStore(stateRoot)
-	if err := store.Save(f); err != nil {
-		t.Fatal(err)
-	}
-	buildCalls := 0
-	result, err := runImplementationLoop(ImplementConfig{
-		Feature: f, FeatureStore: store, PlanPath: planPath, ArtifactDir: artifactDir, StateDir: stateDir,
-		MaxIterations: 1, MaxConsecFails: 3, MaxConsecNoProgress: 3,
-		BuildSession: func(BuildSessionOpts) ([]string, []string, *session.SessionOpts, error) {
-			buildCalls++
-			return nil, nil, nil, errors.New("implementer must not start")
-		},
-	}, nil)
-	if err != nil {
-		t.Fatalf("RunImplementationLoop() error = %v", err)
-	}
-	if result.FinalStatus != "plan_revision_required" || !strings.Contains(result.PlanRevisionFeedback, "[repo: <name>]") {
-		t.Fatalf("result = %+v, want scoped plan revision", result)
-	}
-	if buildCalls != 0 {
-		t.Fatalf("BuildSession calls = %d, want plan repaired before implementer starts", buildCalls)
-	}
-	if _, err := os.Stat(filepath.Join(artifactDir, "iteration-01")); !os.IsNotExist(err) {
-		t.Fatalf("iteration directory exists before plan repair: %v", err)
-	}
-}
-
 // TestImplementLoop_SkillReadInstruction verifies that RunImplementationLoop:
 // - Sets the system prompt to the completion protocol (contains "phase_complete")
 // - Prepends the skill-read instruction path to the user prompt

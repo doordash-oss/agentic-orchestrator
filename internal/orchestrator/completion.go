@@ -528,8 +528,6 @@ func (o *Orchestrator) onMultiRepoImplementDone(featureID string, result *agent.
 		// Graceful shutdown — shutdownFeatures will transition the feature to
 		// StatusInterrupted. We must NOT mark the feature Failed here.
 		return nil
-	case finalStatusPlanRevisionRequired:
-		return o.routePlanRevision(featureID, f, result.PlanRevisionFeedback)
 	case "failed":
 		errMsg := result.LastError
 		if errMsg == "" {
@@ -551,122 +549,6 @@ func (o *Orchestrator) onMultiRepoImplementDone(featureID string, result *agent.
 		o.emitPhaseCompleted(featureID, feature.PhaseImplement, errors.New(errMsg))
 		return o.markFailedWithEvent(featureID, failureRecord(errcat.InfrastructureFailure, feature.PhaseImplement, errMsg))
 	}
-}
-
-func (o *Orchestrator) routePlanRevision(featureID string, f *feature.Feature, feedback string) error {
-	if f == nil {
-		var err error
-		f, err = o.deps.Store.Load(featureID)
-		if err != nil {
-			return fmt.Errorf("load feature for plan revision: %w", err)
-		}
-	}
-	if strings.TrimSpace(feedback) == "" {
-		feedback = "## Plan Revision Required\n\nImplementation cannot resume until the phase plan is corrected.\n"
-	}
-	targetRoadmapPhase := f.CurrentRoadmapPhase
-	if f.TotalRoadmapPhases > 0 && targetRoadmapPhase > f.TotalRoadmapPhases {
-		targetRoadmapPhase = f.CurrentRoadmapPhase
-	}
-	feedbackAttempt, err := o.writePlanRevisionFeedback(f, feedback, targetRoadmapPhase)
-	if err != nil {
-		return err
-	}
-	if err := o.moveFeatureToPlanningForPlanRevision(featureID, targetRoadmapPhase, feedbackAttempt+1); err != nil {
-		return err
-	}
-	startedPhase, started, err := o.startPhase(featureID, feature.PhasePlan)
-	if err != nil {
-		return err
-	}
-	if started {
-		o.emitEvent(ports.Event{Type: ports.FeatureAdvanced, FeatureID: featureID, Phase: startedPhase})
-	}
-	return nil
-}
-
-func (o *Orchestrator) writePlanRevisionFeedback(f *feature.Feature, feedback string, roadmapPhase int) (int, error) {
-	baseDir := o.stateDir()
-	if baseDir == "" || f == nil {
-		return 0, nil
-	}
-	planDir := ""
-	if roadmapPhase > 0 {
-		planDir = o.phasePlanDirForFeature(f, roadmapPhase)
-	} else {
-		planDir = filepath.Join(agent.ActiveRunDir(baseDir, f), "plan")
-	}
-	latestAttempt := agent.LatestCompletedPlanAttempt(planDir)
-	if latestAttempt <= 0 {
-		latestAttempt = 1
-	}
-	attemptDir := filepath.Join(planDir, fmt.Sprintf("attempt-%02d", latestAttempt))
-	if err := os.MkdirAll(attemptDir, 0o755); err != nil {
-		return 0, fmt.Errorf("create plan revision feedback dir: %w", err)
-	}
-	if err := os.WriteFile(filepath.Join(attemptDir, "validation-feedback.md"), []byte(feedback), 0o644); err != nil {
-		return 0, fmt.Errorf("write plan revision feedback: %w", err)
-	}
-	if err := agent.WritePlanAttemptMeta(planDir, agent.PlanAttemptMeta{
-		Attempt:      latestAttempt,
-		ReviewStatus: "CHANGES_REQUESTED",
-	}); err != nil {
-		return 0, fmt.Errorf("write plan revision attempt meta: %w", err)
-	}
-	return latestAttempt, nil
-}
-
-func (o *Orchestrator) moveFeatureToPlanningForPlanRevision(featureID string, roadmapPhase, minPlanAttempts int) error {
-	return o.deps.Store.Modify(featureID, func(ff *feature.Feature) error {
-		switch ff.Status {
-		case feature.StatusPlanning:
-		case feature.StatusPlanNeedsReview:
-			if err := ff.Transition(feature.StatusPlanning); err != nil {
-				return err
-			}
-		case feature.StatusImplementing:
-			if err := ff.Transition(feature.StatusReviewPassed); err != nil {
-				return err
-			}
-			if err := ff.Transition(feature.StatusPlanning); err != nil {
-				return err
-			}
-		case feature.StatusFinalReviewing:
-			if err := ff.Transition(feature.StatusReviewPassed); err != nil {
-				return err
-			}
-			if err := ff.Transition(feature.StatusPlanning); err != nil {
-				return err
-			}
-		case feature.StatusReviewPassed:
-			if err := ff.Transition(feature.StatusPlanning); err != nil {
-				return err
-			}
-		default:
-			if err := ff.Transition(feature.StatusPlanning); err != nil {
-				return err
-			}
-		}
-		ff.CurrentPhase = feature.PhasePlan
-		if roadmapPhase > 0 {
-			ff.CurrentRoadmapPhase = roadmapPhase
-		}
-		ff.CurrentPhaseStatus = ""
-		ff.CurrentIteration = 0
-		ff.PlanIteration = 0
-		ff.ValidatingPlan = false
-		ff.ValidatorStatuses = nil
-		ff.ValidatorErrors = nil
-		if ff.MaxPlanIterations < minPlanAttempts {
-			ff.MaxPlanIterations = minPlanAttempts
-		}
-		ff.PendingReviewPhase = nil
-		ff.PendingRewindReviewRoadmapPhase = nil
-		if ff.Artifacts != nil {
-			delete(ff.Artifacts, "plan")
-		}
-		return nil
-	})
 }
 
 // onMultiReposPassed handles the success branch of multi-repo implement.

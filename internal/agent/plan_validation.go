@@ -20,7 +20,6 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
-	"log"
 	"os"
 	"path/filepath"
 	"sort"
@@ -988,19 +987,18 @@ func buildSpecializedValidationPromptForArtifact(f *feature.Feature, planPath, r
 	intent := resolvePromptIntent(f)
 
 	return prompts.MustRender(prompts.TemplateValidateSpecializedUser, validateSpecializedUserInput{
-		Name:                      f.Name,
-		Description:               intent.Description,
-		ExitCriteria:              intent.ExitCriteria,
-		AcceptanceClause:          intent.AcceptanceClause,
-		RiskLevel:                 string(f.RiskLevel),
-		DomainName:                domain.Name,
-		PlanPath:                  planPath,
-		PriorPhasePlanPaths:       append([]string(nil), extras.PriorPhasePlanPaths...),
-		IsRoadmapKind:             kind == validationArtifactRoadmap,
-		ResearchPath:              researchPath,
-		FeedbackPath:              feedbackPath,
-		AxisLabel:                 domain.Axis,
-		AutomatedVerificationOnly: kind != validationArtifactRoadmap && !f.EffectivePipeline().ShouldContractAgentEvidence(),
+		Name:                f.Name,
+		Description:         intent.Description,
+		ExitCriteria:        intent.ExitCriteria,
+		AcceptanceClause:    intent.AcceptanceClause,
+		RiskLevel:           string(f.RiskLevel),
+		DomainName:          domain.Name,
+		PlanPath:            planPath,
+		PriorPhasePlanPaths: append([]string(nil), extras.PriorPhasePlanPaths...),
+		IsRoadmapKind:       kind == validationArtifactRoadmap,
+		ResearchPath:        researchPath,
+		FeedbackPath:        feedbackPath,
+		AxisLabel:           domain.Axis,
 	})
 }
 
@@ -1439,8 +1437,8 @@ type planArtifactKind struct {
 	validate       func(cfg planLoopConfig, sm ports.SessionManager, attempt int, attemptDir, planArtifactPath string) ([]validatorResult, reviewStatus, string, error)
 	// recordApproved records an approved plan on the feature.
 	recordApproved func(cfg planLoopConfig, planArtifactPath string) error
-	// phasePlanGates enables the evidence-mode check and the per-axis stall
-	// escalation, which only phase plans have.
+	// phasePlanGates enables the per-axis stall escalation, which only phase
+	// plans have.
 	phasePlanGates bool
 }
 
@@ -1808,33 +1806,6 @@ attemptLoop:
 		if cfg.FeatureStore != nil {
 			if fresh, loadErr := cfg.FeatureStore.Load(cfg.Feature.ID); loadErr == nil {
 				cfg.Feature = fresh
-			}
-		}
-
-		// Deterministically enforce the profile-aware evidence mode:
-		// evidence-contracting profiles must give frontend phases real
-		// Visual Evidence rows; automated-only profiles must never declare
-		// agent-owned evidence rows at all.
-		if kind.phasePlanGates {
-			planArtifactPath := resolvePlanArtifactPath(cfg.FeatureStore, cfg.Feature.ID, artifactDir)
-			if planText, readErr := os.ReadFile(planArtifactPath); readErr != nil {
-				log.Printf("plan evidence-mode check skipped: read %s: %v", planArtifactPath, readErr)
-			} else {
-				contractAgentEvidence := cfg.Feature.EffectivePipeline().ShouldContractAgentEvidence()
-				if violations := phasePlanEvidenceModeViolations(string(planText), contractAgentEvidence); len(violations) > 0 {
-					lastErr := formatProtocolViolationError(plannerRole, attemptDir, violations)
-					criticFeedback = formatPlanContractViolationFeedback(plannerRole, violations)
-					_ = os.WriteFile(filepath.Join(attemptDir, "validation-feedback.md"), []byte(criticFeedback), 0o644)
-					_ = WritePlanAttemptMeta(artifactDir, PlanAttemptMeta{
-						Attempt:      attempt,
-						AgentStatus:  agentStatusSuccess,
-						ReviewStatus: agentStatusChangesRequested,
-					})
-					if attempt >= maxAttempts {
-						return &PlanLoopResult{FinalStatus: BoundedHelperStatusProtocolViolation, Iterations: attempt, LastError: lastErr}, nil
-					}
-					continue
-				}
 			}
 		}
 

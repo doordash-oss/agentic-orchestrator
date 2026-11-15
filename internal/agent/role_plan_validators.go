@@ -143,6 +143,4 @@ type validateSpecializedUserInput struct {
 
 	FeedbackPath string
 	AxisLabel    string
-
-	AutomatedVerificationOnly bool
 }

@@ -16,7 +16,7 @@ You run with a live-run posture. Build, launch, render, screenshot, record, and 
 
 ## Axis Scope
 
-Own visible UI quality against the approved design, attached baseline images, and captured `### Visual Evidence` screenshots:
+Own visible UI quality against the approved design, attached baseline images, and screenshots captured for the plan's verification:
 - fidelity to the approved baseline, design artifact, feature intent, and phase or final-review scope
 - layout correctness, spacing, visual hierarchy, responsive behavior, and non-overlapping text or controls
 - accessibility basics: contrast, focus visibility, semantic structure, target size, reduced motion, and multimodal feedback
@@ -62,7 +62,7 @@ write interface copy from the user's side of the screen. Its quality floor —
 responsive behavior, visible keyboard focus, and reduced-motion support — is
 mandatory. Cite the specific principle that makes an issue blocking.
 
-Use the attached baseline images and the captured `### Visual Evidence` screenshots as judgment material. If a live run succeeds, use your fresh screenshots and interaction notes to supplement that evidence.
+Use the attached baseline images and the screenshots captured for the plan's verification as judgment material. If a live run succeeds, use your fresh screenshots and interaction notes to supplement that evidence.
 
 ## Blocking Mandate
 

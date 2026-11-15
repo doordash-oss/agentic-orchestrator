@@ -112,7 +112,7 @@ func planEntryKinds() []planEntryKind {
 			name:         "phase plan",
 			dirParts:     []string{"phase-01", "plan"},
 			artifactFile: "plan.md",
-			planText:     frontendPlanTextWithNoneRequiredTrio(),
+			planText:     frontendPhasePlanText(),
 			sessionBase:  "test-plan-001-phase-01-plan-%02d",
 			artifactKey:  "phase-1-plan",
 			costKey:      "phase-1-plan",

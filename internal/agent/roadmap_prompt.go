@@ -174,8 +174,7 @@ func buildPhasePlanPromptWithResearch(f *feature.Feature, roadmapPath, researchA
 			Lead:          "Read these Q&A files for important context about their intent and preferences — do not re-ask questions that have already been answered:",
 			TrailingBlank: true,
 		},
-		Inquireness:               prompts.GrillMeInquirenessInput{Level: string(f.Inquireness)},
-		AutomatedVerificationOnly: !f.EffectivePipeline().ShouldContractAgentEvidence(),
+		Inquireness: prompts.GrillMeInquirenessInput{Level: string(f.Inquireness)},
 	})
 }
 
@@ -203,9 +202,8 @@ func buildPhasePlanRevisionPrompt(f *feature.Feature, skillsDir, phasePlanPath, 
 			ArtifactName: "phase plan",
 			Approvals:    axisApprovalViews(approvals),
 		},
-		PhasePlanPath:             phasePlanPath,
-		PhasePlanFormatPath:       phasePlanFormatPath(skillsDir),
-		Inquireness:               prompts.AutonomousInquirenessInput{},
-		AutomatedVerificationOnly: !f.EffectivePipeline().ShouldContractAgentEvidence(),
+		PhasePlanPath:       phasePlanPath,
+		PhasePlanFormatPath: phasePlanFormatPath(skillsDir),
+		Inquireness:         prompts.AutonomousInquirenessInput{},
 	})
 }

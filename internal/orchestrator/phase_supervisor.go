@@ -31,12 +31,11 @@ const phaseSupervisorStatusSuccess = "SUCCESS"
 // Shared FinalStatus values reported by agent implementation/review
 // loops (agent.OrchestratorResult, agent.LoopResult, etc.).
 const (
-	reviewStatusPassed              = "review_passed"
-	finalStatusAllPassed            = "all_passed"
-	finalStatusPlanRevisionRequired = "plan_revision_required"
-	finalStatusFailed               = "failed"
-	finalStatusInterrupted          = "interrupted"
-	finalStatusNoOp                 = "no_op"
+	reviewStatusPassed     = "review_passed"
+	finalStatusAllPassed   = "all_passed"
+	finalStatusFailed      = "failed"
+	finalStatusInterrupted = "interrupted"
+	finalStatusNoOp        = "no_op"
 )
 
 type phaseCompletionSink interface {
@@ -199,7 +198,7 @@ func (s *phaseSupervisor) superviseImplementationLoop(featureID string, resultCh
 				continue
 			}
 			switch res.FinalStatus {
-			case finalStatusAllPassed, "awaiting_final_review", finalStatusFailed, finalStatusPlanRevisionRequired, finalStatusInterrupted:
+			case finalStatusAllPassed, "awaiting_final_review", finalStatusFailed, finalStatusInterrupted:
 				s.complete(featureID, PhaseCompletionInput{
 					Phase:           feature.PhaseImplement,
 					MultiRepoResult: res,

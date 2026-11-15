@@ -160,14 +160,10 @@ func resolveOrchestratorSessionConfig(cfg OrchestratorConfig, role llm.PhaseRole
 
 // OrchestratorResult is the aggregate outcome of multi-repo implementation.
 type OrchestratorResult struct {
-	FinalStatus  string            // "all_passed" | "awaiting_final_review" | "failed" | "plan_revision_required" | "interrupted"
+	FinalStatus  string            // "all_passed" | "awaiting_final_review" | "failed" | "interrupted"
 	RepoStatuses map[string]string // per-repo inner loop FinalStatus (e.g., "max_iterations")
 	FailedRepos  []string
 	LastError    string
-	// PlanRevisionFeedback carries phase-plan repair requirements when
-	// FinalStatus == "plan_revision_required". Final Review must run its fix
-	// leg instead of returning this status.
-	PlanRevisionFeedback string
 }
 
 // runMultiRepoOrchestrator drives the unified phase-implement loop. Under
@@ -179,7 +175,7 @@ type OrchestratorResult struct {
 // via RunMultiRepoFinalReview, not per-phase.
 //
 // Returns "awaiting_final_review" when the implement loop succeeds,
-// "failed" / "plan_revision_required" / "interrupted" otherwise.
+// "failed" / "interrupted" otherwise.
 func runMultiRepoOrchestrator(cfg OrchestratorConfig, sm ports.SessionManager) (*OrchestratorResult, error) {
 	implResult, err := RunPhaseImplementLoop(cfg, sm)
 	if err != nil {
@@ -205,12 +201,6 @@ func phaseLoopResultToOrchestratorResult(_ OrchestratorConfig, r *PhaseImplement
 	switch r.FinalStatus {
 	case "interrupted":
 		return &OrchestratorResult{FinalStatus: "interrupted"}
-	case "plan_revision_required":
-		return &OrchestratorResult{
-			FinalStatus:          "plan_revision_required",
-			RepoStatuses:         phaseRepoStatuses(r.PhaseRepos, r.FinalStatus),
-			PlanRevisionFeedback: r.PlanRevisionFeedback,
-		}
 	default:
 		return &OrchestratorResult{
 			FinalStatus:  "failed",

@@ -163,8 +163,6 @@ type PhasePlanUserInput struct {
 	QAFiles QAFilesInput
 
 	Inquireness GrillMeInquirenessInput
-
-	AutomatedVerificationOnly bool
 }
 
 type PhasePlanRevisionUserInput struct {
@@ -179,8 +177,6 @@ type PhasePlanRevisionUserInput struct {
 	PhasePlanFormatPath string
 
 	Inquireness AutonomousInquirenessInput
-
-	AutomatedVerificationOnly bool
 }
 
 type ImplementUserInput struct {
@@ -281,8 +277,6 @@ type ValidateSpecializedUserInput struct {
 
 	FeedbackPath string
 	AxisLabel    string
-
-	AutomatedVerificationOnly bool
 }
 
 // TestGoldenSnapshots exercises each user-facing template with realistic
@@ -459,35 +453,6 @@ func TestGoldenSnapshots(t *testing.T) {
 					PhasePlanPath:       "/state/feat-x/run-1/phase-2/plan.md",
 					PhasePlanFormatPath: "/skills/plan-phase/format.md",
 					Inquireness:         AutonomousInquirenessInput{},
-				})
-			},
-		},
-		{
-			name: "phase_plan_user_automated_verification_only",
-			render: func() string {
-				in := PhasePlanUserInput{
-					Phase: PhasePlanView{
-						Number: 2, Name: "Wire up auth UI", Type: "tdd-fill-in",
-						Goal: "Make the login button work.",
-					},
-					RoadmapPath:               "/state/feat-x/run-1/roadmap/plan.md",
-					Inquireness:               GrillMeInquirenessInput{Level: "none"},
-					AutomatedVerificationOnly: true,
-				}
-				return MustRender(TemplatePhasePlanUser, in)
-			},
-		},
-		{
-			name: "phase_plan_revision_user_automated_verification_only",
-			render: func() string {
-				return MustRender(TemplatePhasePlanRevisionUser, PhasePlanRevisionUserInput{
-					Attempt:                   2,
-					Phase:                     PhasePlanView{Number: 2, Name: "Wire up auth UI", Type: "tdd-fill-in"},
-					Feedback:                  "Plan groundwork is fine but missing PKCE.",
-					PhasePlanPath:             "/state/feat-x/run-1/phase-2/plan.md",
-					PhasePlanFormatPath:       "/skills/plan-phase/format.md",
-					Inquireness:               AutonomousInquirenessInput{},
-					AutomatedVerificationOnly: true,
 				})
 			},
 		},
@@ -760,20 +725,6 @@ func TestGoldenSnapshots(t *testing.T) {
 					IncludePriorPhaseContext: true,
 					PriorPhasePlanPaths:      []string{"/state/feat-x/run-1/phase-1/plan.md"},
 					ResearchPath:             "/state/feat-x/run-1/research/research.md",
-				})
-			},
-		},
-		{
-			name: "validate_specialized_automated_verification_only",
-			render: func() string {
-				return MustRender(TemplateValidateSpecializedUser, ValidateSpecializedUserInput{
-					Name:                      "OAuth login",
-					Description:               "Sign in with Google.",
-					ExitCriteria:              "Relevant tests pass.",
-					RiskLevel:                 "medium",
-					DomainName:                "scope",
-					PlanPath:                  "/state/feat-x/run-1/phase-2/plan.md",
-					AutomatedVerificationOnly: true,
 				})
 			},
 		},

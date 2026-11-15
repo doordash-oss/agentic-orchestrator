@@ -33,19 +33,16 @@ import (
 //     failed (LastError set) for every PhaseRepos entry.
 //   - "safety_rail":      no-progress / consecutive-failure rail tripped.
 //   - "interrupted":      shutdown / feature stopped while running.
-//   - "plan_revision_required": implementation found a phase-plan contract
-//     defect that must be repaired before another implementation attempt.
 //
 // PhaseRepos is the deduplicated, sorted list of repo names declared by the
 // phase plan's `**Repo:** <name>` Task tags (single-repo phases get
 // `[repo[0].Name]`). It is the canonical "phase-declared subset" the
 // AtomicPhaseStamp wrote to.
 type PhaseImplementLoopResult struct {
-	FinalStatus          string
-	Iterations           int
-	LastError            string
-	PhaseRepos           []string
-	PlanRevisionFeedback string
+	FinalStatus string
+	Iterations  int
+	LastError   string
+	PhaseRepos  []string
 }
 
 // RunPhaseImplementLoop runs the unified phase-implement loop for the feature.
@@ -202,14 +199,6 @@ func RunPhaseImplementLoop(cfg OrchestratorConfig, sm ports.SessionManager) (*Ph
 			FinalStatus: finalStatusReviewPassed,
 			Iterations:  loopResult.Iterations,
 			PhaseRepos:  phaseRepos,
-		}, nil
-
-	case "plan_revision_required":
-		return &PhaseImplementLoopResult{
-			FinalStatus:          "plan_revision_required",
-			Iterations:           loopResult.Iterations,
-			PhaseRepos:           phaseRepos,
-			PlanRevisionFeedback: loopResult.PlanRevisionFeedback,
 		}, nil
 
 	case "interrupted":

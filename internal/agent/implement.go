@@ -230,9 +230,6 @@ func resolveImplementSessionConfig(cfg ImplementConfig, role llm.PhaseRole) (ses
 //
 // FinalStatus values:
 //   - "review_passed":     iteration emitted SUCCESS and the review gate APPROVED.
-//   - "plan_revision_required": implementation found a phase-plan contract
-//     defect with structured requirements that must go through phase-plan
-//     revision.
 //   - "max_iterations":    hit cfg.MaxIterations without a passing review.
 //   - "safety_rail":       no-progress / consecutive-failure rail tripped.
 //   - "interrupted":       shutdown / feature stopped while running.
@@ -240,10 +237,6 @@ type LoopResult struct {
 	FinalStatus string
 	Iterations  int
 	LastError   string
-
-	// PlanRevisionFeedback carries phase-plan repair requirements when
-	// FinalStatus == "plan_revision_required".
-	PlanRevisionFeedback string
 }
 
 // runImplementationLoop manages the iterative agent loop.
@@ -388,16 +381,6 @@ func runImplementationLoop(cfg ImplementConfig, sm ports.SessionManager) (result
 			sess         ports.SessionHandle
 			waitResult   PhaseOutcomeWaitResult
 		)
-		planContent := readPlanContent(cfg.PlanPath)
-		if violations := verificationScopeViolations(planContent); len(violations) > 0 {
-			cfg.Observer.IterationEnded(iterCtx, i, observe.SessionUsage{}, time.Since(iterStart), "plan_revision_required")
-			return &LoopResult{
-				FinalStatus:          "plan_revision_required",
-				Iterations:           i,
-				PlanRevisionFeedback: verificationScopePlanRevisionFeedback(violations),
-			}, nil
-		}
-
 		if skipImplement {
 			// Resume point: implement phase already finished in the prior run.
 			// Skip session creation and jump to the review gate. Cost was
@@ -1266,16 +1249,6 @@ func runReviewGate(cfg ImplementConfig, sm ports.SessionManager, iteration int, 
 		return reviewStatus, feedback, fmt.Errorf("running review gate: %w", err)
 	}
 	return reviewStatus, feedback, nil
-}
-
-func verificationScopePlanRevisionFeedback(violations []ProtocolViolation) string {
-	var b strings.Builder
-	b.WriteString("## Verification Scope Errors\n\n")
-	b.WriteString("Repair the phase plan's verification declarations without changing implementation scope. Multi-repo commands require `[repo: <name>]` and run from that repository root; evidence that reaches an external host must declare the capability that reaches it.\n")
-	for _, violation := range violations {
-		fmt.Fprintf(&b, "\n- %s\n", violation.Reason)
-	}
-	return b.String()
 }
 
 // buildImplementPrompt constructs the per-call prompt for an implementation
@@ -2312,17 +2285,6 @@ func parseLargeCodexCommandOutput(line []byte, threshold int) (largeCodexCommand
 		ExitCode:    raw.Params.Item.ExitCode,
 		DurationMs:  raw.Params.Item.DurationMs,
 	}, true
-}
-
-func readPlanContent(planPath string) string {
-	if planPath == "" {
-		return ""
-	}
-	data, err := os.ReadFile(planPath)
-	if err != nil {
-		return ""
-	}
-	return strings.TrimSpace(string(data))
 }
 
 // setReviewingGate persists the ReviewingGate flag on the feature so the

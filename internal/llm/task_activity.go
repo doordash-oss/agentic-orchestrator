@@ -26,7 +26,7 @@ const (
 )
 
 // EventOrigin carries provider-neutral provenance. Only root events may
-// authorize phase completion or create a feature-level user-input gate.
+// authorize phase completion.
 type EventOrigin struct {
 	Kind           EventOriginKind `json:"kind"`
 	TaskID         string          `json:"task_id,omitempty"`

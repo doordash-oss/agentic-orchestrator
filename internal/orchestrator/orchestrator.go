@@ -1026,8 +1026,8 @@ func (o *Orchestrator) featureStartControl(featureID string) *sync.Mutex {
 	return actual.(*sync.Mutex)
 }
 
-// interruptFeature stops all sessions for a feature and clears pending help,
-// permission, and feature-scoped input gate state. Normal phase work and
+// interruptFeature stops all sessions for a feature and clears pending help
+// and permission state. Normal phase work and
 // post-publish rebase children transition the feature to StatusInterrupted.
 //
 // Ordering matters: the Interrupted transition is committed BEFORE sessions

@@ -738,7 +738,7 @@ func actionCatalogDTOsWithChildGuard(f *feature.Feature, hasActiveChild bool) []
 		action(string(FeatureActionSetup), canSetup, featureScope, nil, childGuardReason(canSetup, ActionDisabledReason{Code: "no_pending_setup", Message: "feature has no pending or failed setup work"})...),
 		action(string(FeatureActionStart), canStart, featureScope, nil, childGuardReason(canStart, disabledStatusReason(status))...),
 		action(string(FeatureActionPauseStop), canStop, featureScope, nil, childGuardReason(canStop, ActionDisabledReason{Code: "not_running", Message: "feature has no active work to pause or stop"})...),
-		action(string(FeatureActionResume), canResume, featureScope, nil, childGuardReason(canResume, ActionDisabledReason{Code: "not_paused", Message: "feature has no paused session or input gate"})...),
+		action(string(FeatureActionResume), canResume, featureScope, nil, childGuardReason(canResume, ActionDisabledReason{Code: "not_paused", Message: "feature is not interrupted"})...),
 		action(string(FeatureActionRestart), canRestart, featureScope, nil, childGuardReason(canRestart, ActionDisabledReason{Code: "running", Message: "feature must stop before restart"})...),
 		action(string(FeatureActionPublish), canPublish, featureScope, nil, childGuardReason(canPublish, publishDisabledReason(f))...),
 		action(string(FeatureActionMerge), canMerge, featureScope, nil, childGuardReason(canMerge, mergeDisabledReason(f))...),
@@ -862,7 +862,7 @@ func childActionCatalogDTOs(f *feature.Feature, status feature.Status, running b
 	return []Action{
 		action(string(FeatureActionStart), canStart, featureScope, nil, blockedReason(disabledStatusReason(status))),
 		action(string(FeatureActionPauseStop), canStop, featureScope, nil, blockedReason(ActionDisabledReason{Code: "not_running", Message: "child has no active work to pause or stop"})),
-		action(string(FeatureActionResume), canResume, featureScope, nil, blockedReason(ActionDisabledReason{Code: "not_paused", Message: "child has no paused session or input gate"})),
+		action(string(FeatureActionResume), canResume, featureScope, nil, blockedReason(ActionDisabledReason{Code: "not_paused", Message: "child is not interrupted"})),
 		action(string(FeatureActionRestart), canRestart, featureScope, nil, restartReason),
 		// Setup reruns only the unfinished tasks of a failed child setup and
 		// leaves the child parked at Created; the card resolves the action

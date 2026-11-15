@@ -98,8 +98,7 @@ type AutoReviewUserInput struct {
 // (language guidelines, additional skills) the agent has access to for this
 // assignment.
 //
-// HasGuidelines / HasSkills gate their respective subsections; the section
-// as a whole is suppressed when neither is enabled.
+// HasGuidelines / HasSkills gate their respective subsections.
 // Guidelines, when non-empty, expands into per-language bullets listing
 // each language's index.md absolute path so the agent can browse the
 // catalog without guessing where guidelines live.

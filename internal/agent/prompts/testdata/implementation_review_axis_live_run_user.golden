@@ -36,12 +36,6 @@ Read the implementation plan (source of truth) at: /state/feat-x/run-1/phase-2/p
 
 Settings dashboard matches the approved design.
 
-## Verification Report
-
-Read the verification report at: /state/feat-x/run-1/phase-2/implement/iteration-01/verification-report.yaml
-
-Apply the "Review Rules (Without Verification Items)" section from the axis methodology.
-
 ## Progress
 
 Read the current progress at: /state/feat-x/run-1/phase-2/implement/progress.md

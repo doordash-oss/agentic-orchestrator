@@ -35,17 +35,6 @@ Read the implementation plan at: /state/feat-x/run-1/phase-2/plan.md
 ### Craft
 - Tighten error handling.
 
-## Prior Implementation Evidence
-
-Implementation verification reports:
-- /state/feat-x/run-1/phase-1/implement/iteration-02/verification-report.yaml
-Evidence roots:
-- /state/feat-x/run-1/phase-1/implement/iteration-02
-Evidence artifacts:
-- /state/feat-x/run-1/phase-1/implement/iteration-02/screenshots/login.png
-
 ## Acceptance
 
 Feature acceptance is defined by the `## Acceptance Criteria` section of the approved design at /state/feat-x/run-1/design/design.md. Judge acceptance against that section, not against any restatement of it.
-
-Apply the "Review Rules (Without Verification Items)" section from the axis methodology.

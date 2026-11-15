@@ -37,10 +37,8 @@ func TestImplementPromptBranchBehavior(t *testing.T) {
 			},
 			wantContains: []string{"# Implementation Context", "**Plan**: /plan.md", "**Exit criteria**: Relevant tests pass."},
 			wantOmit: []string{
-				"Required verification items for this iteration",
 				"Reviewer feedback from previous iteration",
 				"Answers to NEED_HELP questions",
-				"Testing contract",
 			},
 		},
 		{
@@ -77,15 +75,13 @@ func TestImplementPromptBranchBehavior(t *testing.T) {
 
 func TestReviewPromptBranchBehavior(t *testing.T) {
 	base := ReviewUserInput{
-		Iteration:              2,
-		IterDir:                "/iter",
-		RoadmapPath:            "/roadmap.md",
-		PlanPath:               "/plan.md",
-		ExitCriteria:           "Relevant tests pass.",
-		VerificationReportPath: "/iter/verification-report.yaml",
-		ContractPath:           "/phase/testing-contract.yaml",
-		ProgressPath:           "/iter/progress.md",
-		PhaseType:              "tdd-fill-in",
+		Iteration:    2,
+		IterDir:      "/iter",
+		RoadmapPath:  "/roadmap.md",
+		PlanPath:     "/plan.md",
+		ExitCriteria: "Relevant tests pass.",
+		ProgressPath: "/iter/progress.md",
+		PhaseType:    "tdd-fill-in",
 	}
 
 	tests := []struct {

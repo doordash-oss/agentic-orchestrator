@@ -227,11 +227,7 @@ func runImplementationReviewAxes(cfg ImplementConfig, sm ports.SessionManager, i
 }
 
 type implementationReviewInput struct {
-	ProgressPath           string
-	ContractPath           string
-	VerificationReportPath string
-	RequiredVerification   []requiredVerificationItem
-	KnownCaveatsGateResult reportGateResult
+	ProgressPath string
 }
 
 func runImplementationReviewAxis(cfg ImplementConfig, sm ports.SessionManager, iteration int, iterDir, reviewDir string, axis implementationReviewAxis, parentCtx observe.SpanContext, input implementationReviewInput) (reviewStatus, string, error) {
@@ -253,39 +249,25 @@ func runImplementationReviewAxis(cfg ImplementConfig, sm ports.SessionManager, i
 	removeCompletionReceipt(axisDir)
 	intent := resolvePromptIntent(cfg.Feature)
 	reviewPrompt := buildImplementationReviewAxisPromptWithOpts(implementationReviewAxisPromptOpts{
-		Gate:                   implementationReviewGatePerPhase,
-		AxisLabel:              axis.Name,
-		FeatureDescription:     intent.Description,
-		DesignArtifactPath:     designArtifactPathForImplementationReview(cfg.Feature),
-		LiveRunAxis:            axis.ExecutionPosture == reviewPostureLiveRun,
-		RefactorPassForkPoint:  refactorPassForkPoint(cfg.Feature),
-		PlanPath:               cfg.PlanPath,
-		ExitCriteria:           cfg.ExitCriteria,
-		ProgressPath:           input.ProgressPath,
-		IterDir:                iterDir,
-		ContractPath:           input.ContractPath,
-		VerificationReportPath: input.VerificationReportPath,
-		Iteration:              iteration,
-		RequiredVerification:   input.RequiredVerification,
-		RoadmapPath:            cfg.RoadmapPath,
-		PhaseType:              cfg.PhaseType,
-		FeedbackPath:           feedbackPath,
+		Gate:                  implementationReviewGatePerPhase,
+		AxisLabel:             axis.Name,
+		FeatureDescription:    intent.Description,
+		DesignArtifactPath:    designArtifactPathForImplementationReview(cfg.Feature),
+		LiveRunAxis:           axis.ExecutionPosture == reviewPostureLiveRun,
+		RefactorPassForkPoint: refactorPassForkPoint(cfg.Feature),
+		PlanPath:              cfg.PlanPath,
+		ExitCriteria:          cfg.ExitCriteria,
+		ProgressPath:          input.ProgressPath,
+		IterDir:               iterDir,
+		Iteration:             iteration,
+		RoadmapPath:           cfg.RoadmapPath,
+		PhaseType:             cfg.PhaseType,
+		FeedbackPath:          feedbackPath,
 	})
 	if cfg.Feature != nil {
 		if block := visualReferencesSection(cfg.Feature.Images, "reviewing this iteration"); block != "" {
 			reviewPrompt = block + reviewPrompt
 		}
-	}
-	if cfg.Feature != nil {
-		if run := cfg.Feature.Run(); run != nil {
-			currentPhase := cfg.Feature.CurrentRoadmapPhase
-			if block := deferralsDueThisPhaseSection(run.Deferrals, currentPhase, deferralPromptKindReview, cfg.RepoName); block != "" {
-				reviewPrompt = block + reviewPrompt
-			}
-		}
-	}
-	if addendum := knownCaveatsReviewAddendum(input.KnownCaveatsGateResult); addendum != "" {
-		reviewPrompt = addendum + "\n\n" + reviewPrompt
 	}
 
 	reviewID := implementationReviewSessionID(cfg, axisSlug, iteration)

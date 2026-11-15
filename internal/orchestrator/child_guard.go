@@ -29,22 +29,21 @@ func (o *Orchestrator) closeChildRelationship(childID, outcome string, closedAt 
 type mutationOperation string
 
 const (
-	mutationPublish       mutationOperation = "publish"
-	mutationMerge         mutationOperation = "merge"
-	mutationRewind        mutationOperation = "rewind"
-	mutationCleanup       mutationOperation = "cleanup"
-	mutationMarkDone      mutationOperation = "mark-done"
-	mutationDelivery      mutationOperation = "delivery"
-	mutationRestart       mutationOperation = "restart"
-	mutationResume        mutationOperation = "resume"
-	mutationStart         mutationOperation = "start"
-	mutationStop          mutationOperation = "stop"
-	mutationRetry         mutationOperation = "retry"
-	mutationDelete        mutationOperation = "delete"
-	mutationRefactor      mutationOperation = "refactor"
-	mutationConfig        mutationOperation = "config"
-	mutationDiscard       mutationOperation = "discard"
-	mutationNeedUserInput mutationOperation = "need-user-input"
+	mutationPublish  mutationOperation = "publish"
+	mutationMerge    mutationOperation = "merge"
+	mutationRewind   mutationOperation = "rewind"
+	mutationCleanup  mutationOperation = "cleanup"
+	mutationMarkDone mutationOperation = "mark-done"
+	mutationDelivery mutationOperation = "delivery"
+	mutationRestart  mutationOperation = "restart"
+	mutationResume   mutationOperation = "resume"
+	mutationStart    mutationOperation = "start"
+	mutationStop     mutationOperation = "stop"
+	mutationRetry    mutationOperation = "retry"
+	mutationDelete   mutationOperation = "delete"
+	mutationRefactor mutationOperation = "refactor"
+	mutationConfig   mutationOperation = "config"
+	mutationDiscard  mutationOperation = "discard"
 	// mutationReviewDecision covers a user review-gate decision (proceed/
 	// iterate/rewind) that can clear gate fields and dispatch a new phase.
 	// It is an ordinary execution control for a child but a parent mutation
@@ -59,7 +58,6 @@ var allowedChildMutations = map[mutationOperation]bool{
 	mutationStop:           true,
 	mutationRestart:        true,
 	mutationResume:         true,
-	mutationNeedUserInput:  true,
 	mutationConfig:         true,
 	mutationDiscard:        true,
 	mutationRetry:          true,

@@ -19,7 +19,6 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -1428,46 +1427,6 @@ func TestSessionGuardHandler_DeniesHarnessReceiptMutationForEveryProvider(t *tes
 	}
 }
 
-func TestSessionGuardHandler_DeniesTestingContractMutationForEveryProvider(t *testing.T) {
-	contract := filepath.Join(t.TempDir(), testingContractFilename)
-	for _, provider := range []string{"claude", "codex", "opencode"} {
-		for _, tc := range []struct {
-			name  string
-			tool  string
-			input string
-		}{
-			{name: "write", tool: toolNameWrite, input: `{"file_path":"` + contract + `","content":"items: []"}`},
-			{name: "edit", tool: toolNameEdit, input: `{"file_path":"` + contract + `","old_string":"a","new_string":"b"}`},
-			{name: "notebook", tool: toolNameNotebookEdit, input: `{"notebook_path":"` + contract + `"}`},
-			{name: "shell", tool: toolNameBash, input: `{"command":"cat plan.yaml > ` + contract + `"}`},
-		} {
-			t.Run(provider+"/"+tc.name, func(t *testing.T) {
-				handler := Guarded(&AutoApproveHandler{})
-				decision, err := handler.CanUseTool(ports.ToolPermissionRequest{
-					ToolName:     tc.tool,
-					Input:        tc.input,
-					ProviderName: provider,
-				})
-				if err != nil {
-					t.Fatalf("CanUseTool() error = %v", err)
-				}
-				if decision.Behavior != decisionDeny {
-					t.Fatalf("Behavior = %q, want deny", decision.Behavior)
-				}
-				if !strings.Contains(decision.Reason, "harness-owned") {
-					t.Fatalf("Reason = %q, want harness-owned guidance", decision.Reason)
-				}
-			})
-		}
-	}
-}
-
-func TestSessionGuardHandler_AllowsTestingContractReadThroughReadOnlyTool(t *testing.T) {
-	contract := filepath.Join(t.TempDir(), testingContractFilename)
-	handler := Guarded(&AutoApproveHandler{})
-	requirePermissionAllowed(t, handler, "Read", `{"file_path":"`+contract+`"}`)
-}
-
 func TestSessionGuardHandler_AllowsReceiptReadThroughReadOnlyTool(t *testing.T) {
 	receipt := filepath.Join(t.TempDir(), completionReceiptFilename)
 	handler := Guarded(&AutoApproveHandler{})
@@ -1485,100 +1444,5 @@ func TestGuarded_UsesDefaultThreshold(t *testing.T) {
 	}
 	if guard.Inner != inner {
 		t.Error("Guarded did not preserve inner handler")
-	}
-}
-
-func TestSessionGuardHandler_AllowsBareHarnessCLIAgainstContract(t *testing.T) {
-	contract := filepath.Join(t.TempDir(), testingContractFilename)
-	handler := Guarded(&AutoApproveHandler{})
-	for _, cmd := range []string{
-		`"$AGENTICO_BIN" validate-artifacts --phase implement --role implementer --dir /tmp/iter`,
-		`"$AGENTICO_BIN" report-blocker --contract "` + contract + `" --dir /tmp/iter --items visual_1,manual_2 --capability authenticated-browser(slack.com) --reason "no signed-in session"`,
-		`/usr/local/bin/agentico validate-artifacts --phase implement --role implementer --dir /tmp/iter`,
-	} {
-		requirePermissionAllowed(t, handler, toolNameBash, `{"command":`+strconv.Quote(cmd)+`}`)
-	}
-	for _, cmd := range []string{
-		`"$AGENTICO_BIN" report-blocker --contract ` + contract + ` --dir /tmp/iter; echo x > ` + contract,
-		`"$AGENTICO_BIN" report-blocker --contract ` + contract + ` && sed -i s/waived// ` + contract,
-		`"$AGENTICO_BIN" server --contract ` + contract,
-		`cp "$AGENTICO_BIN" ` + contract,
-		`"$AGENTICO_BIN" report-blocker --contract $(echo ` + contract + `)`,
-		`"$OTHER_BIN" report-blocker --contract ` + contract,
-	} {
-		decision, err := handler.CanUseTool(ports.ToolPermissionRequest{ToolName: toolNameBash, Input: `{"command":` + strconv.Quote(cmd) + `}`, ProviderName: "codex"})
-		if err != nil {
-			t.Fatal(err)
-		}
-		if decision.Behavior != decisionDeny {
-			t.Fatalf("command %q allowed; want deny", cmd)
-		}
-	}
-}
-
-func TestSessionGuardHandler_ExplainsMalformedHarnessCLIDenial(t *testing.T) {
-	const genericReason = "testing-contract.yaml is harness-owned"
-	for _, tc := range []struct {
-		name           string
-		command        string
-		wantAllowed    bool
-		wantReasonPart string
-	}{
-		{
-			name:           "variable assignment and semicolon",
-			command:        `P=/work/feature/phase-01; "$AGENTICO_BIN" report-blocker --contract "$P/testing-contract.yaml" --dir "$P/implement/iteration-04" --items visual_1 --capability display --reason "no display"`,
-			wantReasonPart: "agentico report-blocker must be invoked as a single bare command",
-		},
-		{
-			name:           "cd and relative paths",
-			command:        `cd /work/feature/phase-01 && "$AGENTICO_BIN" report-blocker --contract testing-contract.yaml --dir implement/iteration-06 --items visual_1 --capability display --reason "no display"`,
-			wantReasonPart: "agentico report-blocker must be invoked as a single bare command",
-		},
-		{
-			name:           "validate-artifacts piped",
-			command:        `"$AGENTICO_BIN" validate-artifacts --phase implement --role implementer --dir /work/iter|tail /work/testing-contract.yaml`,
-			wantReasonPart: "agentico validate-artifacts must be invoked as a single bare command",
-		},
-		{
-			name:        "well-formed bare call",
-			command:     `"$AGENTICO_BIN" report-blocker --contract /work/feature/phase-01/testing-contract.yaml --dir /work/feature/phase-01/implement/iteration-06 --items visual_1 --capability display --reason "no display"`,
-			wantAllowed: true,
-		},
-		{
-			name:           "unrelated command",
-			command:        `cat plan.yaml > /work/feature/phase-01/testing-contract.yaml`,
-			wantReasonPart: genericReason,
-		},
-		{
-			name:           "unsanctioned subcommand",
-			command:        `"$AGENTICO_BIN" server --contract /work/testing-contract.yaml`,
-			wantReasonPart: genericReason,
-		},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			// The inner handler allows everything, so a deny can only come
-			// from the guard.
-			handler := Guarded(&mockHandler{behavior: DecisionAllow})
-			decision, err := handler.CanUseTool(ports.ToolPermissionRequest{
-				ToolName:     toolNameBash,
-				Input:        `{"command":` + strconv.Quote(tc.command) + `}`,
-				ProviderName: "claude",
-			})
-			if err != nil {
-				t.Fatalf("CanUseTool() error = %v", err)
-			}
-			if tc.wantAllowed {
-				if decision.Behavior != DecisionAllow {
-					t.Fatalf("Behavior = %q (reason %q), want allow from inner handler", decision.Behavior, decision.Reason)
-				}
-				return
-			}
-			if decision.Behavior != decisionDeny {
-				t.Fatalf("Behavior = %q, want deny", decision.Behavior)
-			}
-			if !strings.Contains(decision.Reason, tc.wantReasonPart) {
-				t.Fatalf("Reason = %q, want it to contain %q", decision.Reason, tc.wantReasonPart)
-			}
-		})
 	}
 }

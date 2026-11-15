@@ -258,22 +258,19 @@ func TestComposeImplementationReviewFeedbackPoolsDesignOriginalityBlock(t *testi
 
 func TestBuildImplementationReviewAxisPromptIncludesFinalGateContext(t *testing.T) {
 	got := buildImplementationReviewAxisPromptWithOpts(implementationReviewAxisPromptOpts{
-		Gate:                                 implementationReviewGateFinal,
-		AxisLabel:                            "Functionality/Evidence",
-		FeatureDescription:                   "Assembled feature intent.",
-		DesignArtifactPath:                   "/design.md",
-		ExitCriteria:                         "Feature fully implemented.",
-		DiffBase:                             "main",
-		PreviousFeedback:                     "Prior aggregate finding.",
-		Iteration:                            2,
-		RoadmapPath:                          "/roadmap.md",
-		PlanPath:                             "/phase-plan.md",
-		PhaseType:                            "tdd-fill-in",
-		IterDir:                              "/review/iteration-02",
-		FeedbackPath:                         "/review/iteration-02/functionality-evidence/review-feedback.md",
-		PriorImplementationReportPaths:       []string{"/phase-01/implement/iteration-01/verification-report.yaml"},
-		PriorImplementationEvidenceRootDirs:  []string{"/phase-01/implement/iteration-01"},
-		PriorImplementationEvidenceArtifacts: []string{"/phase-01/implement/iteration-01/screenshots/dashboard.png"},
+		Gate:               implementationReviewGateFinal,
+		AxisLabel:          "Functionality/Evidence",
+		FeatureDescription: "Assembled feature intent.",
+		DesignArtifactPath: "/design.md",
+		ExitCriteria:       "Feature fully implemented.",
+		DiffBase:           "main",
+		PreviousFeedback:   "Prior aggregate finding.",
+		Iteration:          2,
+		RoadmapPath:        "/roadmap.md",
+		PlanPath:           "/phase-plan.md",
+		PhaseType:          "tdd-fill-in",
+		IterDir:            "/review/iteration-02",
+		FeedbackPath:       "/review/iteration-02/functionality-evidence/review-feedback.md",
 	})
 
 	for _, want := range []string{
@@ -287,9 +284,6 @@ func TestBuildImplementationReviewAxisPromptIncludesFinalGateContext(t *testing.
 		"Read the approved roadmap at: /roadmap.md",
 		"Read the implementation plan at: /phase-plan.md",
 		"Prior aggregate finding.",
-		"/phase-01/implement/iteration-01/verification-report.yaml",
-		"/phase-01/implement/iteration-01",
-		"/phase-01/implement/iteration-01/screenshots/dashboard.png",
 		"Review feedback output: /review/iteration-02/functionality-evidence/review-feedback.md",
 	} {
 		if !strings.Contains(got, want) {
@@ -407,10 +401,6 @@ func TestRunImplementationReviewAxesUsesLiveRunPostureForFrontendDesign(t *testi
 	if err := os.WriteFile(progressPath, []byte("# Iteration Progress\n\n## Iteration State\n\nSUCCESS\n"), 0o644); err != nil {
 		t.Fatalf("write progress: %v", err)
 	}
-	reportPath := filepath.Join(iterDir, "verification-report.yaml")
-	if err := os.WriteFile(reportPath, []byte("version: 1\nrequired_checks: []\n"), 0o644); err != nil {
-		t.Fatalf("write verification report: %v", err)
-	}
 	planPath := filepath.Join(artifactDir, "phase-plan.md")
 	if err := os.WriteFile(planPath, []byte("# Plan\n"), 0o644); err != nil {
 		t.Fatalf("write plan: %v", err)
@@ -454,7 +444,7 @@ func TestRunImplementationReviewAxesUsesLiveRunPostureForFrontendDesign(t *testi
 		iterDir,
 		reviewDir,
 		observe.SpanContext{TraceID: f.TraceID, SpanID: "review-span", FeatureID: f.ID, FeatureName: f.Name, RunNumber: 1},
-		implementationReviewInput{ProgressPath: progressPath, VerificationReportPath: reportPath},
+		implementationReviewInput{ProgressPath: progressPath},
 	)
 	if err != nil {
 		t.Fatalf("runImplementationReviewAxes() error = %v", err)
@@ -520,10 +510,6 @@ func TestRunImplementationReviewAxesEmitsEventsAndPersistsStatus(t *testing.T) {
 	if err := os.WriteFile(progressPath, []byte("# Iteration Progress\n\n## Iteration State\n\nSUCCESS\n"), 0o644); err != nil {
 		t.Fatalf("write progress: %v", err)
 	}
-	reportPath := filepath.Join(iterDir, "verification-report.yaml")
-	if err := os.WriteFile(reportPath, []byte("version: 1\nrequired_checks: []\n"), 0o644); err != nil {
-		t.Fatalf("write verification report: %v", err)
-	}
 	planPath := filepath.Join(artifactDir, "phase-plan.md")
 	if err := os.WriteFile(planPath, []byte("# Plan\n"), 0o644); err != nil {
 		t.Fatalf("write plan: %v", err)
@@ -568,7 +554,7 @@ func TestRunImplementationReviewAxesEmitsEventsAndPersistsStatus(t *testing.T) {
 		iterDir,
 		reviewDir,
 		observe.SpanContext{TraceID: f.TraceID, SpanID: "review-span", FeatureID: f.ID, FeatureName: f.Name, RunNumber: 1},
-		implementationReviewInput{ProgressPath: progressPath, VerificationReportPath: reportPath},
+		implementationReviewInput{ProgressPath: progressPath},
 	)
 	if err != nil {
 		t.Fatalf("runImplementationReviewAxes() error = %v", err)
@@ -646,10 +632,6 @@ func TestRunImplementationReviewAxesPerPhaseGateOmitsAcceptanceClause(t *testing
 	if err := os.WriteFile(progressPath, []byte("# Iteration Progress\n\n## Iteration State\n\nSUCCESS\n"), 0o644); err != nil {
 		t.Fatalf("write progress: %v", err)
 	}
-	reportPath := filepath.Join(iterDir, "verification-report.yaml")
-	if err := os.WriteFile(reportPath, []byte("version: 1\nrequired_checks: []\n"), 0o644); err != nil {
-		t.Fatalf("write verification report: %v", err)
-	}
 	planPath := filepath.Join(artifactDir, "phase-plan.md")
 	if err := os.WriteFile(planPath, []byte("# Plan\n"), 0o644); err != nil {
 		t.Fatalf("write plan: %v", err)
@@ -700,7 +682,7 @@ func TestRunImplementationReviewAxesPerPhaseGateOmitsAcceptanceClause(t *testing
 		iterDir,
 		reviewDir,
 		observe.SpanContext{TraceID: f.TraceID, SpanID: "review-span", FeatureID: f.ID, FeatureName: f.Name, RunNumber: 1},
-		implementationReviewInput{ProgressPath: progressPath, VerificationReportPath: reportPath},
+		implementationReviewInput{ProgressPath: progressPath},
 	)
 	if err != nil {
 		t.Fatalf("runImplementationReviewAxes() error = %v", err)

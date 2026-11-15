@@ -50,12 +50,6 @@ func (s reviewStatus) String() string {
 	}
 }
 
-// verificationItemView projects a RequiredVerificationItem for review templates.
-type verificationItemView struct {
-	Name        string
-	Requirement string
-}
-
 // reviewUserInput is the data passed to review.user.tmpl.
 type reviewUserInput struct {
 	Iteration int
@@ -74,18 +68,10 @@ type reviewUserInput struct {
 	// top-level features.
 	RefactorPassForkPoint string
 
-	RoadmapPath            string
-	PlanPath               string
-	ExitCriteria           string
-	AcceptanceClause       string
-	VerificationReportPath string
-
-	ContractPath         string
-	RequiredVerification []verificationItemView
-
-	PriorImplementationReportPaths       []string
-	PriorImplementationEvidenceRootDirs  []string
-	PriorImplementationEvidenceArtifacts []string
+	RoadmapPath      string
+	PlanPath         string
+	ExitCriteria     string
+	AcceptanceClause string
 
 	ProgressPath string
 	PhaseType    string
@@ -95,8 +81,7 @@ type reviewUserInput struct {
 
 // implementationReviewAxisPromptOpts carries the shared prompt context for an
 // implementation review axis. The per-phase gate populates the phase-scoped
-// fields; the Final Review gate also supplies cumulative-diff and prior
-// implementation evidence context.
+// fields; the Final Review gate also supplies cumulative-diff context.
 type implementationReviewAxisPromptOpts struct {
 	Gate      implementationReviewGate
 	AxisLabel string
@@ -112,33 +97,18 @@ type implementationReviewAxisPromptOpts struct {
 	// refactor child ("repo @ sha"). Empty for top-level features.
 	RefactorPassForkPoint string
 
-	ProgressPath           string
-	IterDir                string
-	ContractPath           string
-	VerificationReportPath string
-	Iteration              int
-	RequiredVerification   []requiredVerificationItem
-	RoadmapPath            string
-	PlanPath               string
-	PhaseType              string
-	FeedbackPath           string
-
-	PriorImplementationReportPaths       []string
-	PriorImplementationEvidenceRootDirs  []string
-	PriorImplementationEvidenceArtifacts []string
+	ProgressPath string
+	IterDir      string
+	Iteration    int
+	RoadmapPath  string
+	PlanPath     string
+	PhaseType    string
+	FeedbackPath string
 }
 
 // buildImplementationReviewAxisPromptWithOpts renders one gate-aware
 // implementation review axis prompt.
 func buildImplementationReviewAxisPromptWithOpts(opts implementationReviewAxisPromptOpts) string {
-	required := make([]verificationItemView, 0, len(opts.RequiredVerification))
-	for _, item := range opts.RequiredVerification {
-		required = append(required, verificationItemView{
-			Name:        item.Name,
-			Requirement: item.Requirement,
-		})
-	}
-
 	phaseType := opts.PhaseType
 	if opts.Gate == implementationReviewGateFinal {
 		phaseType = ""
@@ -146,29 +116,23 @@ func buildImplementationReviewAxisPromptWithOpts(opts implementationReviewAxisPr
 
 	return prompts.ImplementationReviewAxisUserPrompt(implementationReviewAxisUserInput{
 		reviewUserInput: reviewUserInput{
-			Iteration:                            opts.Iteration,
-			IterDir:                              opts.IterDir,
-			GateLabel:                            implementationReviewGateLabel(opts.Gate),
-			FinalGate:                            opts.Gate == implementationReviewGateFinal,
-			LiveRunAxis:                          opts.LiveRunAxis,
-			DiffBase:                             opts.DiffBase,
-			RefactorPassForkPoint:                opts.RefactorPassForkPoint,
-			FeatureDescription:                   opts.FeatureDescription,
-			DesignArtifactPath:                   opts.DesignArtifactPath,
-			PreviousFeedback:                     opts.PreviousFeedback,
-			RoadmapPath:                          opts.RoadmapPath,
-			PlanPath:                             opts.PlanPath,
-			ExitCriteria:                         opts.ExitCriteria,
-			AcceptanceClause:                     opts.AcceptanceClause,
-			VerificationReportPath:               opts.VerificationReportPath,
-			ContractPath:                         opts.ContractPath,
-			RequiredVerification:                 required,
-			PriorImplementationReportPaths:       opts.PriorImplementationReportPaths,
-			PriorImplementationEvidenceRootDirs:  opts.PriorImplementationEvidenceRootDirs,
-			PriorImplementationEvidenceArtifacts: opts.PriorImplementationEvidenceArtifacts,
-			ProgressPath:                         opts.ProgressPath,
-			PhaseType:                            phaseType,
-			FeedbackPath:                         opts.FeedbackPath,
+			Iteration:             opts.Iteration,
+			IterDir:               opts.IterDir,
+			GateLabel:             implementationReviewGateLabel(opts.Gate),
+			FinalGate:             opts.Gate == implementationReviewGateFinal,
+			LiveRunAxis:           opts.LiveRunAxis,
+			DiffBase:              opts.DiffBase,
+			RefactorPassForkPoint: opts.RefactorPassForkPoint,
+			FeatureDescription:    opts.FeatureDescription,
+			DesignArtifactPath:    opts.DesignArtifactPath,
+			PreviousFeedback:      opts.PreviousFeedback,
+			RoadmapPath:           opts.RoadmapPath,
+			PlanPath:              opts.PlanPath,
+			ExitCriteria:          opts.ExitCriteria,
+			AcceptanceClause:      opts.AcceptanceClause,
+			ProgressPath:          opts.ProgressPath,
+			PhaseType:             phaseType,
+			FeedbackPath:          opts.FeedbackPath,
 		},
 		AxisLabel: opts.AxisLabel,
 	})
@@ -318,9 +282,8 @@ func parseReviewFeedback(path string) (*parsedReviewFeedback, error) {
 }
 
 // formatStructuredReviewFeedback wraps a free-form feedback body in the
-// canonical `## Findings` / `## Suggestions` / `## Verdict` schema. Used by
-// deterministic gates (Report Integrity, deferral ledger) that synthesize a
-// CHANGES_REQUESTED verdict programmatically.
+// canonical `## Findings` / `## Suggestions` / `## Verdict` schema for
+// harness-synthesized verdicts.
 //
 // findings, suggestions, and verdict are emitted verbatim under their
 // section headings. When findings or suggestions are empty, the canonical

@@ -35,7 +35,7 @@ type PhaseScopeResult struct {
 	// Feature.Repos[0] in that case.
 	Repos []string
 	// Tasks is the parsed Tasks section, returned for convenience so callers
-	// (testing-contract compiler, implement loop) don't re-parse the plan.
+	// (implement loop) don't re-parse the plan.
 	Tasks []PlanTask
 	// Issues lists structural validation problems. Non-empty means the plan
 	// is malformed; ScopeOK is false.

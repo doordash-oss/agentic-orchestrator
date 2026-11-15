@@ -47,8 +47,7 @@ Each smell reads *what it is* → *how to fix*; match it against the diff:
 
 ## Non-Goals
 
-- Do not audit whether every verification item passed.
-- Do not emit `MISSING_EVIDENCE_REQUIREMENT`.
+- Do not judge whether the plan's verification passes; Functionality/Evidence owns that.
 - Do not police cross-repo atomicity, stray files, or unrelated touched files.
 - Do not request changes for taste preferences unsupported by local conventions.
 

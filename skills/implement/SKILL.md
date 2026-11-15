@@ -1,12 +1,12 @@
 ---
-description: Execute an approved phase plan with TDD, dependency-aware task fan-out, required evidence, and a strict iteration handoff
+description: Execute an approved phase plan with TDD, dependency-aware task fan-out, the plan's verification and evidence, and a strict iteration handoff
 license: Apache-2.0; Superpowers inspiration acknowledged in ATTRIBUTION.md
 provenance: upstream-inspired
 ---
 
 # Plan Execution
 
-Implement the approved phase plan. You own code, development-time testing, explicitly agent-owned evidence, and the progress handoff. The verification harness owns final contract execution and `verification-report.yaml`.
+Implement the approved phase plan. You own code, development-time testing, the plan's verification and the evidence it asks for, and the progress handoff.
 
 ## Output Files
 
@@ -16,13 +16,12 @@ Implement the approved phase plan. You own code, development-time testing, expli
 
 ## Start Here
 
-Never create or edit `verification-report.yaml` or `phase_complete`. When a testing contract exists, the harness derives the report after it commits your structured root outcome.
+Never create or edit `phase_complete`.
 
 1. Read the full phase plan.
 2. If `{phase_dir}/progress.md` exists, read it and resume from `### Where I stopped`. Reviewer feedback and the current plan override stale handoff prose.
-3. Read `testing-contract.yaml` if it exists — at `{phase_dir}/../testing-contract.yaml` for roadmap phases, or `{phase_dir}/testing-contract.yaml` for cycle layouts (rebase/review-comments, where `{phase_dir}` is the cycle root). Note only items with `owner: agent`; final execution of `owner: harness` items is not your responsibility. If the file does not exist, this feature has no per-iteration machine verification: run every command under the plan's `### Automated Verification` yourself each iteration and record the commands and results in your handoff — SUCCESS asserts they pass.
-4. Confirm every Task `**Repo:** <name>` is mounted. If the plan or repo scope is contradictory, call the formal AskUserQuestion control and continue after the answer.
-5. Build a dependency graph from `Blocked by`, shared files, repo tags, and acceptance criteria.
+3. Confirm every Task `**Repo:** <name>` is mounted. If the plan or repo scope is contradictory, call the formal AskUserQuestion control and continue after the answer.
+4. Build a dependency graph from `Blocked by`, shared files, repo tags, and acceptance criteria.
 
 ## Implementation Rules
 
@@ -31,32 +30,32 @@ Never create or edit `verification-report.yaml` or `phase_complete`. When a test
 - Pin discovered bugs with regression tests before fixing them when practical.
 - Manual evidence does not replace an automated test for behavior that can reasonably be automated.
 - Use stubs only when the plan explicitly requests them. Mark intentional stubs with `// STUB(Phase N): <purpose>`.
-- Do not invent bookkeeping rows or edit the testing contract. If the contract or scope must change, request user input.
+- If the plan or scope must change, call the formal AskUserQuestion control.
 - Add comments only for intent, rationale, invariants, or non-obvious tradeoffs.
 
 ## Task Fan-Out
 
 Parallelize independent non-trivial Tasks. Give each worker the exact Task and acceptance criteria, its repo/file boundary, dependencies, and the focused development test it should use. Sequentialize shared migrations, API decisions, and overlapping edits. Review returned diffs and integrate them before unlocking dependents.
 
-Workers validate the code they change. They do not author final verification results; when a testing contract exists, the harness runs it after handoff. Otherwise, run the plan's Automated Verification before reporting SUCCESS.
+Workers validate the code they change. Before reporting SUCCESS, run every command under the plan's `### Automated Verification` yourself, from the root of the repository its `[repo: <name>]` tag names, and record the commands and results in your handoff — SUCCESS asserts they pass.
 
-## Agent-Owned Evidence
+## Plan Evidence
 
-For every testing-contract item with `owner: agent`, write the file named by `expected_evidence.path` under `{iteration_dir}`.
+When the plan's Success Criteria ask for evidence, capture it under `{iteration_dir}`:
 
-- `manual_observation`: one concise Markdown record covering the contract's consolidated semantic checklist, the observed result, and enough concrete detail for review.
-- `visual_artifact`: the actual image at the specified `screenshots/` path.
-- `behavioral_artifact`: one actual trace, recording, or interaction log covering the contract's consolidated primary-journey checklist at the specified `behaviors/` path.
+- Manual Verification: one concise Markdown record under `observations/` covering the consolidated checklist, the observed result, and enough concrete detail for review.
+- Visual Evidence: the actual image for each item under `screenshots/`, at its declared size.
+- Behavioral Evidence: one actual trace, recording, or interaction log per item under `behaviors/`, produced by the item's packaged command when it has one.
 
-Do not write evidence for `owner: harness` items. Do not invent statuses, counts, transcripts, or waiver claims. If required evidence needs authorization, hardware, or an environment this session lacks, run `"$AGENTICO_BIN" report-blocker --contract "{testing_contract_path}" --dir "{iteration_dir}" --items <id,id,...> --capability <name> --reason <text>` with the affected contract item ids, then end the iteration with `RETRY`; the harness pauses on the user gate, which owns waivers and substitutions. Run it as a single bare command with absolute literal paths — no `cd`, `&&`, `;`, pipes, redirects, command substitution, or shell variables in arguments — or the permission guard refuses it. A row with `allow_substitution: true` accepts a faithful, labelled substitute. Never create placeholder evidence.
+Never create placeholder evidence or report a result you did not observe. If evidence needs authorization, hardware, or an environment this session lacks, call the formal AskUserQuestion control, or record exactly what you could not capture and why under `### Gotchas / blockers / in-flight decisions`.
 
 ## Handoff
 
 At iteration end:
 
-1. Write all required agent-owned evidence files.
+1. Write the plan's evidence files.
 2. Write `{phase_dir}/progress.md`.
-3. Run `"$AGENTICO_BIN" validate-artifacts --phase implement --role implementer --dir "{iteration_dir}"`; fix every reported handoff defect — including evidence gaps: missing, malformed, mis-sized, or byte-identical duplicate captures. This runs the same file-backed checks the post-handoff integrity gate applies — clearing them here avoids losing a whole iteration to a gap you can fix now.
+3. Run `"$AGENTICO_BIN" validate-artifacts --phase implement --role implementer --dir "{iteration_dir}"` and fix every reported handoff defect.
 4. Finish the root response with exactly one structured outcome tag from the system prompt. The harness writes `phase_complete` after validation.
 
 Use this `progress.md` shape:
@@ -94,6 +93,6 @@ The Deferrals block must include both keys. Deferrals are work due in a numbered
 
 Choose exactly one state:
 
-- `SUCCESS`: implementation, acceptance criteria, development tests, due deferrals, and all `owner: agent` evidence are complete. When a testing contract exists, the harness performs final contract verification next; otherwise your reported automated-verification runs are the record.
+- `SUCCESS`: implementation, acceptance criteria, development tests, the plan's automated verification, due deferrals, and the plan's evidence are complete.
 - `RETRY`: useful implementation progress landed and a concrete in-scope next action is possible in the current environment.
-Never emit a bare `RETRY` for a blocker you cannot act on in this environment (missing credentials, absent hardware): the harness re-dispatches `RETRY` iterations unchanged. Record the blocker with `report-blocker` first, or call the formal AskUserQuestion control for a human decision and resume the same iteration after the answer.
+Never emit `RETRY` for a blocker you cannot act on in this environment (missing credentials, absent hardware): the harness re-dispatches `RETRY` iterations unchanged. Call the formal AskUserQuestion control for a human decision and resume the same iteration after the answer.

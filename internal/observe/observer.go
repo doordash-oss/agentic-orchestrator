@@ -227,16 +227,6 @@ func (o *Observer) FeatureMutated(m feature.Mutation) {
 			}
 		}
 	}
-	beforeItems := make(map[string]string, len(m.Before.VerificationItems))
-	for _, item := range m.Before.VerificationItems {
-		beforeItems[item.Name] = item.State
-	}
-	for _, item := range m.After.VerificationItems {
-		if beforeItems[item.Name] == item.State || item.State == "" || item.State == "pending" || item.State == "running" {
-			continue
-		}
-		emit("verification.item_completed", item.State, map[string]any{"verification_type": "testing_contract", "item_name": item.Name})
-	}
 	for phase, total := range m.After.PhaseTimings {
 		if delta := total - m.Before.PhaseTimings[phase]; delta > 0 {
 			emit("phase.duration_recorded", "recorded", map[string]any{"phase": phase, "_duration_ms": delta.Milliseconds()})

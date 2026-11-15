@@ -104,24 +104,6 @@ func TestOutputFilesSectionHidesHarnessArtifacts(t *testing.T) {
 	}
 }
 
-func TestImplementSkillDiscoversTestingContractDirectly(t *testing.T) {
-	path := repoRootPath(t, "skills", "implement", "SKILL.md")
-	data, err := os.ReadFile(path)
-	if err != nil {
-		t.Fatalf("reading %s: %v", path, err)
-	}
-	content := string(data)
-	for _, want := range []string{
-		"{phase_dir}/../testing-contract.yaml",
-		"owner: agent",
-		"Never create or edit `verification-report.yaml`",
-	} {
-		if !strings.Contains(content, want) {
-			t.Fatalf("skills/implement/SKILL.md missing %q", want)
-		}
-	}
-}
-
 func TestImplementSkillDocumentsEvidenceFiles(t *testing.T) {
 	path := repoRootPath(t, "skills", "implement", "SKILL.md")
 	data, err := os.ReadFile(path)
@@ -130,11 +112,11 @@ func TestImplementSkillDocumentsEvidenceFiles(t *testing.T) {
 	}
 	content := string(data)
 	for _, want := range []string{
+		"`observations/`",
 		"`screenshots/`",
 		"`behaviors/`",
-		"expected_evidence.path",
-		"Never create or edit `verification-report.yaml`",
 		"Never create placeholder evidence",
+		"### Automated Verification",
 	} {
 		if !strings.Contains(content, want) {
 			t.Fatalf("skills/implement/SKILL.md missing evidence-file guidance %q", want)

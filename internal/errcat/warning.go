@@ -69,8 +69,8 @@ const (
 	// sessions on that provider will fail until the network path returns.
 	ProviderEndpointUnreachable Code = "provider_endpoint_unreachable"
 	// VerificationSandboxUnavailable reports a macOS host where sandbox-exec
-	// cannot apply a profile (typically a nested sandbox), so contract
-	// commands and review validators run unconfined.
+	// cannot apply a profile (typically a nested sandbox), so review
+	// validators run unconfined.
 	VerificationSandboxUnavailable Code = "verification_sandbox_unavailable"
 )
 

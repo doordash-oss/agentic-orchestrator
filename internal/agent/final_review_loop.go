@@ -547,28 +547,24 @@ func (s *featureFinalReviewLoopState) runFinalReviewAxis(ctx context.Context, it
 	_ = os.Remove(feedbackPath)
 
 	diffBase := featureDefaultDiffBase(cfg.Feature)
-	priorEvidence := priorImplementationEvidenceContextForRun(filepath.Dir(s.artifactDir))
 	intent := resolvePromptIntent(cfg.Feature)
 	prompt := buildImplementationReviewAxisPromptWithOpts(implementationReviewAxisPromptOpts{
-		Gate:                                 implementationReviewGateFinal,
-		AxisLabel:                            axis.Name,
-		FeatureDescription:                   intent.Description,
-		DesignArtifactPath:                   cfg.Feature.DesignArtifactPath(),
-		LiveRunAxis:                          axis.ExecutionPosture == reviewPostureLiveRun,
-		ExitCriteria:                         intent.ExitCriteria,
-		AcceptanceClause:                     intent.AcceptanceClause,
-		DiffBase:                             diffBase,
-		RefactorPassForkPoint:                refactorPassForkPoint(cfg.Feature),
-		PreviousFeedback:                     s.previousAggregateFeedback(iteration),
-		Iteration:                            iteration,
-		RoadmapPath:                          finalReviewArtifactPath(s.stateDir, cfg.Feature, "roadmap"),
-		PlanPath:                             finalReviewArtifactPath(s.stateDir, cfg.Feature, "plan"),
-		PhaseType:                            cfg.Feature.RoadmapPhaseType,
-		IterDir:                              iterDir,
-		FeedbackPath:                         feedbackPath,
-		PriorImplementationReportPaths:       priorEvidence.ReportPaths,
-		PriorImplementationEvidenceRootDirs:  priorEvidence.EvidenceRootDirs,
-		PriorImplementationEvidenceArtifacts: priorEvidence.EvidenceArtifactPaths,
+		Gate:                  implementationReviewGateFinal,
+		AxisLabel:             axis.Name,
+		FeatureDescription:    intent.Description,
+		DesignArtifactPath:    cfg.Feature.DesignArtifactPath(),
+		LiveRunAxis:           axis.ExecutionPosture == reviewPostureLiveRun,
+		ExitCriteria:          intent.ExitCriteria,
+		AcceptanceClause:      intent.AcceptanceClause,
+		DiffBase:              diffBase,
+		RefactorPassForkPoint: refactorPassForkPoint(cfg.Feature),
+		PreviousFeedback:      s.previousAggregateFeedback(iteration),
+		Iteration:             iteration,
+		RoadmapPath:           finalReviewArtifactPath(s.stateDir, cfg.Feature, "roadmap"),
+		PlanPath:              finalReviewArtifactPath(s.stateDir, cfg.Feature, "plan"),
+		PhaseType:             cfg.Feature.RoadmapPhaseType,
+		IterDir:               iterDir,
+		FeedbackPath:          feedbackPath,
 	})
 	if cfg.Feature != nil {
 		if block := visualReferencesSection(cfg.Feature.Images, "conducting this final review"); block != "" {

@@ -65,12 +65,8 @@ func TestTransitionValid(t *testing.T) {
 		{"ImplementReady->Failed", StatusImplementReady, StatusFailed},
 		{"Implementing->ReviewPassed", StatusImplementing, StatusReviewPassed},
 		{"Implementing->ImplementReady", StatusImplementing, StatusImplementReady},
-		{"Implementing->NeedUserInput", StatusImplementing, StatusNeedUserInput},
 		{"Implementing->Failed", StatusImplementing, StatusFailed},
 		{"Implementing->Interrupted", StatusImplementing, StatusInterrupted},
-		{"NeedUserInput->Implementing", StatusNeedUserInput, StatusImplementing},
-		{"NeedUserInput->Failed", StatusNeedUserInput, StatusFailed},
-		{"NeedUserInput->Interrupted", StatusNeedUserInput, StatusInterrupted},
 		{"ReviewPassed->CodeReady", StatusReviewPassed, StatusCodeReady},
 		{"ReviewPassed->Done", StatusReviewPassed, StatusDone},
 		{"ReviewPassed->Implementing", StatusReviewPassed, StatusImplementing},
@@ -313,7 +309,7 @@ func TestStatusYAMLRoundTrip(t *testing.T) {
 		StatusCodeReady, StatusPublished, StatusFailed, StatusInterrupted,
 		StatusDone, StatusBuildingKB,
 		StatusPlanNeedsReview, StatusInquiring, StatusInquireReady,
-		StatusDesignReady, StatusDesigning, StatusNeedUserInput,
+		StatusDesignReady, StatusDesigning,
 	}
 	for _, s := range statuses {
 		data, err := yaml.Marshal(s)

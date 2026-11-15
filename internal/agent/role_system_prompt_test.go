@@ -51,9 +51,7 @@ func TestImplementSystemPromptFromRoleSpec(t *testing.T) {
 		}
 	}
 	for _, oldSystemDetail := range []string{
-		"Write `verification-report.yaml` at the path your user prompt names",
 		"Write `progress.md` at the path your user prompt names",
-		"Need-user-input gate",
 	} {
 		if strings.Contains(got, oldSystemDetail) {
 			t.Fatalf("buildImplementSystemPrompt() still contains old implement-only system detail %q:\n%s", oldSystemDetail, got)

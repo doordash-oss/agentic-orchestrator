@@ -35,14 +35,11 @@ restart `phase`, `dispatch`, and `session_ids` fields (the first two were
 emitted but not consumed), adds the routed `selection` subaction enum value, and
 declares the delete response's existing `retryable` field. The rebase URL
 remains served through the generic action route. In schema series 4,
-ask-user questions carry a required one-based `index`; answers on both
-surfaces (the ask-user answer's `answers` and the need-user-input draft) are
+ask-user questions carry a required one-based `index`; ask-user answers are
 keyed by that index as a string (`"1"`, `"2"`, ...). Ask-user selections use
 arrays of one-based option indexes (`{"1":[2]}`), preserving option identity
 independently of trimmed or truncated display labels. Text answers remain
-supported, including verbatim labels for compatibility. Gate drafts use text
-answers. The need-user-input gate question's
-`index` is required (minimum 1). Series 3 removed `PUT` on
+supported, including verbatim labels for compatibility. Series 3 removed `PUT` on
 `/api/v1/config/runtime` (now `405`; `PATCH` is the only runtime-config
 mutation and keeps its partial-update semantics). Series 2 removed the chat
 prompt routes (`/api/v1/prompts/chat/start` and `/api/v1/prompts/chat/end`,
@@ -238,64 +235,6 @@ reason rather than substituting generic copy. In the desktop app this surfaces a
 per-parent "Refactor History" group beneath each parent (collapsed by default,
 expanded per session), read-only closed-child inspection, and focused action
 hints.
-
-## Capability Gates
-
-Testing-contract rows under Automated Verification, Manual Verification,
-Visual Evidence, or Behavioral Evidence may carry
-`[agentico capability: <name>]`, where `<name>` is a built-in capability:
-`authenticated-browser(<host>)`, `display`, `docker`, or
-`network(<host[:port]>)`. The older `[agentico capability: <name>; probe:
-<shell>]` form with an explicit probe still works. Built-in probes run
-in-process; an unknown name is a contract error routed to plan revision, not a
-user prompt. A Visual Evidence or Manual Verification row that names an
-external host without a capability is likewise returned for plan revision.
-
-The harness probes declared capabilities before each implementer iteration
-starts and again at post-handoff verification. A missing capability opens the
-need-user-input gate with actions `WAIVE`, `RETRY_AFTER_AUTH`, and, for
-agent-owned evidence rows whose policy forbids substitution,
-`ALLOW_SUBSTITUTE`, which sets `allow_substitution: true` on those rows so a
-labelled faithful substitute becomes acceptable evidence.
-
-`authenticated-browser(<host>)` first checks server policy: servers exposed on
-the network deny signed-in browser state by default, and
-`server.capabilities.browser_state: allow|deny` in `config.yaml` overrides
-either default. It then reads Playwright storage state from
-`<runtime_dir>/capabilities/browser/<host>/storageState.json`, checks cookie
-expiry, and makes one HTTP liveness request that fails on a sign-in redirect
-or 401/403. On success the row's command environment receives
-`AGENTICO_BROWSER_STATE_<HOST>` (host upper-cased, non-alphanumerics as `_`,
-e.g. `AGENTICO_BROWSER_STATE_SLACK_COM`) pointing at that file.
-
-CLI:
-
-- `agentico report-blocker --contract <testing-contract.yaml> --dir
-  <iteration_dir> --items <id,id,...> --capability <name> --reason <text>`
-  writes the blocker gate (`need-user-input.yaml`, source agent) into the
-  iteration directory; the implementer then ends the iteration with `RETRY`
-  and the harness pauses on the user gate. Item names shown to the user come
-  from the contract, not the agent.
-
-### GET /api/v1/features/{feature_id}/testing-contract
-
-Returns the current roadmap phase's compiled testing contract
-(`TestingContractResponse`): `active_run`, `roadmap_phase`, `revision`, and one `items`
-entry per row with `item_id`, `source`, `owner`, `repo`, `name`, `command`,
-the policy flags (`required`, `allow_substitution`, `allow_blocked`,
-`allow_waiver`), the recorded `disposition` when one exists, and declared
-`capabilities`. 404 `not_found` when the phase has no contract yet. The
-desktop waive dialog reads this to list waivable rows.
-
-### POST /api/v1/features/{feature_id}/actions/testing-contract-waive
-
-Records user-authorized waivers outside the gate. Body:
-`{ "item_ids": ["<id>", ...], "reason": "<text>", "active_run": <n>, "roadmap_phase": <n>, "contract_revision": <n> }`.
-The three optional integers bind the waiver to the contract the client read;
-a mismatch returns 409 `conflict` so a selection never applies to a later
-phase or revision. The response
-(`TestingContractWaiveResponse`) carries the new `contract_revision` and the
-`waived_items`.
 
 ## Supervisor Messages
 

@@ -52,17 +52,6 @@ type serverConfig struct {
 	// validated at server launch and, like the rest of this section,
 	// intentionally never appear on the runtime-config REST surface.
 	Updates ServerUpdatesConfig `yaml:"updates,omitempty"`
-	// Capabilities controls built-in verification capability probes.
-	Capabilities serverCapabilitiesConfig `yaml:"capabilities,omitempty"`
-}
-
-// serverCapabilitiesConfig holds server.capabilities startup settings.
-type serverCapabilitiesConfig struct {
-	// BrowserState is "allow" or "deny" for the authenticated-browser
-	// capability. Empty defaults to allow on loopback servers and deny on
-	// servers exposed to the network, where a signed-in session must never
-	// be provisioned.
-	BrowserState string `yaml:"browser_state,omitempty"`
 }
 
 // ServerUpdatesConfig is the raw server.updates config map. Values stay

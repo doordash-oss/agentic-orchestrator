@@ -22,10 +22,8 @@ import (
 )
 
 // progressMdHappy returns a minimal valid progress.md body for the given
-// state. iterDir is interpolated into the Verification Report path bullet
-// so the cross-check against the expected runtime path passes when the
-// caller passes filepath.Join(iterDir, "verification-report.yaml").
-func progressMdHappy(state, iterDir, stateNote string) string {
+// state.
+func progressMdHappy(state, stateNote string) string {
 	body := `# Iteration Progress
 
 ## Iteration Handoff
@@ -46,11 +44,6 @@ At the end of unit 4.
 deferrals: []
 closed_deferrals: []
 ` + "```" + `
-
-## Verification Report
-
-- **Path**: ` + iterDir + `/verification-report.yaml
-- **Summary**: 0 passed, 0 failed, 0 blocked, 0 not_run
 
 ## Iteration State
 
@@ -90,7 +83,7 @@ func TestParseProgressMd_RoundTripStates(t *testing.T) {
 			iterDir := filepath.Join(dir, "iteration-01")
 			_ = os.MkdirAll(iterDir, 0o755)
 			path := filepath.Join(dir, "progress.md")
-			body := progressMdHappy(tt.state, iterDir, "")
+			body := progressMdHappy(tt.state, "")
 			if err := os.WriteFile(path, []byte(body), 0o644); err != nil {
 				t.Fatalf("write: %v", err)
 			}
@@ -129,10 +122,6 @@ func TestParseProgressMd_RejectsMissingSection(t *testing.T) {
 ### Completed this iteration
 - thing
 
-## Verification Report
-
-- **Path**: /tmp/iter/verification-report.yaml
-
 ## Iteration State
 
 SUCCESS
@@ -161,7 +150,7 @@ func TestParseProgressMd_RejectsInvalidStateToken(t *testing.T) {
 	dir := t.TempDir()
 	iterDir := filepath.Join(dir, "iteration-01")
 	_ = os.MkdirAll(iterDir, 0o755)
-	body := progressMdHappy("MAYBE", iterDir, "")
+	body := progressMdHappy("MAYBE", "")
 	path := filepath.Join(dir, "progress.md")
 	_ = os.WriteFile(path, []byte(body), 0o644)
 	parsed, _ := parseProgressMd(path)
@@ -206,10 +195,6 @@ deferrals:
   - description: bad
     due_by_phase: not-an-int
 ` + "```" + `
-
-## Verification Report
-
-- **Path**: ` + iterDir + `/verification-report.yaml
 
 ## Iteration State
 
@@ -261,10 +246,6 @@ deferrals:
 closed_deferrals: []
 ` + "```" + `
 
-## Verification Report
-
-- **Path**: ` + iterDir + `/verification-report.yaml
-
 ## Iteration State
 
 SUCCESS
@@ -311,10 +292,6 @@ deferrals:
     due_by_phase: 0
 closed_deferrals: []
 ` + "```" + `
-
-## Verification Report
-
-- **Path**: ` + iterDir + `/verification-report.yaml
 
 ## Iteration State
 
@@ -364,10 +341,6 @@ func TestParseProgressMd_RequiresExplicitDeferralsKeys(t *testing.T) {
 # explicit empty form is required; no keys at all is rejected.
 ` + "```" + `
 
-## Verification Report
-
-- **Path**: ` + iterDir + `/verification-report.yaml
-
 ## Iteration State
 
 SUCCESS
@@ -414,10 +387,6 @@ deferrals: []
 closed_deferrals: []
 ` + "```" + `
 
-## Verification Report
-
-- **Path**: ` + iterDir + `/verification-report.yaml
-
 ## Iteration State
 
 SUCCESS
@@ -436,7 +405,7 @@ func TestParseProgressMd_RejectsAgentAuthoredQuestionGate(t *testing.T) {
 	if err := os.MkdirAll(iterDir, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	body := strings.Replace(progressMdHappy(agentStatusSuccess, iterDir, ""), "## Iteration State", "## Questions for User\n\n1. Which option?\n\n## Iteration State", 1)
+	body := strings.Replace(progressMdHappy(agentStatusSuccess, ""), "## Iteration State", "## Questions for User\n\n1. Which option?\n\n## Iteration State", 1)
 	path := filepath.Join(dir, "progress.md")
 	if err := os.WriteFile(path, []byte(body), 0o644); err != nil {
 		t.Fatal(err)
@@ -450,22 +419,22 @@ func TestParseProgressMd_RejectsAgentAuthoredQuestionGate(t *testing.T) {
 	}
 }
 
-func TestProgressFingerprint_StableAcrossIterationDirs(t *testing.T) {
+func TestProgressFingerprint_StableOutsideHandoff(t *testing.T) {
 	// Two progress.md files identical except for metadata outside the handoff.
 	// The fingerprint should match because only the handoff is hashed — otherwise the
 	// no-progress safety rail breaks (see TestImplementLoopSafetyRailNoProgress).
 	dir := t.TempDir()
 	pathA := filepath.Join(dir, "a.md")
 	pathB := filepath.Join(dir, "b.md")
-	_ = os.WriteFile(pathA, []byte(progressMdHappy(agentStatusSuccess, "/iter/01", "")), 0o644)
-	_ = os.WriteFile(pathB, []byte(progressMdHappy(agentStatusSuccess, "/iter/02", "")), 0o644)
+	_ = os.WriteFile(pathA, []byte(progressMdHappy(agentStatusSuccess, "Finished in iteration 1.")), 0o644)
+	_ = os.WriteFile(pathB, []byte(progressMdHappy(agentStatusSuccess, "Finished in iteration 2.")), 0o644)
 	fpA, errA := progressFingerprint(pathA)
 	fpB, errB := progressFingerprint(pathB)
 	if errA != nil || errB != nil {
 		t.Fatalf("fingerprint errors: %v / %v", errA, errB)
 	}
 	if fpA != fpB {
-		t.Errorf("fingerprints differ across iteration dirs:\n  A=%s\n  B=%s", fpA, fpB)
+		t.Errorf("fingerprints differ outside the handoff:\n  A=%s\n  B=%s", fpA, fpB)
 	}
 }
 
@@ -473,7 +442,7 @@ func TestProgressFingerprint_ChangesWhenHandoffChanges(t *testing.T) {
 	dir := t.TempDir()
 	pathA := filepath.Join(dir, "a.md")
 	pathB := filepath.Join(dir, "b.md")
-	bodyA := progressMdHappy(agentStatusSuccess, "/iter/01", "")
+	bodyA := progressMdHappy(agentStatusSuccess, "")
 	bodyB := strings.Replace(bodyA, "did the thing", "did a different thing", 1)
 	_ = os.WriteFile(pathA, []byte(bodyA), 0o644)
 	_ = os.WriteFile(pathB, []byte(bodyB), 0o644)

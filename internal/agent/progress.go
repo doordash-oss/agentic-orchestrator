@@ -24,7 +24,6 @@ import (
 	"regexp"
 	"strings"
 
-	"github.com/doordash-oss/agentic-orchestrator/internal/feature"
 	"github.com/doordash-oss/agentic-orchestrator/internal/ports"
 	"gopkg.in/yaml.v3"
 )
@@ -198,29 +197,6 @@ func countBlockingReviewFindings(feedback string) int {
 	return len(blockingReviewFindingRE.FindAllString(feedback, -1))
 }
 
-func countOpenVerificationBlockers(report *verificationReport) int {
-	if report == nil {
-		return 0
-	}
-	count := 0
-	for _, result := range report.Results {
-		switch normalizeStatus(result.Status) {
-		case verificationStatusPassed, verificationStatusWaived:
-			continue
-		default:
-			count++
-		}
-	}
-	return count
-}
-
-func countOpenVerificationOutcomeBlockers(out *verificationExecutionOutcome) int {
-	if out == nil {
-		return 0
-	}
-	return countOpenVerificationBlockers(out.Report)
-}
-
 // iterationState is the harness-recognised terminal state the agent declares
 // in progress.md's `## Iteration State` section. StateInvalid is reserved for
 // cases where parsing failed or the body did not match one of the two
@@ -249,13 +225,9 @@ func (s iterationState) String() string {
 // harness uses for routing. Fields populated only when the corresponding
 // section parsed cleanly; on failure the defect is appended to
 // ProtocolViolations and the field is left zero. Callers MUST check
-// ProtocolViolations before trusting any non-State field — a malformed
-// Deferrals YAML, for example, leaves Deferrals nil but the whole struct
-// otherwise looks valid.
+// ProtocolViolations before trusting any non-State field.
 type parsedProgress struct {
 	State              iterationState
-	Deferrals          []feature.IncomingDeferral
-	ClosedDeferrals    []string
 	HandoffSections    map[string]string // sub-section heading -> body (Iteration Handoff children)
 	ProtocolViolations []string
 }
@@ -311,8 +283,16 @@ var progressYAMLBlockRE = regexp.MustCompile("(?s)(?:```|~~~)\\s*ya?ml\\s*\\n(.*
 // but require both keys to be present so the agent's intent is unambiguous —
 // implicit absence is rejected.
 type deferralsYAMLDoc struct {
-	Deferrals       *[]feature.IncomingDeferral `yaml:"deferrals"`
-	ClosedDeferrals *[]string                   `yaml:"closed_deferrals"`
+	Deferrals       *[]progressDeferral `yaml:"deferrals"`
+	ClosedDeferrals *[]string           `yaml:"closed_deferrals"`
+}
+
+type progressDeferral struct {
+	ID          string   `yaml:"id,omitempty"`
+	Description string   `yaml:"description"`
+	DueByPhase  int      `yaml:"due_by_phase"`
+	Reason      string   `yaml:"reason"`
+	RepoScope   []string `yaml:"repo_scope,omitempty"`
 }
 
 // parseProgressMd parses progress.md at path under the iteration-handoff
@@ -387,14 +367,10 @@ func parseProgressMd(path string) (*parsedProgress, error) {
 				if doc.Deferrals == nil {
 					parsed.ProtocolViolations = append(parsed.ProtocolViolations,
 						"progress.md Deferrals YAML must include a `deferrals:` key (use `deferrals: []` when empty)")
-				} else {
-					parsed.Deferrals = *doc.Deferrals
 				}
 				if doc.ClosedDeferrals == nil {
 					parsed.ProtocolViolations = append(parsed.ProtocolViolations,
 						"progress.md Deferrals YAML must include a `closed_deferrals:` key (use `closed_deferrals: []` when empty)")
-				} else {
-					parsed.ClosedDeferrals = *doc.ClosedDeferrals
 				}
 			}
 		}

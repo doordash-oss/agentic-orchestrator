@@ -31,10 +31,7 @@ import (
 	"strings"
 	"testing"
 	"time"
-	"unicode/utf16"
-	"unicode/utf8"
 
-	"github.com/doordash-oss/agentic-orchestrator/internal/agent"
 	"github.com/doordash-oss/agentic-orchestrator/internal/config"
 	"github.com/doordash-oss/agentic-orchestrator/internal/errcat"
 	"github.com/doordash-oss/agentic-orchestrator/internal/feature"
@@ -529,8 +526,6 @@ func TestTranscriptDTOsWriteToolUseMarksEveryLineAdded(t *testing.T) {
 func TestConfigCatalogPromptPermissionSnapshots(t *testing.T) {
 	t.Parallel()
 	store, f := seedReadFeature(t)
-	f.Status = feature.StatusNeedUserInput
-	f.PendingNeedUserInputPath = filepath.Join(store.RunDir(f.ID, 1), "phase-02", targetPhaseImplement, "need-user-input.yaml")
 	f.Pipeline = feature.PipelineMedium
 	f.Checkpoints = feature.Checkpoints{InquiryReview: true, RoadmapReview: true, PhasePlanReview: true, ManualPublish: true, DraftPublish: true}
 	if err := store.Save(f); err != nil {
@@ -637,498 +632,6 @@ func TestConfigCatalogPromptPermissionSnapshots(t *testing.T) {
 	options := question[optionsFieldKey].([]any)
 	if len(options) != 1 || options[0].(map[string]any)[labelFieldKey] != "A" {
 		t.Fatalf("ask_user options = %+v; want sanitized option A", options)
-	}
-	gates := prompts["need_user_inputs"].([]any)
-	if len(gates) != 1 {
-		t.Fatalf("need_user_inputs length = %d; want 1", len(gates))
-	}
-	gate := gates[0].(map[string]any)
-	if gate["feature_id"] != f.ID {
-		t.Fatalf("need user input feature_id = %v; want %s", gate["feature_id"], f.ID)
-	}
-	detail := getJSONMap(t, handler, "/api/v1/features/"+f.ID)
-	detailGate := detail[entityFeature].(map[string]any)["need_user_input"].(map[string]any)
-	if detailGate["feature_id"] != f.ID {
-		t.Fatalf("detail need user input feature_id = %v; want %s", detailGate["feature_id"], f.ID)
-	}
-}
-
-func TestNeedUserInputGateDTOsIncludeQuestionnaireAndCycleRouting(t *testing.T) {
-	t.Parallel()
-	store, f := seedReadFeature(t)
-
-	featureGatePath := filepath.Join(store.RunDir(f.ID, 1), "phase-02", targetPhaseImplement, "iteration-03", "need-user-input.yaml")
-	if err := agent.WriteNeedUserInputRecord(featureGatePath, agent.NeedUserInputRecord{
-		Summary:   "Choose a persistence backend before implementation continues.",
-		Iteration: 3,
-		Questions: []agent.NeedUserInputQuestion{
-			{Index: 1, Prompt: "Which database should implementation use?", Answer: "Postgres"},
-			{Index: 3, Prompt: "Should we migrate existing data?", Answer: ""},
-		},
-		Verification: &agent.NeedUserInputVerificationContext{
-			Blockers: []agent.NeedUserInputVerificationBlocker{{
-				ItemID: "deploy", Name: "Deployment smoke test", RepoName: repoNameSelf,
-				Command:      "make deploy-smoke",
-				Reason:       `missing declared capability "Okta session"`,
-				Capabilities: []string{"Okta session"},
-				Remediation:  "Make Okta session available, then retry verification.",
-			}},
-		},
-		VerificationDecision: &agent.NeedUserVerificationDecision{
-			ContractPath:     "/private/must-not-leak/testing-contract.yaml",
-			ContractRevision: 3,
-			ItemIDs:          []string{"deploy"},
-			AllowedActions: []string{
-				agent.NeedUserVerificationWaive,
-				agent.NeedUserVerificationRetryAfterAuth,
-			},
-		},
-	}); err != nil {
-		t.Fatalf("WriteNeedUserInputRecord(feature gate) error = %v", err)
-	}
-	f.Status = feature.StatusNeedUserInput
-	f.PendingNeedUserInputPath = featureGatePath
-	f.CurrentIteration = 3
-
-	if err := store.Save(f); err != nil {
-		t.Fatalf("Save() error = %v", err)
-	}
-	handler := NewHandler(baseReadHandlerOptions(store))
-
-	detail := getJSONMap(t, handler, "/api/v1/features/"+f.ID)
-	detailGate := detail[entityFeature].(map[string]any)["need_user_input"].(map[string]any)
-	if detailGate["summary"] != "Choose a persistence backend before implementation continues." {
-		t.Fatalf("detail gate summary = %v", detailGate["summary"])
-	}
-	detailQuestions := detailGate["questions"].([]any)
-	if len(detailQuestions) != 2 {
-		t.Fatalf("detail gate questions length = %d; want 2", len(detailQuestions))
-	}
-	firstDetailQuestion := detailQuestions[0].(map[string]any)
-	if firstDetailQuestion["index"] != float64(1) ||
-		firstDetailQuestion["prompt"] != "Which database should implementation use?" ||
-		firstDetailQuestion["answer"] != "Postgres" {
-		t.Fatalf("detail gate first question = %+v", firstDetailQuestion)
-	}
-	secondDetailQuestion := detailQuestions[1].(map[string]any)
-	if secondDetailQuestion["index"] != float64(3) {
-		t.Fatalf("detail gate second question index = %v; want stored index 3", secondDetailQuestion["index"])
-	}
-
-	prompts := getJSONMap(t, handler, apiPathPrompts)
-	gates := prompts["need_user_inputs"].([]any)
-	if len(gates) != 1 {
-		t.Fatalf("need_user_inputs length = %d; want feature gate", len(gates))
-	}
-	var featureGate map[string]any
-	for _, raw := range gates {
-		gate := raw.(map[string]any)
-		if gate["scope"] == entityFeature && gate["repo_name"] == nil {
-			featureGate = gate
-		}
-	}
-	if featureGate == nil {
-		t.Fatalf("need_user_inputs = %+v; want feature gate", gates)
-	}
-	for source, gate := range map[string]map[string]any{
-		"detail": detailGate,
-		"prompt": featureGate,
-	} {
-		verification, ok := gate["verification"].(map[string]any)
-		if !ok {
-			t.Fatalf("%s gate verification = %+v", source, gate["verification"])
-		}
-		if !reflect.DeepEqual(verification["allowed_actions"], []any{"WAIVE", "RETRY_AFTER_AUTH"}) {
-			t.Fatalf("allowed actions = %+v", verification["allowed_actions"])
-		}
-		blocker := verification["blockers"].([]any)[0].(map[string]any)
-		if blocker["name"] != "Deployment smoke test" ||
-			blocker["reason"] != `missing declared capability "Okta session"` ||
-			blocker["remediation"] != "Make Okta session available, then retry verification." {
-			t.Fatalf("blocker = %+v", blocker)
-		}
-		encoded, _ := json.Marshal(gate)
-		for _, forbidden := range []string{"contract_path", "probe", "stdout", "/private/must-not-leak"} {
-			if strings.Contains(string(encoded), forbidden) {
-				t.Fatalf("gate leaked %q: %s", forbidden, encoded)
-			}
-		}
-	}
-}
-
-func TestNeedUserInputGateDTOBoundsLegacyVerificationContext(t *testing.T) {
-	t.Parallel()
-	gatePath := filepath.Join(t.TempDir(), "need-user-input.yaml")
-	blockers := make([]agent.NeedUserInputVerificationBlocker, 0, 101)
-	for i := 0; i < 101; i++ {
-		capabilities := make([]string, 21)
-		for capability := range capabilities {
-			capabilities[capability] = "ordinary capability"
-		}
-		blocker := agent.NeedUserInputVerificationBlocker{
-			ItemID:       fmt.Sprintf("item-%03d", i),
-			Name:         "Ordinary check",
-			RepoName:     "repo",
-			Command:      "make verify",
-			Reason:       "missing capability",
-			Capabilities: capabilities,
-			Remediation:  "Grant access and retry.",
-		}
-		if i == 1 {
-			blocker.ItemID = " \t "
-		}
-		if i == 0 {
-			blocker = agent.NeedUserInputVerificationBlocker{
-				ItemID:       strings.Repeat("😀", 201),
-				Name:         strings.Repeat("😀", 64*1024+1),
-				RepoName:     strings.Repeat("😀", 501),
-				Command:      strings.Repeat("😀", 64*1024+1),
-				Reason:       strings.Repeat("😀", 64*1024+1),
-				Capabilities: capabilities,
-				Remediation:  strings.Repeat("😀", 64*1024+1),
-			}
-		}
-		blockers = append(blockers, blocker)
-	}
-	if err := agent.WriteNeedUserInputRecord(gatePath, agent.NeedUserInputRecord{
-		Questions: []agent.NeedUserInputQuestion{{Index: 1, Prompt: "Continue?"}},
-		Verification: &agent.NeedUserInputVerificationContext{
-			Blockers: blockers,
-		},
-		VerificationDecision: &agent.NeedUserVerificationDecision{
-			AllowedActions: []string{
-				agent.NeedUserVerificationWaive,
-				agent.NeedUserVerificationWaive,
-				agent.NeedUserVerificationRetryAfterAuth,
-				"FUTURE_ACTION",
-			},
-		},
-	}); err != nil {
-		t.Fatalf("WriteNeedUserInputRecord() error = %v", err)
-	}
-
-	dto := needUserInputGateDTO("feature-1", entityFeature, "", 1, "", gatePath)
-	if dto.Verification == nil {
-		t.Fatal("verification = nil, want bounded verification context")
-	}
-	if got := len(dto.Verification.Blockers); got != 100 {
-		t.Fatalf("valid blockers = %d, want 100 after omitting whitespace item ID", got)
-	}
-	if got := len(dto.Verification.AllowedActions); got != 2 {
-		t.Fatalf("allowed actions = %d, want two deduplicated supported actions", got)
-	}
-	blocker := dto.Verification.Blockers[0]
-	for i, projected := range dto.Verification.Blockers {
-		if strings.TrimSpace(projected.ItemID) == "" {
-			t.Fatalf("blocker %d has empty projected item ID", i)
-		}
-	}
-	assertBoundedUTF8 := func(name, value string, maxLength int) {
-		t.Helper()
-		if !utf8.ValidString(value) {
-			t.Fatalf("%s is not valid UTF-8", name)
-		}
-		utf16Length := 0
-		for _, r := range value {
-			utf16Length += utf16.RuneLen(r)
-		}
-		if utf16Length > maxLength {
-			t.Fatalf("%s UTF-16 length = %d, want at most %d", name, utf16Length, maxLength)
-		}
-		if !strings.HasSuffix(value, "…") {
-			t.Fatalf("%s = %q, want truncation ellipsis", name, value)
-		}
-	}
-	assertBoundedUTF8("item_id", blocker.ItemID, 200)
-	assertBoundedUTF8("repo_name", blocker.RepoName, 500)
-	assertBoundedUTF8("name", blocker.Name, 64*1024)
-	assertBoundedUTF8("command", blocker.Command, 64*1024)
-	assertBoundedUTF8("reason", blocker.Reason, 64*1024)
-	assertBoundedUTF8("remediation", blocker.Remediation, 64*1024)
-	if got := len(blocker.Capabilities); got != 20 {
-		t.Fatalf("capabilities = %d, want 20", got)
-	}
-	if _, err := json.Marshal(dto); err != nil {
-		t.Fatalf("Marshal(bounded gate DTO) error = %v", err)
-	}
-}
-
-func TestPromptSnapshotBoundsAggregateNeedUserInputGateDisplay(t *testing.T) {
-	t.Parallel()
-	store, f := seedReadFeature(t)
-	gatePath := filepath.Join(store.RunDir(f.ID, 1), "phase-02", targetPhaseImplement, "need-user-input.yaml")
-	largeText := strings.Repeat("\x01", 64*1024)
-	questions := make([]agent.NeedUserInputQuestion, 40)
-	for i := range questions {
-		questions[i] = agent.NeedUserInputQuestion{
-			Index: i + 1, Prompt: largeText, Answer: largeText,
-		}
-	}
-	blockers := make([]agent.NeedUserInputVerificationBlocker, 4)
-	for i := range blockers {
-		capabilities := make([]string, 20)
-		for capability := range capabilities {
-			capabilities[capability] = largeText
-		}
-		blockers[i] = agent.NeedUserInputVerificationBlocker{
-			ItemID:       fmt.Sprintf("oversized-%d", i),
-			Name:         largeText,
-			RepoName:     repoNameSelf,
-			Command:      largeText,
-			Reason:       largeText,
-			Capabilities: capabilities,
-			Remediation:  largeText,
-		}
-	}
-	if err := agent.WriteNeedUserInputRecord(gatePath, agent.NeedUserInputRecord{
-		Summary:   largeText,
-		Iteration: 1,
-		Questions: questions,
-		Verification: &agent.NeedUserInputVerificationContext{
-			Blockers: blockers,
-		},
-		VerificationDecision: &agent.NeedUserVerificationDecision{
-			ItemIDs: []string{"oversized-0", "oversized-1", "oversized-2", "oversized-3"},
-			AllowedActions: []string{
-				agent.NeedUserVerificationWaive,
-				agent.NeedUserVerificationRetryAfterAuth,
-			},
-		},
-	}); err != nil {
-		t.Fatalf("WriteNeedUserInputRecord() error = %v", err)
-	}
-	f.Status = feature.StatusNeedUserInput
-	f.PendingNeedUserInputPath = gatePath
-	f.CurrentIteration = 1
-	if err := store.Save(f); err != nil {
-		t.Fatalf("Save() error = %v", err)
-	}
-
-	handler := NewHandler(baseReadHandlerOptions(store))
-	request := httptest.NewRequest(http.MethodGet, apiPathPrompts, nil)
-	response := httptest.NewRecorder()
-	handler.ServeHTTP(response, request)
-	if response.Code != http.StatusOK {
-		t.Fatalf("GET %s status = %d, want 200", apiPathPrompts, response.Code)
-	}
-	if got := response.Body.Len(); got >= 2*1024*1024 {
-		t.Fatalf("prompt snapshot bytes = %d, want comfortably below desktop's 5 MiB limit", got)
-	}
-	var payload map[string]any
-	if err := json.Unmarshal(response.Body.Bytes(), &payload); err != nil {
-		t.Fatalf("Unmarshal(prompt snapshot) error = %v", err)
-	}
-	gates := payload["need_user_inputs"].([]any)
-	if len(gates) != 1 {
-		t.Fatalf("need_user_inputs = %d, want one gate", len(gates))
-	}
-	projectedGate := gates[0].(map[string]any)
-	encodedGate, err := json.Marshal(projectedGate)
-	if err != nil {
-		t.Fatalf("Marshal(projected gate) error = %v", err)
-	}
-	if got := len(encodedGate); got > 1024*1024 {
-		t.Fatalf("projected gate bytes = %d, want at most deterministic 1 MiB budget", got)
-	}
-	projectedQuestions := projectedGate["questions"].([]any)
-	if len(projectedQuestions) != len(questions) {
-		t.Fatalf("projected questions = %d, want all %d resolvable questions", len(projectedQuestions), len(questions))
-	}
-	for i, raw := range projectedQuestions {
-		if strings.TrimSpace(raw.(map[string]any)["prompt"].(string)) == "" {
-			t.Fatalf("projected question %d has empty prompt", i)
-		}
-	}
-}
-
-func TestPromptSnapshotCapabilityFallbackKeepsRequiredArrayShape(t *testing.T) {
-	t.Parallel()
-	store, f := seedReadFeature(t)
-	gatePath := filepath.Join(store.RunDir(f.ID, 1), "phase-02", targetPhaseImplement, "need-user-input.yaml")
-	largeCapability := strings.Repeat("x", 64*1024)
-	capabilities := make([]string, 20)
-	for i := range capabilities {
-		capabilities[i] = largeCapability
-	}
-	if err := agent.WriteNeedUserInputRecord(gatePath, agent.NeedUserInputRecord{
-		Questions: []agent.NeedUserInputQuestion{{Index: 1, Prompt: "Choose an action."}},
-		Verification: &agent.NeedUserInputVerificationContext{
-			Blockers: []agent.NeedUserInputVerificationBlocker{{
-				ItemID: "capability-heavy", Name: "Capability-heavy check",
-				Command: "make verify", Reason: "missing access",
-				Capabilities: capabilities, Remediation: "Grant access and retry.",
-			}},
-		},
-		VerificationDecision: &agent.NeedUserVerificationDecision{
-			ItemIDs: []string{"capability-heavy"},
-			AllowedActions: []string{
-				agent.NeedUserVerificationWaive,
-				agent.NeedUserVerificationRetryAfterAuth,
-			},
-		},
-	}); err != nil {
-		t.Fatalf("WriteNeedUserInputRecord() error = %v", err)
-	}
-	f.Status = feature.StatusNeedUserInput
-	f.PendingNeedUserInputPath = gatePath
-	if err := store.Save(f); err != nil {
-		t.Fatalf("Save() error = %v", err)
-	}
-
-	payload := getJSONMap(t, NewHandler(baseReadHandlerOptions(store)), apiPathPrompts)
-	gate := payload["need_user_inputs"].([]any)[0].(map[string]any)
-	verification := gate["verification"].(map[string]any)
-	blocker := verification["blockers"].([]any)[0].(map[string]any)
-	projected, ok := blocker["capabilities"].([]any)
-	if !ok {
-		t.Fatalf("capabilities JSON = %#v, want required array", blocker["capabilities"])
-	}
-	if len(projected) != 0 {
-		t.Fatalf("capabilities length = %d, want empty aggregate-fallback array", len(projected))
-	}
-}
-
-func TestPromptSnapshotUnknownVerificationActionsKeepRequiredArrayShape(t *testing.T) {
-	t.Parallel()
-	store, f := seedReadFeature(t)
-	gatePath := filepath.Join(store.RunDir(f.ID, 1), "phase-02", targetPhaseImplement, "need-user-input.yaml")
-	if err := agent.WriteNeedUserInputRecord(gatePath, agent.NeedUserInputRecord{
-		Questions: []agent.NeedUserInputQuestion{{Index: 1, Prompt: "Choose an action."}},
-		Verification: &agent.NeedUserInputVerificationContext{
-			Blockers: []agent.NeedUserInputVerificationBlocker{{
-				ItemID: "future-action", Name: "Future verification check",
-				Command: "make verify", Reason: "a legacy server wrote an unknown action",
-				Capabilities: []string{}, Remediation: "Answer the generic prompt.",
-			}},
-		},
-		VerificationDecision: &agent.NeedUserVerificationDecision{
-			ItemIDs:        []string{"future-action"},
-			AllowedActions: []string{"REQUEST_ADMIN_ESCALATION"},
-		},
-	}); err != nil {
-		t.Fatalf("WriteNeedUserInputRecord() error = %v", err)
-	}
-	f.Status = feature.StatusNeedUserInput
-	f.PendingNeedUserInputPath = gatePath
-	if err := store.Save(f); err != nil {
-		t.Fatalf("Save() error = %v", err)
-	}
-
-	payload := getJSONMap(t, NewHandler(baseReadHandlerOptions(store)), apiPathPrompts)
-	gate := payload["need_user_inputs"].([]any)[0].(map[string]any)
-	verification := gate["verification"].(map[string]any)
-	actions, ok := verification["allowed_actions"].([]any)
-	if !ok {
-		t.Fatalf("allowed_actions JSON = %#v, want required array", verification["allowed_actions"])
-	}
-	if len(actions) != 0 {
-		t.Fatalf("allowed_actions = %#v, want empty array for unknown legacy actions", actions)
-	}
-}
-
-func TestPromptSnapshotBoundsNeedUserInputCollectionAcrossManyGates(t *testing.T) {
-	t.Parallel()
-	store, base := seedReadFeature(t)
-	features := []*feature.Feature{base}
-	for i := 1; i < 6; i++ {
-		features = append(features, cloneFeatureForReadTest(
-			t,
-			store,
-			base,
-			fmt.Sprintf("budget-gate-%02d", i),
-			fmt.Sprintf("Budget gate %d", i),
-		))
-	}
-	largeText := strings.Repeat("x", 64*1024)
-	for i, f := range features {
-		gatePath := filepath.Join(store.RunDir(f.ID, 1), "phase-02", targetPhaseImplement, "need-user-input.yaml")
-		blockers := make([]agent.NeedUserInputVerificationBlocker, 3)
-		for blocker := range blockers {
-			blockers[blocker] = agent.NeedUserInputVerificationBlocker{
-				ItemID: fmt.Sprintf("gate-%d-blocker-%d", i, blocker),
-				Name:   largeText, Command: largeText, Reason: largeText,
-				Capabilities: []string{}, Remediation: largeText,
-			}
-		}
-		if err := agent.WriteNeedUserInputRecord(gatePath, agent.NeedUserInputRecord{
-			Summary: largeText,
-			Questions: []agent.NeedUserInputQuestion{{
-				Index: 1, Prompt: largeText, Answer: largeText,
-			}},
-			Verification: &agent.NeedUserInputVerificationContext{Blockers: blockers},
-			VerificationDecision: &agent.NeedUserVerificationDecision{
-				ItemIDs: []string{
-					fmt.Sprintf("gate-%d-blocker-0", i),
-					fmt.Sprintf("gate-%d-blocker-1", i),
-					fmt.Sprintf("gate-%d-blocker-2", i),
-				},
-				AllowedActions: []string{
-					agent.NeedUserVerificationWaive,
-					agent.NeedUserVerificationRetryAfterAuth,
-				},
-			},
-		}); err != nil {
-			t.Fatalf("WriteNeedUserInputRecord(%s) error = %v", f.ID, err)
-		}
-		f.Status = feature.StatusNeedUserInput
-		f.PendingNeedUserInputPath = gatePath
-		if err := store.Save(f); err != nil {
-			t.Fatalf("Save(%s) error = %v", f.ID, err)
-		}
-	}
-
-	handler := NewHandler(baseReadHandlerOptions(store))
-	request := httptest.NewRequest(http.MethodGet, apiPathPrompts, nil)
-	response := httptest.NewRecorder()
-	handler.ServeHTTP(response, request)
-	if response.Code != http.StatusOK {
-		t.Fatalf("GET %s status = %d, want 200", apiPathPrompts, response.Code)
-	}
-	if got := response.Body.Len(); got >= 4*1024*1024 {
-		t.Fatalf("multi-gate prompt snapshot bytes = %d, want 2 MiB transport headroom", got)
-	}
-	var payload map[string]any
-	if err := json.Unmarshal(response.Body.Bytes(), &payload); err != nil {
-		t.Fatalf("Unmarshal(prompt snapshot) error = %v", err)
-	}
-	gates := payload["need_user_inputs"].([]any)
-	if len(gates) != len(features) {
-		t.Fatalf("need_user_inputs = %d, want all %d actionable gates", len(gates), len(features))
-	}
-	encodedGates, err := json.Marshal(gates)
-	if err != nil {
-		t.Fatalf("Marshal(need_user_inputs) error = %v", err)
-	}
-	if got := len(encodedGates); got > 3*1024*1024 {
-		t.Fatalf("need_user_inputs bytes = %d, want at most deterministic 3 MiB budget", got)
-	}
-	for i, raw := range gates {
-		questions := raw.(map[string]any)["questions"].([]any)
-		if len(questions) != 1 || strings.TrimSpace(questions[0].(map[string]any)["prompt"].(string)) == "" {
-			t.Fatalf("gate %d questions = %#v, want preserved resolvable questionnaire", i, questions)
-		}
-	}
-}
-
-func TestInterruptedFeatureDoesNotExposeStaleNeedUserInputGate(t *testing.T) {
-	t.Parallel()
-	store, f := seedReadFeature(t)
-	gatePath := filepath.Join(store.RunDir(f.ID, 1), "phase-02", targetPhaseImplement, "need-user-input.yaml")
-	writeFile(t, gatePath, "questions: []\n")
-	f.Status = feature.StatusInterrupted
-	f.PendingNeedUserInputPath = gatePath
-	if err := store.Save(f); err != nil {
-		t.Fatalf("Save() error = %v", err)
-	}
-	handler := NewHandler(baseReadHandlerOptions(store))
-
-	prompts := getJSONMap(t, handler, apiPathPrompts)
-	if gates := prompts["need_user_inputs"].([]any); len(gates) != 0 {
-		t.Fatalf("need_user_inputs = %+v; want no stale gate for interrupted feature", gates)
-	}
-	detail := getJSONMap(t, handler, "/api/v1/features/"+f.ID)
-	if gate := detail[entityFeature].(map[string]any)["need_user_input"]; gate != nil {
-		t.Fatalf("detail need_user_input = %+v; want nil for interrupted feature", gate)
 	}
 }
 
@@ -1841,21 +1344,6 @@ func TestFeatureDetailActionCatalogStateMatrix(t *testing.T) {
 			},
 		},
 		{
-			name: "feature gate can stop",
-			f: func() *feature.Feature {
-				f := actionCatalogTestFeature(feature.StatusNeedUserInput, feature.Checkpoints{}, &publishable)
-				f.PendingNeedUserInputPath = "/tmp/need-user-input.yaml"
-				return f
-			}(),
-			want: map[string]struct {
-				enabled      bool
-				disabledCode string
-			}{
-				string(FeatureActionPauseStop): {enabled: true},
-				string(FeatureActionResume):    {enabled: true},
-			},
-		},
-		{
 			name: "running cleanup disabled",
 			f:    actionCatalogTestFeature(feature.StatusImplementing, feature.Checkpoints{}, &publishable),
 			want: map[string]struct {
@@ -1956,22 +1444,6 @@ func TestPromptPermissionSnapshotsPreserveFIFOOrdering(t *testing.T) {
 		Time:     time.Date(2026, 6, 13, 12, 5, 0, 0, time.UTC),
 		Pending:  true,
 	}}
-	oldest.Status = feature.StatusNeedUserInput
-	newest.Status = feature.StatusNeedUserInput
-	oldGatePath := filepath.Join(store.RunDir(oldest.ID, 1), "phase-02", targetPhaseImplement, "need-user-input.yaml")
-	newGatePath := filepath.Join(store.RunDir(newest.ID, 1), "phase-02", targetPhaseImplement, "need-user-input.yaml")
-	writeFile(t, oldGatePath, "questions: []\n")
-	writeFile(t, newGatePath, "questions: []\n")
-	oldGateTime := time.Date(2026, 6, 13, 12, 2, 0, 0, time.UTC)
-	newGateTime := time.Date(2026, 6, 13, 12, 7, 0, 0, time.UTC)
-	if err := os.Chtimes(oldGatePath, oldGateTime, oldGateTime); err != nil {
-		t.Fatalf("Chtimes(%q) error = %v", oldGatePath, err)
-	}
-	if err := os.Chtimes(newGatePath, newGateTime, newGateTime); err != nil {
-		t.Fatalf("Chtimes(%q) error = %v", newGatePath, err)
-	}
-	oldest.PendingNeedUserInputPath = oldGatePath
-	newest.PendingNeedUserInputPath = newGatePath
 	for _, f := range []*feature.Feature{oldest, newest} {
 		if err := store.Save(f); err != nil {
 			t.Fatalf("Save(%s) error = %v", f.ID, err)
@@ -2011,33 +1483,18 @@ func TestPromptPermissionSnapshotsPreserveFIFOOrdering(t *testing.T) {
 	if got, want := stringFieldFromJSON(t, prompts["help_queue"], questionFieldKey), []string{"oldest help", "newest help"}; strings.Join(got, ",") != strings.Join(want, ",") {
 		t.Fatalf("prompt help_queue order = %v; want %v", got, want)
 	}
-	if got, want := stringFieldFromJSON(t, prompts["need_user_inputs"], "feature_id"), []string{oldest.ID, newest.ID}; strings.Join(got, ",") != strings.Join(want, ",") {
-		t.Fatalf("prompt need_user_inputs order = %v; want %v", got, want)
-	}
 	permissions := getJSONMap(t, handler, apiPathPermissions)
 	if got, want := stringFieldFromJSON(t, permissions["requests"], requestIDKey), []string{"old-perm", "new-perm"}; strings.Join(got, ",") != strings.Join(want, ",") {
 		t.Fatalf("permissions requests order = %v; want %v", got, want)
 	}
 	assertControlsHaveWaitingSince(t, prompts["ask_user_questions"])
 	assertControlsHaveWaitingSince(t, permissions["requests"])
-	assertGatesHaveWaitingSince(t, prompts["need_user_inputs"])
 }
 
 func TestPromptAndPermissionSnapshotsExposeStableWaitingSince(t *testing.T) {
 	t.Parallel()
 
 	store, f := seedReadFeature(t)
-	f.Status = feature.StatusNeedUserInput
-	legacyGatePath := filepath.Join(store.RunDir(f.ID, 1), "phase-02", targetPhaseImplement, "need-user-input.yaml")
-	writeFile(t, legacyGatePath, "questions: []\n")
-	legacyGateTime := time.Date(2026, 6, 13, 12, 2, 0, 0, time.UTC)
-	if err := os.Chtimes(legacyGatePath, legacyGateTime, legacyGateTime); err != nil {
-		t.Fatalf("Chtimes(%q) error = %v", legacyGatePath, err)
-	}
-	f.PendingNeedUserInputPath = legacyGatePath
-	if err := store.Save(f); err != nil {
-		t.Fatalf("Save(%s) error = %v", f.ID, err)
-	}
 
 	sessions := fakeSessionManager{views: []ports.SessionView{
 		&fakeSessionView{
@@ -2061,18 +1518,6 @@ func TestPromptAndPermissionSnapshotsExposeStableWaitingSince(t *testing.T) {
 	secondPrompts := getJSONMap(t, handler, apiPathPrompts)
 	firstPermissions := getJSONMap(t, handler, apiPathPermissions)
 	secondPermissions := getJSONMap(t, handler, apiPathPermissions)
-
-	firstGate := firstPrompts["need_user_inputs"].([]any)[0].(map[string]any)
-	gateWaitingSince, err := time.Parse(time.RFC3339Nano, firstGate["waiting_since"].(string))
-	if err != nil {
-		t.Fatalf("Parse(waiting_since) error = %v", err)
-	}
-	if !gateWaitingSince.Equal(legacyGateTime) {
-		t.Fatalf("legacy gate waiting_since = %v; want %v", gateWaitingSince, legacyGateTime)
-	}
-	if got, want := secondPrompts["need_user_inputs"].([]any)[0].(map[string]any)["waiting_since"], firstGate["waiting_since"]; got != want {
-		t.Fatalf("gate waiting_since changed across snapshots: got %v; want %v", got, want)
-	}
 
 	assertStableControlWaitingSince(t, firstPrompts["ask_user_questions"], secondPrompts["ask_user_questions"])
 	assertStableControlWaitingSince(t, firstPermissions["requests"], secondPermissions["requests"])
@@ -2099,15 +1544,6 @@ func assertControlsHaveWaitingSince(t *testing.T, requests any) {
 	for _, request := range requests.([]any) {
 		if got := request.(map[string]any)["waiting_since"]; got == nil || got == "" {
 			t.Fatalf("control request waiting_since = %v; want timestamp", got)
-		}
-	}
-}
-
-func assertGatesHaveWaitingSince(t *testing.T, gates any) {
-	t.Helper()
-	for _, gate := range gates.([]any) {
-		if got := gate.(map[string]any)["waiting_since"]; got == nil || got == "" {
-			t.Fatalf("need user input gate waiting_since = %v; want timestamp", got)
 		}
 	}
 }

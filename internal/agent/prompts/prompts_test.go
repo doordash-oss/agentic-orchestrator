@@ -198,18 +198,12 @@ type PhasePlanRevisionUserInput struct {
 	AutomatedVerificationOnly bool
 }
 
-type VerificationItemView struct {
-	Name        string
-	Requirement string
-}
-
 type ImplementUserInput struct {
-	PlanPath             string
-	ExitCriteria         string
-	Feedback             string
-	PlanRevisionFeedback string
-	HelpAnswers          string
-	Iteration            int
+	PlanPath     string
+	ExitCriteria string
+	Feedback     string
+	HelpAnswers  string
+	Iteration    int
 }
 
 type ReviewUserInput struct {
@@ -226,18 +220,10 @@ type ReviewUserInput struct {
 	PreviousFeedback      string
 	RefactorPassForkPoint string
 
-	RoadmapPath            string
-	PlanPath               string
-	ExitCriteria           string
-	AcceptanceClause       string
-	VerificationReportPath string
-
-	ContractPath         string
-	RequiredVerification []VerificationItemView
-
-	PriorImplementationReportPaths       []string
-	PriorImplementationEvidenceRootDirs  []string
-	PriorImplementationEvidenceArtifacts []string
+	RoadmapPath      string
+	PlanPath         string
+	ExitCriteria     string
+	AcceptanceClause string
 
 	ProgressPath string
 	PhaseType    string
@@ -609,17 +595,15 @@ func TestGoldenSnapshots(t *testing.T) {
 			name: "implementation_review_axis_user",
 			render: func() string {
 				return ImplementationReviewAxisUserPrompt(ReviewUserInput{
-					Iteration:              2,
-					IterDir:                "/state/feat-x/run-1/phase-1/implement/iteration-02",
-					AxisLabel:              "Functionality/Evidence",
-					RoadmapPath:            "/state/feat-x/run-1/roadmap/plan.md",
-					PlanPath:               "/state/feat-x/run-1/phase-1/plan.md",
-					ExitCriteria:           "Relevant tests pass.",
-					VerificationReportPath: "/state/feat-x/run-1/phase-1/implement/iteration-02/verification-report.yaml",
-					ContractPath:           "/state/feat-x/run-1/testing-contract.yaml",
-					ProgressPath:           "/state/feat-x/run-1/phase-1/implement/progress.md",
-					PhaseType:              "tdd-fill-in",
-					FeedbackPath:           "/state/feat-x/run-1/phase-1/implement/iteration-02/review/functionality-evidence/review-feedback.md",
+					Iteration:    2,
+					IterDir:      "/state/feat-x/run-1/phase-1/implement/iteration-02",
+					AxisLabel:    "Functionality/Evidence",
+					RoadmapPath:  "/state/feat-x/run-1/roadmap/plan.md",
+					PlanPath:     "/state/feat-x/run-1/phase-1/plan.md",
+					ExitCriteria: "Relevant tests pass.",
+					ProgressPath: "/state/feat-x/run-1/phase-1/implement/progress.md",
+					PhaseType:    "tdd-fill-in",
+					FeedbackPath: "/state/feat-x/run-1/phase-1/implement/iteration-02/review/functionality-evidence/review-feedback.md",
 				})
 			},
 		},
@@ -627,19 +611,18 @@ func TestGoldenSnapshots(t *testing.T) {
 			name: "implementation_review_axis_live_run_user",
 			render: func() string {
 				return ImplementationReviewAxisUserPrompt(ReviewUserInput{
-					Iteration:              1,
-					IterDir:                "/state/feat-x/run-1/phase-2/implement/iteration-01",
-					AxisLabel:              "Design",
-					LiveRunAxis:            true,
-					FeatureDescription:     "Launch a polished settings dashboard.",
-					DesignArtifactPath:     "/state/feat-x/run-1/design/design.md",
-					RoadmapPath:            "/state/feat-x/run-1/roadmap/plan.md",
-					PlanPath:               "/state/feat-x/run-1/phase-2/plan.md",
-					ExitCriteria:           "Settings dashboard matches the approved design.",
-					VerificationReportPath: "/state/feat-x/run-1/phase-2/implement/iteration-01/verification-report.yaml",
-					ProgressPath:           "/state/feat-x/run-1/phase-2/implement/progress.md",
-					PhaseType:              "tdd-fill-in",
-					FeedbackPath:           "/state/feat-x/run-1/phase-2/implement/iteration-01/review/design/review-feedback.md",
+					Iteration:          1,
+					IterDir:            "/state/feat-x/run-1/phase-2/implement/iteration-01",
+					AxisLabel:          "Design",
+					LiveRunAxis:        true,
+					FeatureDescription: "Launch a polished settings dashboard.",
+					DesignArtifactPath: "/state/feat-x/run-1/design/design.md",
+					RoadmapPath:        "/state/feat-x/run-1/roadmap/plan.md",
+					PlanPath:           "/state/feat-x/run-1/phase-2/plan.md",
+					ExitCriteria:       "Settings dashboard matches the approved design.",
+					ProgressPath:       "/state/feat-x/run-1/phase-2/implement/progress.md",
+					PhaseType:          "tdd-fill-in",
+					FeedbackPath:       "/state/feat-x/run-1/phase-2/implement/iteration-01/review/design/review-feedback.md",
 				})
 			},
 		},
@@ -647,23 +630,20 @@ func TestGoldenSnapshots(t *testing.T) {
 			name: "implementation_review_axis_final_user",
 			render: func() string {
 				return ImplementationReviewAxisUserPrompt(ReviewUserInput{
-					Iteration:                            3,
-					IterDir:                              "/state/feat-x/run-1/review/iteration-03",
-					AxisLabel:                            "Functionality/Evidence",
-					GateLabel:                            "Final Review",
-					FinalGate:                            true,
-					DiffBase:                             "main",
-					FeatureDescription:                   "Sign in with Google.",
-					DesignArtifactPath:                   "/state/feat-x/run-1/design/design.md",
-					PreviousFeedback:                     "## Findings\n### Craft\n- Tighten error handling.",
-					RoadmapPath:                          "/state/feat-x/run-1/roadmap/plan.md",
-					PlanPath:                             "/state/feat-x/run-1/phase-2/plan.md",
-					PhaseType:                            "tdd-fill-in",
-					AcceptanceClause:                     "Feature acceptance is defined by the `## Acceptance Criteria` section of the approved design at /state/feat-x/run-1/design/design.md. Judge acceptance against that section, not against any restatement of it.",
-					PriorImplementationReportPaths:       []string{"/state/feat-x/run-1/phase-1/implement/iteration-02/verification-report.yaml"},
-					PriorImplementationEvidenceRootDirs:  []string{"/state/feat-x/run-1/phase-1/implement/iteration-02"},
-					PriorImplementationEvidenceArtifacts: []string{"/state/feat-x/run-1/phase-1/implement/iteration-02/screenshots/login.png"},
-					FeedbackPath:                         "/state/feat-x/run-1/review/iteration-03/functionality-evidence/review-feedback.md",
+					Iteration:          3,
+					IterDir:            "/state/feat-x/run-1/review/iteration-03",
+					AxisLabel:          "Functionality/Evidence",
+					GateLabel:          "Final Review",
+					FinalGate:          true,
+					DiffBase:           "main",
+					FeatureDescription: "Sign in with Google.",
+					DesignArtifactPath: "/state/feat-x/run-1/design/design.md",
+					PreviousFeedback:   "## Findings\n### Craft\n- Tighten error handling.",
+					RoadmapPath:        "/state/feat-x/run-1/roadmap/plan.md",
+					PlanPath:           "/state/feat-x/run-1/phase-2/plan.md",
+					PhaseType:          "tdd-fill-in",
+					AcceptanceClause:   "Feature acceptance is defined by the `## Acceptance Criteria` section of the approved design at /state/feat-x/run-1/design/design.md. Judge acceptance against that section, not against any restatement of it.",
+					FeedbackPath:       "/state/feat-x/run-1/review/iteration-03/functionality-evidence/review-feedback.md",
 				})
 			},
 		},
@@ -760,24 +740,6 @@ func TestGoldenSnapshots(t *testing.T) {
 					golden, string(want), got)
 			}
 		})
-	}
-}
-
-func TestImplementUserPromptDoesNotRenderRequiredVerification(t *testing.T) {
-	got := MustRender(TemplateImplementUser, ImplementUserInput{
-		PlanPath:     "/state/feat-x/run-1/phase-1/plan.md",
-		ExitCriteria: "Relevant tests pass.",
-		Iteration:    3,
-	})
-
-	for _, unwanted := range []string{
-		"Required verification items for this iteration",
-		"auth-flow",
-		"Run e2e.",
-	} {
-		if strings.Contains(got, unwanted) {
-			t.Fatalf("implement.user rendered static verification %q in:\n%s", unwanted, got)
-		}
 	}
 }
 

@@ -61,16 +61,6 @@ Relay the question to the user and send only their answer. Never answer on the u
 2. `"$AGENTICO_BIN" api POST /api/v1/permissions/answer '{"request_id":"{request_id}","session_id":"{session_id}","decision":"allow_once"}'`
 3. Validate: `"$AGENTICO_BIN" api GET /api/v1/permissions` no longer lists the request.
 
-### A need-user-input gate
-
-1. `"$AGENTICO_BIN" api GET /api/v1/features/{feature_id}`
-   Read `need_user_input`: the `summary` and each question's `index` and `prompt`. If `verification.allowed_actions` is present the gate is a missing capability; explain the blockers and the allowed actions.
-2. Save the user's answers, keyed by question index:
-   `"$AGENTICO_BIN" api POST /api/v1/features/{feature_id}/actions/need-user-input-draft '{"answers":{"1":"Use the existing export service."}}'`
-3. Resume the feature:
-   `"$AGENTICO_BIN" api POST /api/v1/features/{feature_id}/actions/need-user-input '{}'`
-4. Validate: `"$AGENTICO_BIN" api GET /api/v1/features/{feature_id}` shows the gate closed (`need_user_input.open` false or absent) and the feature moving again.
-
 ### An artifact review gate
 
 1. Open the review session:

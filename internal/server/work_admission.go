@@ -21,7 +21,6 @@ import (
 	"sync/atomic"
 
 	"github.com/doordash-oss/agentic-orchestrator/internal/errcat"
-	"github.com/doordash-oss/agentic-orchestrator/internal/feature"
 	"github.com/doordash-oss/agentic-orchestrator/internal/git"
 	"github.com/doordash-oss/agentic-orchestrator/internal/workadmission"
 )
@@ -149,9 +148,8 @@ func (h *apiHandler) registerAdmissionDetectors(coordinator *workadmission.Coord
 }
 
 // detectFeatureActivity counts features through the same projection that
-// enables the pause-stop action: a running or need-user-input status for
-// ordinary features, and a running status for children whose relationship
-// is still open. The count intentionally fails toward blocking.
+// enables the pause-stop action: a running status for ordinary features and
+// for children whose relationship is still open. The count intentionally fails toward blocking.
 func (h *apiHandler) detectFeatureActivity(context.Context) (workadmission.Activity, error) {
 	if h.featureDetectFail != nil {
 		// Test-only seam armed by the selfupdate driver: a deterministic
@@ -178,7 +176,7 @@ func (h *apiHandler) detectFeatureActivity(context.Context) (workadmission.Activ
 			// reconciliation; that work is covered by its reservations.
 			continue
 		}
-		if f.Status.IsRunning() || f.Status == feature.StatusNeedUserInput {
+		if f.Status.IsRunning() {
 			activity.Features++
 		}
 	}

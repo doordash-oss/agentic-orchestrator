@@ -171,27 +171,6 @@ type PriorAxisApprovalsInput struct {
 	Approvals    []AxisApprovalView
 }
 
-// DeferralView is the per-deferral projection consumed by the deferrals_due
-// partial. RedeferralCount is the precomputed count from feature.Deferral.RedeferralCount().
-type DeferralView struct {
-	ID              string
-	Description     string
-	CreatedInPhase  int
-	CreatedInKind   string
-	DueByPhase      int
-	Reason          string
-	RedeferralCount int
-}
-
-// DeferralsDueInput is the data passed to the deferrals_due partial. Kind
-// is one of "plan", "implement", "review" — anything else suppresses the
-// per-kind preface (the entries themselves still render).
-type DeferralsDueInput struct {
-	Phase   int
-	Kind    string
-	Entries []DeferralView
-}
-
 // summaryUserInput is the data passed to summary.user.tmpl.
 type summaryUserInput struct {
 	Name        string

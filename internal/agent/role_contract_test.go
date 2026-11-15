@@ -94,8 +94,7 @@ func TestRoleContractsResolveArtifactPaths(t *testing.T) {
 		{feature.PhaseInquire, RoleInquirer, inquireDir, map[string]string{"phase_markdown_artifact": inquireDir}},
 		{feature.PhaseResearch, RoleResearcher, researchDir, map[string]string{"phase_markdown_artifact": researchDir}},
 		{feature.PhaseDesign, RoleDesigner, designDir, map[string]string{"phase_markdown_artifact": designDir}},
-		// The fixer has no required artifacts: no testing contract executes at
-		// Final Review.
+		// The fixer has no required artifacts.
 		{feature.PhaseReview, roleFinalReviewFixer, reviewIter, map[string]string{}},
 	}
 	for _, v := range []struct {

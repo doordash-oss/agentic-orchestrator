@@ -526,22 +526,6 @@ func (o *Orchestrator) restartPhaseLocked(featureID string, maxIterationsDelta, 
 		return RestartOutcome{Action: RestartDispatchPhase, Phase: phase}, nil
 	}
 
-	// Restarting deliberately abandons an open need-user-input request: the
-	// answers are discarded, the gate pointer and its attention are cleared,
-	// and the phase is re-dispatched from Interrupted. (Answering the request
-	// is the other, non-destructive way out.)
-	if f.Status == feature.StatusNeedUserInput {
-		if err := o.deps.Store.Modify(featureID, func(ff *feature.Feature) error {
-			ff.Status = feature.StatusInterrupted
-			ff.PendingNeedUserInputPath = ""
-			clearPendingFeatureAttention(ff)
-			return nil
-		}); err != nil {
-			return RestartOutcome{}, fmt.Errorf("restart need-user-input gate: %w", err)
-		}
-		return RestartOutcome{Action: RestartDispatchPhase, Phase: phase}, nil
-	}
-
 	// A crash inside the end-of-phase git boundary leaves the finalizing marker
 	// persisted; Restart is the user's way out, so clear it before routing.
 	if f.IsFinalizingPhase() {

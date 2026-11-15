@@ -359,19 +359,6 @@ func (o *Orchestrator) AnswerQueuedHelp(featureID, message string) (bool, error)
 	return found, err
 }
 
-// PendingNeedUserInputGatePath returns the gate artifact of the feature's
-// open need-user-input request, or an error when none is open.
-func (o *Orchestrator) PendingNeedUserInputGatePath(featureID string) (string, error) {
-	f, err := o.deps.Store.Load(featureID)
-	if err != nil {
-		return "", err
-	}
-	if f.PendingNeedUserInputPath == "" {
-		return "", fmt.Errorf("feature %s is not paused on a need-user-input gate", featureID)
-	}
-	return f.PendingNeedUserInputPath, nil
-}
-
 // Steps recorded by the operation trace, in the order an operation may take
 // them.
 const (

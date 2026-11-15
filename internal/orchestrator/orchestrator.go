@@ -96,14 +96,8 @@ type PhaseCompletionInput struct {
 	FailureCode errcat.Code
 
 	PlanResult      *agent.PlanLoopResult
-	ImplementResult *agent.LoopResult
 	MultiRepoResult *agent.OrchestratorResult
 }
-
-// NeedUserInputResume identifies the paused need-user-input gate to resume.
-// NeedUserInputResume selects the persisted feature-level gate. Rebase owns
-// its own feature-level pause/resume state.
-type NeedUserInputResume struct{}
 
 // ReviewDecision describes a user decision from a review gate or menu.
 // Clients collect these through a review flow and hand them to the
@@ -320,13 +314,6 @@ func New(deps Deps, hooks Hooks) *Orchestrator {
 		Spawn:             o.cycleWG.Go,
 	})
 	if o.deps.PhaseRunner != nil {
-		existingProgressHook := o.deps.PhaseRunner.OnVerificationProgress
-		o.deps.PhaseRunner.OnVerificationProgress = func(featureID string) {
-			if existingProgressHook != nil {
-				existingProgressHook(featureID)
-			}
-			o.emitEvent(ports.Event{Type: ports.VerificationProgress, FeatureID: featureID})
-		}
 		// Per-round commits: the implementation and final-review loops emit
 		// a round completion event; this layer owns the git commit. Chained
 		// behind any pre-existing hook exactly once (the PhaseRunner is
@@ -543,14 +530,6 @@ func (o *Orchestrator) startFeatureLocked(featureID string) error {
 		}
 	}
 
-	// An open need-user-input request is answered only through the
-	// need-user-input verb. Start/Resume must refuse: the Implementing
-	// transition is legal from NeedUserInput, so without this guard the verb
-	// would silently bypass the gate, reset the iteration counter, and leave
-	// the request pending but invisible.
-	if f.PendingNeedUserInputPath != "" {
-		return fmt.Errorf("%w: %s", feature.ErrNeedUserInputGateOpen, f.PendingNeedUserInputPath)
-	}
 	// The end-of-phase git boundary runs synchronously while the feature reads
 	// as StatusReviewPassed, which otherwise looks startable.
 	if f.IsFinalizingPhase() {
@@ -1388,7 +1367,6 @@ func (o *Orchestrator) interruptFeature(featureID string) error {
 				f.PermissionsQueue[i].Pending = false
 			}
 		}
-		f.PendingNeedUserInputPath = ""
 		return nil
 	}); err != nil {
 		return fmt.Errorf("clear pending flags: %w", err)

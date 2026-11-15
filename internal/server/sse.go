@@ -518,8 +518,6 @@ func eventDTOFromDomain(ev ports.Event) SSEEvent {
 	switch ev.Type {
 	case ports.FeatureConfigChanged:
 		kind = sseEventConfigUpdated
-	case ports.NeedUserInputRequired:
-		kind = "prompt.updated"
 	case ports.RecoveryScanned, ports.RecoveryExecuted:
 		kind = sseEventRecoveryUpdated
 		resourceType = resourceTypeRuntime
@@ -624,8 +622,6 @@ func safeEventSummary(ev ports.Event) string {
 		return "phase completed"
 	case ports.PhaseStarted:
 		return "phase started"
-	case ports.NeedUserInputRequired:
-		return "user input required"
 	case ports.FeatureConfigChanged:
 		return "config changed"
 	case ports.RelationshipChildCreated:

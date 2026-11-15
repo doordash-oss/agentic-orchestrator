@@ -35,12 +35,9 @@ import (
 
 // PhaseRunner handles launching agent sessions for each feature phase.
 type PhaseRunner struct {
-	SessionManager ports.SessionManager
-	FeatureStore   FeatureStore
-	CommandRunner  ports.CommandRunner
-	// CapabilityPolicy configures built-in capability probes for this
-	// server; nil uses the local default.
-	CapabilityPolicy            *CapabilityPolicy
+	SessionManager              ports.SessionManager
+	FeatureStore                FeatureStore
+	CommandRunner               ports.CommandRunner
 	Config                      *config.Config
 	CurrentAutomaticReviewModel func() string
 	StateDir                    string
@@ -54,11 +51,6 @@ type PhaseRunner struct {
 
 	// Observer is the observability facade. May be nil (acts as NopObserver).
 	Observer *observe.Observer
-
-	// OnVerificationProgress is called after a harness verification status
-	// transition has been persisted. The runtime uses it to invalidate API
-	// clients while verification runs without an active agent session.
-	OnVerificationProgress func(featureID string)
 
 	// RoundCommitHook, when non-nil, is forwarded into the phase-implement
 	// and final-review loop configs so every implementation/fix round
@@ -876,7 +868,6 @@ func (pr *PhaseRunner) multiRepoOrchestratorConfig(f *feature.Feature, passRole 
 		DangerouslySkipPermissions: pr.DangerouslySkipPermissions,
 		PermissionCache:            pr.PermissionCache,
 		CommandRunner:              pr.CommandRunner,
-		CapabilityPolicy:           pr.CapabilityPolicy,
 		BuildSession:               pr.buildSessionForFeature(f),
 		AskingClause:               pr.askingQuestionsClauseForModel(model),
 		CompletionTool:             pr.completionToolForModel(model),
@@ -890,7 +881,6 @@ func (pr *PhaseRunner) multiRepoOrchestratorConfig(f *feature.Feature, passRole 
 		SkillsDir:                  pr.SkillsDir,
 		GuidelinesDir:              pr.GuidelinesDir,
 		Observer:                   pr.Observer,
-		OnVerificationProgress:     pr.OnVerificationProgress,
 		RoundCommitHook:            pr.RoundCommitHook,
 		RunFinalReviewFn:           pr.RunFinalReviewFn,
 	}

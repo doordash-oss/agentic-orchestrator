@@ -18,7 +18,7 @@ Every operation the supervisor uses, grouped by job. Each entry gives the method
   Example: `"$AGENTICO_BIN" api GET /api/v1/features`
 - `POST /api/v1/features` — create a feature. Required: `name`. Common optional fields: `description` (the brief, up to 10000 characters), `repos` (repository names from `workspace.repositories[].name` in `GET /api/v1/readiness`), `pipeline` (`medium`, `large`, `moonshot`), `inquireness` (`none`, `medium`, `high`), `risk_level` (`low`, `medium`, `high`), `exit_criteria`, `models`, `checkpoints`, `use_current_branch`, `idempotency_key`. Returns 201 with the new feature's ID. Creation only queues worktree setup and never runs it: the feature reads `SettingUpWorktrees` with `active_run_detail.setup.status` `queued` (no `started_at`) and an enabled `setup` action until you dispatch it, so follow creation with the `setup` action.
   Example: `"$AGENTICO_BIN" api POST /api/v1/features '{"name":"Add CSV export","description":"Add a CSV export button to the reports page.","repos":["web-app"],"pipeline":"medium"}'`
-- `GET /api/v1/features/{feature_id}` — read one feature's detail: status, phase, runs, repositories, gates (`review_gate`, `need_user_input`), `failure`, `errors`, and the `actions` catalog saying which actions are enabled and why others are disabled.
+- `GET /api/v1/features/{feature_id}` — read one feature's detail: status, phase, runs, repositories, gates (`review_gate`), `failure`, `errors`, and the `actions` catalog saying which actions are enabled and why others are disabled.
   Example: `"$AGENTICO_BIN" api GET /api/v1/features/{feature_id}`
 - `GET /api/v1/features/{feature_id}/config` — read the feature's editable config as `current`, `defaults` and `original`.
   Example: `"$AGENTICO_BIN" api GET /api/v1/features/{feature_id}/config`
@@ -26,8 +26,6 @@ Every operation the supervisor uses, grouped by job. Each entry gives the method
   Example: `"$AGENTICO_BIN" api POST /api/v1/features/{feature_id}/config '{"models":{"implementation":"opus"},"effort":{},"inquireness":"medium","checkpoints":{"inquiry_review":false,"research_review":false,"design_review":false,"roadmap_review":true,"phase_plan_review":true,"manual_publish":true,"draft_publish":false},"pipeline":"medium","input_notifications":"default","automatic_review_mode":"default"}'`
 - `GET /api/v1/features/{feature_id}/live-preview` — compact live preview of what the feature is doing right now.
   Example: `"$AGENTICO_BIN" api GET /api/v1/features/{feature_id}/live-preview`
-- `GET /api/v1/features/{feature_id}/testing-contract` — the current roadmap phase's testing contract: `items` with `item_id`, `name`, `command`, policy flags and any recorded `disposition`. 404 before the phase has a contract.
-  Example: `"$AGENTICO_BIN" api GET /api/v1/features/{feature_id}/testing-contract`
 - `GET /api/v1/features/{feature_id}/completion/preflight` — read-only preflight for publish, merge and done: eligible repositories, existing PR URLs, blockers, and the `source_revision` to pass to those actions.
   Example: `"$AGENTICO_BIN" api GET /api/v1/features/{feature_id}/completion/preflight`
 - `GET /api/v1/features/{feature_id}/rewind/preview` — read-only rewind preview. Required query: `target_phase` (`knowledge-base`, `inquire`, `research`, `design`, `plan`, `implement`, `review`, `publish`). Returns valid targets, consequences and the `source_run_number` and `source_revision` to pass to rewind.
@@ -55,12 +53,6 @@ All actions use `POST /api/v1/features/{feature_id}/actions/{action}`. Check the
   Example: `"$AGENTICO_BIN" api POST /api/v1/features/{feature_id}/actions/setup '{}'`
 - `POST /api/v1/features/{feature_id}/actions/rewind` — rewind to an earlier phase. Required: `target_phase`. Optional: `roadmap_phase`, `upgrade_pipeline`, and `source_run_number` plus `source_revision` from the rewind preview (send them so a stale preview is refused).
   Example: `"$AGENTICO_BIN" api POST /api/v1/features/{feature_id}/actions/rewind '{"target_phase":"plan","source_run_number":1,"source_revision":"{source_revision}"}'`
-- `POST /api/v1/features/{feature_id}/actions/need-user-input-draft` — save answers to the open need-user-input gate. Required: `answers`, an object keyed by each question's `index` (as a string) from `need_user_input.questions`.
-  Example: `"$AGENTICO_BIN" api POST /api/v1/features/{feature_id}/actions/need-user-input-draft '{"answers":{"1":"Use the existing export service."}}'`
-- `POST /api/v1/features/{feature_id}/actions/need-user-input` — submit the saved answers and resume the gated feature. Body `{}`.
-  Example: `"$AGENTICO_BIN" api POST /api/v1/features/{feature_id}/actions/need-user-input '{}'`
-- `POST /api/v1/features/{feature_id}/actions/testing-contract-waive` — waive testing-contract rows the user agreed to waive. Required: `item_ids`, `reason`. Optional: `active_run`, `roadmap_phase`, `contract_revision` from the testing contract you read.
-  Example: `"$AGENTICO_BIN" api POST /api/v1/features/{feature_id}/actions/testing-contract-waive '{"item_ids":["{item_id}"],"reason":"User waived: no display on this machine."}'`
 - `POST /api/v1/features/{feature_id}/actions/publish` — publish (open or update pull requests). Optional: `repos`, `title`, `body`, `source_revision` from the completion preflight.
   Example: `"$AGENTICO_BIN" api POST /api/v1/features/{feature_id}/actions/publish '{"source_revision":"{source_revision}"}'`
 - `POST /api/v1/features/{feature_id}/actions/{action}/{subaction}` — run a named sub-action; `{subaction}` is `description`, `fetch`, or `selection`. The publish description sub-action generates a PR title and body. Optional: `repos`.
@@ -137,7 +129,7 @@ Feature sessions ask questions (ask-user) and request help; both wait in the pen
 
 - `GET /api/v1/features/{feature_id}/runs` — list the feature's runs, newest first. Optional query: `page`, `page_size`.
   Example: `"$AGENTICO_BIN" api GET /api/v1/features/{feature_id}/runs`
-- `GET /api/v1/features/{feature_id}/runs/{run_number}` — one run's detail: seal, provenance, timing, cost, and `sandbox` (`{available:false, reason}`, present only when the run's verification commands or review validators ran without the OS sandbox).
+- `GET /api/v1/features/{feature_id}/runs/{run_number}` — one run's detail: seal, provenance, timing, cost, and `sandbox` (`{available:false, reason}`, present only when the run's review validators ran without the OS sandbox).
   Example: `"$AGENTICO_BIN" api GET /api/v1/features/{feature_id}/runs/{run_number}`
 - `GET /api/v1/features/{feature_id}/runs/{run_number}/sessions` — the sessions that belong to one run.
   Example: `"$AGENTICO_BIN" api GET /api/v1/features/{feature_id}/runs/{run_number}/sessions`
@@ -186,7 +178,7 @@ Recovery lists sessions orphaned by a previous server process.
 
 Each `providers[]` entry may carry `endpoint_reachable` (result of a short, unauthenticated probe of the provider's custom API endpoint, such as an OpenCode `baseURL`, `ANTHROPIC_BASE_URL`, or a Codex `model_provider` `base_url`; absent when none is configured or the background check is still running) and `warning`. A `provider_endpoint_unreachable` warning also appears in `issues` and does not set `ready:false`, but sessions on that provider will fail to connect. Tell the user to check their VPN or network, then refresh readiness. A refresh waits up to 3 seconds for the check; plain reads use the cached result and recheck in the background.
 
-On macOS, Agentico runs testing-contract commands and Final Review validators under `sandbox-exec`. It checks once per server process that `sandbox-exec` can apply a profile. macOS does not allow nested sandboxes, so when Agentico itself runs inside one (hardened CI, an agent sandbox, or Agentico validating itself), that check fails and `issues` carries one `verification_sandbox_unavailable` warning. The probe's reason is in `diagnostics`, and `ready` stays unchanged. In that state, each contract command runs once, unsandboxed: there is no sandboxed attempt and no confirmation rerun, and the result notes `verification sandbox unavailable (<reason>)`. Validators launch without the sandbox wrapper. The affected run records `sandbox` in its run detail. To restore write confinement, run Agentico outside the outer sandbox and restart the server.
+On macOS, Agentico runs review validators under `sandbox-exec`. It checks once per server process that `sandbox-exec` can apply a profile. macOS does not allow nested sandboxes, so when Agentico itself runs inside one (hardened CI, an agent sandbox, or Agentico validating itself), that check fails and `issues` carries one `verification_sandbox_unavailable` warning. The probe's reason is in `diagnostics`, and `ready` stays unchanged. In that state, validators launch without the sandbox wrapper. The affected run records `sandbox` in its run detail. To restore write confinement, run Agentico outside the outer sandbox and restart the server.
 
 ## Runtime config
 

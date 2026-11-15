@@ -44,7 +44,7 @@ func TestParseCompletionIntent_RequiresExactlyOneStructuredOutcome(t *testing.T)
 		},
 		{
 			name:      "unknown status is invalid",
-			text:      "<agentico-outcome>{\"status\":\"need_user_input\"}</agentico-outcome>",
+			text:      "<agentico-outcome>{\"status\":\"blocked\"}</agentico-outcome>",
 			wantFound: true,
 		},
 		{

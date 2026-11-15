@@ -691,7 +691,7 @@ func TestContractRegistryImplementer(t *testing.T) {
 	iterDir := t.TempDir()
 	artifactDir := filepath.Dir(iterDir)
 	progressPath := filepath.Join(artifactDir, "progress.md")
-	writeValidProgress(t, progressPath, "", stateSuccess)
+	writeValidProgress(t, progressPath, stateSuccess)
 
 	out, violations, err := Validate(feature.PhaseImplement, roleImplementer, iterDir)
 	if err != nil {
@@ -700,74 +700,8 @@ func TestContractRegistryImplementer(t *testing.T) {
 	if len(violations) != 0 {
 		t.Fatalf("Validate() violations = %v, want none", violations)
 	}
-	if !out.OK || out.Progress == nil || out.VerificationReport != nil {
+	if !out.OK || out.Progress == nil {
 		t.Fatalf("Validate() outcome = %+v, want parsed progress only", out)
-	}
-}
-
-func TestValidateArtifactsPreflightImplementerAcceptsAgentEvidence(t *testing.T) {
-	phaseDir := filepath.Join(t.TempDir(), "phase-01")
-	artifactDir := filepath.Join(phaseDir, "implement")
-	iterDir := filepath.Join(artifactDir, "iteration-01")
-	if err := os.MkdirAll(iterDir, 0o755); err != nil {
-		t.Fatalf("mkdir iteration: %v", err)
-	}
-	writeValidProgress(t, filepath.Join(artifactDir, "progress.md"), "", stateSuccess)
-
-	contract := CompileTestingContract(strings.Join([]string{
-		"### Visual Evidence",
-		"- [ ] Capture the dashboard empty state [size: 1x1]",
-	}, "\n"), filepath.Join(phaseDir, "plan.md"), "collapsed")
-	if err := WriteTestingContract(filepath.Join(phaseDir, "testing-contract.yaml"), contract); err != nil {
-		t.Fatalf("WriteTestingContract() error = %v", err)
-	}
-
-	var visual TestingContractItem
-	for _, item := range contract.Items {
-		if item.Owner == testingContractOwnerAgent && item.Source == testingContractVisualSource {
-			visual = item
-			break
-		}
-	}
-	if visual.ID == "" {
-		t.Fatal("compiled contract has no agent-owned visual item")
-	}
-	writeTestPNG(t, filepath.Join(iterDir, filepath.FromSlash(visual.ExpectedEvidence.Path)), 1, 1)
-
-	out, violations, err := ValidateArtifactsPreflight(feature.PhaseImplement, roleImplementer, iterDir)
-	if err != nil {
-		t.Fatalf("ValidateArtifactsPreflight() error = %v", err)
-	}
-	if len(violations) != 0 || !out.OK {
-		t.Fatalf("ValidateArtifactsPreflight() = (%+v, %v), want OK", out, violations)
-	}
-}
-
-func TestValidateArtifactsPreflightImplementerReportsMissingAgentEvidence(t *testing.T) {
-	phaseDir := filepath.Join(t.TempDir(), "phase-01")
-	artifactDir := filepath.Join(phaseDir, "implement")
-	iterDir := filepath.Join(artifactDir, "iteration-01")
-	if err := os.MkdirAll(iterDir, 0o755); err != nil {
-		t.Fatalf("mkdir iteration: %v", err)
-	}
-	writeValidProgress(t, filepath.Join(artifactDir, "progress.md"), "", stateSuccess)
-
-	contract := CompileTestingContract(strings.Join([]string{
-		"### Manual Verification",
-		"- [ ] Confirm the status copy is understandable to a user.",
-	}, "\n"), filepath.Join(phaseDir, "plan.md"), "collapsed")
-	if err := WriteTestingContract(filepath.Join(phaseDir, "testing-contract.yaml"), contract); err != nil {
-		t.Fatalf("WriteTestingContract() error = %v", err)
-	}
-
-	_, violations, err := ValidateArtifactsPreflight(feature.PhaseImplement, roleImplementer, iterDir)
-	if err != nil {
-		t.Fatalf("ValidateArtifactsPreflight() error = %v", err)
-	}
-	got := joinProtocolViolations(violations)
-	if !strings.Contains(got, "observations/confirm-the-status-copy-is-understandable-to-a-user.md") ||
-		!strings.Contains(got, "required agent-owned evidence is missing") {
-		t.Fatalf("JoinProtocolViolations() = %q, want missing agent evidence", got)
 	}
 }
 
@@ -787,33 +721,13 @@ func TestContractRegistryImplementerReportsMissingArtifacts(t *testing.T) {
 	}
 }
 
-// notRunVerificationReport builds a legacy v1 report listing each required
-// item as an unrun check.
-func notRunVerificationReport(required ...requiredVerificationItem) verificationReport {
-	report := verificationReport{Version: 1}
-	for _, item := range required {
-		report.RequiredChecks = append(report.RequiredChecks, verificationCheckResult{
-			Name:        item.Name,
-			Requirement: item.Requirement,
-			Command:     item.Requirement,
-			Mode:        verificationModeUnknown,
-			Status:      verificationStatusNotRun,
-		})
-	}
-	return report
-}
-
 func TestContractRegistryImplementerReportsMalformedProgress(t *testing.T) {
 	iterDir := t.TempDir()
 	artifactDir := filepath.Dir(iterDir)
 	progressPath := filepath.Join(artifactDir, "progress.md")
-	reportPath := filepath.Join(iterDir, "verification-report.yaml")
 
 	if err := os.WriteFile(progressPath, []byte("# Iteration Progress\n\n## Iteration Handoff\n- malformed\n"), 0o644); err != nil {
 		t.Fatalf("write malformed progress: %v", err)
-	}
-	if err := writeVerificationReport(reportPath, notRunVerificationReport()); err != nil {
-		t.Fatalf("WriteVerificationReport() error = %v", err)
 	}
 
 	out, violations, err := Validate(feature.PhaseImplement, roleImplementer, iterDir)
@@ -829,47 +743,16 @@ func TestContractRegistryImplementerReportsMalformedProgress(t *testing.T) {
 	}
 }
 
-func TestContractRegistryImplementerAllowsRetryWithNotRunVerification(t *testing.T) {
+func TestContractRegistryImplementerAllowsRetry(t *testing.T) {
 	iterDir := t.TempDir()
-	artifactDir := filepath.Dir(iterDir)
-	progressPath := filepath.Join(artifactDir, "progress.md")
-	reportPath := filepath.Join(iterDir, "verification-report.yaml")
-
-	writeValidProgress(t, progressPath, reportPath, stateRetry)
-	report := notRunVerificationReport(requiredVerificationItem{Name: "Relevant tests pass", Requirement: "go test ./..."})
-	if err := writeVerificationReport(reportPath, report); err != nil {
-		t.Fatalf("WriteVerificationReport() error = %v", err)
-	}
-
-	out, violations, err := Validate(feature.PhaseImplement, roleImplementer, iterDir)
-	if err != nil {
-		t.Fatalf("Validate() error = %v", err)
-	}
-	if len(violations) != 0 {
-		t.Fatalf("Validate() violations = %v, want none for RETRY with not_run verification", violations)
-	}
-	if !out.OK {
-		t.Fatal("Validate() OK = false, want true for RETRY with not_run verification")
-	}
-}
-
-func TestContractRegistryImplementerDoesNotRequireNeedUserInputForSuccess(t *testing.T) {
-	iterDir := t.TempDir()
-	artifactDir := filepath.Dir(iterDir)
-	progressPath := filepath.Join(artifactDir, "progress.md")
-	reportPath := filepath.Join(iterDir, "verification-report.yaml")
-
-	writeValidProgress(t, progressPath, reportPath, stateSuccess)
-	if err := writeVerificationReport(reportPath, notRunVerificationReport()); err != nil {
-		t.Fatalf("WriteVerificationReport() error = %v", err)
-	}
+	writeValidProgress(t, filepath.Join(filepath.Dir(iterDir), "progress.md"), stateRetry)
 
 	out, violations, err := Validate(feature.PhaseImplement, roleImplementer, iterDir)
 	if err != nil {
 		t.Fatalf("Validate() error = %v", err)
 	}
 	if len(violations) != 0 || !out.OK {
-		t.Fatalf("Validate() = (%+v, %v), want OK without need-user-input payload", out, violations)
+		t.Fatalf("Validate() = (%+v, %v), want OK for RETRY", out, violations)
 	}
 }
 
@@ -882,8 +765,7 @@ func TestContractRegistryFinalReviewFixerRequiresNoReportArtifact(t *testing.T) 
 		t.Fatalf("Lookup(PhaseReview, RoleFinalReviewFixer).Role = %q, want %q", contract.Role, roleFinalReviewFixer)
 	}
 
-	// verification-report.yaml is harness-owned: an empty fix iteration dir
-	// must validate cleanly instead of demanding an agent-authored report.
+	// An empty fix iteration dir must validate cleanly.
 	out, violations, err := Validate(feature.PhaseReview, roleFinalReviewFixer, t.TempDir())
 	if err != nil {
 		t.Fatalf("Validate() error = %v", err)
@@ -1002,9 +884,8 @@ func writeReviewFeedbackFile(t *testing.T, path, body string) {
 	}
 }
 
-func writeValidProgress(t *testing.T, path string, reportPath string, state iterationState) {
+func writeValidProgress(t *testing.T, path string, state iterationState) {
 	t.Helper()
-	_ = reportPath
 	body := fmt.Sprintf(`# Iteration Progress
 
 ## Iteration Handoff

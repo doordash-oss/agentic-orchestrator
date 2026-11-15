@@ -74,7 +74,6 @@ type OrchestratorConfig struct {
 	DangerouslySkipPermissions bool
 	PermissionCache            *permission.Cache
 	CommandRunner              ports.CommandRunner
-	CapabilityPolicy           *CapabilityPolicy
 
 	// BuildSession creates CLI command args, env vars, and session opts
 	// by routing through the provider registry. Passed through to ImplementConfig.
@@ -128,10 +127,6 @@ type OrchestratorConfig struct {
 	// Observer is the observability facade for lifecycle events. Nil = no-op.
 	Observer *observe.Observer
 
-	// OnVerificationProgress is called after each persisted harness
-	// verification status transition so API clients can refresh live state.
-	OnVerificationProgress func(featureID string)
-
 	// RoundCommitHook, when non-nil, is invoked by the phase-implement and
 	// final-review loops once per implementation/fix round, right after the
 	// round's session ends and before the review gate. The orchestrator
@@ -167,19 +162,10 @@ func resolveOrchestratorSessionConfig(cfg OrchestratorConfig, role llm.PhaseRole
 
 // OrchestratorResult is the aggregate outcome of multi-repo implementation.
 type OrchestratorResult struct {
-	FinalStatus  string            // "all_passed" | "awaiting_final_review" | "failed" | "need_user_input" | "plan_revision_required" | "interrupted"
+	FinalStatus  string            // "all_passed" | "awaiting_final_review" | "failed" | "plan_revision_required" | "interrupted"
 	RepoStatuses map[string]string // per-repo inner loop FinalStatus (e.g., "max_iterations")
 	FailedRepos  []string
-	// PausedRepos lists repos that ended this run paused on a need-user-input
-	// gate. Under the unified flow the gate is feature-scoped, so PausedRepos
-	// carries the phase-declared repo subset when FinalStatus == "need_user_input".
-	PausedRepos []string
-	// NeedUserInputPath is the absolute path to the persisted gate artifact
-	// when FinalStatus == "need_user_input". The orchestrator stores this on
-	// Feature.PendingNeedUserInputPath so the resume handler
-	// can read the questionnaire and answers.
-	NeedUserInputPath string
-	LastError         string
+	LastError    string
 	// PlanRevisionFeedback carries phase-plan repair requirements when
 	// FinalStatus == "plan_revision_required". Final Review must run its fix
 	// leg instead of returning this status.
@@ -195,7 +181,7 @@ type OrchestratorResult struct {
 // via RunMultiRepoFinalReview, not per-phase.
 //
 // Returns "awaiting_final_review" when the implement loop succeeds,
-// "failed" / "need_user_input" / "interrupted" otherwise.
+// "failed" / "plan_revision_required" / "interrupted" otherwise.
 func runMultiRepoOrchestrator(cfg OrchestratorConfig, sm ports.SessionManager) (*OrchestratorResult, error) {
 	implResult, err := RunPhaseImplementLoop(cfg, sm)
 	if err != nil {
@@ -221,13 +207,6 @@ func phaseLoopResultToOrchestratorResult(_ OrchestratorConfig, r *PhaseImplement
 	switch r.FinalStatus {
 	case "interrupted":
 		return &OrchestratorResult{FinalStatus: "interrupted"}
-	case "need_user_input":
-		return &OrchestratorResult{
-			FinalStatus:       "need_user_input",
-			PausedRepos:       append([]string(nil), r.PhaseRepos...),
-			NeedUserInputPath: r.NeedUserInputPath,
-			LastError:         r.LastError,
-		}
 	case "plan_revision_required":
 		return &OrchestratorResult{
 			FinalStatus:          "plan_revision_required",

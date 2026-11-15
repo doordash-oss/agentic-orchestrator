@@ -69,7 +69,7 @@ func TestCommitPhaseOutcome_RejectsIntentThatDisagreesWithProgress(t *testing.T)
 	if err := os.MkdirAll(iterDir, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	writeValidProgress(t, filepath.Join(phaseDir, "progress.md"), "", stateRetry)
+	writeValidProgress(t, filepath.Join(phaseDir, "progress.md"), stateRetry)
 
 	outcome, _, violations, err := CommitPhaseOutcome(CompletionCommitInput{
 		Phase:       feature.PhaseImplement,

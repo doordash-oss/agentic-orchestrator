@@ -39,7 +39,7 @@ Planning has two levels:
 
 ### Implement
 
-Executes the approved phase plan in verified iterations. Each iteration writes a structured handoff and verification report.
+Executes the approved phase plan in verified iterations. Each iteration writes a structured handoff.
 
 ### Final Review
 

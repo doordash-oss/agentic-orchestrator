@@ -5086,7 +5086,6 @@ func TestRewindWithRequest_Phase2PartialResetsToAnchorAndCarriesSurvivors(t *tes
 		filepath.Join("roadmap", "roadmap.md"),
 		filepath.Join("phase-01", "plan", "phase-plan.md"),
 		filepath.Join("phase-01", "implement", "iteration-01", "x"),
-		filepath.Join("phase-01", "testing-contract.yaml"),
 		filepath.Join("phase-02", "plan", "phase-plan.md"),
 	} {
 		if _, err := os.Stat(filepath.Join(run2Dir, rel)); err != nil {
@@ -5094,6 +5093,7 @@ func TestRewindWithRequest_Phase2PartialResetsToAnchorAndCarriesSurvivors(t *tes
 		}
 	}
 	for _, rel := range []string{
+		filepath.Join("phase-01", "testing-contract.yaml"),
 		filepath.Join("phase-02", "implement"),
 		filepath.Join("phase-02", "testing-contract.yaml"),
 		filepath.Join("phase-03"),

@@ -42,10 +42,9 @@ var implementRoleSpec = roleSpec{
 
 // implementUserInput is the data passed to implement.user.tmpl.
 type implementUserInput struct {
-	PlanPath             string
-	ExitCriteria         string
-	Feedback             string
-	PlanRevisionFeedback string
-	HelpAnswers          string
-	Iteration            int
+	PlanPath     string
+	ExitCriteria string
+	Feedback     string
+	HelpAnswers  string
+	Iteration    int
 }

@@ -33,9 +33,6 @@ import (
 //     failed (LastError set) for every PhaseRepos entry.
 //   - "safety_rail":      no-progress / consecutive-failure rail tripped.
 //   - "interrupted":      shutdown / feature stopped while running.
-//   - "need_user_input":  harness verification requires a user decision;
-//     NeedUserInputPath points to the harness-owned gate artifact at the
-//     phase-iteration dir.
 //   - "plan_revision_required": implementation found a phase-plan contract
 //     defect that must be repaired before another implementation attempt.
 //
@@ -48,7 +45,6 @@ type PhaseImplementLoopResult struct {
 	Iterations           int
 	LastError            string
 	PhaseRepos           []string
-	NeedUserInputPath    string
 	PlanRevisionFeedback string
 }
 
@@ -64,9 +60,7 @@ type PhaseImplementLoopResult struct {
 // together. AtomicPhaseStamp commits the outcome in one Modify write at the
 // end of the loop.
 //
-// RETRY is phase-scoped. Harness-created verification gates live at the
-// phase-iteration artifact dir; the orchestrator surfaces them via the
-// feature-level pending-need-user-input pointer.
+// RETRY is phase-scoped.
 //
 // Crash recovery: re-runs the interrupted unit (iteration N's implement, or
 // iteration N's review) from scratch. Durable state on disk
@@ -155,7 +149,6 @@ func RunPhaseImplementLoop(cfg OrchestratorConfig, sm ports.SessionManager) (*Ph
 		DangerouslySkipPermissions: cfg.DangerouslySkipPermissions,
 		PermissionCache:            cfg.PermissionCache,
 		CommandRunner:              cfg.CommandRunner,
-		CapabilityPolicy:           cfg.CapabilityPolicy,
 		BuildSession:               cfg.BuildSession,
 		AskingClause:               cfg.AskingClause,
 		CompletionTool:             cfg.CompletionTool,
@@ -167,7 +160,6 @@ func RunPhaseImplementLoop(cfg OrchestratorConfig, sm ports.SessionManager) (*Ph
 		SkillsDir:                  cfg.SkillsDir,
 		GuidelinesDir:              cfg.GuidelinesDir,
 		Observer:                   cfg.Observer,
-		OnVerificationProgress:     cfg.OnVerificationProgress,
 		RoundCommitHook:            cfg.RoundCommitHook,
 		RoundCommitRepos:           workspace.RepoPaths,
 		PhaseExitGate:              cfg.PhaseExitGate,
@@ -213,21 +205,6 @@ func RunPhaseImplementLoop(cfg OrchestratorConfig, sm ports.SessionManager) (*Ph
 			PhaseRepos:  phaseRepos,
 		}, nil
 
-	case "need_user_input":
-		_ = AtomicPhaseStamp(cfg.FeatureStore, AtomicPhaseStampInput{
-			FeatureID: cfg.Feature.ID,
-			Repos:     phaseRepos,
-			Outcome:   phaseOutcomeNeedUserInput,
-			GatePath:  loopResult.NeedUserInputPath,
-		})
-		return &PhaseImplementLoopResult{
-			FinalStatus:       "need_user_input",
-			Iterations:        loopResult.Iterations,
-			LastError:         loopResult.LastError,
-			NeedUserInputPath: loopResult.NeedUserInputPath,
-			PhaseRepos:        phaseRepos,
-		}, nil
-
 	case "plan_revision_required":
 		return &PhaseImplementLoopResult{
 			FinalStatus:          "plan_revision_required",
@@ -263,8 +240,8 @@ func RunPhaseImplementLoop(cfg OrchestratorConfig, sm ports.SessionManager) (*Ph
 }
 
 // resolveUnifiedPhaseImplementDir returns the unified-flow phase-iteration
-// artifact dir: one progress.md, one verification-report.yaml, one
-// review-feedback.md per iteration at this dir level (no per-repo subdir).
+// artifact dir: one progress.md and one review-feedback.md per iteration at
+// this dir level (no per-repo subdir).
 //
 // For roadmap-phase features the dir is `runs/run-NNN/phase-NN/implement/`.
 // For non-roadmap features it's `runs/run-NNN/implement/`.

@@ -280,25 +280,22 @@ func (e ErrorScope) Valid() bool {
 
 // Defines values for FeatureAction.
 const (
-	FeatureActionCleanup              FeatureAction = "cleanup"
-	FeatureActionDelete               FeatureAction = "delete"
-	FeatureActionDiscard              FeatureAction = "discard"
-	FeatureActionMarkDone             FeatureAction = "mark-done"
-	FeatureActionMerge                FeatureAction = "merge"
-	FeatureActionNeedUserInput        FeatureAction = "need-user-input"
-	FeatureActionNeedUserInputDraft   FeatureAction = "need-user-input-draft"
-	FeatureActionPauseStop            FeatureAction = "pause-stop"
-	FeatureActionPublish              FeatureAction = "publish"
-	FeatureActionRebase               FeatureAction = "rebase"
-	FeatureActionRefactor             FeatureAction = "refactor"
-	FeatureActionRestart              FeatureAction = "restart"
-	FeatureActionResume               FeatureAction = "resume"
-	FeatureActionRetry                FeatureAction = "retry"
-	FeatureActionReviewFeedback       FeatureAction = "review-feedback"
-	FeatureActionRewind               FeatureAction = "rewind"
-	FeatureActionSetup                FeatureAction = "setup"
-	FeatureActionStart                FeatureAction = "start"
-	FeatureActionTestingContractWaive FeatureAction = "testing-contract-waive"
+	FeatureActionCleanup        FeatureAction = "cleanup"
+	FeatureActionDelete         FeatureAction = "delete"
+	FeatureActionDiscard        FeatureAction = "discard"
+	FeatureActionMarkDone       FeatureAction = "mark-done"
+	FeatureActionMerge          FeatureAction = "merge"
+	FeatureActionPauseStop      FeatureAction = "pause-stop"
+	FeatureActionPublish        FeatureAction = "publish"
+	FeatureActionRebase         FeatureAction = "rebase"
+	FeatureActionRefactor       FeatureAction = "refactor"
+	FeatureActionRestart        FeatureAction = "restart"
+	FeatureActionResume         FeatureAction = "resume"
+	FeatureActionRetry          FeatureAction = "retry"
+	FeatureActionReviewFeedback FeatureAction = "review-feedback"
+	FeatureActionRewind         FeatureAction = "rewind"
+	FeatureActionSetup          FeatureAction = "setup"
+	FeatureActionStart          FeatureAction = "start"
 )
 
 // Valid indicates whether the value is a known member of the FeatureAction enum.
@@ -313,10 +310,6 @@ func (e FeatureAction) Valid() bool {
 	case FeatureActionMarkDone:
 		return true
 	case FeatureActionMerge:
-		return true
-	case FeatureActionNeedUserInput:
-		return true
-	case FeatureActionNeedUserInputDraft:
 		return true
 	case FeatureActionPauseStop:
 		return true
@@ -339,8 +332,6 @@ func (e FeatureAction) Valid() bool {
 	case FeatureActionSetup:
 		return true
 	case FeatureActionStart:
-		return true
-	case FeatureActionTestingContractWaive:
 		return true
 	default:
 		return false
@@ -425,27 +416,6 @@ func (e InitializeRepositoryResponseResult) Valid() bool {
 	case AlreadyInitialized:
 		return true
 	case Initialized:
-		return true
-	default:
-		return false
-	}
-}
-
-// Defines values for NeedUserInputVerificationAction.
-const (
-	ALLOWSUBSTITUTE NeedUserInputVerificationAction = "ALLOW_SUBSTITUTE"
-	RETRYAFTERAUTH  NeedUserInputVerificationAction = "RETRY_AFTER_AUTH"
-	WAIVE           NeedUserInputVerificationAction = "WAIVE"
-)
-
-// Valid indicates whether the value is a known member of the NeedUserInputVerificationAction enum.
-func (e NeedUserInputVerificationAction) Valid() bool {
-	switch e {
-	case ALLOWSUBSTITUTE:
-		return true
-	case RETRYAFTERAUTH:
-		return true
-	case WAIVE:
 		return true
 	default:
 		return false
@@ -3110,7 +3080,6 @@ type FeatureDetail struct {
 	Inquireness    feature.Inquireness `json:"inquireness,omitempty"`
 	Models         ModelDefaults       `json:"models"`
 	Name           string              `json:"name"`
-	NeedUserInput  *NeedUserInputGate  `json:"need_user_input,omitempty"`
 
 	// ParentID Launch parent id; only set on child features.
 	ParentID string `json:"parent_id,omitempty"`
@@ -3138,9 +3107,8 @@ type FeatureDetail struct {
 	Timing        Timing `json:"timing"`
 
 	// Transaction Ordered per-repository transaction journal for multi-repository child-to-parent integration.
-	Transaction       TransactionJournal `json:"transaction,omitempty"`
-	VerificationItems []VerificationItem `json:"verification_items,omitempty"`
-	WaitReason        string             `json:"wait_reason,omitempty"`
+	Transaction TransactionJournal `json:"transaction,omitempty"`
+	WaitReason  string             `json:"wait_reason,omitempty"`
 
 	// Warnings Canonical warning-class errors for this feature, such as effort-capability drift; absent when there is nothing to warn about.
 	Warnings []Error `json:"warnings,omitempty"`
@@ -3354,47 +3322,6 @@ type ModelReadiness struct {
 	Models []string `json:"models,omitempty"`
 }
 
-// NeedUserInputGate defines model for NeedUserInputGate.
-type NeedUserInputGate struct {
-	FeatureID          string                     `json:"feature_id,omitempty"`
-	InputNotifications string                     `json:"input_notifications,omitempty"`
-	Iteration          int                        `json:"iteration,omitempty"`
-	Open               bool                       `json:"open"`
-	Questions          []NeedUserInputQuestion    `json:"questions,omitempty"`
-	RepoName           string                     `json:"repo_name,omitempty"`
-	Scope              string                     `json:"scope,omitempty"`
-	Summary            string                     `json:"summary,omitempty"`
-	Verification       *NeedUserInputVerification `json:"verification,omitempty"`
-	WaitingSince       time.Time                  `json:"waiting_since"`
-}
-
-// NeedUserInputQuestion defines model for NeedUserInputQuestion.
-type NeedUserInputQuestion struct {
-	Answer string `json:"answer,omitempty"`
-	Index  int    `json:"index"`
-	Prompt string `json:"prompt,omitempty"`
-}
-
-// NeedUserInputVerification defines model for NeedUserInputVerification.
-type NeedUserInputVerification struct {
-	AllowedActions []NeedUserInputVerificationAction  `json:"allowed_actions"`
-	Blockers       []NeedUserInputVerificationBlocker `json:"blockers"`
-}
-
-// NeedUserInputVerificationAction WAIVE records user-authorized waivers, RETRY_AFTER_AUTH re-probes after the user provides the missing capability, and ALLOW_SUBSTITUTE keeps the evidence requirement but authorizes a faithful substitute for blocked agent-owned evidence rows.
-type NeedUserInputVerificationAction string
-
-// NeedUserInputVerificationBlocker defines model for NeedUserInputVerificationBlocker.
-type NeedUserInputVerificationBlocker struct {
-	Capabilities []string `json:"capabilities"`
-	Command      string   `json:"command"`
-	ItemID       string   `json:"item_id"`
-	Name         string   `json:"name"`
-	Reason       string   `json:"reason"`
-	Remediation  string   `json:"remediation"`
-	RepoName     string   `json:"repo_name,omitempty"`
-}
-
 // NotificationConfig defines model for NotificationConfig.
 type NotificationConfig struct {
 	MuteFeatureInput bool `json:"mute_feature_input"`
@@ -3501,11 +3428,10 @@ type PermissionSnapshotResponse struct {
 
 // PromptSnapshotResponse defines model for PromptSnapshotResponse.
 type PromptSnapshotResponse struct {
-	APIVersion       string              `json:"api_version"`
-	AskUserQuestions []ControlRequest    `json:"ask_user_questions"`
-	HelpQueue        []HelpQueue         `json:"help_queue"`
-	Meta             ResponseMeta        `json:"meta,omitempty"`
-	NeedUserInputs   []NeedUserInputGate `json:"need_user_inputs"`
+	APIVersion       string           `json:"api_version"`
+	AskUserQuestions []ControlRequest `json:"ask_user_questions"`
+	HelpQueue        []HelpQueue      `json:"help_queue"`
+	Meta             ResponseMeta     `json:"meta,omitempty"`
 }
 
 // ProviderModelRefreshRequest defines model for ProviderModelRefreshRequest.
@@ -4430,7 +4356,6 @@ type RunDetail struct {
 	Committing                      bool   `json:"committing,omitempty"`
 	Cost                            Cost   `json:"cost"`
 	CurrentPhase                    string `json:"current_phase,omitempty"`
-	HasNeedUserGate                 bool   `json:"has_need_user_gate,omitempty"`
 	IsRewind                        bool   `json:"is_rewind,omitempty"`
 	Iteration                       int    `json:"iteration,omitempty"`
 	PendingReviewPhase              string `json:"pending_review_phase,omitempty"`
@@ -4442,7 +4367,7 @@ type RunDetail struct {
 	RoadmapTotal                    int    `json:"roadmap_total,omitempty"`
 	RunNumber                       int    `json:"run_number"`
 
-	// Sandbox Present only when this run executed harness verification commands or launched review validators while the OS verification sandbox was unavailable (for example nested macOS sandbox-exec); those commands ran unconfined.
+	// Sandbox Present only when this run launched review validators while the OS sandbox was unavailable (for example nested macOS sandbox-exec); those validators ran unconfined.
 	Sandbox    *RunSandbox `json:"sandbox,omitempty"`
 	SealReason string      `json:"seal_reason,omitempty"`
 	SealedAt   *time.Time  `json:"sealed_at,omitempty"`
@@ -4486,7 +4411,7 @@ type RunLogListResponse struct {
 	Meta       ResponseMeta `json:"meta,omitempty"`
 }
 
-// RunSandbox Present only when this run executed harness verification commands or launched review validators while the OS verification sandbox was unavailable (for example nested macOS sandbox-exec); those commands ran unconfined.
+// RunSandbox Present only when this run launched review validators while the OS sandbox was unavailable (for example nested macOS sandbox-exec); those validators ran unconfined.
 type RunSandbox struct {
 	// Available Always false when present.
 	Available bool `json:"available"`
@@ -4507,7 +4432,6 @@ type RunSessionListResponse struct {
 type RunSummary struct {
 	ArtifactCount                   int        `json:"artifact_count"`
 	CurrentPhase                    string     `json:"current_phase,omitempty"`
-	HasNeedUserGate                 bool       `json:"has_need_user_gate,omitempty"`
 	IsRewind                        bool       `json:"is_rewind,omitempty"`
 	Iteration                       int        `json:"iteration,omitempty"`
 	PendingReviewPhase              string     `json:"pending_review_phase,omitempty"`
@@ -5112,57 +5036,6 @@ type TaskActivityUsage struct {
 	TotalTokens int   `json:"total_tokens,omitempty"`
 }
 
-// TestingContractDisposition defines model for TestingContractDisposition.
-type TestingContractDisposition struct {
-	ChangedBy string `json:"changed_by,omitempty"`
-	Reason    string `json:"reason,omitempty"`
-
-	// Status waived is the only recorded status today.
-	Status string `json:"status"`
-}
-
-// TestingContractItem One compiled testing-contract row.
-type TestingContractItem struct {
-	AllowBlocked      bool                        `json:"allow_blocked"`
-	AllowSubstitution bool                        `json:"allow_substitution"`
-	AllowWaiver       bool                        `json:"allow_waiver"`
-	Capabilities      []string                    `json:"capabilities"`
-	Command           string                      `json:"command"`
-	Disposition       *TestingContractDisposition `json:"disposition,omitempty"`
-	ItemID            string                      `json:"item_id"`
-	Name              string                      `json:"name"`
-
-	// Owner harness or agent.
-	Owner    string `json:"owner"`
-	Repo     string `json:"repo,omitempty"`
-	Required bool   `json:"required"`
-
-	// Source plan, cross-repo, manual, visual, or behavioral.
-	Source string `json:"source"`
-}
-
-// TestingContractResponse defines model for TestingContractResponse.
-type TestingContractResponse struct {
-	// ActiveRun Run the contract belongs to; phase and revision numbers restart after a rewind.
-	ActiveRun    int                   `json:"active_run"`
-	APIVersion   string                `json:"api_version"`
-	FeatureID    string                `json:"feature_id"`
-	Items        []TestingContractItem `json:"items"`
-	Meta         ResponseMeta          `json:"meta,omitempty"`
-	Revision     int                   `json:"revision"`
-	RoadmapPhase int                   `json:"roadmap_phase"`
-}
-
-// TestingContractWaiveResponse defines model for TestingContractWaiveResponse.
-type TestingContractWaiveResponse struct {
-	APIVersion       string       `json:"api_version"`
-	ContractRevision int          `json:"contract_revision"`
-	FeatureID        string       `json:"feature_id"`
-	Meta             ResponseMeta `json:"meta,omitempty"`
-	Result           string       `json:"result"`
-	WaivedItems      []string     `json:"waived_items"`
-}
-
 // TextContentResponse defines model for TextContentResponse.
 type TextContentResponse struct {
 	APIVersion string       `json:"api_version"`
@@ -5417,12 +5290,6 @@ type Usage struct {
 	CostUSD      float64 `json:"cost_usd,omitempty"`
 	InputTokens  int     `json:"input_tokens,omitempty"`
 	OutputTokens int     `json:"output_tokens,omitempty"`
-}
-
-// VerificationItem defines model for VerificationItem.
-type VerificationItem struct {
-	Name  string `json:"name"`
-	State string `json:"state"`
 }
 
 // WorkspaceReadiness defines model for WorkspaceReadiness.

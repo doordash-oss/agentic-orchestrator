@@ -53,15 +53,6 @@ Scope guidance:
 
 {{ .PreviousFeedback }}
 
-{{ end }}{{ if or .PriorImplementationReportPaths .PriorImplementationEvidenceRootDirs .PriorImplementationEvidenceArtifacts }}## Prior Implementation Evidence
-
-{{ if .PriorImplementationReportPaths }}Implementation verification reports:
-{{ range .PriorImplementationReportPaths }}- {{ . }}
-{{ end }}{{ end }}{{ if .PriorImplementationEvidenceRootDirs }}Evidence roots:
-{{ range .PriorImplementationEvidenceRootDirs }}- {{ . }}
-{{ end }}{{ end }}{{ if .PriorImplementationEvidenceArtifacts }}Evidence artifacts:
-{{ range .PriorImplementationEvidenceArtifacts }}- {{ . }}
-{{ end }}{{ end }}
 {{ end }}{{ else if .RoadmapPath }}## Approved Roadmap
 
 This phase is one step in a larger plan. Read the approved roadmap at: {{ .RoadmapPath }}
@@ -84,23 +75,6 @@ Read the implementation plan (source of truth) at: {{ .PlanPath }}
 {{ end }}{{ if .ExitCriteria }}## Exit Criteria
 
 {{ .ExitCriteria }}
-
-{{ end }}{{ if .VerificationReportPath }}## Verification Report
-
-Read the verification report at: {{ .VerificationReportPath }}
-
-{{ end }}{{ if .ContractPath }}## Testing Contract
-
-Read the binding testing contract at: {{ .ContractPath }}
-
-{{ else if .RequiredVerification }}## Required Verification Items
-
-{{ range $i, $item := .RequiredVerification }}{{ inc $i }}. {{ if $item.Name }}{{ $item.Name }}
-   Requirement: {{ $item.Requirement }}{{ else }}{{ $item.Requirement }}{{ end }}
-{{ end }}
-Apply the "Review Rules (With Verification Items)" section from the axis methodology.
-
-{{ else }}Apply the "Review Rules (Without Verification Items)" section from the axis methodology.
 
 {{ end }}{{ if .ProgressPath }}## Progress
 

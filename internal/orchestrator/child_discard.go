@@ -282,7 +282,6 @@ func (o *Orchestrator) resolveChildAttention(childID string) error {
 	if err := o.deps.Store.Modify(childID, func(f *feature.Feature) error {
 		f.PermissionsQueue = nil
 		f.HelpQueue = nil
-		f.PendingNeedUserInputPath = ""
 		f.PendingReviewPhase = nil
 		f.PendingRewindReviewRoadmapPhase = nil
 		return nil

@@ -30,7 +30,7 @@ Before returning APPROVED, execute the repository's full automated test suites (
 
 Use `CHANGES_REQUESTED` only for Critical or High defects attributable to the code. Examples: the feature cannot build, cannot launch, crashes, or behaves contrary to approved intent or the cited acceptance criteria.
 
-Do not block merely because recorded implementation evidence is missing; that is owned upstream by per-phase Functionality/Evidence and the implement evidence contract. Do not write `verification-report.yaml`, do not promote files into canonical evidence roots, and do not ask the fixer to repair environment limitations.
+Do not block merely because recorded implementation evidence is missing; that is owned upstream by the implementer and the per-phase Functionality/Evidence reviewer. Do not promote files into canonical evidence roots, and do not ask the fixer to repair environment limitations.
 
 When you cannot exercise a surface for a reason you cannot attribute to the code, record a non-blocking caveat in `## Suggestions`. Examples: a headless browser unavailable in this environment, a local service dependency not present, or a toolchain requiring in-tree writes under an OS sandbox. Be explicit about what you could not verify and why.
 

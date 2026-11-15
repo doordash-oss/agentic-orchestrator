@@ -84,8 +84,6 @@ When the app cannot be rendered live for a reason you cannot attribute to the co
 
 - Do not opine on functional correctness beyond visible UI behavior and state.
 - Do not audit non-UI code craft or change-set hygiene.
-- Do not write `verification-report.yaml`.
-- Do not emit `MISSING_EVIDENCE_REQUIREMENT`; Functionality/Evidence owns that per-phase escape hatch.
 - Do not promote live-run evidence into canonical implementation evidence roots.
 
 ## Handoff Contract

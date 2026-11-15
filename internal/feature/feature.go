@@ -246,11 +246,6 @@ const (
 	StatusResearchNeedsReview
 	StatusDesignNeedsReview
 	statusReviewing
-	// StatusNeedUserInput marks a feature paused on a phase-implement
-	// need-user-input gate. The unified flow tracks NEED_USER_INPUT at the
-	// feature level via Feature.PendingNeedUserInputPath; per-repo pauses
-	// are no longer modelled separately.
-	StatusNeedUserInput
 	// StatusFinalReviewing marks a feature in the deferred end-of-feature
 	// final review pass. The orchestrator transitions
 	// StatusReviewPassed → StatusFinalReviewing on entry and
@@ -309,8 +304,6 @@ func (s Status) String() string {
 		return "DesignNeedsReview"
 	case statusReviewing:
 		return "Reviewing"
-	case StatusNeedUserInput:
-		return "NeedUserInput"
 	case StatusFinalReviewing:
 		return "FinalReviewing"
 	case StatusSettingUpWorktrees:
@@ -383,9 +376,11 @@ func (s *Status) UnmarshalYAML(unmarshal func(interface{}) error) error {
 		"ResearchNeedsReview": StatusResearchNeedsReview,
 		"DesignNeedsReview":   StatusDesignNeedsReview,
 		"Reviewing":           statusReviewing,
-		"NeedUserInput":       StatusNeedUserInput,
 		"FinalReviewing":      StatusFinalReviewing,
 		"SettingUpWorktrees":  StatusSettingUpWorktrees,
+		// A feature persisted while paused on the removed need-user-input
+		// gate resumes as an ordinary interrupted implement phase.
+		"NeedUserInput": StatusInterrupted,
 	}
 
 	var str string
@@ -665,12 +660,6 @@ type Feature struct {
 	// written before the stamp existed.
 	PersistSeq int64 `yaml:"persist_seq,omitempty"`
 
-	// PendingNeedUserInputPath is the absolute path of the persisted
-	// `need-user-input.yaml` gate artifact when the feature is paused on a
-	// single-repo NEED_USER_INPUT gate. Empty otherwise. The unified flow
-	// tracks NEED_USER_INPUT at the feature level only.
-	PendingNeedUserInputPath string `yaml:"-"`
-
 	// --- Transient per-run shadows (yaml:"-"; NOT persisted in feature.yaml) ---
 	// Store.saveUnlocked copies these into the companion Run before writing
 	// run.yaml; Store.loadUnlocked copies the loaded Run back into these fields
@@ -686,12 +675,9 @@ type Feature struct {
 	// ValidatorErrors holds the last error of a failed or retrying validator,
 	// keyed like ValidatorStatuses.
 	ValidatorErrors map[string]string `yaml:"-"`
-	// VerificationItems is the ordered live progress of harness-executed
-	// testing-contract commands while CurrentPhaseStatus is "verifying".
-	VerificationItems []VerificationItemStatus `yaml:"-"`
-	PlanIteration     int                      `yaml:"-"`
-	ReviewIteration   int                      `yaml:"-"`
-	Artifacts         map[string]string        `yaml:"-"`
+	PlanIteration   int               `yaml:"-"`
+	ReviewIteration int               `yaml:"-"`
+	Artifacts       map[string]string `yaml:"-"`
 	// RepoStates is the per-repo state map. agent.AtomicPhaseStamp writes it
 	// in a single FeatureStore.Modify call; orchestration readers consume it
 	// via Feature.AllReposPublished / Feature.TouchedRepos. Persisted on
@@ -794,7 +780,6 @@ func (f *Feature) syncShadowsToRun() {
 	r.ValidatingPlan = f.ValidatingPlan
 	r.ValidatorStatuses = f.ValidatorStatuses
 	r.ValidatorErrors = f.ValidatorErrors
-	r.VerificationItems = f.VerificationItems
 	r.PlanIteration = f.PlanIteration
 	r.ReviewIteration = f.ReviewIteration
 	r.Artifacts = f.Artifacts
@@ -819,7 +804,6 @@ func (f *Feature) syncShadowsToRun() {
 	r.TotalRoadmapPhases = f.TotalRoadmapPhases
 	r.RoadmapPhaseType = f.RoadmapPhaseType
 	r.MaxPlanIterations = f.MaxPlanIterations
-	r.PendingNeedUserInputPath = f.PendingNeedUserInputPath
 	r.CurrentPhaseStatus = f.CurrentPhaseStatus
 }
 
@@ -837,7 +821,6 @@ func (f *Feature) syncRunToShadows() {
 	f.ValidatingPlan = r.ValidatingPlan
 	f.ValidatorStatuses = r.ValidatorStatuses
 	f.ValidatorErrors = r.ValidatorErrors
-	f.VerificationItems = r.VerificationItems
 	f.PlanIteration = r.PlanIteration
 	f.ReviewIteration = r.ReviewIteration
 	f.Artifacts = r.Artifacts
@@ -858,7 +841,6 @@ func (f *Feature) syncRunToShadows() {
 	f.TotalRoadmapPhases = r.TotalRoadmapPhases
 	f.RoadmapPhaseType = r.RoadmapPhaseType
 	f.MaxPlanIterations = r.MaxPlanIterations
-	f.PendingNeedUserInputPath = r.PendingNeedUserInputPath
 	f.CurrentPhaseStatus = r.CurrentPhaseStatus
 }
 
@@ -943,8 +925,7 @@ var validTransitions = map[Status][]Status{
 	StatusPlanReady:           {StatusPlanning, StatusFailed},
 	StatusPlanning:            {StatusImplementReady, StatusPlanNeedsReview, StatusFailed, StatusInterrupted},
 	StatusImplementReady:      {StatusImplementing, StatusFailed},
-	StatusImplementing:        {StatusReviewPassed, StatusImplementReady, StatusNeedUserInput, StatusFailed, StatusInterrupted},
-	StatusNeedUserInput:       {StatusImplementing, StatusFailed, StatusInterrupted},
+	StatusImplementing:        {StatusReviewPassed, StatusImplementReady, StatusFailed, StatusInterrupted},
 	StatusReviewPassed:        {StatusCodeReady, StatusDone, StatusImplementing, StatusImplementReady, StatusFailed, StatusPlanning, statusReviewing, StatusFinalReviewing},
 	StatusFinalReviewing:      {StatusCodeReady, StatusReviewPassed, StatusFailed, StatusInterrupted},
 	statusReviewing:           {StatusCodeReady, StatusFailed, StatusInterrupted},

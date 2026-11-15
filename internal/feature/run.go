@@ -66,14 +66,6 @@ type RewindWarning struct {
 	Err    error
 }
 
-// VerificationItemStatus is one harness-executed testing-contract command's
-// live progress state ("pending", "running", or a terminal classification)
-// during the deterministic verification substep.
-type VerificationItemStatus struct {
-	Name  string `yaml:"name" json:"name"`
-	State string `yaml:"state" json:"state"`
-}
-
 // Run captures one attempt at the pipeline for a feature. Every per-attempt
 // field that used to live on Feature now lives here. Run is persisted at
 // `<stateDir>/<featureID>/runs/run-<zero-padded-number>/run.yaml`. Loaded
@@ -155,24 +147,21 @@ type Run struct {
 	// the feature level (Run.CurrentPhaseStatus).
 	RepoStates map[string]*RepoState `yaml:"repo_states,omitempty"`
 
-	// CurrentPhaseStatus is the mid-flight phase-implement status for the
-	// unified flow ("implementing", "reviewing", "verifying", or "" when not
-	// in a phase).
+	// CurrentPhaseStatus is the mid-flight phase status for the unified flow
+	// ("implementing", "final_reviewing", "finalizing", or "" when not in a
+	// phase).
 	CurrentPhaseStatus string `yaml:"current_phase_status,omitempty"`
 
 	// Publish (moved from Feature).
 	PRURL string `yaml:"pr_url,omitempty"`
 
 	// Plan validation + gate state (moved from Feature).
-	ValidatingPlan    bool              `yaml:"validating_plan,omitempty"`
-	ValidatorStatuses map[string]string `yaml:"validator_statuses,omitempty"`
-	ValidatorErrors   map[string]string `yaml:"validator_errors,omitempty"`
-	// VerificationItems is the ordered live progress of harness-executed
-	// testing-contract commands while CurrentPhaseStatus is "verifying".
-	VerificationItems  []VerificationItemStatus `yaml:"verification_items,omitempty"`
-	ReviewingGate      bool                     `yaml:"reviewing_gate,omitempty"`
-	ReviewFixing       bool                     `yaml:"review_fixing,omitempty"`
-	PendingReviewPhase *Phase                   `yaml:"pending_review_phase,omitempty"`
+	ValidatingPlan     bool              `yaml:"validating_plan,omitempty"`
+	ValidatorStatuses  map[string]string `yaml:"validator_statuses,omitempty"`
+	ValidatorErrors    map[string]string `yaml:"validator_errors,omitempty"`
+	ReviewingGate      bool              `yaml:"reviewing_gate,omitempty"`
+	ReviewFixing       bool              `yaml:"review_fixing,omitempty"`
+	PendingReviewPhase *Phase            `yaml:"pending_review_phase,omitempty"`
 	// PendingRewindReviewRoadmapPhase is set only while a partial rewind to
 	// Implement is waiting for human review of the selected roadmap phase plan.
 	// It is deliberately separate from CurrentRoadmapPhase so the dashboard can
@@ -205,29 +194,15 @@ type Run struct {
 	ForceKBRebuild bool              `yaml:"force_kb_rebuild,omitempty"`
 	KBStatus       map[string]string `yaml:"kb_status,omitempty"`
 
-	// Deferrals is the cross-phase work ledger. Entries are added when
-	// a phase's plan or implement output declares that specific work
-	// should land in a later phase; they are carried forward into the
-	// target phase's prompts and the implement Report Integrity Gate
-	// refuses SUCCESS while a due-this-phase entry remains open. See
-	// internal/feature/deferral.go for the lifecycle.
-	Deferrals []Deferral `yaml:"deferrals,omitempty"`
-
-	// PendingNeedUserInputPath is the absolute path of the persisted
-	// `need-user-input.yaml` gate artifact when the feature is paused on a
-	// single-repo NEED_USER_INPUT gate. Empty when no gate is open. Multi-repo
-	// runs persist the per-repo gate path on RepoImplState instead.
-	PendingNeedUserInputPath string `yaml:"pending_need_user_input_path,omitempty"`
-
-	// Sandbox is set once, the first time this run executes harness
-	// verification or launches a sandboxed review validator while the OS
-	// sandbox is unavailable (e.g. nested macOS sandbox-exec), so the run
-	// record shows those commands ran unconfined. Absent otherwise.
+	// Sandbox is set once, the first time this run launches a sandboxed
+	// review validator while the OS sandbox is unavailable (e.g. nested macOS
+	// sandbox-exec), so the run record shows it ran unconfined. Absent
+	// otherwise.
 	Sandbox *SandboxRecord `yaml:"sandbox,omitempty"`
 }
 
-// SandboxRecord notes that the verification sandbox was unavailable for a
-// run and why.
+// SandboxRecord notes that the review sandbox was unavailable for a run and
+// why.
 type SandboxRecord struct {
 	Available bool   `yaml:"available"`
 	Reason    string `yaml:"reason,omitempty"`

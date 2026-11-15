@@ -56,7 +56,6 @@ Use a fresh DM message for a new phase or decision, then keep replies, action re
    | User intent | Operation |
    | --- | --- |
    | Answer a session question or help request | Ask-user answer or help send, bound to the current session/request |
-   | Answer a need-user-input gate | Save indexed answers, then submit the gate |
    | Approve or iterate an artifact | Review draft/decision with the current revision |
    | Allow or deny a permission | Permission answer with the user's decision and requested scope |
    | Pause, resume, retry, reconfigure, rewind, publish, merge or otherwise direct the feature | Corresponding enabled action/config operation, with its required preview/preflight and current revision |

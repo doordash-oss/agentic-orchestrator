@@ -159,7 +159,6 @@ func TestWorkAdmissionFeatureDetectorProjection(t *testing.T) {
 	t.Parallel()
 	features := []*feature.Feature{
 		{ID: "running", Status: feature.StatusImplementing},
-		{ID: "needs-input", Status: feature.StatusNeedUserInput},
 		{ID: "review-paused", Status: feature.StatusPlanNeedsReview},
 		{ID: "terminal", Status: feature.StatusDone},
 		nil,
@@ -171,11 +170,11 @@ func TestWorkAdmissionFeatureDetectorProjection(t *testing.T) {
 	if err != nil {
 		t.Fatalf("detection error: %v", err)
 	}
-	// Running, need-user-input, and an open-relationship running child
-	// count; review-paused, terminal, and closed-relationship children do
-	// not (the pause-stop projection).
-	if activity.Features != 3 {
-		t.Fatalf("features = %d, want 3", activity.Features)
+	// Running features and an open-relationship running child count;
+	// review-paused, terminal, and closed-relationship children do not (the
+	// pause-stop projection).
+	if activity.Features != 2 {
+		t.Fatalf("features = %d, want 2", activity.Features)
 	}
 	if !activity.Busy() {
 		t.Fatal("activity must read busy")

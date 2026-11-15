@@ -81,11 +81,9 @@ const (
 
 	cliSubcommandServer            = "server"
 	cliSubcommandValidateArtifacts = "validate-artifacts"
-	cliSubcommandReportBlocker     = "report-blocker"
 	cliFlagDir                     = "--dir"
 	cliFlagPhase                   = "--phase"
 	cliFlagRole                    = "--role"
-	cliFlagContract                = "--contract"
 )
 
 func main() {
@@ -100,7 +98,6 @@ const (
 	launchModeHelp
 	launchModeVersion
 	launchModeValidateArtifacts
-	launchModeReportBlocker
 	launchModeAPI
 )
 
@@ -117,7 +114,6 @@ type launchOptions struct {
 	updatesPolicy     string
 	mode              launchMode
 	validateArtifacts validateArtifactsOptions
-	reportBlocker     reportBlockerOptions
 	api               apiOptions
 }
 
@@ -125,16 +121,6 @@ type validateArtifactsOptions struct {
 	phase string
 	role  string
 	dir   string
-}
-
-// reportBlockerOptions describes an implementer escalation: contract items
-// blocked by a capability the environment lacks.
-type reportBlockerOptions struct {
-	contract   string
-	dir        string
-	items      []string
-	capability string
-	reason     string
 }
 
 type serverLauncher func(configPath, stateDir string, dangerouslySkipPerms bool, enabledProviders []string, refreshModels bool, listenAddr, serverName, updatesPolicy string) int
@@ -201,8 +187,6 @@ func runArgsWithDesktop(args []string, stdout, stderr io.Writer, launchDesktop d
 		return 0
 	case launchModeValidateArtifacts:
 		return runValidateArtifacts(opts.validateArtifacts, stdout, stderr)
-	case launchModeReportBlocker:
-		return runReportBlocker(opts.reportBlocker, stdout, stderr)
 	case launchModeAPI:
 		return runAPI(opts.api, stdout, stderr)
 	case launchModeServer:
@@ -291,10 +275,6 @@ func parseLaunchArgs(args []string) (launchOptions, error) {
 	if len(args) > 0 && args[0] == cliSubcommandValidateArtifacts {
 		opts.mode = launchModeValidateArtifacts
 		return parseValidateArtifactsArgs(opts, args[1:])
-	}
-	if len(args) > 0 && args[0] == cliSubcommandReportBlocker {
-		opts.mode = launchModeReportBlocker
-		return parseReportBlockerArgs(opts, args[1:])
 	}
 	if len(args) > 0 && args[0] == cliSubcommandAPI {
 		opts.mode = launchModeAPI
@@ -464,83 +444,18 @@ func parseValidateArtifactsArgs(opts launchOptions, args []string) (launchOption
 	return opts, requireSubcommandFlags(cliSubcommandValidateArtifacts, []string{cliFlagPhase, cliFlagRole, cliFlagDir}, flags)
 }
 
-func parseReportBlockerArgs(opts launchOptions, args []string) (launchOptions, error) {
-	var items string
-	flags := map[string]*string{
-		cliFlagContract: &opts.reportBlocker.contract,
-		cliFlagDir:      &opts.reportBlocker.dir,
-		"--items":       &items,
-		"--capability":  &opts.reportBlocker.capability,
-		"--reason":      &opts.reportBlocker.reason,
-	}
-	if help, err := parseSubcommandFlags(cliSubcommandReportBlocker, args, flags); help || err != nil {
-		if help {
-			opts.mode = launchModeHelp
-		}
-		return opts, err
-	}
-	if err := requireSubcommandFlags(cliSubcommandReportBlocker, []string{cliFlagContract, cliFlagDir, "--capability", "--reason"}, flags); err != nil {
-		return opts, err
-	}
-	for _, id := range strings.Split(items, ",") {
-		if id = strings.TrimSpace(id); id != "" {
-			opts.reportBlocker.items = append(opts.reportBlocker.items, id)
-		}
-	}
-	if len(opts.reportBlocker.items) == 0 {
-		return opts, fmt.Errorf("report-blocker requires --items <id,id,...>")
-	}
-	return opts, nil
-}
-
-// runReportBlocker writes the implementer's capability-blocker gate into the
-// iteration directory. The implementer then ends the iteration with RETRY and
-// the harness pauses on the user gate instead of looping on chat questions.
-func runReportBlocker(opts reportBlockerOptions, stdout, stderr io.Writer) int {
-	contract, err := agent.ReadTestingContract(opts.contract)
-	if err != nil {
-		renderError(stderr, errcat.ContractInputUnreadable,
-			errcat.WithDiagnostics(fmt.Sprintf("reading testing contract: %v", err)))
-		return 1
-	}
-	rec, err := agent.SynthesizeAgentReportedBlockerGate(opts.contract, contract, opts.items, opts.capability, opts.reason, 0)
-	if err != nil {
-		renderError(stderr, errcat.InvalidUsage, errcat.WithParams(errcat.UsageParams{Reason: err.Error()}))
-		return 1
-	}
-	gatePath := agent.NeedUserInputPath(opts.dir)
-	if err := agent.WriteNeedUserInputRecord(gatePath, rec); err != nil {
-		renderError(stderr, errcat.ContractInputUnreadable,
-			errcat.WithDiagnostics(fmt.Sprintf("writing blocker gate: %v", err)))
-		return 1
-	}
-	fmt.Fprintf(stdout, "blocker gate written: %s\nEnd this iteration with `RETRY` in progress.md; the harness will pause for the user's decision.\n", gatePath)
-	return 0
-}
-
 func printUsage(w io.Writer) {
 	fmt.Fprintln(w, `Agentic Orchestrator
 
 Usage: agentico
        agentico server [flags]
        agentico validate-artifacts --phase <phase> --role <role> --dir <iteration_dir>
-       agentico report-blocker --contract </abs/path/testing-contract.yaml> --dir </abs/path/iteration_dir> \
-                               --items <id,id,...> --capability <name> --reason <text>
        agentico api [--timeout <duration>] [--after <cursor>] METHOD /api/v1/<path> [json]
 
 Starts or focuses the installed Agentico desktop app. Use the explicit 'server'
 subcommand to start the foreground loopback HTTP server for headless automation.
 Run 'agentico validate-artifacts' from agent sessions before declaring an outcome
-to parse and validate role output artifacts without starting the server; the
-implementer branch also confirms required agent-owned captures are present,
-correctly sized, and not duplicates — catching gaps before the post-handoff
-integrity gate does.
-Run 'agentico report-blocker' from implementer sessions when
-required evidence needs a capability the environment lacks; it records the
-blocked rows for the user's decision instead of an unanswerable chat question.
-Agent sessions must run report-blocker as one bare command
-with absolute literal paths (no cd, &&, ;, pipes, redirects, or shell variables);
-the permission guard refuses any other shape that references the contract.
+to parse and validate role output artifacts without starting the server.
 Run 'agentico api' on the server machine to make one authenticated REST call
 through the server's discovery file without handling the bearer token; SSE
 stream paths require --timeout and print one line per event. See
@@ -581,19 +496,6 @@ func runValidateArtifacts(opts validateArtifactsOptions, stdout, stderr io.Write
 		renderError(stderr, errcat.ContractInputUnreadable,
 			errcat.WithDiagnostics(fmt.Sprintf("validating artifacts: %v", err)))
 		return 1
-	}
-	// The implementer branch folds the evidence preflight's duplicate-digest
-	// pass in beside ValidateArtifactsPreflight's required-evidence checks:
-	// two or more passed agent-owned captures sharing one SHA-256 reject here,
-	// seconds before the post-handoff report-integrity gate would catch them.
-	if phase == feature.PhaseImplement && role == agent.Role("implementer") {
-		digestViolations, digestErr := agent.PreflightDuplicateEvidenceCaptures(opts.dir)
-		if digestErr != nil {
-			renderError(stderr, errcat.ContractInputUnreadable,
-				errcat.WithDiagnostics(fmt.Sprintf("validating artifacts: %v", digestErr)))
-			return 1
-		}
-		violations = append(violations, digestViolations...)
 	}
 	if !out.OK || len(violations) > 0 {
 		renderProtocolViolations(stderr, "artifact contract", violations)
@@ -1447,7 +1349,6 @@ func runServer(configPath, stateDir string, dangerouslySkipPerms bool, enabledPr
 		return targetStartupFailure(func(e error) { renderStartupFailure(os.Stderr, &serverStartError{e}) }, err)
 	}
 	networkBind := listen.Policy == serverruntime.CompatibilityNetworkRuntimePolicy
-	boot.phaseRunner.CapabilityPolicy = resolveCapabilityPolicy(boot.cfg, boot.runtime.RuntimeDir, networkBind)
 	initialReviewerModel := boot.cfg.Defaults.Models.AutomaticReview
 	boot.phaseRunner.CurrentAutomaticReviewModel = func() string {
 		if current, err := config.Load(boot.runtime.Config); err == nil {
@@ -2245,20 +2146,4 @@ func shutdownFeatures(orch *orchestrator.Orchestrator, sm *session.Manager) {
 	// Second shutdown pass: catch any sessions that RunImplementationLoop
 	// managed to create between the first Shutdown snapshot and now.
 	sm.Shutdown()
-}
-
-// resolveCapabilityPolicy derives the built-in capability probe policy for
-// this server. Servers exposed to the network deny authenticated browser
-// state unless server.capabilities.browser_state explicitly allows it.
-func resolveCapabilityPolicy(cfg *config.Config, runtimeDir string, networkBind bool) *agent.CapabilityPolicy {
-	allow := !networkBind
-	if cfg != nil {
-		switch strings.ToLower(strings.TrimSpace(cfg.Server.Capabilities.BrowserState)) {
-		case "allow":
-			allow = true
-		case "deny":
-			allow = false
-		}
-	}
-	return &agent.CapabilityPolicy{RuntimeDir: runtimeDir, AllowBrowserState: allow}
 }

@@ -240,13 +240,13 @@ func TestOrchestrator_OnMultiReposPassed_MediumRunsDeferredFinalReview(t *testin
 	}
 }
 
-func TestOrchestrator_HandlePhaseCompletion_Implement_MissingEvidenceStaysOnCurrentRoadmapPhase(t *testing.T) {
+func TestOrchestrator_HandlePhaseCompletion_Implement_PlanRevisionStaysOnCurrentRoadmapPhase(t *testing.T) {
 	cpr := newCapturingPhaseRunner(t)
 	cpr.sm.StartSessionFn = func(id, featureID string, phase feature.Phase, command []string, workdir string, env []string, opts ...*session.SessionOpts) (ports.SessionHandle, error) {
 		return nil, session.ErrShuttingDown
 	}
 
-	featureID := "feat-impl-missing-evidence-current-phase"
+	featureID := "feat-impl-plan-revision-current-phase"
 	roadmapPath := filepath.Join(cpr.stateDir, "roadmap.md")
 	writeRoadmap(t, roadmapPath)
 	unpub := false
@@ -296,7 +296,7 @@ func TestOrchestrator_HandlePhaseCompletion_Implement_MissingEvidenceStaysOnCurr
 		Phase: feature.PhaseImplement,
 		MultiRepoResult: &agent.OrchestratorResult{
 			FinalStatus:          "plan_revision_required",
-			PlanRevisionFeedback: "MISSING_EVIDENCE_REQUIREMENT phase 1 behavioral: Record the phase-one create-project CLI journey.",
+			PlanRevisionFeedback: "Plan revision: phase 1 behavioral: Record the phase-one create-project CLI journey.",
 		},
 	}); err != nil {
 		t.Fatalf("HandlePhaseCompletion() error = %v", err)
@@ -312,7 +312,7 @@ func TestOrchestrator_HandlePhaseCompletion_Implement_MissingEvidenceStaysOnCurr
 	if err != nil {
 		t.Fatalf("read phase 2 validation feedback: %v", err)
 	}
-	if got := string(data); !strings.Contains(got, "MISSING_EVIDENCE_REQUIREMENT phase 1 behavioral: Record the phase-one create-project CLI journey.") {
+	if got := string(data); !strings.Contains(got, "Plan revision: phase 1 behavioral: Record the phase-one create-project CLI journey.") {
 		t.Fatalf("phase 2 validation feedback missing reviewer requirement:\n%s", got)
 	}
 	if _, err := os.Stat(filepath.Join(phase1PlanDir, "attempt-01", "validation-feedback.md")); !os.IsNotExist(err) {
@@ -884,7 +884,7 @@ func TestOrchestrator_FeatureFinalReview_FailedProtocolViolationPreserved(t *tes
 			FinalStatus:  "failed",
 			RepoStatuses: map[string]string{apiRepoName: agent.BoundedHelperStatusProtocolViolation},
 			FailedRepos:  []string{apiRepoName},
-			LastError:    "protocol violation: final_review_fixer @ /tmp/iter: verification-report.yaml is missing",
+			LastError:    "protocol violation: final_review_fixer @ /tmp/iter: review-feedback.md is missing",
 		}
 		return ch, nil
 	})

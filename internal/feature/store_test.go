@@ -1082,40 +1082,83 @@ func TestStoreDelete(t *testing.T) {
 	}
 }
 
-// TestStoreNeedUserInputPathPersistence locks in that the run-scoped
-// PendingNeedUserInputPath survives a save/load round-trip via the run
-// shadow synchroniser.
-func TestStoreNeedUserInputPathPersistence(t *testing.T) {
+// TestStoreLoadsLegacyNeedUserInputFeatureAsInterrupted covers a feature
+// persisted while paused on the removed need-user-input gate: it loads as an
+// interrupted implement phase, and the run's retired gate, deferral and
+// verification fields are ignored.
+func TestStoreLoadsLegacyNeedUserInputFeatureAsInterrupted(t *testing.T) {
 	t.Parallel()
 	// parallel-candidate: per-test temp dirs and mocks isolate filesystem and collaborator state.
 	dir := t.TempDir()
 	store := NewStore(dir)
-
-	gatePath := "/tmp/feat-nui-001/runs/run-001/phase-01/implement/agentic/iteration-02/need-user-input.yaml"
 	f := &Feature{
-		ID:                       "feat-nui-001",
-		Name:                     "Need User Input pause",
-		Slug:                     "need-user-input-pause",
-		Status:                   StatusNeedUserInput,
-		PendingNeedUserInputPath: gatePath,
-		SchemaVersion:            SchemaVersionCurrent,
+		ID:               "feat-nui-001",
+		Name:             "Legacy gate",
+		Slug:             "legacy-gate",
+		Status:           StatusImplementing,
+		CurrentPhase:     PhaseImplement,
+		CurrentIteration: 2,
+		SchemaVersion:    SchemaVersionCurrent,
 	}
 	if err := store.Save(f); err != nil {
 		t.Fatalf("save: %v", err)
 	}
 
-	loaded, err := store.Load("feat-nui-001")
+	featurePath := filepath.Join(dir, f.ID, "feature.yaml")
+	data, err := os.ReadFile(featurePath)
+	if err != nil {
+		t.Fatalf("read feature.yaml: %v", err)
+	}
+	legacy := strings.Replace(string(data), "status: Implementing", "status: NeedUserInput", 1)
+	if legacy == string(data) {
+		t.Fatalf("feature.yaml has no Implementing status to rewrite:\n%s", data)
+	}
+	if err := os.WriteFile(featurePath, []byte(legacy), 0o644); err != nil {
+		t.Fatalf("write feature.yaml: %v", err)
+	}
+	runPath := filepath.Join(store.runDirUnlocked(f.ID, f.ActiveRun), "run.yaml")
+	runData, err := os.ReadFile(runPath)
+	if err != nil {
+		t.Fatalf("read run.yaml: %v", err)
+	}
+	legacyRun := string(runData) + `pending_need_user_input_path: /tmp/feat-nui-001/need-user-input.yaml
+deferrals:
+  - id: d-1
+    description: carried work
+    created_in_phase: 1
+    due_by_phase: 2
+    reason: later
+    status: open
+verification_items:
+  - name: go test ./...
+    state: running
+current_phase_status: verifying
+`
+	if err := os.WriteFile(runPath, []byte(legacyRun), 0o644); err != nil {
+		t.Fatalf("write run.yaml: %v", err)
+	}
+
+	loaded, err := store.Load(f.ID)
 	if err != nil {
 		t.Fatalf("load: %v", err)
 	}
-	if loaded.Status != StatusNeedUserInput {
-		t.Errorf("Status: got %v, want StatusNeedUserInput", loaded.Status)
+	if loaded.Status != StatusInterrupted {
+		t.Errorf("Status = %v, want Interrupted", loaded.Status)
 	}
-	if loaded.PendingNeedUserInputPath != gatePath {
-		t.Errorf("PendingNeedUserInputPath: got %q, want %q", loaded.PendingNeedUserInputPath, gatePath)
+	if loaded.CurrentPhase != PhaseImplement || loaded.CurrentIteration != 2 {
+		t.Errorf("phase/iteration = %v/%d, want implement/2", loaded.CurrentPhase, loaded.CurrentIteration)
 	}
-	if run := loaded.Run(); run == nil || run.PendingNeedUserInputPath != gatePath {
-		t.Errorf("run.PendingNeedUserInputPath: got %q, want %q", run.PendingNeedUserInputPath, gatePath)
+	if err := store.Save(loaded); err != nil {
+		t.Fatalf("re-save: %v", err)
+	}
+	resaved, err := os.ReadFile(runPath)
+	if err != nil {
+		t.Fatalf("read re-saved run.yaml: %v", err)
+	}
+	for _, key := range []string{"pending_need_user_input_path", "deferrals:", "verification_items"} {
+		if strings.Contains(string(resaved), key) {
+			t.Errorf("re-saved run.yaml still carries %q:\n%s", key, resaved)
+		}
 	}
 }
 

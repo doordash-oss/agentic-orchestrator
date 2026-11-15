@@ -751,11 +751,8 @@ func TestImplementLoopReviewWithShellSpecialChars(t *testing.T) {
 		os.MkdirAll(d, 0o755)
 	}
 
-	reportCmd := "_d=\"\"; for d in \"" + artifactDir + "\"/iteration-*; do _d=\"$d\"; done; cat > \"$_d/verification-report.yaml\" <<'REPORT_EOF'\nversion: 1\nrequired_checks:\n  - name: Tests pass\n    requirement: go test ./...\n    status: passed\n    evidence: ok\n  - name: Lint clean\n    requirement: go vet ./...\n    status: passed\n    evidence: clean\nREPORT_EOF"
 	agentScript := testutil.WriteScript(t, scriptsDir, "agent.sh",
-		testutil.JSONLInit+"\n"+reportCmd+"\n"+
-			// Custom report is written above; pair with a valid progress.md
-			// so the harness handoff parser passes.
+		testutil.JSONLInit+"\n"+
 			testutil.WriteImplementProgressMd(artifactDir, agentStatusSuccess)+"\n"+
 			testutil.JSONLSuccess+"\n")
 
@@ -1414,8 +1411,8 @@ func TestImplementLoop_ResumesReviewWhenImplementAlreadyComplete(t *testing.T) {
 	iter2Dir, _ := am.createIterationDir(2)
 	writeTestCompletionReceipt(t, iter2Dir)
 	// The implement turn is being skipped on resume, so the harness still
-	// needs a parseable progress.md + verification-report.yaml on disk to
-	// route iteration-02 into the review gate. Seed both.
+	// needs a parseable progress.md on disk to route iteration-02 into the
+	// review gate.
 	testutil.WriteImplementHandoffFiles(t, artifactDir, iter2Dir, agentStatusSuccess)
 
 	// Agent script would fail if called — proves the implement session

@@ -72,7 +72,6 @@ const (
 
 	// Partials rendered directly from Go.
 	TemplateAutonomousInquireness templateKey = "autonomous_inquireness"
-	TemplateDeferralsDue          templateKey = "deferrals_due"
 	TemplateGrillMeInquireness    templateKey = "grillme_inquireness"
 	TemplateVisualReferences      templateKey = "visual_references"
 )

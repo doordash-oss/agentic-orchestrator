@@ -22,13 +22,11 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
-	"os"
 	"sort"
 	"strings"
 	"sync"
 	"time"
 
-	"github.com/doordash-oss/agentic-orchestrator/internal/agent"
 	"github.com/doordash-oss/agentic-orchestrator/internal/config"
 	"github.com/doordash-oss/agentic-orchestrator/internal/errcat"
 	"github.com/doordash-oss/agentic-orchestrator/internal/feature"
@@ -42,8 +40,6 @@ import (
 )
 
 const maxFeatureDetailHistoricalRuns = 5
-
-var errNeedUserInputGateCollectionTooLarge = errors.New("pending prompt snapshot exceeds the safe response limit")
 
 // Tool names as reported by the LLM control protocol; shared across
 // read_model.go, session_model.go, sse.go and their tests.
@@ -198,9 +194,6 @@ func (h *apiHandler) featureDetailDTO(f *feature.Feature) (FeatureDetail, error)
 		ValidatorStatuses: copyStringMap(f.ValidatorStatuses),
 		ValidatorErrors:   copyStringMap(f.ValidatorErrors),
 	}
-	for _, item := range f.VerificationItems {
-		detail.VerificationItems = append(detail.VerificationItems, VerificationItem{Name: item.Name, State: item.State})
-	}
 	detail.Actions = actionCatalogDTOsWithChildGuard(f, detail.ActiveChild != nil)
 	// Destructive actions carry a server-authoritative impact preview so
 	// confirmations enumerate the exact relationship and resources at stake.
@@ -238,10 +231,6 @@ func (h *apiHandler) featureDetailDTO(f *feature.Feature) (FeatureDetail, error)
 		if detail.ActiveChild == nil {
 			enableAction(detail.Actions, string(FeatureActionPauseStop))
 		}
-	}
-	if f.Status == feature.StatusNeedUserInput && f.PendingNeedUserInputPath != "" {
-		gate := needUserInputGateDTO(f.ID, entityFeature, "", f.CurrentIteration, f.InputNotifications, f.PendingNeedUserInputPath)
-		detail.NeedUserInput = &gate
 	}
 	detail.Warnings = append(detail.Warnings, effortDriftWarnings(f, h.registry)...)
 	return detail, nil
@@ -698,10 +687,8 @@ func actionCatalogDTOsWithChildGuard(f *feature.Feature, hasActiveChild bool) []
 		status == feature.StatusDesignReady ||
 		status == feature.StatusImplementReady ||
 		status == feature.StatusReviewPassed)
-	canStop := running || status == feature.StatusNeedUserInput
-	canResume := status == feature.StatusInterrupted ||
-		status == feature.StatusNeedUserInput ||
-		f.PendingNeedUserInputPath != ""
+	canStop := running
+	canResume := status == feature.StatusInterrupted
 	canRestart := !running
 	// The publish action is enabled whenever the completion preflight would
 	// allow a publish: a publishable feature at CodeReady or Published,
@@ -870,9 +857,7 @@ func childActionCatalogDTOs(f *feature.Feature, status feature.Status, running b
 		status == feature.StatusImplementReady ||
 		status == feature.StatusReviewPassed)
 	canStop := runnable && running
-	canResume := runnable && (status == feature.StatusInterrupted ||
-		status == feature.StatusNeedUserInput ||
-		f.PendingNeedUserInputPath != "")
+	canResume := runnable && status == feature.StatusInterrupted
 	canRestart := runnable && !running
 
 	return []Action{
@@ -1040,18 +1025,17 @@ func runSummaryDTO(run *feature.Run, f *feature.Feature) RunSummary {
 		return RunSummary{}
 	}
 	dto := RunSummary{
-		RunNumber:       run.RunNumber,
-		StartedAt:       run.StartedAt,
-		SealedAt:        run.SealedAt,
-		SealReason:      string(run.SealReason),
-		CurrentPhase:    f.CurrentPhase.String(),
-		PhaseStatus:     run.CurrentPhaseStatus,
-		Iteration:       run.CurrentIteration,
-		RoadmapPhase:    run.CurrentRoadmapPhase,
-		RoadmapTotal:    run.TotalRoadmapPhases,
-		ArtifactCount:   len(run.Artifacts),
-		HasNeedUserGate: run.PendingNeedUserInputPath != "",
-		Setup:           setupDTO(run.Setup),
+		RunNumber:     run.RunNumber,
+		StartedAt:     run.StartedAt,
+		SealedAt:      run.SealedAt,
+		SealReason:    string(run.SealReason),
+		CurrentPhase:  f.CurrentPhase.String(),
+		PhaseStatus:   run.CurrentPhaseStatus,
+		Iteration:     run.CurrentIteration,
+		RoadmapPhase:  run.CurrentRoadmapPhase,
+		RoadmapTotal:  run.TotalRoadmapPhases,
+		ArtifactCount: len(run.Artifacts),
+		Setup:         setupDTO(run.Setup),
 	}
 	if run.PendingReviewPhase != nil {
 		dto.PendingReviewPhase = run.PendingReviewPhase.DirName()
@@ -1372,21 +1356,10 @@ func (h *apiHandler) handleProviderModelRefreshRoute(w http.ResponseWriter, r *h
 func (h *apiHandler) handlePrompts(w http.ResponseWriter, r *http.Request) {
 	asks, perms := h.pendingControls()
 	_ = perms
-	help, gates, err := h.featureQueues()
-	if err != nil {
-		writeAPIError(
-			w,
-			http.StatusInternalServerError,
-			errcat.PromptSnapshotTooLarge,
-			errcat.WithDiagnostics(errNeedUserInputGateCollectionTooLarge.Error()),
-		)
-		return
-	}
 	resp := PromptSnapshotResponse{
 		APIVersion:       APIVersion,
 		AskUserQuestions: asks,
-		HelpQueue:        help,
-		NeedUserInputs:   gates,
+		HelpQueue:        h.featureQueues(),
 	}
 	h.writeRevisionedResponse(w, r, resp, func(meta ResponseMeta) any { resp.Meta = meta; return resp })
 }
@@ -1546,10 +1519,9 @@ func (h *apiHandler) pendingControls() ([]ControlRequest, []ControlRequest) {
 	return dtosOf(asks, dto), dtosOf(perms, dto)
 }
 
-func (h *apiHandler) featureQueues() ([]HelpQueue, []NeedUserInputGate, error) {
+func (h *apiHandler) featureQueues() []HelpQueue {
 	features, _, _ := listFeatures(h.features)
 	var help []orderedHelpQueue
-	var gates []orderedNeedInputGate
 	for _, f := range features {
 		for i, req := range f.HelpQueue {
 			if !req.Pending {
@@ -1565,14 +1537,6 @@ func (h *apiHandler) featureQueues() ([]HelpQueue, []NeedUserInputGate, error) {
 				},
 				featureID: f.ID,
 				index:     i,
-			})
-		}
-		if f.Status == feature.StatusNeedUserInput && f.PendingNeedUserInputPath != "" {
-			gates = append(gates, orderedNeedInputGate{
-				dto:       needUserInputGateDTO(f.ID, entityFeature, "", f.CurrentIteration, f.InputNotifications, f.PendingNeedUserInputPath),
-				featureID: f.ID,
-				created:   f.Created,
-				gateTime:  gateFileTime(f.PendingNeedUserInputPath),
 			})
 		}
 	}
@@ -1601,12 +1565,7 @@ func (h *apiHandler) featureQueues() ([]HelpQueue, []NeedUserInputGate, error) {
 		}
 	}
 	sortOrderedHelpQueue(help)
-	sortOrderedNeedInputGates(gates)
-	if err := boundNeedUserInputGateCollection(gates); err != nil {
-		return nil, nil, err
-	}
-	return dtosOf(help, func(w orderedHelpQueue) HelpQueue { return w.dto }),
-		dtosOf(gates, func(w orderedNeedInputGate) NeedUserInputGate { return w.dto }), nil
+	return dtosOf(help, func(w orderedHelpQueue) HelpQueue { return w.dto })
 }
 
 func sessionHasPendingAskUserControl(sess ports.SessionView) bool {
@@ -1619,275 +1578,6 @@ func sessionHasPendingAskUserControl(sess ports.SessionView) bool {
 		}
 	}
 	return false
-}
-
-func needUserInputGateDTO(featureID, scope, repoName string, iteration int, inputNotifications feature.InputNotificationsMode, gatePath string) NeedUserInputGate {
-	dto := NeedUserInputGate{
-		FeatureID:          featureID,
-		Open:               true,
-		Scope:              scope,
-		RepoName:           repoName,
-		InputNotifications: string(feature.NormalizeInputNotificationsMode(inputNotifications)),
-		Iteration:          iteration,
-		WaitingSince:       gateFileTime(gatePath),
-	}
-	rec, err := agent.ReadNeedUserInputRecord(gatePath)
-	if err != nil {
-		return dto
-	}
-	if dto.Iteration == 0 {
-		dto.Iteration = rec.Iteration
-	}
-	if !rec.WaitingSince.IsZero() {
-		dto.WaitingSince = rec.WaitingSince
-	}
-	dto.Summary = agent.BoundNeedUserInputVerificationString(
-		strings.TrimSpace(rec.Summary),
-		agent.NeedUserInputVerificationContextTextMaxLength,
-	)
-	dto.Questions = make(
-		[]NeedUserInputQuestion,
-		0,
-		min(len(rec.Questions), agent.NeedUserInputGateMaxQuestions),
-	)
-	for _, q := range rec.Questions {
-		if len(dto.Questions) == agent.NeedUserInputGateMaxQuestions {
-			break
-		}
-		prompt := strings.TrimSpace(q.Prompt)
-		if prompt == "" {
-			continue
-		}
-		dto.Questions = append(dto.Questions, NeedUserInputQuestion{
-			Index: q.Index,
-			Prompt: agent.BoundNeedUserInputVerificationString(
-				prompt,
-				agent.NeedUserInputVerificationContextTextMaxLength,
-			),
-			Answer: agent.BoundNeedUserInputVerificationString(
-				strings.TrimSpace(q.Answer),
-				agent.NeedUserInputVerificationContextTextMaxLength,
-			),
-		})
-	}
-	if rec.Verification != nil && rec.VerificationDecision != nil && len(rec.Verification.Blockers) > 0 {
-		verification := NeedUserInputVerification{
-			Blockers: make(
-				[]NeedUserInputVerificationBlocker,
-				0,
-				min(len(rec.Verification.Blockers), agent.NeedUserInputVerificationMaxBlockers),
-			),
-			AllowedActions: []NeedUserInputVerificationAction{},
-		}
-		for _, blocker := range rec.Verification.Blockers {
-			if len(verification.Blockers) == agent.NeedUserInputVerificationMaxBlockers {
-				break
-			}
-			itemID := strings.TrimSpace(blocker.ItemID)
-			if itemID == "" {
-				continue
-			}
-			capabilities := make(
-				[]string,
-				0,
-				min(
-					len(blocker.Capabilities),
-					agent.NeedUserInputVerificationMaxCapabilities,
-				),
-			)
-			for _, capability := range blocker.Capabilities {
-				if capability = strings.TrimSpace(capability); capability != "" {
-					capabilities = append(
-						capabilities,
-						agent.BoundNeedUserInputVerificationString(
-							capability,
-							agent.NeedUserInputVerificationContextTextMaxLength,
-						),
-					)
-					if len(capabilities) == agent.NeedUserInputVerificationMaxCapabilities {
-						break
-					}
-				}
-			}
-			verification.Blockers = append(verification.Blockers, NeedUserInputVerificationBlocker{
-				ItemID: agent.BoundNeedUserInputVerificationString(
-					itemID,
-					agent.NeedUserInputVerificationItemIDMaxLength,
-				),
-				Name: agent.BoundNeedUserInputVerificationString(
-					strings.TrimSpace(blocker.Name),
-					agent.NeedUserInputVerificationContextTextMaxLength,
-				),
-				RepoName: agent.BoundNeedUserInputVerificationString(
-					strings.TrimSpace(blocker.RepoName),
-					agent.NeedUserInputVerificationRepoNameMaxLength,
-				),
-				Command: agent.BoundNeedUserInputVerificationString(
-					strings.TrimSpace(blocker.Command),
-					agent.NeedUserInputVerificationContextTextMaxLength,
-				),
-				Reason: agent.BoundNeedUserInputVerificationString(
-					strings.TrimSpace(blocker.Reason),
-					agent.NeedUserInputVerificationContextTextMaxLength,
-				),
-				Capabilities: capabilities,
-				Remediation: agent.BoundNeedUserInputVerificationString(
-					strings.TrimSpace(blocker.Remediation),
-					agent.NeedUserInputVerificationContextTextMaxLength,
-				),
-			})
-		}
-		seenActions := make(map[NeedUserInputVerificationAction]struct{}, 3)
-		for _, action := range rec.VerificationDecision.AllowedActions {
-			normalized := strings.ToUpper(strings.TrimSpace(action))
-			switch normalized {
-			case agent.NeedUserVerificationWaive, agent.NeedUserVerificationRetryAfterAuth, agent.NeedUserVerificationAllowSubstitute:
-				candidate := NeedUserInputVerificationAction(normalized)
-				if _, exists := seenActions[candidate]; !exists {
-					seenActions[candidate] = struct{}{}
-					verification.AllowedActions = append(verification.AllowedActions, candidate)
-				}
-			}
-		}
-		dto.Verification = &verification
-	}
-	boundNeedUserInputGateDisplay(&dto)
-	return dto
-}
-
-// A JSON string can expand to six bytes per UTF-16 code unit when control
-// characters are escaped. Reserve three quarters of the gate budget for all
-// questionnaire fields so every projected question remains answerable.
-const needUserInputQuestionJSONExpansion = 6
-
-func boundNeedUserInputGateDisplay(dto *NeedUserInputGate) {
-	if len(dto.Questions) > 0 {
-		questionTextLimit := (agent.NeedUserInputGateDisplayMaxBytes * 3 / 4) /
-			(len(dto.Questions) * 2 * needUserInputQuestionJSONExpansion)
-		questionTextLimit = max(1, min(
-			questionTextLimit,
-			agent.NeedUserInputVerificationContextTextMaxLength,
-		))
-		for i := range dto.Questions {
-			dto.Questions[i].Prompt = agent.BoundNeedUserInputVerificationString(
-				dto.Questions[i].Prompt,
-				questionTextLimit,
-			)
-			dto.Questions[i].Answer = agent.BoundNeedUserInputVerificationString(
-				dto.Questions[i].Answer,
-				questionTextLimit,
-			)
-		}
-	}
-	if needUserInputGateFitsDisplayBudget(*dto) {
-		return
-	}
-	if dto.Verification != nil {
-		for i := range dto.Verification.Blockers {
-			dto.Verification.Blockers[i].Capabilities = []string{}
-		}
-		if needUserInputGateFitsDisplayBudget(*dto) {
-			return
-		}
-	}
-	dto.Summary = ""
-	if needUserInputGateFitsDisplayBudget(*dto) {
-		return
-	}
-	if dto.Verification == nil {
-		return
-	}
-
-	blockers := dto.Verification.Blockers
-	low, high, best := 1, len(blockers), 0
-	for low <= high {
-		mid := low + (high-low)/2
-		dto.Verification.Blockers = blockers[:mid]
-		if needUserInputGateFitsDisplayBudget(*dto) {
-			best = mid
-			low = mid + 1
-		} else {
-			high = mid - 1
-		}
-	}
-	if best > 0 {
-		dto.Verification.Blockers = blockers[:best]
-		return
-	}
-	dto.Verification = nil
-}
-
-func needUserInputGateFitsDisplayBudget(dto NeedUserInputGate) bool {
-	data, err := json.Marshal(dto)
-	return err == nil && len(data) <= agent.NeedUserInputGateDisplayMaxBytes
-}
-
-func boundNeedUserInputGateCollection(gates []orderedNeedInputGate) error {
-	questionCount := 0
-	for i := range gates {
-		questionCount += len(gates[i].dto.Questions)
-	}
-	if questionCount > 0 {
-		questionTextLimit := (agent.NeedUserInputGateCollectionMaxBytes * 3 / 4) /
-			(questionCount * 2 * needUserInputQuestionJSONExpansion)
-		questionTextLimit = max(1, min(
-			questionTextLimit,
-			agent.NeedUserInputVerificationContextTextMaxLength,
-		))
-		for i := range gates {
-			for question := range gates[i].dto.Questions {
-				gates[i].dto.Questions[question].Prompt =
-					agent.BoundNeedUserInputVerificationString(
-						gates[i].dto.Questions[question].Prompt,
-						questionTextLimit,
-					)
-				gates[i].dto.Questions[question].Answer =
-					agent.BoundNeedUserInputVerificationString(
-						gates[i].dto.Questions[question].Answer,
-						questionTextLimit,
-					)
-			}
-		}
-	}
-	if needUserInputGateCollectionFitsBudget(gates) {
-		return nil
-	}
-	for i := range gates {
-		if gates[i].dto.Verification == nil {
-			continue
-		}
-		for blocker := range gates[i].dto.Verification.Blockers {
-			gates[i].dto.Verification.Blockers[blocker].Capabilities = []string{}
-		}
-	}
-	if needUserInputGateCollectionFitsBudget(gates) {
-		return nil
-	}
-	for i := range gates {
-		gates[i].dto.Summary = ""
-	}
-	if needUserInputGateCollectionFitsBudget(gates) {
-		return nil
-	}
-	for i := len(gates) - 1; i >= 0; i-- {
-		if gates[i].dto.Verification == nil {
-			continue
-		}
-		gates[i].dto.Verification = nil
-		if needUserInputGateCollectionFitsBudget(gates) {
-			return nil
-		}
-	}
-	return errNeedUserInputGateCollectionTooLarge
-}
-
-func needUserInputGateCollectionFitsBudget(gates []orderedNeedInputGate) bool {
-	dtos := make([]NeedUserInputGate, len(gates))
-	for i := range gates {
-		dtos[i] = gates[i].dto
-	}
-	data, err := json.Marshal(dtos)
-	return err == nil && len(data) <= agent.NeedUserInputGateCollectionMaxBytes
 }
 
 type orderedControlRequest struct {
@@ -1939,48 +1629,12 @@ func sortOrderedHelpQueue(items []orderedHelpQueue) {
 	})
 }
 
-type orderedNeedInputGate struct {
-	dto       NeedUserInputGate
-	featureID string
-	created   time.Time
-	gateTime  time.Time
-}
-
-func sortOrderedNeedInputGates(items []orderedNeedInputGate) {
-	sort.SliceStable(items, func(i, j int) bool {
-		if beforeByKnownTime(items[i].gateTime, items[j].gateTime) {
-			return true
-		}
-		if beforeByKnownTime(items[j].gateTime, items[i].gateTime) {
-			return false
-		}
-		if beforeByKnownTime(items[i].created, items[j].created) {
-			return true
-		}
-		if beforeByKnownTime(items[j].created, items[i].created) {
-			return false
-		}
-		if items[i].featureID != items[j].featureID {
-			return items[i].featureID < items[j].featureID
-		}
-		return items[i].dto.Iteration < items[j].dto.Iteration
-	})
-}
-
 func dtosOf[W any, D any](items []W, get func(W) D) []D {
 	out := make([]D, 0, len(items))
 	for _, item := range items {
 		out = append(out, get(item))
 	}
 	return out
-}
-
-func gateFileTime(path string) time.Time {
-	info, err := os.Stat(path)
-	if err != nil {
-		return time.Time{}
-	}
-	return info.ModTime().UTC()
 }
 
 func beforeByKnownTime(a, b time.Time) bool {

@@ -1031,13 +1031,13 @@ func TestOrchestrator_HandlePhaseCompletion_Implement_Multi_Failed(t *testing.T)
 	}
 }
 
-func TestOrchestrator_HandlePhaseCompletion_Implement_MissingEvidenceRoutesPhasePlanRevision(t *testing.T) {
+func TestOrchestrator_HandlePhaseCompletion_Implement_PlanRevisionRequiredRoutesPhasePlanner(t *testing.T) {
 	cpr := newCapturingPhaseRunner(t)
 	cpr.sm.StartSessionFn = func(id, featureID string, phase feature.Phase, command []string, workdir string, env []string, opts ...*session.SessionOpts) (ports.SessionHandle, error) {
 		return nil, session.ErrShuttingDown
 	}
 	tmpStateDir := cpr.stateDir
-	featureID := "feat-impl-missing-evidence"
+	featureID := "feat-impl-plan-revision"
 	roadmapPath := filepath.Join(tmpStateDir, "roadmap.md")
 	roadmap := "# Roadmap\n\n## Phase 1: Bootstrap\n### Goal\nInit\n\n## Phase 2: Build\n### Goal\nBuild\n"
 	if err := os.WriteFile(roadmapPath, []byte(roadmap), 0o644); err != nil {
@@ -1082,7 +1082,7 @@ func TestOrchestrator_HandlePhaseCompletion_Implement_MissingEvidenceRoutesPhase
 		CmdRunner:   cpr.cmd,
 	}, orchestrator.Hooks{})
 
-	feedback := "- **Critical**: MISSING_EVIDENCE_REQUIREMENT visual: Capture the setup wizard empty state."
+	feedback := "- **Critical**: Plan revision: visual: Capture the setup wizard empty state."
 	if err := o.HandlePhaseCompletion(featureID, orchestrator.PhaseCompletionInput{
 		Phase: feature.PhaseImplement,
 		MultiRepoResult: &agent.OrchestratorResult{
@@ -1095,7 +1095,7 @@ func TestOrchestrator_HandlePhaseCompletion_Implement_MissingEvidenceRoutesPhase
 
 	stored := loadStoredFeature(t, fs, f.ID)
 	if stored.Status != feature.StatusPlanning {
-		t.Fatalf("feature status = %v, want Planning after missing-evidence plan repair dispatch", stored.Status)
+		t.Fatalf("feature status = %v, want Planning after plan-revision plan repair dispatch", stored.Status)
 	}
 	if stored.MaxPlanIterations < 2 {
 		t.Fatalf("MaxPlanIterations = %d, want a guaranteed repair attempt beyond approved attempt 1", stored.MaxPlanIterations)
@@ -1111,14 +1111,14 @@ func TestOrchestrator_HandlePhaseCompletion_Implement_MissingEvidenceRoutesPhase
 		}
 	}
 	if !sawAdvance {
-		t.Fatalf("expected FeatureAdvanced(PhasePlan) after missing-evidence plan repair dispatch; events: %+v", events)
+		t.Fatalf("expected FeatureAdvanced(PhasePlan) after plan-revision plan repair dispatch; events: %+v", events)
 	}
 	data, err := os.ReadFile(filepath.Join(phasePlanDir, "attempt-01", "validation-feedback.md"))
 	if err != nil {
 		t.Fatalf("read validation feedback: %v", err)
 	}
 	got := string(data)
-	if !strings.Contains(got, "MISSING_EVIDENCE_REQUIREMENT visual: Capture the setup wizard empty state.") {
+	if !strings.Contains(got, "Plan revision: visual: Capture the setup wizard empty state.") {
 		t.Errorf("validation feedback missing reviewer-authored requirement:\n%s", got)
 	}
 	if latest := agent.LatestCompletedPlanAttempt(phasePlanDir); latest != 0 {
@@ -1126,12 +1126,12 @@ func TestOrchestrator_HandlePhaseCompletion_Implement_MissingEvidenceRoutesPhase
 	}
 }
 
-func TestOrchestrator_HandlePhaseCompletion_Implement_MissingEvidenceUsesLatestInvalidatedAttemptFeedback(t *testing.T) {
+func TestOrchestrator_HandlePhaseCompletion_Implement_PlanRevisionUsesLatestInvalidatedAttemptFeedback(t *testing.T) {
 	cpr := newCapturingPhaseRunner(t)
 	cpr.sm.StartSessionFn = func(id, featureID string, phase feature.Phase, command []string, workdir string, env []string, opts ...*session.SessionOpts) (ports.SessionHandle, error) {
 		return nil, session.ErrShuttingDown
 	}
-	featureID := "feat-impl-missing-evidence-attempt-02"
+	featureID := "feat-impl-plan-revision-attempt-02"
 	roadmapPath := filepath.Join(cpr.stateDir, "roadmap.md")
 	writeRoadmap(t, roadmapPath)
 	f := &feature.Feature{
@@ -1180,7 +1180,7 @@ func TestOrchestrator_HandlePhaseCompletion_Implement_MissingEvidenceUsesLatestI
 		CmdRunner:   cpr.cmd,
 	}, orchestrator.Hooks{})
 
-	feedback := "- **Critical**: MISSING_EVIDENCE_REQUIREMENT visual: Capture the approved attempt 02 setup wizard."
+	feedback := "- **Critical**: Plan revision: visual: Capture the approved attempt 02 setup wizard."
 	if err := o.HandlePhaseCompletion(featureID, orchestrator.PhaseCompletionInput{
 		Phase: feature.PhaseImplement,
 		MultiRepoResult: &agent.OrchestratorResult{
@@ -1196,8 +1196,8 @@ func TestOrchestrator_HandlePhaseCompletion_Implement_MissingEvidenceUsesLatestI
 		t.Fatalf("no phase-plan revision session captured; captures: %+v", cpr.capturedOpts)
 	}
 	prompt := captured[0].Prompt
-	if !strings.Contains(prompt, "MISSING_EVIDENCE_REQUIREMENT visual: Capture the approved attempt 02 setup wizard.") {
-		t.Fatalf("phase-plan revision prompt missing latest missing-evidence feedback:\n%s", prompt)
+	if !strings.Contains(prompt, "Plan revision: visual: Capture the approved attempt 02 setup wizard.") {
+		t.Fatalf("phase-plan revision prompt missing latest plan-revision feedback:\n%s", prompt)
 	}
 	if strings.Contains(prompt, "stale validator feedback from attempt 01") {
 		t.Fatalf("phase-plan revision prompt used stale attempt-01 feedback:\n%s", prompt)

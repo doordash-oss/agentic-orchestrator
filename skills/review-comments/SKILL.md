@@ -19,7 +19,7 @@ The harness has detected unaddressed PR review comments on one or more of this f
 
 Per-repo edits are delegated **by prompt**, not by `cwd`. Each Task sub-agent's prompt names exactly one repo and constrains file edits to that repo's worktree. Today's main-vs-sub split is preserved:
 
-- **Stays in main:** plan reading, deciding address/dismiss for each comment, sequencing across repos, reading the testing contract, emitting the handoff, writing the combined `review-resolutions.json`.
+- **Stays in main:** plan reading, deciding address/dismiss for each comment, sequencing across repos, emitting the handoff, writing the combined `review-resolutions.json`.
 - **Delegated to per-repo Task agents:** the actual code edits, focused development tests, commit + push.
 
 ## The Process

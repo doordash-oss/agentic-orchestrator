@@ -231,7 +231,6 @@ func (o *Orchestrator) settleCascadeAttention(intent *feature.CascadeDeleteInten
 			for i := range f.HelpQueue {
 				f.HelpQueue[i].Pending = false
 			}
-			f.PendingNeedUserInputPath = ""
 			f.ReviewingGate = false
 			f.ValidatingPlan = false
 			return nil

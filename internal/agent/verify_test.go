@@ -159,9 +159,8 @@ type VerificationStep struct {
 		{
 			// Inverted format — command first, prose trailing. The leftover
 			// prose ("succeeds.", "passes.", "shows exactly X.") is a sentence
-			// fragment, so Description must be "" so the testing-contract
-			// extractor falls back to using the command as the name.
-			// See agentic-in-napolitan run for the original symptom.
+			// fragment, so Description must be "" and callers fall back to
+			// using the command as the name.
 			name:     "inverted format yields empty description",
 			planText: "#### Automated Verification:\n- [ ] `go build ./...` succeeds.\n- [ ] `go test ./... -race -short` passes.\n- [ ] `git diff --name-only HEAD~1` shows exactly `README.md`.\n",
 			want: []verificationStep{

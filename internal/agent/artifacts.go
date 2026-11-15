@@ -60,19 +60,6 @@ func PhasePlanDir(stateDir string, f *feature.Feature, phase int) string {
 	return filepath.Join(PhaseDir(stateDir, f, phase), "plan")
 }
 
-// phaseTestingContractDir returns the base directory for a roadmap phase's
-// testing contract artifact. The contract lives at the phase root so
-// implementation and review share one binding file.
-func phaseTestingContractDir(stateDir string, f *feature.Feature, phase int) string {
-	return PhaseDir(stateDir, f, phase)
-}
-
-// PhaseTestingContractPath returns the absolute path to a roadmap phase's
-// compiled testing contract artifact.
-func PhaseTestingContractPath(stateDir string, f *feature.Feature, phase int) string {
-	return filepath.Join(phaseTestingContractDir(stateDir, f, phase), "testing-contract.yaml")
-}
-
 // RoadmapDir returns the roadmap artifacts directory within the active run.
 // e.g., runs/run-001/roadmap/.
 func RoadmapDir(stateDir string, f *feature.Feature) string {

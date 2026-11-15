@@ -50,14 +50,13 @@ type ProtocolViolation struct {
 
 // Outcome carries parsed artifacts from a successful contract validation.
 type Outcome struct {
-	OK                 bool
-	Progress           *parsedProgress
-	VerificationReport *verificationReport
-	ReviewFeedback     *parsedReviewFeedback
-	RoadmapPhases      []RoadmapPhase
-	PlanAttemptMeta    *PlanAttemptMeta
-	PlanMarkdownPath   string
-	PhaseArtifactPath  string
+	OK                bool
+	Progress          *parsedProgress
+	ReviewFeedback    *parsedReviewFeedback
+	RoadmapPhases     []RoadmapPhase
+	PlanAttemptMeta   *PlanAttemptMeta
+	PlanMarkdownPath  string
+	PhaseArtifactPath string
 }
 
 // lookup returns the registered contract for a phase and role.
@@ -124,61 +123,8 @@ func ValidateArtifactsPreflight(phase feature.Phase, role Role, iterDir string) 
 		return out, nil, err
 	}
 	violations = append(violations, contractViolations...)
-	if phase == feature.PhaseImplement && role == roleImplementer {
-		extra, extraErr := validateImplementerAgentOwnedEvidencePreflight(iterDir)
-		if extraErr != nil {
-			return out, nil, extraErr
-		}
-		violations = append(violations, extra...)
-	}
 	out.OK = len(violations) == 0
 	return out, violations, nil
-}
-
-func validateImplementerAgentOwnedEvidencePreflight(iterDir string) ([]ProtocolViolation, error) {
-	contractPath := ""
-	for _, candidate := range implementerTestingContractPathCandidates(iterDir) {
-		if _, err := os.Stat(candidate); err == nil {
-			contractPath = candidate
-			break
-		} else if !errors.Is(err, os.ErrNotExist) {
-			return nil, fmt.Errorf("checking testing contract for artifact preflight: %w", err)
-		}
-	}
-	if strings.TrimSpace(contractPath) == "" {
-		return nil, nil
-	}
-	contract, err := ReadTestingContract(contractPath)
-	if err != nil {
-		return nil, fmt.Errorf("reading testing contract for artifact preflight: %w", err)
-	}
-	return validateRequiredAgentOwnedEvidence(contract, iterDir), nil
-}
-
-func implementerTestingContractPathCandidates(iterDir string) []string {
-	// Roadmap phase iterations live at <phase>/implement/iteration-N with the
-	// contract at <phase>/testing-contract.yaml. Implementation iterations
-	// use the same phase-dir progress layout and keep the contract beside
-	// progress.md.
-	parent := filepath.Dir(iterDir)
-	phaseDir := filepath.Dir(parent)
-	candidates := []string{}
-	for _, dir := range []string{phaseDir, parent} {
-		if dir == "." || dir == string(filepath.Separator) {
-			continue
-		}
-		candidate := filepath.Join(dir, "testing-contract.yaml")
-		duplicate := false
-		for _, existing := range candidates {
-			if existing == candidate {
-				duplicate = true
-			}
-		}
-		if !duplicate {
-			candidates = append(candidates, candidate)
-		}
-	}
-	return candidates
 }
 
 func validateYAMLArtifactSyntax(displayPath, path string) []ProtocolViolation {
@@ -405,11 +351,10 @@ func descriptionContainsCommandSpan(description string) bool {
 	return false
 }
 
-// verificationScopeViolations checks every automated-verification command the
-// contract compiler would consume: per-Task blocks plus all content outside
-// the `## Tasks` section (the compiler's top-level scope — not just Success
-// Criteria). Repo names compare case-insensitively so tag-case drift does not
-// reject an otherwise valid plan.
+// verificationScopeViolations checks every automated-verification command in
+// the plan: per-Task blocks plus all content outside the `## Tasks` section.
+// Repo names compare case-insensitively so tag-case drift does not reject an
+// otherwise valid plan.
 func verificationScopeViolations(planText string) []ProtocolViolation {
 	tasks := ParsePlanTasks(planText)
 	repos := make(map[string]bool)
@@ -437,8 +382,7 @@ func verificationScopeViolations(planText string) []ProtocolViolation {
 		}
 	}
 	violations = append(violations, evidenceCapabilityViolations(planText)...)
-	topLevel, _ := splitPlanForVerification(planText)
-	for _, step := range parsePlanVerification(topLevel) {
+	for _, step := range parsePlanVerification(planTextOutsideTasks(planText)) {
 		repo := strings.TrimSpace(step.Repo)
 		if len(repos) > 1 && repo == "" {
 			violations = append(violations, ProtocolViolation{Artifact: "phase plan markdown", Reason: "multi-repo phase automated verification must scope every command with `[repo: <name>]`"})
@@ -450,6 +394,36 @@ func verificationScopeViolations(planText string) []ProtocolViolation {
 		}
 	}
 	return violations
+}
+
+// planTextOutsideTasks returns the plan with its `## Tasks` section removed.
+func planTextOutsideTasks(planText string) string {
+	lines := strings.Split(planText, "\n")
+	start := -1
+	for i, ln := range lines {
+		if strings.TrimSpace(ln) == "## Tasks" {
+			start = i
+			break
+		}
+	}
+	if start < 0 {
+		return planText
+	}
+	end := len(lines)
+	var fence fenceState
+	for i := start + 1; i < len(lines); i++ {
+		ln := lines[i]
+		if fence.update(ln) || fence.inside() {
+			continue
+		}
+		if strings.HasPrefix(ln, "## ") {
+			end = i
+			break
+		}
+	}
+	parts := append([]string{}, lines[:start]...)
+	parts = append(parts, lines[end:]...)
+	return strings.Join(parts, "\n")
 }
 
 func validateFrontendVisualEvidenceSection(successCriteria string) string {
@@ -555,10 +529,9 @@ func behavioralItemsAllCarryCommands(body string) bool {
 
 // evidenceBulletMissingProse reports whether body contains a checklist bullet
 // that countEvidenceChecklistItems counts as a requirement but that
-// parseEvidenceChecklistItem (the testing-contract compiler's parser) rejects
-// because stripping its trailing executable command leaves an empty
-// description. Such a bullet passes structural validation yet compiles to
-// zero contract rows, so evidence sections must reject it explicitly. Only
+// parseEvidenceChecklistItem rejects because stripping its trailing
+// executable command leaves an empty description, so evidence sections must
+// reject it explicitly. Only
 // callers validating Visual/Behavioral Evidence sections use this — Manual
 // and Automated Verification never strip a trailing command out of the
 // description, so they cannot hit this mismatch.
@@ -722,19 +695,6 @@ func progressViolations(parsed *parsedProgress) []ProtocolViolation {
 	out := make([]ProtocolViolation, 0, len(parsed.ProtocolViolations))
 	for _, reason := range parsed.ProtocolViolations {
 		out = append(out, ProtocolViolation{Artifact: "progress.md", Reason: reason})
-	}
-	return out
-}
-
-func reportGateViolations(gate reportGateResult) []ProtocolViolation {
-	out := make([]ProtocolViolation, 0, len(gate.Findings))
-	for _, finding := range gate.Findings {
-		reason := finding.Detail
-		if finding.CheckName != "" {
-			reason = finding.CheckName + ": " + reason
-		}
-		reason = "Report Integrity Gate: " + reason
-		out = append(out, ProtocolViolation{Artifact: "verification-report.yaml", Reason: reason})
 	}
 	return out
 }

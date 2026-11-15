@@ -238,7 +238,7 @@ func parseChecklistItem(line string) (verificationStep, bool) {
 // Cross-Repo Verification sections authored either way yield VerificationSteps.
 // Plain bullets require a command-shaped backtick span (no last-span fallback)
 // so prose notes like `- Keep `service-a` and `service-b` schemas in sync`
-// do not become fabricated contract rows.
+// do not become fabricated verification steps.
 func parseCrossRepoItem(line string) (verificationStep, bool) {
 	if !strings.HasPrefix(line, "- ") {
 		return verificationStep{}, false
@@ -540,8 +540,7 @@ func looksLikeShellCommand(s string) bool {
 // start, immediately after the checkbox, with prose trailing — the leftover
 // after stripping is almost always a sentence fragment ("succeeds.", "passes.",
 // "shows exactly `X`."). In that case return "" so callers can fall back to
-// using the command itself as the human-readable name (the testing-contract
-// extractor in testing_contract.go does this via `if name == "" { name = command }`).
+// using the command itself as the human-readable name.
 // The canonical format puts description before the command, so this only
 // changes behavior for the inverted shape.
 func extractDescription(line, commandWithBackticks string) string {

@@ -30,7 +30,6 @@ import (
 
 	serverruntime "github.com/doordash-oss/agentic-orchestrator/internal/server"
 
-	"github.com/doordash-oss/agentic-orchestrator/internal/agent"
 	"github.com/doordash-oss/agentic-orchestrator/internal/config"
 	"github.com/doordash-oss/agentic-orchestrator/internal/errcat"
 	"github.com/doordash-oss/agentic-orchestrator/internal/feature"
@@ -51,7 +50,6 @@ const (
 	resultCreated      = "created"
 	resultDiscarded    = "discarded"
 	resultDone         = "done"
-	resultDrafted      = "drafted"
 	resultGenerated    = "generated"
 	resultMerged       = "merged"
 	resultPublished    = "published"
@@ -67,7 +65,6 @@ const (
 	resultStopped      = "stopped"
 	resultUnchanged    = "unchanged"
 	resultUpdated      = "updated"
-	resultWaived       = "waived"
 )
 
 const (
@@ -239,9 +236,6 @@ func (t *mutationTarget) RunFeatureLifecycle(featureID string, action serverrunt
 	case serverruntime.FeatureActionRetry:
 		err = t.orch.RetryFeature(featureID)
 		result = resultRetried
-	case serverruntime.FeatureActionNeedUserInput:
-		err = t.orch.ResumeNeedUserInput(featureID, orchestrator.NeedUserInputResume{})
-		result = resultResumed
 	case serverruntime.FeatureActionDiscard:
 		err = t.orch.DiscardChild(featureID)
 		result = resultDiscarded
@@ -313,41 +307,6 @@ func (t *mutationTarget) UpdateFeatureConfig(featureID string, req serverruntime
 		return serverruntime.FeatureActionResponse{}, err
 	}
 	return serverruntime.FeatureActionResponse{FeatureID: featureID, Result: resultUpdated}, nil
-}
-
-func (t *mutationTarget) WaiveTestingContractItems(featureID string, req serverruntime.TestingContractWaiveRequest) (serverruntime.TestingContractWaiveResponse, error) {
-	result, err := t.orch.WaiveTestingContractItems(featureID, orchestrator.TestingContractWaiver{
-		ItemIDs: req.ItemIDs, Reason: req.Reason,
-		ExpectedRun: req.ActiveRun, ExpectedPhase: req.RoadmapPhase, ExpectedRevision: req.ContractRevision,
-	})
-	if err != nil {
-		if errors.Is(err, orchestrator.ErrStaleTestingContract) {
-			err = &serverruntime.ActionConflictError{Err: err, Code: errcat.Conflict}
-		}
-		return serverruntime.TestingContractWaiveResponse{}, err
-	}
-	return serverruntime.TestingContractWaiveResponse{
-		FeatureID: featureID, Result: resultWaived,
-		ContractRevision: result.Revision, WaivedItems: result.WaivedItems,
-	}, nil
-}
-
-func (t *mutationTarget) DraftNeedUserInputAnswers(featureID string, req serverruntime.NeedUserInputDraftRequest) (serverruntime.FeatureActionResponse, error) {
-	gatePath, err := t.orch.PendingNeedUserInputGatePath(featureID)
-	if err != nil {
-		return serverruntime.FeatureActionResponse{}, err
-	}
-	rec, err := agent.ReadNeedUserInputRecord(gatePath)
-	if err != nil {
-		return serverruntime.FeatureActionResponse{}, fmt.Errorf("read need-user-input gate: %w", err)
-	}
-	if err := applyNeedUserInputDraftAnswers(&rec, req.Answers); err != nil {
-		return serverruntime.FeatureActionResponse{}, err
-	}
-	if err := agent.WriteNeedUserInputRecord(gatePath, rec); err != nil {
-		return serverruntime.FeatureActionResponse{}, fmt.Errorf("write need-user-input gate: %w", err)
-	}
-	return serverruntime.FeatureActionResponse{FeatureID: featureID, Result: resultDrafted}, nil
 }
 
 func (t *mutationTarget) AnswerPermission(req serverruntime.PermissionAnswerRequest) (serverruntime.PermissionAnswerResponse, error) {
@@ -906,25 +865,6 @@ func (t *mutationTarget) helpSession(req serverruntime.HelpAnswerRequest) (ports
 	default:
 		return nil, fmt.Errorf("multiple active sessions for feature %s; session_id is required", featureID)
 	}
-}
-
-func applyNeedUserInputDraftAnswers(rec *agent.NeedUserInputRecord, answers map[string]string) error {
-	if rec == nil {
-		return errors.New("nil need-user-input record")
-	}
-	questionByKey := make(map[string]*agent.NeedUserInputQuestion, len(rec.Questions))
-	for i := range rec.Questions {
-		q := &rec.Questions[i]
-		questionByKey[strconv.Itoa(q.Index)] = q
-	}
-	for key, answer := range answers {
-		q := questionByKey[key]
-		if q == nil {
-			return fmt.Errorf("answer key %q is not a need-user-input question index", key)
-		}
-		q.Answer = answer
-	}
-	return nil
 }
 
 func mergeRuntimeDefaultsMutation(dst *config.DefaultsConfig, patch serverruntime.RuntimeDefaultsMutation) bool {

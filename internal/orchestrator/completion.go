@@ -21,7 +21,6 @@ import (
 	"log"
 	"os"
 	"path/filepath"
-	"sort"
 	"strings"
 	"unicode/utf8"
 
@@ -669,17 +668,11 @@ func (o *Orchestrator) onPlanNeedsReview(featureID string) error {
 // ---------------------------------------------------------------------------
 
 // onImplementCompleted is the dispatch point for implement-phase completion.
-// Multi-repo aggregate results flow through MultiRepoResult; the single-repo
-// NEED_USER_INPUT pause flow still arrives as a single-repo LoopResult so the
-// orchestrator can transition the feature into StatusNeedUserInput before the
-// multi-repo aggregator collapses the result. Single-repo completions arrive
-// via per-repo Final Review result channels, never through HandlePhaseCompletion.
+// Single-repo completions arrive via per-repo Final Review result channels,
+// never through HandlePhaseCompletion.
 func (o *Orchestrator) onImplementCompleted(featureID string, input PhaseCompletionInput) error {
 	if input.MultiRepoResult != nil {
 		return o.onMultiRepoImplementDone(featureID, input.MultiRepoResult)
-	}
-	if input.ImplementResult != nil && input.ImplementResult.FinalStatus == finalStatusNeedUserInput {
-		return o.onSingleRepoNeedUserInput(featureID, input.ImplementResult)
 	}
 	errMsg := "implement completion missing multi-repo result"
 	o.emitPhaseCompleted(featureID, feature.PhaseImplement, errors.New(errMsg))
@@ -707,54 +700,6 @@ func (o *Orchestrator) onMultiRepoImplementDone(featureID string, result *agent.
 	case finalStatusInterrupted:
 		// Graceful shutdown — shutdownFeatures will transition the feature to
 		// StatusInterrupted. We must NOT mark the feature Failed here.
-		return nil
-	case finalStatusNeedUserInput:
-		// Under SchemaVersionCurrent = 4 the NEED_USER_INPUT gate is
-		// feature-scoped (Feature.PendingNeedUserInputPath). Persist the
-		// gate path and transition the feature into StatusNeedUserInput so
-		// the resume dispatcher (resumeFeatureNeedUserInput)
-		// finds it paused. Do NOT emit PhaseCompleted — the phase is
-		// paused, not done — and surface NeedUserInputRequired so clients can
-		// open the questionnaire.
-		if result.NeedUserInputPath != "" {
-			if err := o.deps.Store.Modify(featureID, func(ff *feature.Feature) error {
-				ff.PendingNeedUserInputPath = result.NeedUserInputPath
-				if ff.Status == feature.StatusImplementing {
-					if tErr := ff.Transition(feature.StatusNeedUserInput); tErr != nil {
-						return fmt.Errorf("transition to StatusNeedUserInput: %w", tErr)
-					}
-				}
-				return nil
-			}); err != nil {
-				return err
-			}
-		}
-		summary := strings.TrimSpace(result.LastError)
-		if summary == "" {
-			var paused []string
-			for repoName, status := range result.RepoStatuses {
-				if status == finalStatusNeedUserInput {
-					paused = append(paused, repoName)
-				}
-			}
-			if len(paused) == 0 {
-				for _, r := range f.Repos {
-					paused = append(paused, r.Name)
-				}
-			}
-			sort.Strings(paused)
-			if len(paused) > 0 {
-				summary = fmt.Sprintf("implementation is waiting for user input from: %s", strings.Join(paused, ", "))
-			} else {
-				summary = "implementation is waiting for user input"
-			}
-		}
-		o.emitEventBlocking(ports.Event{
-			Type:      ports.NeedUserInputRequired,
-			FeatureID: featureID,
-			Phase:     feature.PhaseImplement,
-			Message:   summary,
-		})
 		return nil
 	case finalStatusPlanRevisionRequired:
 		return o.routePlanRevision(featureID, f, result.PlanRevisionFeedback)

@@ -125,18 +125,10 @@ deferrals: []
 closed_deferrals: []
 `+"~~~"+`
 
-## Verification Report
-
-- **Path**: $_d/verification-report.yaml
-- **Summary**: 0 passed, 0 failed, 0 blocked, 1 not_run
-
 ## Iteration State
 
 RETRY
 PROGRESS_EOF
-if [ ! -f "$_d/verification-report.yaml" ]; then
-  printf 'version: 1\nrequired_checks:\n  - name: Deferred check\n    requirement: go test ./...\n    status: not_run\n    evidence: pending retry iteration\n' > "$_d/verification-report.yaml"
-fi
 `+testutil.JSONLInit+`
 `+testutil.JSONLRetry+`
 `)
@@ -327,23 +319,14 @@ deferrals: []
 closed_deferrals: []
 `+"~~~"+`
 
-## Verification Report
-
-- **Path**: $_d/verification-report.yaml
-- **Summary**: 0 passed, 0 failed, 0 blocked, 0 not_run
-
-## Iteration State
-
-NEED_USER_INPUT
-Need a product choice before touching auth.
-
 ## Questions for User
 
 1. Legacy auth path or new auth service?
+
+## Iteration State
+
+SUCCESS
 PROGRESS_EOF
-if [ ! -f "$_d/verification-report.yaml" ]; then
-  printf 'version: 1\nrequired_checks: []\n' > "$_d/verification-report.yaml"
-fi
 `+testutil.JSONLInit+`
 `+testutil.JSONLSuccess+`
 `)
@@ -368,8 +351,8 @@ fi
 	if err != nil {
 		t.Fatalf("loop error: %v", err)
 	}
-	if result.FinalStatus == "need_user_input" {
-		t.Fatalf("legacy progress questions must not open a gate: %+v", result)
+	if result.FinalStatus == finalStatusReviewPassed {
+		t.Fatalf("legacy progress questions must not pass review: %+v", result)
 	}
 	feedbackPath := filepath.Join(artifactDir, "iteration-01", "review-feedback.md")
 	feedback, readErr := os.ReadFile(feedbackPath)
@@ -378,9 +361,6 @@ fi
 	}
 	if !strings.Contains(string(feedback), "Questions for User") {
 		t.Fatalf("review-feedback.md = %s, want legacy question-section violation", feedback)
-	}
-	if _, statErr := os.Stat(filepath.Join(artifactDir, "iteration-01", "need-user-input.yaml")); !os.IsNotExist(statErr) {
-		t.Fatalf("legacy progress questions must not persist a gate artifact: stat err = %v", statErr)
 	}
 }
 

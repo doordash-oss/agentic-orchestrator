@@ -438,26 +438,6 @@ func TestFeatureCheckpointsToConfigCheckpoints(t *testing.T) {
 	}
 }
 
-func TestShouldRunImplementationHarness(t *testing.T) {
-	t.Parallel()
-	// parallel-candidate: pure value, table-driven, or per-test temp-dir assertions with no shared state.
-	tests := []struct {
-		profile PipelineProfile
-		want    bool
-	}{
-		{PipelineMoonshot, true},
-		{PipelineMedium, false},
-		{PipelineLarge, false},
-	}
-	for _, tt := range tests {
-		t.Run(string(tt.profile), func(t *testing.T) {
-			if got := tt.profile.ShouldRunImplementationHarness(); got != tt.want {
-				t.Errorf("%s.ShouldRunImplementationHarness() = %v, want %v", tt.profile, got, tt.want)
-			}
-		})
-	}
-}
-
 func TestShouldContractAgentEvidence(t *testing.T) {
 	t.Parallel()
 	// parallel-candidate: pure value, table-driven, or per-test temp-dir assertions with no shared state.

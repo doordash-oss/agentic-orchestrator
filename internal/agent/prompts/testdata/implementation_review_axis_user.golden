@@ -27,14 +27,6 @@ Read the implementation plan (source of truth) at: /state/feat-x/run-1/phase-1/p
 
 Relevant tests pass.
 
-## Verification Report
-
-Read the verification report at: /state/feat-x/run-1/phase-1/implement/iteration-02/verification-report.yaml
-
-## Testing Contract
-
-Read the binding testing contract at: /state/feat-x/run-1/testing-contract.yaml
-
 ## Progress
 
 Read the current progress at: /state/feat-x/run-1/phase-1/implement/progress.md

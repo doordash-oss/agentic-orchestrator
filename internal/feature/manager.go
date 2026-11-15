@@ -1267,12 +1267,7 @@ func carryForwardSet(target Phase, sealedRunDir string, partialRoadmapPhase int)
 	if err != nil {
 		return nil, fmt.Errorf("discovering phase-NN plan dirs: %w", err)
 	}
-	phaseFiles, err := discoverCarriedPhaseFiles(sealedRunDir)
-	if err != nil {
-		return nil, fmt.Errorf("discovering phase-root history files: %w", err)
-	}
-	dirs = append(dirs, phaseDirs...)
-	return append(dirs, phaseFiles...), nil
+	return append(dirs, phaseDirs...), nil
 }
 
 // UpgradePipeline escalates a feature's pipeline profile without rewinding.
@@ -1494,7 +1489,6 @@ func (m *Manager) RetryPhase(featureID string, repoNames []string) error {
 			state.Error = nil
 		}
 		f.Run().Failure = nil
-		f.PendingNeedUserInputPath = ""
 		f.CurrentPhaseStatus = ""
 		return nil
 	})

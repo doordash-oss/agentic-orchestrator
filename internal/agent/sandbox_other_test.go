@@ -12,17 +12,12 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+//go:build !darwin && !linux
+
 package agent
 
-import (
-	"testing"
-)
+import "testing"
 
-func TestMaybeWrapHelperSandbox_DisabledUnchanged(t *testing.T) {
-	cmd := []string{"helper", "run"}
-	got, sandboxed, _, cleanup := maybeWrapHelperSandbox(cmd, false, "/Users/x/.agentic-workflow/features")
-	cleanup()
-	if sandboxed || len(got) != 2 || got[0] != "helper" || got[1] != "run" {
-		t.Errorf("disabled sandbox: got=%v sandboxed=%v, want unchanged [helper run]", got, sandboxed)
-	}
-}
+func helperSandboxExpected() bool { return false }
+
+func helperSandboxDenyDirs(*testing.T, []string) ([]string, bool) { return nil, false }

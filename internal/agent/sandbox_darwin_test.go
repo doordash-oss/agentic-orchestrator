@@ -44,7 +44,8 @@ func TestMaybeWrapHelperSandbox_EnabledWrapsWithSandboxExec(t *testing.T) {
 		t.Skip("sandbox-exec not available on this host")
 	}
 	stateRoot := filepath.Join(t.TempDir(), "features")
-	if err := os.MkdirAll(feature.WorktreesDir(stateRoot), 0o755); err != nil {
+	wt := feature.WorktreesDir(stateRoot)
+	if err := os.MkdirAll(wt, 0o755); err != nil {
 		t.Fatalf("mkdir worktrees: %v", err)
 	}
 	cmd := []string{"helper", "run"}
@@ -56,9 +57,33 @@ func TestMaybeWrapHelperSandbox_EnabledWrapsWithSandboxExec(t *testing.T) {
 	if len(got) < 4 || got[0] != sandboxExecPath || got[1] != "-f" || got[len(got)-2] != "helper" || got[len(got)-1] != "run" {
 		t.Fatalf("wrapped argv = %v, want [sandbox-exec -f <profile> helper run]", got)
 	}
-	if _, err := os.Stat(got[2]); err != nil {
-		t.Fatalf("sandbox profile %q not written: %v", got[2], err)
+	real, err := filepath.EvalSymlinks(wt)
+	if err != nil {
+		t.Fatalf("resolve worktrees dir: %v", err)
 	}
+	if dirs, _ := helperSandboxDenyDirs(t, got); len(dirs) != 1 || dirs[0] != real {
+		t.Fatalf("profile deny dirs = %v, want [%s]", dirs, real)
+	}
+}
+
+func helperSandboxExpected() bool { return sandboxExecAvailable() }
+
+func helperSandboxDenyDirs(t *testing.T, command []string) ([]string, bool) {
+	t.Helper()
+	if len(command) < 3 || command[0] != sandboxExecPath || command[1] != "-f" {
+		return nil, false
+	}
+	profile, err := os.ReadFile(command[2])
+	if err != nil {
+		t.Fatalf("read sandbox profile: %v", err)
+	}
+	var dirs []string
+	for _, line := range strings.Split(string(profile), "\n") {
+		if _, rest, ok := strings.Cut(line, `(deny file-write* (subpath "`); ok {
+			dirs = append(dirs, strings.TrimSuffix(rest, `"))`))
+		}
+	}
+	return dirs, true
 }
 
 type sandboxProbeRunner struct {

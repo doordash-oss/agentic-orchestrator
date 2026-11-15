@@ -71,6 +71,7 @@ func TestClassifyStartSessionError(t *testing.T) {
 	}{
 		{"missing executable", fmt.Errorf("starting: %w", exec.ErrNotFound), providerFailureHard},
 		{"handshake timeout", errors.New("protocol handshake: opencode initialize timeout: context deadline exceeded"), providerFailureTransient},
+		{"exited before handshake", fmt.Errorf("protocol handshake: %w: exit status 1; stderr: request timed out", ports.ErrProviderExitedBeforeHandshake), providerFailureHard},
 		{"shutting down", fmt.Errorf("start: %w", ports.ErrSessionShuttingDown), providerFailureUnknown},
 		{"unrecognized", errors.New("session id already in use"), providerFailureUnknown},
 	}

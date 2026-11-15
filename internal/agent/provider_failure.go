@@ -165,13 +165,15 @@ func providerFailureDetail(sess ports.SessionView, result *boundedHelperResult) 
 }
 
 // classifyStartSessionError decides whether a session that failed to start
-// is retryable. Missing executables and hard provider errors fail fast; a
-// handshake timeout (a provider slow to boot under load) is transient.
+// is retryable. Missing executables, a provider that exits before its
+// handshake, and hard provider errors fail fast; a handshake timeout (a
+// provider slow to boot under load) is transient.
 func classifyStartSessionError(err error) providerFailureClass {
 	if err == nil || errors.Is(err, ports.ErrSessionShuttingDown) {
 		return providerFailureUnknown
 	}
-	if errors.Is(err, exec.ErrNotFound) {
+	// A provider that dies at launch fails the same way on every retry.
+	if errors.Is(err, exec.ErrNotFound) || errors.Is(err, ports.ErrProviderExitedBeforeHandshake) {
 		return providerFailureHard
 	}
 	return classifyProviderFailure(err.Error())

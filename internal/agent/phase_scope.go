@@ -56,6 +56,9 @@ type phaseScopeIssue struct {
 // abort whatever workflow asked for the scope.
 func (r PhaseScopeResult) ScopeOK() bool { return len(r.Issues) == 0 }
 
+// phaseScopeNoTasks is the issue code for a plan without Task headings.
+const phaseScopeNoTasks = "no-tasks"
+
 // PhaseScope computes the per-phase repo set and validates the plan's
 // `**Repo:** <name>` tagging structure. This is the unified-flow replacement
 // for LoadExecutionPlan + ParseExecutionOrder + ValidateExecutionOrder.
@@ -99,7 +102,7 @@ func phaseScopeFromText(feat *feature.Feature, planText string) PhaseScopeResult
 	var issues []phaseScopeIssue
 	if len(tasks) == 0 {
 		issues = append(issues, phaseScopeIssue{
-			Code:    "no-tasks",
+			Code:    phaseScopeNoTasks,
 			Message: "phase plan has no '## Tasks' section or no '### Task N:' headings",
 		})
 	}

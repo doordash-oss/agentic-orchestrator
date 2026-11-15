@@ -3174,6 +3174,7 @@ func TestPhasePlanStructureViolations(t *testing.T) {
 		want []string
 	}{
 		{name: "valid", plan: strings.Replace(validPhasePlanText(), "#### What to build", "**Repo:** api\n\n#### What to build", 1)},
+		{name: "no tasks", plan: "# Phase Plan\n\n## Verification\n\nRun the tests.\n"},
 		{name: "malformed repo tag", plan: strings.Replace(validPhasePlanText(), "#### What to build", "**Repo:** api, web\n\n#### What to build", 1), want: []string{"Task 1: Build the slice: task missing required '**Repo:** <name>' tag"}},
 		{name: "foreign repo", plan: strings.Replace(validPhasePlanText(), "#### What to build", "**Repo:** cli\n\n#### What to build", 1), want: []string{`task tagged repo "cli" is not in Feature.Repos`}},
 	}

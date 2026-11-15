@@ -2072,7 +2072,8 @@ func setValidatingPlan(cfg planLoopConfig, validating bool) {
 
 // phasePlanStructureViolations reports Task repo tags the harness cannot
 // resolve. Only multi-repo plans are checked: a single-repo phase is scoped
-// to its one repo whatever the plan says.
+// to its one repo whatever the plan says. A plan without Task headings is
+// not a violation: the phase then covers every repo.
 func phasePlanStructureViolations(f *feature.Feature, attemptDir string) []ProtocolViolation {
 	if f == nil || len(f.Repos) < 2 {
 		return nil
@@ -2084,6 +2085,9 @@ func phasePlanStructureViolations(f *feature.Feature, attemptDir string) []Proto
 	}
 	var violations []ProtocolViolation
 	for _, issue := range phaseScopeFromText(f, string(data)).Issues {
+		if issue.Code == phaseScopeNoTasks {
+			continue
+		}
 		reason := issue.Message
 		if issue.Task != "" {
 			reason = issue.Task + ": " + reason

@@ -18,6 +18,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"math/rand/v2"
 	"os"
 	"path/filepath"
 	"strings"
@@ -252,9 +253,36 @@ func (pr *PhaseRunner) runBoundedHelperSession(ctx context.Context, cfg boundedH
 			if cfg.onRetry != nil {
 				cfg.onRetry(sessionAttempt+1, err)
 			}
+			if !waitBeforeHelperRetry(ctx, sessionAttempt) {
+				if !pr.helperInterrupted(ctx, cfg.featureID) {
+					return result, err
+				}
+				if result != nil {
+					result.Status = boundedHelperStatusInterrupted
+				}
+				return result, fmt.Errorf("running %s: %w", label, errHelperInterrupted)
+			}
 			continue
 		}
 		return result, err
+	}
+}
+
+// helperRetryBaseDelay spaces helper relaunches; jitter keeps helpers that
+// failed together from relaunching together.
+const helperRetryBaseDelay = 250 * time.Millisecond
+
+// waitBeforeHelperRetry sleeps a jittered delay that grows with the attempt,
+// returning false if ctx is cancelled first.
+func waitBeforeHelperRetry(ctx context.Context, attempt int) bool {
+	delay := time.Duration(attempt) * (helperRetryBaseDelay + rand.N(3*helperRetryBaseDelay))
+	timer := time.NewTimer(delay)
+	defer timer.Stop()
+	select {
+	case <-timer.C:
+		return true
+	case <-ctx.Done():
+		return false
 	}
 }
 

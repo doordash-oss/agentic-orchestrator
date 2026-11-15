@@ -104,6 +104,8 @@ Fresh installs use:
   agentico.log             # Runtime log output
 ```
 
+`knowledge-base/`, `overlays/`, and `child-kb/` directories left there by older versions are not used and can be deleted by hand.
+
 ## Next Steps
 
 - Learn the engine states and the currently exposed controls in [Feature Lifecycle](feature-lifecycle.md).

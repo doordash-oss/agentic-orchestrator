@@ -411,3 +411,5 @@ The same launch flags are accepted by `agentico server`.
   permissions/             # Permission cache (global.json, per-repo JSON)
   agentico.log             # Runtime log output
 ```
+
+`knowledge-base/`, `overlays/`, and `child-kb/` directories that older versions created in `~/.agentic-orchestrator/` are not used or cleaned up by Agentico; you can delete them by hand.

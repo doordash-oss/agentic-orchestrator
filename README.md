@@ -14,8 +14,8 @@ That is the real "oneshot" value: an engineer can describe a large feature once,
 
 - **Context is built, not hoped for** — Large and Moonshot features run inquiry, research, and design phases before planning. The implementation agent reads structured artifacts instead of relying on a single overloaded chat history.
 - **Complexity is phased** — Planning produces a roadmap, then each roadmap phase gets its own detailed phase plan. A tracer-bullet phase establishes the path; later TDD fill-in phases retire stubs and expand coverage.
-- **Quality gates happen before the diff gets expensive** — Plan validators review architecture, scope, structure, and, for high-risk work, security, performance, and testing. Implementation and Final Review loops use explicit verification evidence before the feature becomes publishable.
-- **Human attention is reserved for decisions** — Optional gates pause on inquiry review, research review, design review, roadmap review, phase plan review, user-input, and publish decisions. You approve direction, request iteration, or answer targeted questions; the orchestrator keeps the workflow state.
+- **Quality gates happen before the diff gets expensive** — Plan validators review architecture, scope, structure, and, for high-risk work, security, performance, and testing. The implementer runs each phase plan's verification itself, and Final Review runs the product and the full test suites before the feature becomes publishable.
+- **Human attention is reserved for decisions** — Optional gates pause on inquiry review, research review, design review, roadmap review, phase plan review, and publish decisions. You approve direction, request iteration, or answer targeted questions; the orchestrator keeps the workflow state.
 - **Parallelism is the multiplier, not the premise** — Because every feature gets isolated worktrees, branches, sessions, and artifacts, you can run several complex workflows at once without mixing state or blocking your main checkout.
 - **Provider orchestration is explicit** — One provider is enough to run the whole workflow; add more to split the work. Claude, Codex, and OpenCode are co-equal: each phase uses [configurable model recommendations and discovered capabilities](docs/model-selection.md) across detected providers, and models can be overridden per phase and swapped at runtime. Use `--providers` to restrict the orchestrator to the CLIs you actually have installed.
 
@@ -99,7 +99,7 @@ After installing your provider CLI(s), confirm each is authenticated — `claude
 
 ### The Feature Lifecycle
 
-The lifecycle is profile-dependent and checkpoint-driven. Medium starts at planning. Large and Moonshot first build context, clarify intent, and explore design options. All profiles then enter the roadmap loop: create a roadmap, plan one roadmap phase at a time, implement it, commit phase anchors, and continue until the final phase reaches Final Review.
+The lifecycle is profile-dependent and checkpoint-driven. Medium starts at planning. Large and Moonshot first clarify intent, research the codebase, and explore design options. All profiles then enter the roadmap loop: create a roadmap, plan one roadmap phase at a time, implement it, commit phase anchors, and continue until the final phase reaches Final Review.
 
 <img width="1051" height="570" alt="image" src="https://github.com/user-attachments/assets/00eb8559-0b0c-4000-a029-2210aa50f920" />
 
@@ -107,9 +107,9 @@ The lifecycle is profile-dependent and checkpoint-driven. Medium starts at plann
 
 **Roadmap and Phase Planning** — Creates the top-level roadmap, then a detailed plan for each roadmap phase. Large and Moonshot run plan validators; Medium skips plan critics for lower overhead.
 
-**Implementation** — Runs a unified phase implementation loop across the phase-scoped repo set. Medium and Large rely on Final Review; Moonshot also keeps per-iteration review during implementation, where an acceptance reviewer runs the phase plan's verification itself. That review follows the same round rules as Final Review: later rounds rerun only the axes with open findings, approvals stick, and a fix iteration that changes nothing or an axis that stalls hands the phase to you.
+**Implementation** — Runs a unified phase implementation loop across the phase-scoped repo set. On every profile the implementer runs the phase plan's verification itself and leaves free-form handoff notes for the next iteration; whether an iteration succeeds or retries comes from the agent's completion outcome. Medium and Large rely on Final Review; on Moonshot each successful iteration is followed by a per-phase review whose Functionality/Evidence reviewer runs the phase plan's verification itself. That review follows the same round rules as Final Review, and its handoff question offers to continue with guidance, accept and finish the phase, or stop.
 
-**Final Review** — Runs once after the last roadmap phase, across every touched repo that has not already been published. The phase contains its own review/fix loop: the first round runs every review axis over the full diff, later rounds rerun only the axes that requested changes, and earlier approvals confirm once against the fixes that followed them. The fixer can dispute a finding by asking you, and your answer is recorded for every later round. When a fix round changes nothing, or one axis requests changes three rounds in a row, Final Review asks you whether to continue with guidance, accept and proceed to Publish, or stop. Passing Final Review moves the feature to `CodeReady`; hitting the iteration cap or violating the phase contract fails the feature.
+**Final Review** — Runs once after the last roadmap phase, across every touched repo that has not already been published. The phase contains its own review/fix loop: the first round runs every review axis over the full diff, later rounds rerun only the axes that requested changes, scoped to their open findings and what changed since, and an earlier approval is confirmed once if code changed after it. The QA reviewer runs the product and the full test suites. The fixer can dispute a finding by asking you; your answer is recorded in a decisions file that later reviewers read, and approved decisions override the design's acceptance criteria. When a fix round changes nothing, or one axis requests changes three rounds in a row, Final Review asks you one question: continue with guidance, accept and proceed to Publish, or stop. Stopping parks the feature as `Interrupted`, and resuming re-enters Final Review. Passing Final Review moves the feature to `CodeReady`; hitting the iteration cap or violating the phase contract fails the feature.
 
 **Publishing** — If auto-publish is enabled, Agentic Orchestrator commits, pushes, creates PRs, and injects cross-repo PR links automatically. If manual publish is enabled, the desktop app pauses at `CodeReady` so you can review the diff and PR description first.
 
@@ -117,11 +117,11 @@ The lifecycle is profile-dependent and checkpoint-driven. Medium starts at plann
 
 When creating a feature, choose a pipeline depth:
 
-| Profile      | Phases                                                                                 | Best for                                                           |
-| ------------ | -------------------------------------------------------------------------------------- | ------------------------------------------------------------------ |
-| **Medium**   | Roadmap plan → per-phase plan/implement loop → Final Review → Publish                  | Small, well-understood changes where you already know the approach |
-| **Large**    | Inquire → Research → Design → roadmap loop → Final Review → Publish                    | Most complex features (default)                                    |
-| **Moonshot** | Same phase sequence as Large, with high effort and per-iteration implementation review | High-risk or highly ambiguous changes                              |
+| Profile      | Phases                                                                                             | Best for                                                           |
+| ------------ | -------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------ |
+| **Medium**   | Roadmap plan → per-phase plan/implement loop → Final Review → Publish                              | Small, well-understood changes where you already know the approach |
+| **Large**    | Inquire → Research → Design → roadmap loop → Final Review → Publish                                | Most complex features (default)                                    |
+| **Moonshot** | Same phase sequence as Large, with per-phase review after each successful implementation iteration | High-risk or highly ambiguous changes                              |
 
 ### Worktree Isolation
 
@@ -206,7 +206,6 @@ defaults:
 repos:
   my-service:
     path: /home/user/projects/my-service
-    verification: "go test ./..."
 
 workspace_roots:
   - /home/user/projects # Scanned for git repos on startup

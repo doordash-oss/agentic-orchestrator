@@ -31,7 +31,8 @@ and minimum client series 6 under the `loopback-bearer-v1` runtime policy
 (`network-bearer-v1` for non-loopback listeners). Series 6 removes the
 testing-contract route, the need-user-input gate with its
 `need-user-input`, `need-user-input-draft` and `testing-contract-waive`
-actions, and the required `need_user_inputs` prompt-snapshot field. Series 5
+actions, the required `need_user_inputs` prompt-snapshot field, and the
+`kb_build` model and effort fields. Series 5
 merged the feature-action and child-launch response schemas, removed the
 unused action union and static rebase operation declaration, dropped the
 never-sent start `phase` and `session_ids` fields and the restart `phase`,

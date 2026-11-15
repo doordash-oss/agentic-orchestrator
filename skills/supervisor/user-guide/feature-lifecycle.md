@@ -8,7 +8,7 @@ A feature is Agentic Orchestrator’s durable unit of work. It owns isolated git
 |---------|----------------|----------------|
 | **Medium** | Roadmap and phase planning → Implement → Final Review → Publish | Small, well-understood work |
 | **Large** | Inquire → Research → Design → roadmap loop → Final Review → Publish | Most complex features |
-| **Moonshot** | Same sequence as Large, with higher effort and per-iteration implementation review | High-risk or ambiguous work |
+| **Moonshot** | Same sequence as Large, with per-phase review after each successful implementation iteration | High-risk or ambiguous work |
 
 The Electron creation wizard exposes a pipeline-profile picker (Medium / Large / Moonshot) and a Review step for per-feature model, checkpoint, risk, exit-criteria, and inquireness editors. Defaults still come from `config.yaml`, but every value can be overridden per feature before creation.
 
@@ -16,11 +16,11 @@ The Electron creation wizard exposes a pipeline-profile picker (Medium / Large /
 
 ### Inquire
 
-Clarifies intent and records structured questions and answers, probing the feature's exit criteria along the way. `defaults.inquireness` controls how frequently eligible planning questions are surfaced by the workflow engine.
+Clarifies intent and records structured questions and answers, probing the feature's exit criteria along the way. It reads just enough of the target repositories, including their instruction files such as `AGENTS.md`, to ask grounded questions. `defaults.inquireness` controls how frequently eligible planning questions are surfaced by the workflow engine.
 
 ### Research
 
-Investigates relevant code paths, existing patterns, and constraints, then writes findings for later phases.
+Investigates relevant code paths, existing patterns, and constraints, then writes findings for later phases, including a short "Conventions and Verification" section: the conventions each investigated area follows and the commands that verify changes there.
 
 ### Design
 
@@ -31,17 +31,25 @@ Compares implementation approaches and records a chosen direction with its trade
 Planning has two levels:
 
 1. a strategic roadmap divided into vertical phases (on design-less pipelines such as Medium, the roadmap distills the exit criteria into its `## Overall Exit Criteria` section); and
-2. a tactical plan for each roadmap phase, with repository ownership and verification requirements.
+2. a tactical plan for each roadmap phase: tasks with acceptance criteria, each tagged with the repository it belongs to (`**Repo:**`), a `**Frontend:**` metadata field, and one prose `## Verification` section saying which commands to run and what to look at.
 
 ### Implement
 
-Executes the approved phase plan in verified iterations. Each iteration writes a structured handoff.
+Executes the approved phase plan in iterations. On every profile the implementer runs the plan's `## Verification` itself before reporting success, and writes free-form handoff notes to `progress.md` for the next session. Nothing parses those notes: whether an iteration succeeds or retries comes from the agent's completion outcome.
 
-On Moonshot, each successful iteration is followed by a per-phase review that follows the Final Review round rules below. Its handoff asks whether to continue with guidance, accept and finish the phase, or stop, and stopping parks the feature as interrupted in that phase.
+On Moonshot, each successful iteration is followed by a per-phase review that follows the review round rules below; its Functionality/Evidence reviewer runs the plan's verification itself. The handoff question asks whether to continue with guidance, accept and finish the phase, or stop, and stopping parks the feature as `Interrupted` in that phase. Medium and Large have no per-phase review and are verified at Final Review.
 
 ### Final Review
 
-Reviews the completed implementation and cycles through fixes until it passes or reaches its limits. After the first round, only the review axes that requested changes rerun, and earlier approvals confirm once before the phase passes. The fixer asks you about findings it disputes; your answers are recorded for later rounds. When a fix round changes nothing, or one axis requests changes three rounds in a row, Final Review asks you whether to continue with guidance, accept and proceed to Publish, or stop. Stopping parks the feature as interrupted, so resuming re-enters Final Review. Final Review progress is tracked per repository while the feature remains in an implementing top-level state.
+Reviews the completed implementation and cycles through fixes until it passes or reaches its limits. The QA reviewer runs the product and the full test suites.
+
+Review rounds (here and in Moonshot's per-phase review) follow these rules:
+
+- The first round runs every reviewer over the full diff.
+- Later rounds rerun only the reviewers that requested changes, scoped to their open findings and what changed since.
+- An earlier approval is confirmed once if code changed after it.
+- The fixer (or, per phase, the implementer) may dispute a finding by asking you. Your answer is recorded in a decisions file that later reviewers read, and later approved decisions override the design's acceptance criteria.
+- If a fix round changes nothing, or the same reviewer requests changes three rounds in a row, the loop asks you one question: continue with guidance, accept (Final Review proceeds to Publish), or stop. Stopping parks the feature as `Interrupted`; resuming re-enters the same review.
 
 ### Publish
 
@@ -53,14 +61,15 @@ The main path is:
 
 ```text
 Created → Inquiring → Researching → Designing → Planning
-    → Implementing → ReviewPassed → CodeReady → Published → Done
+    → Implementing → ReviewPassed → FinalReviewing → CodeReady → Published → Done
 ```
 
 Frequently seen states include:
 
 | State | Meaning |
 |-------|---------|
-| `Created` | Durable setup is complete or in progress; orchestration has not started |
+| `SettingUpWorktrees` | Durable setup of the feature's worktrees is queued or running |
+| `Created` | Durable setup is complete; orchestration has not started |
 | `Inquiring` | Inquiry is running |
 | `InquireReady` | Inquiry completed and the next phase is eligible |
 | `Researching` | Research is running |
@@ -69,15 +78,20 @@ Frequently seen states include:
 | `PlanReady` | A roadmap or phase plan is needed |
 | `Planning` | Planning is running |
 | `ImplementReady` | An approved plan is ready for implementation |
-| `Implementing` | Implementation or per-repository Final Review is running |
-| `ReviewPassed` | Final Review passed for every repository |
+| `Implementing` | Implementation is running, including Moonshot's per-phase review |
+| `ReviewPassed` | Implementation finished for every repository; Final Review runs next, and the feature returns here after it passes |
+| `FinalReviewing` | Final Review is running |
 | `CodeReady` | Code is ready for publishing |
 | `Published` | Publishing produced the expected remote result |
 | `Done` | The feature is complete |
 | `Failed` | A phase exhausted its allowed recovery path |
-| `Interrupted` | Work was stopped or its session ended unexpectedly |
+| `Interrupted` | Work was stopped, a review handoff was answered with stop, or its session ended unexpectedly |
 
 Review checkpoints can also pause the runtime in states such as `PromptNeedsReview`, `InquiryNeedsReview`, `ResearchNeedsReview`, `DesignNeedsReview`, and `PlanNeedsReview`.
+
+### Features saved by older versions
+
+State saved by older versions still loads. A feature that was paused waiting for user input, or that was building a knowledge base, loads as `Interrupted` and resumes normally; a feature that was building a knowledge base resumes at Inquire. Older features still show a Knowledge Base entry in their history.
 
 ## Electron Lifecycle Controls
 

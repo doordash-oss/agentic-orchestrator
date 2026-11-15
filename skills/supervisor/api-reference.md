@@ -95,7 +95,7 @@ Artifact review gates (inquiry, research, design, roadmap, phase plan) pause the
 
 ## Prompts
 
-Feature sessions ask questions (ask-user) and request help; both wait in the pending prompts snapshot.
+Feature sessions ask questions (ask-user) and request help; both wait in the pending prompts snapshot. Review rounds use ask-user too: a fixer or implementer disputing a finding, and the review handoff question (continue with guidance, accept, or stop).
 
 - `GET /api/v1/prompts` — list pending ask-user and help prompts with `request_id`, `session_id`, `feature_id` and the questions.
   Example: `"$AGENTICO_BIN" api GET /api/v1/prompts`

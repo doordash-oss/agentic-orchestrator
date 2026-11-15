@@ -37,6 +37,8 @@ Planning has two levels:
 
 Executes the approved phase plan in verified iterations. Each iteration writes a structured handoff.
 
+On Moonshot, each successful iteration is followed by a per-phase review that follows the Final Review round rules below. Its handoff asks whether to continue with guidance, accept and finish the phase, or stop, and stopping parks the feature as interrupted in that phase.
+
 ### Final Review
 
 Reviews the completed implementation and cycles through fixes until it passes or reaches its limits. After the first round, only the review axes that requested changes rerun, and earlier approvals confirm once before the phase passes. The fixer asks you about findings it disputes; your answers are recorded for later rounds. When a fix round changes nothing, or one axis requests changes three rounds in a row, Final Review asks you whether to continue with guidance, accept and proceed to Publish, or stop. Stopping parks the feature as interrupted, so resuming re-enters Final Review. Final Review progress is tracked per repository while the feature remains in an implementing top-level state.

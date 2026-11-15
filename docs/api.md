@@ -229,8 +229,8 @@ returns `completed`, `cleanup_pending`, or `attention_required`.
 
 Destructive relationship actions — child Discard and parent Delete with linked
 children — carry a server-authoritative `impact_preview` on their action
-catalog entry enumerating affected sessions, worktrees, branches, knowledge
-resources, child records, and retained outcomes; every category is present and
+catalog entry enumerating affected sessions, worktrees, branches, child
+records, and retained outcomes; every category is present and
 absent impact is an explicitly empty list. Clients render that projection
 verbatim before confirmation instead of reconstructing mutable backend state,
 and resolve an unavailable action against `disabled_reasons` for the typed

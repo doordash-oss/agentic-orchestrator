@@ -30,7 +30,7 @@ Every operation the supervisor uses, grouped by job. Each entry gives the method
   Example: `"$AGENTICO_BIN" api GET /api/v1/features/{feature_id}/testing-contract`
 - `GET /api/v1/features/{feature_id}/completion/preflight` — read-only preflight for publish, merge and done: eligible repositories, existing PR URLs, blockers, and the `source_revision` to pass to those actions.
   Example: `"$AGENTICO_BIN" api GET /api/v1/features/{feature_id}/completion/preflight`
-- `GET /api/v1/features/{feature_id}/rewind/preview` — read-only rewind preview. Required query: `target_phase` (`knowledge-base`, `inquire`, `research`, `design`, `plan`, `implement`, `review`, `publish`). Returns valid targets, consequences and the `source_run_number` and `source_revision` to pass to rewind.
+- `GET /api/v1/features/{feature_id}/rewind/preview` — read-only rewind preview. Required query: `target_phase` (`inquire`, `research`, `design`, `plan`, `implement`, `review`, `publish`). Returns valid targets, consequences and the `source_run_number` and `source_revision` to pass to rewind.
   Example: `"$AGENTICO_BIN" api GET '/api/v1/features/{feature_id}/rewind/preview?target_phase=plan'`
 - `GET /api/v1/features/{feature_id}/repositories/{repo_name}/diff` — bounded diff of one repository's changes. Optional query: `file_path` for one file's content.
   Example: `"$AGENTICO_BIN" api GET /api/v1/features/{feature_id}/repositories/{repo_name}/diff`

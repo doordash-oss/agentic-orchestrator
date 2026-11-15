@@ -553,7 +553,7 @@ func handoffQuestion(gateLabel string, h reviewHandoff, notePath string) string 
 		}
 	}
 	if h.FixerNote != "" {
-		fmt.Fprintf(&b, "\nFixer's note: %s\n", truncateText(h.FixerNote, handoffMaxNoteLength))
+		fmt.Fprintf(&b, "\nFixer's note: %s\n", truncateText(plainText(h.FixerNote), handoffMaxNoteLength))
 	}
 	fmt.Fprintf(&b, "\nDetails: %s\n\n%s", notePath, handoffQuestionMarker(gateLabel))
 	return b.String()
@@ -574,7 +574,7 @@ func blockingFindingLines(feedback string) []string {
 		case strings.HasPrefix(line, "### "):
 			axis = strings.TrimSpace(strings.TrimPrefix(line, "### "))
 		case strings.HasPrefix(line, "- ") && line != "- (none)":
-			text := strings.TrimSpace(strings.TrimPrefix(line, "- "))
+			text := plainText(strings.TrimPrefix(line, "- "))
 			if axis != "" {
 				text = axis + ": " + text
 			}
@@ -593,6 +593,16 @@ func blockingFindingLines(feedback string) []string {
 		lines = lines[:handoffMaxFindings]
 	}
 	return lines
+}
+
+var markdownLink = regexp.MustCompile(`\[([^\]]*)\]\([^)]*\)`)
+
+// plainText drops inline markdown, since the handoff question is shown as
+// plain text.
+func plainText(s string) string {
+	s = markdownLink.ReplaceAllString(s, "$1")
+	s = strings.NewReplacer("**", "", "__", "", "`", "").Replace(s)
+	return strings.TrimSpace(s)
 }
 
 func truncateText(s string, limit int) string {

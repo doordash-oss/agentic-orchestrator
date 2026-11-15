@@ -396,16 +396,16 @@ func TestReposChangedSince(t *testing.T) {
 func TestHandoffQuestionListsBlockingFindings(t *testing.T) {
 	t.Parallel()
 	feedback := formatStructuredReviewFeedback("Multi-Axis Final Review",
-		"### Craft\n- (none)\n\n### QA\n- **High**: export button stays disabled\n- **Low**: label casing",
+		"### Craft\n- (none)\n\n### QA\n- **High**: `Export` button stays [disabled](https://example.com/x)\n- **Low**: label casing",
 		"", reviewChangesRequested)
 	got := handoffQuestion("Final Review", reviewHandoff{
 		Reason:    "The QA axis requested changes in 3 consecutive rounds.",
 		Findings:  feedback,
-		FixerNote: "Made no changes: the export was dropped from scope in the roadmap.",
+		FixerNote: "Made no changes: the export was dropped from scope in the **roadmap**.",
 	}, "/review/iteration-03/handoff/handoff.md")
 	for _, want := range []string{
 		"Final Review needs your decision. The QA axis requested changes in 3 consecutive rounds.",
-		"- QA: **High**: export button stays disabled",
+		"- QA: High: Export button stays disabled",
 		"Fixer's note: Made no changes: the export was dropped from scope in the roadmap.",
 		"Details: /review/iteration-03/handoff/handoff.md",
 	} {
@@ -415,5 +415,8 @@ func TestHandoffQuestionListsBlockingFindings(t *testing.T) {
 	}
 	if strings.Contains(got, "label casing") {
 		t.Fatalf("handoffQuestion() listed a non-blocking finding:\n%s", got)
+	}
+	if strings.ContainsAny(got, "*`[") {
+		t.Fatalf("handoffQuestion() kept markdown; the question is shown as plain text:\n%s", got)
 	}
 }

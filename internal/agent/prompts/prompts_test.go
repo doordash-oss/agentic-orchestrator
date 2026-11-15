@@ -223,7 +223,6 @@ type ReviewUserInput struct {
 	DiffBase              string
 	FeatureDescription    string
 	DesignArtifactPath    string
-	PreviousFeedback      string
 	RefactorPassForkPoint string
 
 	RoadmapPath            string
@@ -257,6 +256,39 @@ type FinalFixUserInput struct {
 	IncludeManualVerificationOutcomes bool
 	Publishable                       bool
 	RefactorPassForkPoint             string
+
+	RoadmapPath     string
+	UserAnswerPaths []string
+	DecisionsPath   string
+	Handoff         *FinalFixHandoffInput
+}
+
+type FinalFixHandoffInput struct {
+	Reason        string
+	Question      string
+	NotePath      string
+	ContinueLabel string
+	AcceptLabel   string
+	StopLabel     string
+}
+
+type ReviewRoundUserInput struct {
+	GateLabel         string
+	Mode              string
+	LiveRun           bool
+	Since             int
+	PriorFeedbackPath string
+	Deltas            []ReviewRoundDelta
+	FixNotePaths      []string
+	RoadmapPath       string
+	UserAnswerPaths   []string
+	DecisionsPath     string
+}
+
+type ReviewRoundDelta struct {
+	Repo string
+	Path string
+	Base string
 }
 
 type ValidateSpecializedUserInput struct {
@@ -655,7 +687,6 @@ func TestGoldenSnapshots(t *testing.T) {
 					DiffBase:                             "main",
 					FeatureDescription:                   "Sign in with Google.",
 					DesignArtifactPath:                   "/state/feat-x/run-1/design/design.md",
-					PreviousFeedback:                     "## Findings\n### Craft\n- Tighten error handling.",
 					RoadmapPath:                          "/state/feat-x/run-1/roadmap/plan.md",
 					PlanPath:                             "/state/feat-x/run-1/phase-2/plan.md",
 					PhaseType:                            "tdd-fill-in",
@@ -664,6 +695,72 @@ func TestGoldenSnapshots(t *testing.T) {
 					PriorImplementationEvidenceRootDirs:  []string{"/state/feat-x/run-1/phase-1/implement/iteration-02"},
 					PriorImplementationEvidenceArtifacts: []string{"/state/feat-x/run-1/phase-1/implement/iteration-02/screenshots/login.png"},
 					FeedbackPath:                         "/state/feat-x/run-1/review/iteration-03/functionality-evidence/review-feedback.md",
+				})
+			},
+		},
+		{
+			name: "review_round_user_full",
+			render: func() string {
+				return MustRender(TemplateReviewRoundUser, ReviewRoundUserInput{
+					GateLabel:       "Final Review",
+					Mode:            "full",
+					RoadmapPath:     "/state/feat-x/run-1/roadmap/plan.md",
+					UserAnswerPaths: []string{"/state/feat-x/run-1/design/qa-answers.md"},
+				})
+			},
+		},
+		{
+			name: "review_round_user_follow_up",
+			render: func() string {
+				return MustRender(TemplateReviewRoundUser, ReviewRoundUserInput{
+					GateLabel:         "Final Review",
+					Mode:              "follow_up",
+					Since:             2,
+					PriorFeedbackPath: "/state/feat-x/run-1/review/iteration-02/craft/review-feedback.md",
+					Deltas: []ReviewRoundDelta{
+						{Repo: "api", Path: "/state/wt/api", Base: "1111111"},
+						{Repo: "web", Path: "/state/wt/web", Base: "2222222"},
+					},
+					FixNotePaths:    []string{"/state/feat-x/run-1/review/iteration-02/fix-notes.md"},
+					RoadmapPath:     "/state/feat-x/run-1/roadmap/plan.md",
+					UserAnswerPaths: []string{"/state/feat-x/run-1/design/qa-answers.md", "/state/feat-x/run-1/roadmap/qa-answers.md"},
+					DecisionsPath:   "/state/feat-x/run-1/review/review-decisions.md",
+				})
+			},
+		},
+		{
+			name: "review_round_user_confirm_live_run",
+			render: func() string {
+				return MustRender(TemplateReviewRoundUser, ReviewRoundUserInput{
+					GateLabel:         "Final Review",
+					Mode:              "confirm",
+					LiveRun:           true,
+					Since:             1,
+					PriorFeedbackPath: "/state/feat-x/run-1/review/iteration-01/qa/review-feedback.md",
+					DecisionsPath:     "/state/feat-x/run-1/review/review-decisions.md",
+				})
+			},
+		},
+		{
+			name: "final_fix_user_handoff",
+			render: func() string {
+				return MustRender(TemplateFinalFixUser, FinalFixUserInput{
+					Iteration:        3,
+					AcceptanceClause: "Feature acceptance is defined by the `## Acceptance Criteria` section of the approved design at /state/feat-x/run-1/design/design.md. Judge acceptance against that section, not against any restatement of it.",
+					Feedback:         "## Findings\n### QA\n- **High**: export button stays disabled.",
+					FeedbackPath:     "/state/feat-x/run-1/review/iteration-03/review-feedback.md",
+					Publishable:      true,
+					RoadmapPath:      "/state/feat-x/run-1/roadmap/plan.md",
+					UserAnswerPaths:  []string{"/state/feat-x/run-1/design/qa-answers.md"},
+					DecisionsPath:    "/state/feat-x/run-1/review/review-decisions.md",
+					Handoff: &FinalFixHandoffInput{
+						Reason:        "The QA axis requested changes in 3 consecutive rounds.",
+						Question:      "Final Review needs your decision. The QA axis requested changes in 3 consecutive rounds.\n\nOpen findings:\n- QA: **High**: export button stays disabled.\n\nDetails: /state/feat-x/run-1/review/iteration-03/handoff/handoff.md\n\nHow should Final Review proceed?",
+						NotePath:      "/state/feat-x/run-1/review/iteration-03/handoff/handoff.md",
+						ContinueLabel: "Continue with guidance",
+						AcceptLabel:   "Accept and proceed to Publish",
+						StopLabel:     "Stop",
+					},
 				})
 			},
 		},

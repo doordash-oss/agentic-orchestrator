@@ -89,6 +89,11 @@ type iterationMeta struct {
 	MadeProgress bool          `yaml:"made_progress"`
 	CostUSD      float64       `yaml:"cost_usd,omitempty"`
 	Context      *contextMeta  `yaml:"context,omitempty"`
+
+	// Multi-axis review round state, replayed on resume.
+	AxisVerdicts map[string]string `yaml:"axis_verdicts,omitempty"`
+	ReviewHeads  map[string]string `yaml:"review_heads,omitempty"`
+	Handoff      string            `yaml:"handoff,omitempty"`
 }
 
 type contextMeta struct {

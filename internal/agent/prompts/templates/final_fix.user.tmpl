@@ -1,7 +1,8 @@
 {{- /*
   final_fix.user: user prompt for the Final-Review fix agent (post-review
   iteration). Carries reviewer feedback; the fix agent is scoped to
-  addressing review feedback only — no new features.
+  addressing review feedback only — no new features. With Handoff set, the
+  session first asks the user how Final Review should proceed.
 
   Manual-verification-outcomes guidance is conditionally injected when
   the feedback mentions a manual-verification gate (so the fix agent
@@ -13,6 +14,24 @@
 
 This is fix iteration {{ .Iteration }}.
 
+{{ if .Handoff }}## Handoff to the User
+
+Final Review stopped its automatic loop: {{ .Handoff.Reason }}
+
+Before any other work, ask the user exactly one question with the ask-user tool described under Asking Questions. Use this question text verbatim:
+
+> {{ blockquote .Handoff.Question }}
+
+Offer exactly these options, with these labels:
+- "{{ .Handoff.ContinueLabel }}": the user types guidance as the answer; you apply it and Final Review continues.
+- "{{ .Handoff.AcceptLabel }}": the open findings are accepted as they are and the feature moves on to Publish.
+- "{{ .Handoff.StopLabel }}": Final Review stops; the user resumes or rewinds the feature later.
+
+If the answer is "{{ .Handoff.AcceptLabel }}" or "{{ .Handoff.StopLabel }}", make no changes and finish. Any other answer is the user's guidance: apply it as this round's fix, using the open findings as reviewer feedback where the guidance leaves something open, then finish. The harness records the answer in the decisions file.
+
+Open findings and the previous fixer's note: {{ .Handoff.NotePath }}
+
+{{ end -}}
 {{ if .RefactorPassForkPoint }}## Refactor Pass Fork Point
 
 This feature is a refactor pass forked from its parent feature's delivered state at {{ .RefactorPassForkPoint }}. Anything that already exists at the fork point is the parent's approved work, not this pass's. Wherever the specification or reviewer feedback refers to prior, current, or existing state, resolve that reference against the fork point — this pass's own delta is `git diff <fork-sha>..HEAD` — never against the repository base branch. If feedback attributes fork-point content to this pass and asks you to change it beyond what the approved plan covers, that is misattribution: do not apply it silently — surface the conflict (AskUserQuestion if needed) instead of rewriting the parent's delivered state. All work is confined to the worktrees listed for this pass: other checkouts of the same repositories exist and are off-limits.
@@ -23,6 +42,13 @@ This feature is a refactor pass forked from its parent feature's delivered state
 {{ end }}{{ if .ExitCriteria }}**Exit criteria**:
 {{ .ExitCriteria }}
 
+{{ end }}{{ if or .RoadmapPath .UserAnswerPaths .DecisionsPath }}## Approved Decisions
+
+Later approved decisions override the design's acceptance criteria where they conflict:
+{{ if .RoadmapPath }}- Roadmap, including its out-of-scope list: {{ .RoadmapPath }}
+{{ end }}{{ range .UserAnswerPaths }}- User's recorded answers: {{ . }}
+{{ end }}{{ if .DecisionsPath }}- Final Review decisions: {{ .DecisionsPath }}
+{{ end }}
 {{ end }}{{ if .FeedbackPath }}## Reviewer Feedback
 
 Read the reviewer feedback at: {{ .FeedbackPath }}

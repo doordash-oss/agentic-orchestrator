@@ -356,8 +356,11 @@ fi`,
 			testutil.WriteFinalReviewChangesRequested(artDir, "- **High**: needs a fix"),
 			testutil.JSONLSuccess))
 
+	// The fixer commits its change itself; the recording hook does not.
 	fixScript := testutil.WriteScript(t, env.scriptsDir, "fix.sh",
-		testutil.JSONLInit+"\n"+testutil.JSONLSuccess+"\n")
+		testutil.JSONLInit+"\n"+
+			fmt.Sprintf(`printf 'fixed\n' > %q/fix.txt && git -C %q add -A && git -C %q commit -qm fix`, repo, repo, repo)+"\n"+
+			testutil.JSONLSuccess+"\n")
 
 	eventCh := make(chan any, 100)
 	sm := session.NewManager(eventCh)

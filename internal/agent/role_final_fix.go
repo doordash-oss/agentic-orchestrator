@@ -50,4 +50,20 @@ type finalFixUserInput struct {
 	// RefactorPassForkPoint resolves the spec's "fork point" references for a
 	// refactor child ("repo @ sha"). Empty for top-level features.
 	RefactorPassForkPoint string
+
+	RoadmapPath     string
+	UserAnswerPaths []string
+	DecisionsPath   string
+	Handoff         *finalFixHandoffInput
+}
+
+// finalFixHandoffInput turns a fix session into the loop's handoff: it asks
+// the user how to proceed before doing anything else.
+type finalFixHandoffInput struct {
+	Reason        string
+	Question      string
+	NotePath      string
+	ContinueLabel string
+	AcceptLabel   string
+	StopLabel     string
 }

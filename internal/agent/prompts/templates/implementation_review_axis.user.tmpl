@@ -49,10 +49,6 @@ Scope guidance:
 
 {{ end }}{{ if .PlanPath }}Read the implementation plan at: {{ .PlanPath }}
 
-{{ end }}{{ if .PreviousFeedback }}## Prior Aggregate Feedback
-
-{{ .PreviousFeedback }}
-
 {{ end }}{{ if or .PriorImplementationReportPaths .PriorImplementationEvidenceRootDirs .PriorImplementationEvidenceArtifacts }}## Prior Implementation Evidence
 
 {{ if .PriorImplementationReportPaths }}Implementation verification reports:

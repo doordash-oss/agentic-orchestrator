@@ -19,6 +19,7 @@ import (
 	"log"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 
 	"github.com/doordash-oss/agentic-orchestrator/internal/agent/prompts"
@@ -246,7 +247,7 @@ func (g *phaseReviewGate) reviewRoundInput(iteration int, run reviewAxisRun) rev
 		DecisionsPath:    existingPath(g.decisionsPath()),
 	}
 	if g.cfg.RunDir != "" {
-		in.UserAnswerPaths = userAnswerPaths(g.cfg.RunDir)
+		in.UserAnswerPaths = slices.DeleteFunc(userAnswerPaths(g.cfg.RunDir), func(p string) bool { return p == g.decisionsPath() })
 	}
 	if run.Mode == reviewRoundFull {
 		return in

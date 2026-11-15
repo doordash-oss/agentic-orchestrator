@@ -15,6 +15,9 @@
 package agent
 
 import (
+	"os"
+	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/doordash-oss/agentic-orchestrator/internal/feature"
@@ -75,5 +78,29 @@ func TestImplementLoopPhaseReview_DecisionSurvivesResume(t *testing.T) {
 	resumed := runPhaseGate(t, env, 5, nil, nil, nil)
 	if resumed.result.FinalStatus != finalStatusReviewPassed {
 		t.Fatalf("resumed = %+v, want review_passed: the recorded dispute is not a no-change round", resumed.result)
+	}
+}
+
+// Decisions from a phase's review reach Final Review.
+func TestRunFeatureFinalReviewLoop_SeesPhaseReviewDecisions(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping integration test in short mode")
+	}
+	env := newFRLoopEnv(t)
+	store, f, _, artDir := newFRGitFeature(t, env, "fr-phase-decisions")
+	phaseDecisions := filepath.Join(filepath.Dir(artDir), "phase-01", "implement", reviewDecisionsFile)
+	if err := os.MkdirAll(filepath.Dir(phaseDecisions), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(phaseDecisions, []byte("# Review Decisions\n\n## Iteration 2 handoff\n\n**Q:** Phase 1 review needs your decision.\n\n**A:** Accept and finish the phase\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	result, _ := runFRLoop(t, f, store, env, frReviewerScript(t, env, artDir, nil), frFixerScript(t, env, artDir, ":", ":"), 3, nil)
+	if result.FinalStatus != finalStatusReviewPassed {
+		t.Fatalf("result = %+v, want review_passed", result)
+	}
+	prompt := readFRFile(t, filepath.Join(artDir, "iteration-01", "craft", "review-prompt.md"))
+	if !strings.Contains(prompt, phaseDecisions) {
+		t.Fatalf("Final Review prompt does not list the phase review decisions %s:\n%s", phaseDecisions, prompt)
 	}
 }

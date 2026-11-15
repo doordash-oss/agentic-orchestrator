@@ -325,11 +325,11 @@ func existingPath(path string) string {
 	return path
 }
 
-// userAnswerPaths lists the user's recorded answers from earlier phases of
-// the run.
+// userAnswerPaths lists the user's recorded answers across the run: phase
+// answers and the decisions from each phase's review.
 func userAnswerPaths(runDir string) []string {
 	var paths []string
-	for _, pattern := range []string{"*/qa-answers.md", "*/*/qa-answers.md"} {
+	for _, pattern := range []string{"*/qa-answers.md", "*/*/qa-answers.md", "implement/" + reviewDecisionsFile, "*/implement/" + reviewDecisionsFile} {
 		matches, _ := filepath.Glob(filepath.Join(runDir, pattern))
 		paths = append(paths, matches...)
 	}

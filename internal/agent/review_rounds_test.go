@@ -18,6 +18,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 
@@ -499,5 +500,27 @@ func TestPlanRoundUnknownStateStalesApprovals(t *testing.T) {
 	fixed.recordReview(3, map[string]string{axes[0].Slug: ReviewApproved.String()}, repoState{})
 	if plan := fixed.planRound(axes, repoState{}); len(plan) != len(axes)-1 {
 		t.Fatalf("plan after a fix = %+v, want every axis but the one just approved", plannedAxes(plan))
+	}
+}
+
+func TestUserAnswerPathsIncludePhaseReviewDecisions(t *testing.T) {
+	t.Parallel()
+	runDir := t.TempDir()
+	var want []string
+	for _, dir := range []string{filepath.Join("phase-01", "implement"), "implement"} {
+		decisions := filepath.Join(runDir, dir, reviewDecisionsFile)
+		if err := os.MkdirAll(filepath.Dir(decisions), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(decisions, []byte("# Review Decisions\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		want = append(want, decisions)
+	}
+	got := userAnswerPaths(runDir)
+	for _, path := range want {
+		if !slices.Contains(got, path) {
+			t.Fatalf("userAnswerPaths() = %v, want the phase review decisions %s", got, path)
+		}
 	}
 }

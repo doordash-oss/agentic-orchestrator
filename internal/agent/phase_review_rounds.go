@@ -51,7 +51,7 @@ func newPhaseReviewGate(cfg ImplementConfig, am *artifactManager, upTo int) *pha
 		cfg:     cfg,
 		repos:   implementRoundCommitRepos(cfg),
 		axes:    perPhaseReviewAxes(cfg),
-		history: &reviewRoundHistory{axes: map[string]*reviewAxisRecord{}},
+		history: &reviewRoundHistory{axes: map[string]*reviewAxisRecord{}, loadedAt: upTo},
 	}
 	askedAt := 0
 	scanIterationMetas(am, cfg.ArtifactDir, upTo, func(meta iterationMeta) {
@@ -271,7 +271,7 @@ const confirmRoundDir = "confirm"
 // clone copies the history so a confirmation round can be planned before the
 // iteration's verdicts are committed.
 func (h *reviewRoundHistory) clone() *reviewRoundHistory {
-	c := &reviewRoundHistory{axes: make(map[string]*reviewAxisRecord, len(h.axes)), lastFixChange: h.lastFixChange, accepted: h.accepted}
+	c := &reviewRoundHistory{axes: make(map[string]*reviewAxisRecord, len(h.axes)), lastFixChange: h.lastFixChange, loadedAt: h.loadedAt, accepted: h.accepted}
 	for slug, rec := range h.axes {
 		copied := *rec
 		c.axes[slug] = &copied

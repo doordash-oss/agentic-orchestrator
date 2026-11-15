@@ -117,6 +117,7 @@ func TestReviewRoundHistoryUnknownDeltaRunsFull(t *testing.T) {
 	requirePlan(t, h, stateAt("bbb"), plannedAxis{"craft", reviewRoundFull, 0})
 	h.recordReview(2, map[string]string{"craft": verdictApproved}, stateAt("bbb"))
 	requirePlan(t, h, repoState{},
+		plannedAxis{"craft", reviewRoundFull, 0},
 		plannedAxis{"cleanliness", reviewRoundFull, 0},
 		plannedAxis{"qa", reviewRoundFull, 0})
 }
@@ -418,5 +419,55 @@ func TestHandoffQuestionListsBlockingFindings(t *testing.T) {
 	}
 	if strings.ContainsAny(got, "*`[") {
 		t.Fatalf("handoffQuestion() kept markdown; the question is shown as plain text:\n%s", got)
+	}
+}
+
+// Unknown repo state keeps an approval only while nothing could have changed
+// the code since: no fix, no change in what is known, and no gap between loop
+// runs. Each stale approval reruns once, in full.
+func TestPlanRoundUnknownStateStalesApprovals(t *testing.T) {
+	t.Parallel()
+	axes := finalGateAxesForTest()
+	all := map[string]string{}
+	for _, axis := range axes {
+		all[axis.Slug] = ReviewApproved.String()
+	}
+	newHistory := func(loadedAt int) *reviewRoundHistory {
+		return &reviewRoundHistory{axes: map[string]*reviewAxisRecord{}, loadedAt: loadedAt}
+	}
+
+	lostState := newHistory(0)
+	lostState.recordReview(1, all, stateAt("a"))
+	if plan := lostState.planRound(axes, repoState{}); len(plan) != len(axes) || plan[0].Mode != reviewRoundFull {
+		t.Fatalf("plan once state is unknown = %+v, want every axis in full", plannedAxes(plan))
+	}
+	lostState.recordReview(2, all, repoState{})
+	if plan := lostState.planRound(axes, repoState{}); len(plan) != 0 {
+		t.Fatalf("plan after the full round = %+v, want approval", plannedAxes(plan))
+	}
+
+	gainedState := newHistory(0)
+	gainedState.recordReview(1, all, repoState{})
+	if plan := gainedState.planRound(axes, stateAt("a")); len(plan) != len(axes) || plan[0].Mode != reviewRoundFull {
+		t.Fatalf("plan once state is known = %+v, want every axis in full", plannedAxes(plan))
+	}
+
+	resumed := newHistory(1)
+	resumed.recordReview(1, all, repoState{})
+	if plan := resumed.planRound(axes, repoState{}); len(plan) != len(axes) {
+		t.Fatalf("plan after a resume = %+v, want every axis in full", plannedAxes(plan))
+	}
+	resumed.recordReview(2, all, repoState{})
+	if plan := resumed.planRound(axes, repoState{}); len(plan) != 0 {
+		t.Fatalf("plan after the full round = %+v, want approval", plannedAxes(plan))
+	}
+
+	fixed := newHistory(0)
+	fixed.recordReview(1, all, repoState{})
+	fixed.recordReview(2, map[string]string{axes[0].Slug: reviewChangesRequested.String()}, repoState{})
+	fixed.recordFix(2, true)
+	fixed.recordReview(3, map[string]string{axes[0].Slug: ReviewApproved.String()}, repoState{})
+	if plan := fixed.planRound(axes, repoState{}); len(plan) != len(axes)-1 {
+		t.Fatalf("plan after a fix = %+v, want every axis but the one just approved", plannedAxes(plan))
 	}
 }

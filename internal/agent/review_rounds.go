@@ -51,11 +51,14 @@ type reviewAxisRecord struct {
 type reviewRoundHistory struct {
 	axes          map[string]*reviewAxisRecord
 	lastFixChange int
-	accepted      bool
+	// loadedAt is the last iteration replayed from disk; the repos may have
+	// changed while the loop was not running.
+	loadedAt int
+	accepted bool
 }
 
 func loadReviewRoundHistory(am *artifactManager, artifactDir string, upTo int) *reviewRoundHistory {
-	h := &reviewRoundHistory{axes: map[string]*reviewAxisRecord{}}
+	h := &reviewRoundHistory{axes: map[string]*reviewAxisRecord{}, loadedAt: upTo}
 	scanIterationMetas(am, artifactDir, upTo, func(meta iterationMeta) {
 		h.recordReview(meta.Iteration, meta.AxisVerdicts, metaRepoState(meta))
 		h.recordFix(meta.Iteration, meta.MadeProgress)
@@ -129,7 +132,9 @@ type reviewAxisRun struct {
 // first round. Approvals stick until the repos differ from what the axis
 // approved, or a recorded fix landed after it; once nothing is open, each
 // stale approval confirms once. An axis whose delta is unknown reruns in
-// full. An empty plan means approval.
+// full; with no state to compare, its approval stands only while it saw the
+// same kind of state, no fix followed it, and the loop has run since it was
+// given. An empty plan means approval.
 func (h *reviewRoundHistory) planRound(axes []implementationReviewAxis, now repoState) []reviewAxisRun {
 	if h.accepted {
 		return nil
@@ -152,10 +157,10 @@ func (h *reviewRoundHistory) planRound(axes []implementationReviewAxis, now repo
 				run.Mode = reviewRoundFollowUp
 			}
 			open = append(open, run)
-		case h.lastFixChange >= rec.lastReview || (scoped && now.differs(rec.lastState)):
-			if scoped {
-				run.Mode = reviewRoundConfirm
-			}
+		case !scoped && (h.lastFixChange >= rec.lastReview || rec.lastState.known() != now.known() || rec.lastReview <= h.loadedAt):
+			confirm = append(confirm, run)
+		case scoped && (h.lastFixChange >= rec.lastReview || now.differs(rec.lastState)):
+			run.Mode = reviewRoundConfirm
 			confirm = append(confirm, run)
 		}
 	}

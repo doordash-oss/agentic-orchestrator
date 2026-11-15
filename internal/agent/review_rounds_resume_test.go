@@ -1,0 +1,79 @@
+// Copyright 2026 DoorDash, Inc.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+package agent
+
+import (
+	"testing"
+
+	"github.com/doordash-oss/agentic-orchestrator/internal/feature"
+)
+
+// setFeatureStatus stands in for a pause or a resume between loop runs.
+func setFeatureStatus(t *testing.T, store *feature.Store, id string, status feature.Status) {
+	t.Helper()
+	if err := store.Modify(id, func(f *feature.Feature) error {
+		f.Status = status
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// A dispute recorded before a pause still counts once the loop resumes.
+func TestRunFeatureFinalReviewLoop_DecisionSurvivesResume(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping integration test in short mode")
+	}
+	env := newFRLoopEnv(t)
+	store, f, _, artDir := newFRGitFeature(t, env, "fr-decided-resume")
+	status := f.Status
+	reviewScript := frReviewerScript(t, env, artDir, map[string]string{"iteration-01/craft": "CSV export is missing"})
+	dispute := "Dispute: Craft: CSV export is missing. The roadmap drops the export."
+	first, _ := runFRLoop(t, f, store, env, reviewScript, frFixerScript(t, env, artDir, frAskUser(dispute, "Fix it", "Accept as is"), ":"), 5, func(string) string {
+		setFeatureStatus(t, store, f.ID, feature.StatusInterrupted)
+		return "Accept as is"
+	})
+	if first.FinalStatus != "interrupted" {
+		t.Fatalf("first run = %+v, want interrupted", first)
+	}
+	setFeatureStatus(t, store, f.ID, status)
+	resumed, _ := runFRLoop(t, f, store, env, reviewScript, frFixerScript(t, env, artDir, ":", ":"), 5, nil)
+	if resumed.FinalStatus != finalStatusReviewPassed {
+		t.Fatalf("resumed = %+v, want review_passed: the recorded dispute is not a no-change round", resumed)
+	}
+}
+
+func TestImplementLoopPhaseReview_DecisionSurvivesResume(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping loop test in short mode")
+	}
+	env := newPhaseGateEnv(t, "feat-phase-decided-resume", feature.PipelineMoonshot)
+	status := env.f.Status
+	dispute := "Dispute: Craft: retry loop has no backoff. The plan keeps a fixed delay."
+	first := runPhaseGate(t, env, 5, []string{"", frAskUser(dispute, "Fix it", "Accept as is")},
+		map[string]string{"iteration-01/craft": "retry loop has no backoff"},
+		func(string) string {
+			setFeatureStatus(t, env.store, env.f.ID, feature.StatusInterrupted)
+			return "Accept as is"
+		})
+	if first.result.FinalStatus != "interrupted" {
+		t.Fatalf("first run = %+v, want interrupted", first.result)
+	}
+	setFeatureStatus(t, env.store, env.f.ID, status)
+	resumed := runPhaseGate(t, env, 5, nil, nil, nil)
+	if resumed.result.FinalStatus != finalStatusReviewPassed {
+		t.Fatalf("resumed = %+v, want review_passed: the recorded dispute is not a no-change round", resumed.result)
+	}
+}

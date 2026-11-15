@@ -41,7 +41,6 @@ type phaseReviewGate struct {
 
 	lastReview int
 	lastState  repoState
-	decided    bool
 	pending    *reviewHandoffPromptInput
 	pendingDir string
 }
@@ -108,7 +107,12 @@ func (g *phaseReviewGate) recordReview(iteration int, verdicts map[string]string
 	}
 	g.history.recordReview(iteration, verdicts, state)
 	g.lastReview, g.lastState = iteration, state
-	g.decided = false
+}
+
+// decided reports whether a session since the latest review recorded a
+// decision.
+func (g *phaseReviewGate) decided() bool {
+	return decidedAfter(g.decisionsPath(), g.lastReview)
 }
 
 // awaitingFix reports whether the latest review left findings open.
@@ -147,11 +151,9 @@ func (g *phaseReviewGate) recordSession(iteration int, iterDir string, sess port
 			}
 		}
 	}
-	recorded, err := appendReviewDecisions(g.decisionsPath(), heading, reviewDecisionPairs(sess.QALog(), question))
-	if err != nil {
+	if _, err := appendReviewDecisions(g.decisionsPath(), heading, reviewDecisionPairs(sess.QALog(), question)); err != nil {
 		log.Printf("phase review: %v", err)
 	}
-	g.decided = g.decided || recorded
 	note := sessionClosingNote(sess)
 	if note != "" && (g.awaitingFix() || g.pending != nil) {
 		_ = os.WriteFile(filepath.Join(iterDir, fixNotesFile), []byte(note+"\n"), 0o644)

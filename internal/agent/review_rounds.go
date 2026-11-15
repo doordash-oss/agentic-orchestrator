@@ -22,6 +22,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"sort"
+	"strconv"
 	"strings"
 
 	"gopkg.in/yaml.v3"
@@ -298,6 +299,23 @@ func appendReviewDecisions(path, heading string, qa []ports.QAPair) (bool, error
 		return false, fmt.Errorf("writing review decisions: %w", err)
 	}
 	return true, nil
+}
+
+var decisionHeadingPattern = regexp.MustCompile(`(?m)^## Iteration (\d+) `)
+
+// decidedAfter reports whether the decisions file records a session of an
+// iteration after the given one.
+func decidedAfter(path string, iteration int) bool {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return false
+	}
+	for _, m := range decisionHeadingPattern.FindAllStringSubmatch(string(data), -1) {
+		if n, err := strconv.Atoi(m[1]); err == nil && n > iteration {
+			return true
+		}
+	}
+	return false
 }
 
 func existingPath(path string) string {

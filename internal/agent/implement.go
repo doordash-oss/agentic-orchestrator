@@ -884,7 +884,7 @@ func runImplementationLoop(cfg ImplementConfig, sm ports.SessionManager) (result
 
 			// A fix iteration that changed nothing and recorded no decision
 			// would only repeat the open findings: ask the user instead.
-			if gate.awaitingFix() && !gate.decided && !gate.changedSinceReview() {
+			if gate.awaitingFix() && !gate.decided() && !gate.changedSinceReview() {
 				findings := gate.openFindings(reviewerFeedback)
 				h := reviewHandoff{
 					Reason:    fmt.Sprintf("Fix iteration %d made no code changes, so another review round would repeat the same findings.", i),

@@ -40,6 +40,8 @@ If the plan references human decisions from the roadmap or prior Q&A, those are 
 
 Per-Task `**Repo:** <name>` tags are the **single source of truth** for which repos this phase touches.
 
+The harness reads a tag only in its exact form: one line holding `**Repo:** <name>` alone (the name may be in backticks), under the task heading. Any other form, such as `**Repo:** api, web` or `Repo: api`, reads as untagged.
+
 1. **Multi-repo features** (`len(Feature.Repos) > 1`): every `### Task N:` heading **must** be followed by a `**Repo:** <name>` tag naming one repo. A missing tag is a Critical finding.
 2. **Tag value must be in `Feature.Repos`**: a tag pointing to a repo that is not part of the feature is a Critical finding.
 3. **Single-repo features** (`len(Feature.Repos) == 1`) may omit tags entirely. If a single-repo plan uses tags, every task must be tagged consistently.

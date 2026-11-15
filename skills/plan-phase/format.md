@@ -12,7 +12,7 @@ Every phase emits one file in the plan directory:
 
 ## Per-Task Repo Tag
 
-For multi-repo features, every `### Task N:` heading is followed by a `**Repo:** <name>` line that names the single repo this task touches. Single-repo features may omit repo tags entirely; if they use tags, every task must be tagged consistently.
+For multi-repo features, every `### Task N:` heading is followed by a `**Repo:** <name>` line that names the single repo this task touches. Write the line exactly in that form, with nothing else on it; the harness reads any other form as untagged. Single-repo features may omit repo tags entirely; if they use tags, every task must be tagged consistently.
 
 ## Plan Metadata
 

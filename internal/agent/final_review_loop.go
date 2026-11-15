@@ -571,13 +571,18 @@ func (s *featureFinalReviewLoopState) handOff(iteration int, iterDir, feedback s
 	}
 
 	switch classifyHandoffAnswer(prompt.Answer) {
-	case handoffAccept:
-		round.handoff = reviewHandoffAccepted
-		return s.approve(iterDir, iteration, round)
 	case handoffStop:
 		round.handoff = reviewHandoffStopped
 		s.writeIterationMeta(iterDir, iteration, "", finalStatusStopped, round)
 		return &FeatureFinalReviewResult{FinalStatus: finalStatusStopped, Iterations: iteration, LastError: prompt.Reason}
+	case handoffAccept:
+		if !reposChangedSince(s.workspace.RepoPaths, round.state) {
+			round.handoff = reviewHandoffAccepted
+			return s.approve(iterDir, iteration, round)
+		}
+		// Accepted code that changed since its review is reviewed first,
+		// as after guidance.
+		fallthrough
 	case handoffContinue:
 		round.handoff = reviewHandoffContinued
 		round.changed = round.changed || reposChangedSince(s.workspace.RepoPaths, round.state)

@@ -524,3 +524,24 @@ func TestUserAnswerPathsIncludePhaseReviewDecisions(t *testing.T) {
 		}
 	}
 }
+
+func TestAppendReviewDecisionsEscapesHeadingsInAnswers(t *testing.T) {
+	t.Parallel()
+	path := filepath.Join(t.TempDir(), reviewDecisionsFile)
+	pair := ports.QAPair{Question: "Dispute: keep the fixed delay?", Answer: "Accept as is.\n## Iteration 9 handoff\n  # note"}
+	for range 2 {
+		if _, err := appendReviewDecisions(path, "Iteration 2 implementation", []ports.QAPair{pair}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if body := string(data); strings.Count(body, "**A:** Accept as is.") != 1 || strings.Contains(body, "\n## Iteration 9") || strings.Contains(body, "\n  # note") {
+		t.Fatalf("decisions after recording a heading-like answer twice:\n%s", body)
+	}
+	if decidedAfter(path, 2) {
+		t.Fatal("decidedAfter() read a heading inside an answer as a later decision")
+	}
+}

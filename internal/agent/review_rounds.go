@@ -280,7 +280,7 @@ func appendReviewDecisions(path, heading string, qa []ports.QAPair) (bool, error
 	}
 	added := false
 	for _, pair := range qa {
-		block := fmt.Sprintf("\n**Q:** %s\n\n**A:** %s\n", strings.TrimSpace(pair.Question), strings.TrimSpace(pair.Answer))
+		block := fmt.Sprintf("\n**Q:** %s\n\n**A:** %s\n", decisionText(pair.Question), decisionText(pair.Answer))
 		if !strings.Contains(section, block) {
 			section += block
 			added = true
@@ -299,6 +299,19 @@ func appendReviewDecisions(path, heading string, qa []ports.QAPair) (bool, error
 		return false, fmt.Errorf("writing review decisions: %w", err)
 	}
 	return true, nil
+}
+
+// decisionText escapes heading lines so recorded text never starts a
+// section of the decisions file.
+func decisionText(text string) string {
+	lines := strings.Split(strings.TrimSpace(text), "\n")
+	for i, line := range lines {
+		rest := strings.TrimLeft(line, " \t")
+		if strings.HasPrefix(rest, "#") {
+			lines[i] = line[:len(line)-len(rest)] + "\\" + rest
+		}
+	}
+	return strings.Join(lines, "\n")
 }
 
 var decisionHeadingPattern = regexp.MustCompile(`(?m)^## Iteration (\d+) `)
@@ -420,8 +433,8 @@ var handoffChoices = map[string]reviewHandoffChoice{
 	strings.ToLower(handoffStopLabel):        handoffStop,
 }
 
-// handoffLabelChoice matches an option label, its leading word, or a
-// shortened label.
+// handoffLabelChoice matches an option label exactly, or a prefix of at
+// least four characters that names only one choice.
 func handoffLabelChoice(label string) (reviewHandoffChoice, bool) {
 	if choice, ok := handoffChoices[label]; ok {
 		return choice, true
@@ -443,9 +456,11 @@ func handoffLabelChoice(label string) (reviewHandoffChoice, bool) {
 	return found, matched
 }
 
-// classifyHandoffAnswer maps the handoff answer to the way forward. An
-// answer that opens with an option takes it, whatever text follows; one
-// naming more than one option is not an answer; any other text is guidance.
+// classifyHandoffAnswer maps the handoff answer to the way forward. The
+// whole answer, or its first clause before one of ",;:." or " - ", must
+// match an option; "Stop for now" does not. An answer whose clauses name
+// more than one choice is not an answer; any other text is guidance, which
+// always leads to another review.
 func classifyHandoffAnswer(answer string) reviewHandoffChoice {
 	label := answerLabel(answer)
 	if label == "" {

@@ -14,7 +14,7 @@
 
 package agent
 
-import "path/filepath"
+import "github.com/doordash-oss/agentic-orchestrator/internal/feature"
 
 type boundedHelperSandboxProvider interface {
 	UsesBoundedHelperSandbox() bool
@@ -24,11 +24,11 @@ type boundedHelperSandboxProvider interface {
 // is read-only at the kernel layer while the helper's shell runs unrestricted —
 // a worktree write then fails as an ordinary shell error the model absorbs,
 // instead of a permission denial that aborts it. Returns the (possibly wrapped)
-// command, whether it was sandboxed, and a cleanup func (never nil).
+// command, whether it was sandboxed, and a cleanup func (never nil). stateDir
+// is the features state root.
 func maybeWrapHelperSandbox(command []string, enabled bool, stateDir string) ([]string, bool, func()) {
 	if !enabled || len(command) == 0 {
 		return command, false, func() {}
 	}
-	worktreesBase := filepath.Join(filepath.Dir(stateDir), "worktrees")
-	return wrapHelperSandbox(command, worktreesBase)
+	return wrapHelperSandbox(command, feature.WorktreesDir(stateDir))
 }

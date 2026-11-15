@@ -138,6 +138,7 @@ func RunPhaseImplementLoop(cfg OrchestratorConfig, sm ports.SessionManager) (*Ph
 		ResolveSessionConfig:       cfg.ResolveSessionConfig,
 		ArtifactDir:                artifactDir,
 		StateDir:                   stateDir,
+		StateRoot:                  cfg.StateDir,
 		RunDir:                     runDir,
 		AdditionalDirs:             additionalDirsExcludingStateDir(workspace, stateDir),
 		PhaseType:                  cfg.Feature.RoadmapPhaseType,

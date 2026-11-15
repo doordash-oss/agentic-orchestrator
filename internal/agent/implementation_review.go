@@ -304,7 +304,7 @@ func runImplementationReviewAxis(cfg ImplementConfig, sm ports.SessionManager, i
 	helper := &PhaseRunner{
 		SessionManager: sm,
 		FeatureStore:   cfg.FeatureStore,
-		StateDir:       cfg.StateDir,
+		StateDir:       cfg.stateRoot(),
 		SkillsDir:      cfg.SkillsDir,
 		GuidelinesDir:  cfg.GuidelinesDir,
 		Observer:       cfg.Observer,

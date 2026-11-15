@@ -55,6 +55,7 @@ type ImplementConfig struct {
 	ResolveSessionConfig func(llm.PhaseRole) (sessionRuntimeConfig, error)
 	ArtifactDir          string // base dir for iteration artifacts
 	StateDir             string // feature state directory for PID files
+	StateRoot            string // features state root; empty derives from StateDir
 	RunDir               string // active run directory granted to the agent; empty derives from Feature.ActiveRun
 
 	// AdditionalDirs are extra directories to pass as --add-dir flags to the
@@ -168,6 +169,15 @@ type ImplementConfig struct {
 	// routes into a fix round like a deterministic regression and counts
 	// toward the no-progress and iteration rails. Nil disables the gate.
 	PhaseExitGate PhaseExitGate
+}
+
+// stateRoot is the features state root helper sessions resolve shared
+// directories (worktrees, PID files) from; StateDir is <root>/<featureID>.
+func (cfg ImplementConfig) stateRoot() string {
+	if cfg.StateRoot != "" {
+		return cfg.StateRoot
+	}
+	return filepath.Dir(cfg.StateDir)
 }
 
 // PhaseExitGate reports mechanical phase-exit violations as fix-round

@@ -246,7 +246,6 @@ type LoopResult struct {
 func runImplementationLoop(cfg ImplementConfig, sm ports.SessionManager) (result *LoopResult, err error) {
 	am := newArtifactManager(cfg.ArtifactDir)
 	pt := newProgressTracker()
-	progressPath := filepath.Join(cfg.ArtifactDir, "progress.md")
 	summaryPath := filepath.Join(cfg.ArtifactDir, "summary.log")
 	aggregateLogPath := filepath.Join(cfg.ArtifactDir, "output.txt")
 
@@ -814,7 +813,7 @@ func runImplementationLoop(cfg ImplementConfig, sm ports.SessionManager) (result
 			// iteration starts fresh from the progress notes (no reviewer
 			// feedback — RETRY is not a rejection).
 			if committedRetry(iterDir) {
-				madeProgress = pt.observeRetryOutcome(retryProgressFingerprints(progressPath, cfg))
+				madeProgress = pt.observeRetryOutcome(worktreeStateFingerprint(context.Background(), cfg.CommandRunner, implementWorktreePaths(cfg)))
 				meta.ReviewStatus = "skipped_retry"
 				meta.AgentStatus = "RETRY"
 				meta.MadeProgress = madeProgress
@@ -1271,14 +1270,6 @@ func retryReviewFeedbackReminder(artifactDir string, reviewedIter int) string {
 func committedRetry(iterDir string) bool {
 	receipt, err := readCompletionReceipt(iterDir)
 	return err == nil && receipt.Status == llm.CompletionIntentRetry
-}
-
-// retryProgressFingerprints gathers the stall-evidence signals for a RETRY
-// iteration: a hash of the progress notes and of every feature worktree's
-// uncommitted state.
-func retryProgressFingerprints(progressPath string, cfg ImplementConfig) (string, string) {
-	narrativeFP, _ := fingerprint(progressPath)
-	return narrativeFP, worktreeStateFingerprint(context.Background(), cfg.CommandRunner, implementWorktreePaths(cfg))
 }
 
 func observeVerifiedImplementationOutcome(pt *progressTracker, blockers int, cfg ImplementConfig) bool {

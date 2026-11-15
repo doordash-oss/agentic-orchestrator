@@ -26,19 +26,6 @@ import (
 	"github.com/doordash-oss/agentic-orchestrator/internal/ports"
 )
 
-// fingerprint computes SHA256 of a file's contents.
-func fingerprint(path string) (string, error) {
-	data, err := os.ReadFile(path)
-	if err != nil {
-		if os.IsNotExist(err) {
-			return "", nil
-		}
-		return "", fmt.Errorf("reading file for fingerprint: %w", err)
-	}
-	h := sha256.Sum256(data)
-	return fmt.Sprintf("%x", h), nil
-}
-
 // progressTracker tracks consecutive no-progress iterations.
 type progressTracker struct {
 	noProgressCount int
@@ -47,10 +34,9 @@ type progressTracker struct {
 	// Verified stall-evidence state: the last worktree fingerprint seen by
 	// ObserveVerifiedOutcomeWithWorktree.
 	lastVerifiedWorktree string
-	// RETRY stall-evidence state: the last handoff-narrative and worktree
-	// fingerprints seen by ObserveRetryOutcome.
+	// RETRY stall-evidence state: the last worktree fingerprint seen by
+	// observeRetryOutcome.
 	hasRetryObservation bool
-	lastRetryNarrative  string
 	lastRetryWorktree   string
 }
 
@@ -104,20 +90,18 @@ func (pt *progressTracker) observeUnverifiedOutcome() bool {
 // A RETRY produces no review verdict, but absence of a verdict is not
 // evidence of a stall: a short-turn model legitimately splits one task
 // across many partial iterations. The iteration counts as no-progress only
-// when neither the handoff narrative nor the worktree state changed since
-// the previous RETRY observation. An empty fingerprint (unreadable
-// progress.md, git failure) is treated as unchanged so a broken signal
+// when the worktree state did not change since the previous RETRY
+// observation; rewritten progress notes alone are not progress. An empty
+// fingerprint (git failure) is treated as unchanged so a broken signal
 // cannot disarm the rail. A progressing RETRY does not reset the counter
 // accumulated by non-improving verified outcomes — it only declines to add
 // to it — so review churn without fewer blockers still trips the rail.
-func (pt *progressTracker) observeRetryOutcome(narrativeFP, worktreeFP string) bool {
+func (pt *progressTracker) observeRetryOutcome(worktreeFP string) bool {
 	first := !pt.hasRetryObservation
-	narrativeChanged := narrativeFP != "" && narrativeFP != pt.lastRetryNarrative
 	worktreeChanged := worktreeFP != "" && worktreeFP != pt.lastRetryWorktree
 	pt.hasRetryObservation = true
-	pt.lastRetryNarrative = narrativeFP
 	pt.lastRetryWorktree = worktreeFP
-	if first || narrativeChanged || worktreeChanged {
+	if first || worktreeChanged {
 		return true
 	}
 	pt.noProgressCount++

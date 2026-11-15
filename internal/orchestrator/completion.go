@@ -525,7 +525,7 @@ func (o *Orchestrator) onMultiRepoImplementDone(featureID string, result *agent.
 		// StatusInterrupted. We must NOT mark the feature Failed here.
 		return nil
 	case finalStatusStopped:
-		return o.parkStoppedAtHandoff(featureID, feature.PhaseImplement)
+		return o.parkStoppedAtHandoff(featureID, feature.PhaseImplement, result.LastError)
 	case "failed":
 		errMsg := result.LastError
 		if errMsg == "" {
@@ -999,7 +999,7 @@ func (o *Orchestrator) finishDeferredFinalReviewResult(featureID string, res *ag
 		o.emitPhaseCompleted(featureID, feature.PhaseFinalReview, nil)
 		return errFinalReviewInterrupted
 	case finalStatusStopped:
-		if err := o.parkStoppedAtHandoff(featureID, feature.PhaseFinalReview); err != nil {
+		if err := o.parkStoppedAtHandoff(featureID, feature.PhaseFinalReview, res.LastError); err != nil {
 			return err
 		}
 		return errFinalReviewInterrupted
@@ -1371,8 +1371,9 @@ func safeCompletionTruncate(s string, max int) string {
 }
 
 // parkStoppedAtHandoff parks a feature whose user chose to stop at a review
-// handoff the way a pause-stop does, so resuming re-enters the phase.
-func (o *Orchestrator) parkStoppedAtHandoff(featureID string, phase feature.Phase) error {
+// handoff, or whose handoff still waits for an answer, the way a pause-stop
+// does, so resuming re-enters the phase. reason says why and how to go on.
+func (o *Orchestrator) parkStoppedAtHandoff(featureID string, phase feature.Phase, reason string) error {
 	if err := o.deps.Manager.Transition(featureID, feature.StatusInterrupted); err != nil {
 		return fmt.Errorf("stop after %s review handoff: %w", phase, err)
 	}
@@ -1380,6 +1381,9 @@ func (o *Orchestrator) parkStoppedAtHandoff(featureID string, phase feature.Phas
 	if o.hooks.OnFeatureInterrupted != nil {
 		o.hooks.OnFeatureInterrupted(featureID)
 	}
-	o.emitEvent(ports.Event{Type: ports.FeatureInterrupted, FeatureID: featureID})
+	if reason != "" {
+		log.Printf("feature %s parked at the %s review handoff: %s", featureID, phase, reason)
+	}
+	o.emitEvent(ports.Event{Type: ports.FeatureInterrupted, FeatureID: featureID, Message: reason})
 	return nil
 }

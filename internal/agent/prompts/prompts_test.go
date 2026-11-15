@@ -245,6 +245,11 @@ type FinalFixHandoffInput struct {
 	StopLabel     string
 }
 
+type ImplementReviewUserInput struct {
+	Handoff       *FinalFixHandoffInput
+	DecisionsPath string
+}
+
 type ReviewRoundUserInput struct {
 	GateLabel         string
 	AcceptanceSource  string
@@ -715,6 +720,49 @@ func TestGoldenSnapshots(t *testing.T) {
 						AcceptLabel:   "Accept and proceed to Publish",
 						StopLabel:     "Stop",
 					},
+				})
+			},
+		},
+		{
+			name: "implement_review_user_handoff",
+			render: func() string {
+				return MustRender(TemplateImplementReviewUser, ImplementReviewUserInput{
+					DecisionsPath: "/state/feat-x/run-1/phase-02/implement/review-decisions.md",
+					Handoff: &FinalFixHandoffInput{
+						GateLabel:     "Phase 2 review",
+						AcceptOutcome: "the phase passes",
+						Reason:        "Fix iteration 3 made no code changes, so another review round would repeat the same findings.",
+						Question:      "Phase 2 review needs your decision. Fix iteration 3 made no code changes, so another review round would repeat the same findings.\n\nOpen findings:\n- Craft: **High**: retry loop has no backoff.\n\nDetails: /state/feat-x/run-1/phase-02/implement/iteration-03/handoff/handoff.md\n\nHow should Phase 2 review proceed?",
+						NotePath:      "/state/feat-x/run-1/phase-02/implement/iteration-03/handoff/handoff.md",
+						ContinueLabel: "Continue with guidance",
+						AcceptLabel:   "Accept and finish the phase",
+						StopLabel:     "Stop",
+					},
+				})
+			},
+		},
+		{
+			name: "implement_review_user_decisions",
+			render: func() string {
+				return MustRender(TemplateImplementReviewUser, ImplementReviewUserInput{
+					DecisionsPath: "/state/feat-x/run-1/phase-02/implement/review-decisions.md",
+				})
+			},
+		},
+		{
+			name: "review_round_user_per_phase_follow_up",
+			render: func() string {
+				return MustRender(TemplateReviewRoundUser, ReviewRoundUserInput{
+					GateLabel:         "Per-Phase Implementation Review",
+					AcceptanceSource:  "the acceptance criteria in the design and the phase plan",
+					Mode:              "follow_up",
+					LiveRun:           true,
+					Since:             2,
+					PriorFeedbackPath: "/state/feat-x/run-1/phase-02/implement/iteration-02/review/functionality-evidence/review-feedback.md",
+					Deltas:            []ReviewRoundDelta{{Repo: "api", Path: "/state/wt/api", Base: "1111111"}},
+					FixNotePaths:      []string{"/state/feat-x/run-1/phase-02/implement/iteration-03/fix-notes.md"},
+					RoadmapPath:       "/state/feat-x/run-1/roadmap/plan.md",
+					DecisionsPath:     "/state/feat-x/run-1/phase-02/implement/review-decisions.md",
 				})
 			},
 		},

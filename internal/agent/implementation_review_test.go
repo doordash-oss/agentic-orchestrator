@@ -438,7 +438,7 @@ func TestRunImplementationReviewAxesUsesLiveRunPostureForAcceptanceAndDesign(t *
 		BuildSession: buildSession,
 		Observer:     observerFromModule(t, false, "", "test"),
 	}
-	status, feedback, err := runImplementationReviewAxes(
+	status, feedback, _, err := runImplementationReviewAxes(
 		cfg,
 		sm,
 		1,
@@ -552,7 +552,7 @@ func TestRunImplementationReviewAxesEmitsEventsAndPersistsStatus(t *testing.T) {
 		BuildSession: mockBuildSession("", reviewScript),
 		Observer:     observerFromModule(t, true, observeDir, "test"),
 	}
-	status, feedback, err := runImplementationReviewAxes(
+	status, feedback, _, err := runImplementationReviewAxes(
 		cfg,
 		sm,
 		1,
@@ -680,7 +680,7 @@ func TestRunImplementationReviewAxesPerPhaseGateOmitsAcceptanceClause(t *testing
 		BuildSession: buildSession,
 		Observer:     observerFromModule(t, false, "", "test"),
 	}
-	status, feedback, err := runImplementationReviewAxes(
+	status, feedback, _, err := runImplementationReviewAxes(
 		cfg,
 		sm,
 		1,

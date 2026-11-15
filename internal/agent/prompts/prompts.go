@@ -62,6 +62,7 @@ const (
 	TemplateResearchFromQuestionsUser    templateKey = "research_from_questions.user"
 	templateReviewUser                   templateKey = "review.user"
 	TemplateReviewRoundUser              templateKey = "review_round.user"
+	TemplateImplementReviewUser          templateKey = "implement_review.user"
 	TemplateRoadmapUser                  templateKey = "roadmap.user"
 	TemplateRoadmapRevisionUser          templateKey = "roadmap_revision.user"
 	templateScoutUser                    templateKey = "scout.user"

@@ -1,0 +1,30 @@
+## Handoff to the User
+
+Phase 2 review stopped its automatic loop: Fix iteration 3 made no code changes, so another review round would repeat the same findings.
+
+Before any other work, ask the user exactly one question with the ask-user tool described under Asking Questions. Use this question text verbatim:
+
+> Phase 2 review needs your decision. Fix iteration 3 made no code changes, so another review round would repeat the same findings.
+> 
+> Open findings:
+> - Craft: **High**: retry loop has no backoff.
+> 
+> Details: /state/feat-x/run-1/phase-02/implement/iteration-03/handoff/handoff.md
+> 
+> How should Phase 2 review proceed?
+
+Offer exactly these options, with these labels:
+- "Continue with guidance": the user types guidance as the answer; you apply it and Phase 2 review continues.
+- "Accept and finish the phase": the open findings are accepted as they are and the phase passes.
+- "Stop": Phase 2 review stops; the user resumes or rewinds the feature later.
+
+If the answer is "Accept and finish the phase" or "Stop", make no changes and finish. Any other answer is the user's guidance: apply it as this round's fix, using the open findings as reviewer feedback where the guidance leaves something open, then finish. The harness records the answer in the decisions file.
+
+Open findings and the previous fixer's note: /state/feat-x/run-1/phase-02/implement/iteration-03/handoff/handoff.md
+
+## Approved Review Decisions
+
+The user's review decisions for this phase: /state/feat-x/run-1/phase-02/implement/review-decisions.md
+
+They override the phase plan's acceptance criteria and earlier reviewer findings where they conflict. Follow them, and leave a finding accepted as is alone.
+

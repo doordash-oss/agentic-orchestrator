@@ -16,6 +16,7 @@ package agent
 
 import (
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -285,6 +286,31 @@ func TestImplementLoopPhaseReview_ResumeAfterGuidanceKeepsReviewTruthful(t *test
 			t.Fatalf("the rerun session's changes passed on a cached Craft verdict; reviewed %v", resumed.reviewed())
 		}
 	})
+}
+
+// A reviewer that writes into a worktree is caught and its write undone.
+func TestImplementLoopPhaseReview_ReadOnlyRepoGuard(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping loop test in short mode")
+	}
+	env := newPhaseGateEnv(t, "feat-phase-readonly", feature.PipelineMoonshot)
+	env.f.Repos[0].WorktreePath = env.repo
+	if err := env.store.Save(env.f); err != nil {
+		t.Fatal(err)
+	}
+	stray := filepath.Join(env.repo, "reviewer-wrote.txt")
+	env.reviewBody = `case "$_key" in iteration-01/craft) echo stray > "` + stray + `" ;; esac`
+	runPhaseGate(t, env, 5, nil, nil, nil)
+	out, err := exec.Command("git", "-C", env.repo, "log", "--all", "--name-only", "--format=").CombinedOutput()
+	if err != nil {
+		t.Fatalf("git log: %v\n%s", err, out)
+	}
+	if strings.Contains(string(out), "reviewer-wrote.txt") {
+		t.Fatal("a reviewer's worktree write was committed")
+	}
+	if _, err := os.Stat(stray); !os.IsNotExist(err) {
+		t.Fatalf("stray reviewer write stat = %v, want restored", err)
+	}
 }
 
 // Decisions from a phase's review reach Final Review.

@@ -393,12 +393,15 @@ func TestRunImplementationReviewAxesUsesLiveRunPostureForAcceptanceAndDesign(t *
 	stateDir := filepath.Join(tmpDir, "state")
 	scriptsDir := filepath.Join(tmpDir, "scripts")
 	npmCache := filepath.Join(tmpDir, "home", ".npm")
-	for _, dir := range []string{workDir, iterDir, scriptsDir, npmCache} {
+	// A toolchain cache inside the worktree must stay unwritable.
+	modCache := filepath.Join(workDir, ".modcache")
+	for _, dir := range []string{workDir, iterDir, scriptsDir, npmCache, modCache} {
 		if err := os.MkdirAll(dir, 0o755); err != nil {
 			t.Fatalf("mkdir %s: %v", dir, err)
 		}
 	}
 	t.Setenv("HOME", filepath.Dir(npmCache))
+	t.Setenv("GOMODCACHE", modCache)
 
 	progressPath := filepath.Join(artifactDir, "progress.md")
 	if err := os.WriteFile(progressPath, []byte("# Iteration Progress\n\n## Iteration State\n\nSUCCESS\n"), 0o644); err != nil {
@@ -494,6 +497,11 @@ func TestRunImplementationReviewAxesUsesLiveRunPostureForAcceptanceAndDesign(t *
 		}
 		if sliceContains(opts.WritableRoots, filepath.Join(axisDir, "build-cache")) {
 			t.Fatalf("%s WritableRoots include a throwaway build cache: %#v", axis, opts.WritableRoots)
+		}
+		for _, root := range opts.WritableRoots {
+			if pathWithin(workDir, root) || pathWithin(root, workDir) {
+				t.Fatalf("%s WritableRoots include %q, which overlaps the worktree %q", axis, root, workDir)
+			}
 		}
 		requirePermissionDecision(t, opts.PermHandler, "Bash", `{"command":"npm install && npm run build > out.log"}`, "allow")
 		requirePermissionDecision(t, opts.PermHandler, "Write", `{"file_path":"`+filepath.Join(axisDir, "evidence", "home.png")+`"}`, "allow")

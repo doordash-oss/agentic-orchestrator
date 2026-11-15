@@ -534,14 +534,24 @@ func TestProviderReconcileAgenticAgents_RemovesRetiredGeneratedAgents(t *testing
 	if err := os.MkdirAll(agentsDir, 0o755); err != nil {
 		t.Fatalf("MkdirAll(%s): %v", agentsDir, err)
 	}
-	generated := filepath.Join(agentsDir, "verification-researcher.toml")
-	if err := os.WriteFile(generated, []byte(agentTOMLContent("verification-researcher", agentdef.AgentDef{Description: "d", Prompt: "p"})), 0o644); err != nil {
+	released, err := os.ReadFile(filepath.Join("testdata", "retired-agents", "verification-researcher.toml"))
+	if err != nil {
 		t.Fatal(err)
 	}
-	userAuthored := filepath.Join(agentsDir, "conventions-researcher.toml")
-	userContent := "# mine\nname = \"conventions-researcher\"\n"
-	if err := os.WriteFile(userAuthored, []byte(userContent), 0o644); err != nil {
+	generated := filepath.Join(agentsDir, "verification-researcher.toml")
+	if err := os.WriteFile(generated, released, 0o644); err != nil {
 		t.Fatal(err)
+	}
+	userFiles := map[string]string{
+		"conventions-researcher.toml": "# mine\nname = \"conventions-researcher\"\n",
+		// Same header a generated file starts with, as a user re-creating
+		// the agent after the upgrade would write.
+		"api-surface-researcher.toml": agentTOMLContent("api-surface-researcher", agentdef.AgentDef{Description: "mine", Prompt: "my prompt"}),
+	}
+	for name, content := range userFiles {
+		if err := os.WriteFile(filepath.Join(agentsDir, name), []byte(content), 0o644); err != nil {
+			t.Fatal(err)
+		}
 	}
 
 	if err := p.reconcileAgenticAgents(codexHome); err != nil {
@@ -551,8 +561,10 @@ func TestProviderReconcileAgenticAgents_RemovesRetiredGeneratedAgents(t *testing
 	if _, err := os.Stat(generated); !os.IsNotExist(err) {
 		t.Fatalf("retired generated agent should be removed, stat err = %v", err)
 	}
-	if data, err := os.ReadFile(userAuthored); err != nil || string(data) != userContent {
-		t.Fatalf("user-authored agent changed: data=%q err=%v", data, err)
+	for name, content := range userFiles {
+		if data, err := os.ReadFile(filepath.Join(agentsDir, name)); err != nil || string(data) != content {
+			t.Fatalf("user-authored agent %s changed: data=%q err=%v", name, data, err)
+		}
 	}
 }
 

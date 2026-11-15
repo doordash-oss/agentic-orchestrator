@@ -17,11 +17,14 @@ package codex
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"io/fs"
 	"os"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strings"
 
@@ -426,20 +429,36 @@ func (p *Provider) reconcileAgenticAgents(codexHome string) error {
 	return removeRetiredAgentTOMLs(agentsDir, defs)
 }
 
-// retiredAgents names agents earlier binaries wrote and this binary no longer
-// ships.
-var retiredAgents = []string{
-	"api-surface-researcher",
-	"architecture-researcher",
-	"conventions-researcher",
-	"dependencies-researcher",
-	"verification-researcher",
+// retiredAgents maps each agent earlier binaries wrote and this binary no
+// longer ships to the SHA-256 of every TOML a release generated for it.
+var retiredAgents = map[string][]string{
+	"api-surface-researcher": {
+		"709c159a889fdf8bba7af3a4b71162c3768fadc38dadacfcd256951371bd0c8e",
+		"733eeb829532511d48678188bc7cb55dfe3a2e77d36f1a385c305baddb7ba132",
+	},
+	"architecture-researcher": {
+		"89d850eea2ffd2c42b71eb218e06107dda8462cba78005496ecfe1b2d2137918",
+		"38d4684aad75251785dd886f3a244b0df5b737d0972782fc2f0748872d299e72",
+	},
+	"conventions-researcher": {
+		"d516d273df559a62aec54e41d4e5a7adc0e457ff6c5b6c1f0eef5bd1f550a5e7",
+		"247b509c08b9c63e663b8ac6cf4b23811c88707ddab016e12da6c810e7a25e40",
+	},
+	"dependencies-researcher": {
+		"3d2ee587048a24b40bf0eee217cebcd2ed2baa86354fdf6014aaf444028b6e19",
+		"0a5ecba2cb5f7b87c7c439f948f00a28662a28e860b013ceae77f4063df20efb",
+	},
+	"verification-researcher": {
+		"63ac58f08db867b108f57c75cda078c939f30ba3480812f25a5c9cf4a62ccc09",
+		"7809d77e5517b07603dec8e0b6c07f4f356b5de07bca5827e3e3f582f3adcb38",
+	},
 }
 
-// removeRetiredAgentTOMLs deletes a retired agent's TOML only when it still
-// carries the header Agentico generated, so user-authored files survive.
+// removeRetiredAgentTOMLs deletes a retired agent's TOML only when it is
+// byte-identical to one a release generated. Any other file at that path,
+// including one the user writes later, is left alone.
 func removeRetiredAgentTOMLs(agentsDir string, defs map[string]agentdef.AgentDef) error {
-	for _, name := range retiredAgents {
+	for name, generatedSums := range retiredAgents {
 		if _, shipped := defs[name]; shipped {
 			continue
 		}
@@ -451,7 +470,8 @@ func removeRetiredAgentTOMLs(agentsDir string, defs map[string]agentdef.AgentDef
 		if err != nil {
 			return fmt.Errorf("reading retired agent TOML %s: %w", name, err)
 		}
-		if !strings.HasPrefix(string(content), fmt.Sprintf("name = %q\n", name)) {
+		sum := sha256.Sum256(content)
+		if !slices.Contains(generatedSums, hex.EncodeToString(sum[:])) {
 			continue
 		}
 		if err := os.Remove(path); err != nil && !errors.Is(err, fs.ErrNotExist) {

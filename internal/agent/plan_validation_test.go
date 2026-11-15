@@ -3176,7 +3176,6 @@ func TestPhasePlanStructureViolations(t *testing.T) {
 		{name: "valid", plan: strings.Replace(validPhasePlanText(), "#### What to build", "**Repo:** api\n\n#### What to build", 1)},
 		{name: "malformed repo tag", plan: strings.Replace(validPhasePlanText(), "#### What to build", "**Repo:** api, web\n\n#### What to build", 1), want: []string{"Task 1: Build the slice: task missing required '**Repo:** <name>' tag"}},
 		{name: "foreign repo", plan: strings.Replace(validPhasePlanText(), "#### What to build", "**Repo:** cli\n\n#### What to build", 1), want: []string{`task tagged repo "cli" is not in Feature.Repos`}},
-		{name: "missing frontend", plan: strings.Replace(strings.Replace(validPhasePlanText(), "**Frontend:** false\n", "", 1), "#### What to build", "**Repo:** api\n\n#### What to build", 1), want: []string{"**Frontend:** true"}},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -3189,6 +3188,10 @@ func TestPhasePlanStructureViolations(t *testing.T) {
 				t.Fatal(err)
 			}
 			got := phasePlanStructureViolations(multiRepo, attemptDir)
+			singleRepo := &feature.Feature{Repos: []feature.FeatureRepo{{Name: "api"}}}
+			if got := phasePlanStructureViolations(singleRepo, attemptDir); len(got) != 0 {
+				t.Fatalf("single-repo violations = %+v, want none", got)
+			}
 			if len(got) != len(tt.want) {
 				t.Fatalf("violations = %+v, want %d", got, len(tt.want))
 			}

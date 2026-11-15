@@ -2070,9 +2070,13 @@ func setValidatingPlan(cfg planLoopConfig, validating bool) {
 	})
 }
 
-// phasePlanStructureViolations reports problems in the plan structure the
-// harness reads: the Task repo tags and the Frontend metadata field.
+// phasePlanStructureViolations reports Task repo tags the harness cannot
+// resolve. Only multi-repo plans are checked: a single-repo phase is scoped
+// to its one repo whatever the plan says.
 func phasePlanStructureViolations(f *feature.Feature, attemptDir string) []ProtocolViolation {
+	if f == nil || len(f.Repos) < 2 {
+		return nil
+	}
 	path := resolvePlanMarkdownRoleArtifact("phase-plan.md")(roleRuntime{IterationDir: attemptDir}, roleArtifactSpec{})
 	data, err := os.ReadFile(path)
 	if err != nil {
@@ -2085,9 +2089,6 @@ func phasePlanStructureViolations(f *feature.Feature, attemptDir string) []Proto
 			reason = issue.Task + ": " + reason
 		}
 		violations = append(violations, ProtocolViolation{Artifact: "phase plan markdown", Reason: reason})
-	}
-	if !planDeclaresFrontend(string(data)) {
-		violations = append(violations, ProtocolViolation{Artifact: "phase plan markdown", Reason: "`## Metadata` must set `**Frontend:** true` or `**Frontend:** false`"})
 	}
 	return violations
 }

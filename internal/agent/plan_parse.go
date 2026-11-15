@@ -181,18 +181,6 @@ func detectFenceMarker(ln string) (byte, int) {
 // parsePhasePlanFrontend reads the plan-level frontend metadata flag.
 // Missing legacy metadata, a missing field, or an unrecognized value all
 // resolve to false for backward compatibility with already-authored plans.
-// planDeclaresFrontend reports whether the plan's `## Metadata` section sets
-// the Frontend field to true or false.
-func planDeclaresFrontend(planMarkdown string) bool {
-	for _, line := range strings.Split(extractMarkdownSection(planMarkdown, "## Metadata"), "\n") {
-		if m := frontendMetadataRE.FindStringSubmatch(strings.TrimSpace(line)); m != nil {
-			v := strings.ToLower(m[1])
-			return v == "true" || v == "false"
-		}
-	}
-	return false
-}
-
 func parsePhasePlanFrontend(planMarkdown string) bool {
 	metadata := extractMarkdownSection(planMarkdown, "## Metadata")
 	if metadata == "" {

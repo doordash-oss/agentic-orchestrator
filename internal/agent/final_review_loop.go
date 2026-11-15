@@ -456,15 +456,11 @@ func (s *featureFinalReviewLoopState) approve(iterDir string, iteration int, rou
 func (s *featureFinalReviewLoopState) handOff(iteration int, iterDir string, h reviewHandoff, round finalReviewRound, fixNumber int) *FeatureFinalReviewResult {
 	cfg := s.cfg
 	handoffDir := filepath.Join(iterDir, handoffDirName)
-	if err := os.MkdirAll(handoffDir, 0o755); err != nil {
-		return &FeatureFinalReviewResult{FinalStatus: "failed", Iterations: iteration, LastError: fmt.Sprintf("creating final review handoff directory: %v", err)}
-	}
-	notePath := filepath.Join(handoffDir, "handoff.md")
-	if err := writeHandoffNote(notePath, iteration, h); err != nil {
+	prompt, err := prepareHandoff(handoffDir, iteration, h, implementationReviewGateLabel(implementationReviewGateFinal), handoffAcceptLabel, "the feature moves on to Publish")
+	if err != nil {
 		return &FeatureFinalReviewResult{FinalStatus: "failed", Iterations: iteration, LastError: err.Error()}
 	}
 
-	gateLabel := implementationReviewGateLabel(implementationReviewGateFinal)
 	before := repoHeads(s.workspace.RepoPaths)
 	s.setReviewFixing(true)
 	fix := s.runFix(finalFixRun{
@@ -473,14 +469,7 @@ func (s *featureFinalReviewLoopState) handOff(iteration int, iterDir string, h r
 		Role:         handoffDirName,
 		Feedback:     h.Findings,
 		FeedbackPath: filepath.Join(iterDir, "review-feedback.md"),
-		Handoff: &finalFixHandoffInput{
-			Reason:        h.Reason,
-			Question:      handoffQuestion(gateLabel, h, notePath),
-			NotePath:      notePath,
-			ContinueLabel: handoffContinueLabel,
-			AcceptLabel:   handoffAcceptLabel,
-			StopLabel:     handoffStopLabel,
-		},
+		Handoff:      prompt,
 	})
 	if err := s.commitFixRound(iteration, fixNumber); err != nil {
 		return &FeatureFinalReviewResult{FinalStatus: "failed", Iterations: iteration, LastError: err.Error()}
@@ -510,7 +499,7 @@ func (s *featureFinalReviewLoopState) handOff(iteration int, iterDir string, h r
 		return &FeatureFinalReviewResult{
 			FinalStatus: "safety_rail",
 			Iterations:  iteration,
-			LastError:   fmt.Sprintf("final review needs a human decision, but the handoff question went unanswered: %s See %s.", h.Reason, notePath),
+			LastError:   fmt.Sprintf("final review needs a human decision, but the handoff question went unanswered: %s See %s.", h.Reason, prompt.NotePath),
 		}
 	}
 }
@@ -824,12 +813,13 @@ func (s *featureFinalReviewLoopState) runFinalReviewAxis(ctx context.Context, it
 // findings or approval plus the fix delta since then.
 func (s *featureFinalReviewLoopState) reviewRoundInput(iteration int, run reviewAxisRun) reviewRoundUserInput {
 	in := reviewRoundUserInput{
-		GateLabel:       implementationReviewGateLabel(implementationReviewGateFinal),
-		Mode:            run.Mode,
-		LiveRun:         run.Axis.ExecutionPosture == reviewPostureLiveRun,
-		RoadmapPath:     finalReviewArtifactPath(s.stateDir, s.cfg.Feature, "roadmap"),
-		UserAnswerPaths: userAnswerPaths(filepath.Dir(s.artifactDir)),
-		DecisionsPath:   existingPath(s.decisionsPath()),
+		GateLabel:        implementationReviewGateLabel(implementationReviewGateFinal),
+		AcceptanceSource: "the design's acceptance criteria",
+		Mode:             run.Mode,
+		LiveRun:          run.Axis.ExecutionPosture == reviewPostureLiveRun,
+		RoadmapPath:      finalReviewArtifactPath(s.stateDir, s.cfg.Feature, "roadmap"),
+		UserAnswerPaths:  userAnswerPaths(filepath.Dir(s.artifactDir)),
+		DecisionsPath:    existingPath(s.decisionsPath()),
 	}
 	if run.Mode == reviewRoundFull {
 		return in
@@ -885,7 +875,7 @@ type finalFixRun struct {
 	Role         string
 	Feedback     string
 	FeedbackPath string
-	Handoff      *finalFixHandoffInput
+	Handoff      *reviewHandoffPromptInput
 }
 
 type finalFixResult struct {

@@ -43,7 +43,7 @@ type finalFixPromptOpts struct {
 	RoadmapPath     string
 	UserAnswerPaths []string
 	DecisionsPath   string
-	Handoff         *finalFixHandoffInput
+	Handoff         *reviewHandoffPromptInput
 }
 
 // buildFinalFixPrompt constructs the prompt for the fix agent session.

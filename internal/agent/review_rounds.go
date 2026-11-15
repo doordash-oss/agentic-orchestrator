@@ -263,9 +263,10 @@ func sessionClosingNote(sess ports.SessionView) string {
 }
 
 const (
-	handoffContinueLabel = "Continue with guidance"
-	handoffAcceptLabel   = "Accept and proceed to Publish"
-	handoffStopLabel     = "Stop"
+	handoffContinueLabel    = "Continue with guidance"
+	handoffAcceptLabel      = "Accept and proceed to Publish"
+	phaseHandoffAcceptLabel = "Accept and finish the phase"
+	handoffStopLabel        = "Stop"
 )
 
 // Handoff outcomes persisted in iteration metas.
@@ -292,7 +293,7 @@ func classifyHandoffAnswer(qa []ports.QAPair) reviewHandoffChoice {
 	}
 	for _, pair := range qa {
 		switch answerLabel(pair.Answer) {
-		case strings.ToLower(handoffAcceptLabel):
+		case strings.ToLower(handoffAcceptLabel), strings.ToLower(phaseHandoffAcceptLabel):
 			return handoffAccept
 		case strings.ToLower(handoffStopLabel):
 			return handoffStop
@@ -328,6 +329,40 @@ func writeHandoffNote(path string, iteration int, h reviewHandoff) error {
 		return fmt.Errorf("writing review handoff note: %w", err)
 	}
 	return nil
+}
+
+// reviewHandoffPromptInput is the data for the review_handoff partial.
+type reviewHandoffPromptInput struct {
+	GateLabel     string
+	AcceptOutcome string
+	Reason        string
+	Question      string
+	NotePath      string
+	ContinueLabel string
+	AcceptLabel   string
+	StopLabel     string
+}
+
+// prepareHandoff writes the handoff note under dir and returns the prompt
+// that has the session ask the user.
+func prepareHandoff(dir string, iteration int, h reviewHandoff, gateLabel, acceptLabel, acceptOutcome string) (*reviewHandoffPromptInput, error) {
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return nil, fmt.Errorf("creating review handoff directory: %w", err)
+	}
+	notePath := filepath.Join(dir, "handoff.md")
+	if err := writeHandoffNote(notePath, iteration, h); err != nil {
+		return nil, err
+	}
+	return &reviewHandoffPromptInput{
+		GateLabel:     gateLabel,
+		AcceptOutcome: acceptOutcome,
+		Reason:        h.Reason,
+		Question:      handoffQuestion(gateLabel, h, notePath),
+		NotePath:      notePath,
+		ContinueLabel: handoffContinueLabel,
+		AcceptLabel:   acceptLabel,
+		StopLabel:     handoffStopLabel,
+	}, nil
 }
 
 const (
@@ -400,6 +435,7 @@ func truncateText(s string, limit int) string {
 // reviewRoundUserInput is the data passed to review_round.user.tmpl.
 type reviewRoundUserInput struct {
 	GateLabel         string
+	AcceptanceSource  string
 	Mode              reviewRoundMode
 	LiveRun           bool
 	Since             int

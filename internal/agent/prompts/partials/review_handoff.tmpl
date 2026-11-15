@@ -1,0 +1,23 @@
+{{- /*
+  review_handoff: turns a fix or implement session into a review loop's
+  handoff, which first asks the user how the loop should proceed.
+*/ -}}
+{{- define "review_handoff" -}}
+## Handoff to the User
+
+{{ .GateLabel }} stopped its automatic loop: {{ .Reason }}
+
+Before any other work, ask the user exactly one question with the ask-user tool described under Asking Questions. Use this question text verbatim:
+
+> {{ blockquote .Question }}
+
+Offer exactly these options, with these labels:
+- "{{ .ContinueLabel }}": the user types guidance as the answer; you apply it and {{ .GateLabel }} continues.
+- "{{ .AcceptLabel }}": the open findings are accepted as they are and {{ .AcceptOutcome }}.
+- "{{ .StopLabel }}": {{ .GateLabel }} stops; the user resumes or rewinds the feature later.
+
+If the answer is "{{ .AcceptLabel }}" or "{{ .StopLabel }}", make no changes and finish. Any other answer is the user's guidance: apply it as this round's fix, using the open findings as reviewer feedback where the guidance leaves something open, then finish. The harness records the answer in the decisions file.
+
+Open findings and the previous fixer's note: {{ .NotePath }}
+
+{{ end -}}

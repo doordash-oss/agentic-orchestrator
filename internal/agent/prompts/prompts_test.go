@@ -235,6 +235,8 @@ type FinalFixUserInput struct {
 }
 
 type FinalFixHandoffInput struct {
+	GateLabel     string
+	AcceptOutcome string
 	Reason        string
 	Question      string
 	NotePath      string
@@ -245,6 +247,7 @@ type FinalFixHandoffInput struct {
 
 type ReviewRoundUserInput struct {
 	GateLabel         string
+	AcceptanceSource  string
 	Mode              string
 	LiveRun           bool
 	Since             int
@@ -648,10 +651,11 @@ func TestGoldenSnapshots(t *testing.T) {
 			name: "review_round_user_full",
 			render: func() string {
 				return MustRender(TemplateReviewRoundUser, ReviewRoundUserInput{
-					GateLabel:       "Final Review",
-					Mode:            "full",
-					RoadmapPath:     "/state/feat-x/run-1/roadmap/plan.md",
-					UserAnswerPaths: []string{"/state/feat-x/run-1/design/qa-answers.md"},
+					GateLabel:        "Final Review",
+					AcceptanceSource: "the design's acceptance criteria",
+					Mode:             "full",
+					RoadmapPath:      "/state/feat-x/run-1/roadmap/plan.md",
+					UserAnswerPaths:  []string{"/state/feat-x/run-1/design/qa-answers.md"},
 				})
 			},
 		},
@@ -660,6 +664,7 @@ func TestGoldenSnapshots(t *testing.T) {
 			render: func() string {
 				return MustRender(TemplateReviewRoundUser, ReviewRoundUserInput{
 					GateLabel:         "Final Review",
+					AcceptanceSource:  "the design's acceptance criteria",
 					Mode:              "follow_up",
 					Since:             2,
 					PriorFeedbackPath: "/state/feat-x/run-1/review/iteration-02/craft/review-feedback.md",
@@ -679,6 +684,7 @@ func TestGoldenSnapshots(t *testing.T) {
 			render: func() string {
 				return MustRender(TemplateReviewRoundUser, ReviewRoundUserInput{
 					GateLabel:         "Final Review",
+					AcceptanceSource:  "the design's acceptance criteria",
 					Mode:              "confirm",
 					LiveRun:           true,
 					Since:             1,
@@ -700,6 +706,8 @@ func TestGoldenSnapshots(t *testing.T) {
 					UserAnswerPaths:  []string{"/state/feat-x/run-1/design/qa-answers.md"},
 					DecisionsPath:    "/state/feat-x/run-1/review/review-decisions.md",
 					Handoff: &FinalFixHandoffInput{
+						GateLabel:     "Final Review",
+						AcceptOutcome: "the feature moves on to Publish",
 						Reason:        "The QA axis requested changes in 3 consecutive rounds.",
 						Question:      "Final Review needs your decision. The QA axis requested changes in 3 consecutive rounds.\n\nOpen findings:\n- QA: **High**: export button stays disabled.\n\nDetails: /state/feat-x/run-1/review/iteration-03/handoff/handoff.md\n\nHow should Final Review proceed?",
 						NotePath:      "/state/feat-x/run-1/review/iteration-03/handoff/handoff.md",

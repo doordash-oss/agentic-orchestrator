@@ -66,6 +66,8 @@ You are tasked with conducting comprehensive research across the codebase to ans
    - Remind agents they are documenting, not evaluating or improving
    - **Text-only output**: every sub-agent prompt MUST instruct the agent to return its findings as its text response and to NOT write or edit any file — sub-agents have no output artifact of their own. You are the sole writer; only you create the research document (step 5).
 
+   **Conventions and verification (always, even when no question asks):** for each area you investigate, document the conventions it follows and how changes there are verified (tests, builds, linters, CI). Each repository's own instruction files (such as `AGENTS.md` or `CLAUDE.md`, at its root and in the directories involved) are the first source for both.
+
 4. **Wait for all sub-agents to complete and synthesize findings:**
    - IMPORTANT: Wait for ALL sub-agent tasks to complete before proceeding
    - Compile all sub-agent results
@@ -114,6 +116,9 @@ You are tasked with conducting comprehensive research across the codebase to ans
 
      ## Architecture Documentation
      [Current patterns, conventions, and design implementations found in the codebase]
+
+     ## Conventions and Verification
+     [Per investigated area: the conventions it follows and the exact commands or checks that verify changes there]
 
      ## Open Questions
      [Any areas that need further investigation]

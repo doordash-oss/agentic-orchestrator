@@ -282,11 +282,8 @@ func runImplementationLoop(cfg ImplementConfig, sm ports.SessionManager) (result
 	// would have advanced past it), the implement phase finished before the
 	// prior run was interrupted — likely during the review gate. Skip the
 	// implement session and jump straight to the review for that iteration.
-	skipImplement := false
-	if nextIter := startIter + 1; nextIter <= cfg.MaxIterations {
-		nextIterDir := filepath.Join(cfg.ArtifactDir, fmt.Sprintf("iteration-%02d", nextIter))
-		skipImplement = hasCommittedPhaseOutcome(nextIterDir, feature.PhaseImplement, roleImplementer)
-	}
+	nextIterDir := filepath.Join(cfg.ArtifactDir, fmt.Sprintf("iteration-%02d", startIter+1))
+	skipImplement := hasCommittedPhaseOutcome(nextIterDir, feature.PhaseImplement, roleImplementer)
 
 	if startIter > 0 {
 		// Recover consecutiveFailures: count trailing iterations that
@@ -342,15 +339,19 @@ func runImplementationLoop(cfg ImplementConfig, sm ports.SessionManager) (result
 	// user when it stops converging; its state is replayed from the metas. A
 	// pending handoff is asked again by a fresh session.
 	var gate *phaseReviewGate
+	// MaxIterations caps the fixes, never a round the review owes: the
+	// review of a finished iteration, the round after a stop, and a pending
+	// handoff run past it.
+	owedRound := false
 	if !cfg.SkipIterationReview {
 		gate = newPhaseReviewGate(cfg, am, startIter)
 		if gate.pending != nil {
 			skipImplement = false
 		}
+		owedRound = skipImplement || gate.stoppedAt == startIter && startIter > 0
 	}
 
-	// A pending review handoff is asked even past MaxIterations.
-	for i := startIter + 1; i <= cfg.MaxIterations || (gate != nil && gate.pending != nil); i++ {
+	for i := startIter + 1; i <= cfg.MaxIterations || gate.owes(i == startIter+1 && owedRound); i++ {
 		iterStart := time.Now()
 		iterCtx := phaseCtx.Child()
 		cfg.Observer.IterationStarted(iterCtx, i)

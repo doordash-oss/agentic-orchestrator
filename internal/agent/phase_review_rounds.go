@@ -44,6 +44,8 @@ type phaseReviewGate struct {
 	lastState  repoState
 	pending    *reviewHandoffPromptInput
 	pendingDir string
+	// stoppedAt is the iteration the user last stopped the phase at.
+	stoppedAt int
 }
 
 func newPhaseReviewGate(cfg ImplementConfig, am *artifactManager, upTo int) *phaseReviewGate {
@@ -64,6 +66,9 @@ func newPhaseReviewGate(cfg ImplementConfig, am *artifactManager, upTo int) *pha
 		case reviewHandoffContinued, reviewHandoffStopped:
 			askedAt = 0
 			g.history.resetStreaks()
+		}
+		if meta.Handoff == reviewHandoffStopped {
+			g.stoppedAt = meta.Iteration
 		}
 		if len(meta.AxisVerdicts) > 0 {
 			g.recordReview(meta.Iteration, meta.AxisVerdicts, metaRepoState(meta), meta.CodeChanged)
@@ -325,6 +330,11 @@ func (g *phaseReviewGate) implementContext() string {
 type implementReviewUserInput struct {
 	Handoff       *reviewHandoffPromptInput
 	DecisionsPath string
+}
+
+// owes reports whether the loop must run another iteration past the cap.
+func (g *phaseReviewGate) owes(resumeOwed bool) bool {
+	return g != nil && (g.pending != nil || resumeOwed)
 }
 
 func gatePending(g *phaseReviewGate) *reviewHandoffPromptInput {

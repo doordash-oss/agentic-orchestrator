@@ -545,10 +545,10 @@ describe('App partial-readiness setup command', () => {
 describe('App per-server attention drafts', () => {
   const helpItem: AttentionItem = {
     kind: 'help',
-    id: 'feature-1:kb1234567890abcdef',
+    id: 'feature-1:rs1234567890abcdef',
     featureId: 'abcd1234ef567890',
-    sessionId: 'kb1234567890abcdef',
-    phase: 'Knowledge Base',
+    sessionId: 'rs1234567890abcdef',
+    phase: 'Research',
     waitingSince: '2026-07-15T10:00:00.000Z',
     prompt: 'Where should the config live?',
     waitingKind: 'question',

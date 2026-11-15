@@ -147,7 +147,6 @@ const STATUS_LANE_MATRIX: Array<[string, Lane]> = [
   ['Failed', 'at-rest'],
   ['Interrupted', 'waiting'],
   ['Done', 'done'],
-  ['BuildingKB', 'running'],
   ['PlanNeedsReview', 'waiting'],
   ['Inquiring', 'running'],
   ['InquireReady', 'at-rest'],
@@ -158,7 +157,6 @@ const STATUS_LANE_MATRIX: Array<[string, Lane]> = [
   ['ResearchNeedsReview', 'waiting'],
   ['DesignNeedsReview', 'waiting'],
   ['Reviewing', 'running'],
-  ['NeedUserInput', 'waiting'],
   ['FinalReviewing', 'running'],
   ['SettingUpWorktrees', 'running'],
 ];
@@ -171,7 +169,7 @@ describe('classifyLane — full status matrix', () => {
   it('covers every status the matrix table lists exactly once', () => {
     const statuses = STATUS_LANE_MATRIX.map(([status]) => status);
     expect(new Set(statuses).size).toBe(statuses.length);
-    expect(statuses).toHaveLength(26);
+    expect(statuses).toHaveLength(24);
   });
 });
 
@@ -213,8 +211,7 @@ describe('classifyLane — owned errors drive presence', () => {
     expect(classifyLane(feature)).toBe('waiting');
   });
 
-  it('keeps the status-driven pauses in waiting: NeedUserInput, NeedsReview, Interrupted', () => {
-    expect(classifyLane(snapshot('NeedUserInput'))).toBe('waiting');
+  it('keeps the status-driven pauses in waiting: NeedsReview, Interrupted', () => {
     expect(classifyLane(snapshot('PlanNeedsReview'))).toBe('waiting');
     expect(classifyLane(snapshot('Interrupted'))).toBe('waiting');
   });

@@ -164,19 +164,6 @@ test('capture all visual evidence screenshots', async ({ page }) => {
 
   await capture(
     page,
-    'post-cycle-gate',
-    'dark',
-    1440,
-    900,
-    'cycle-need-user-input-sheet-free-text-1440x900',
-    '.need-input-sheet',
-    async (capturePage) => {
-      await capturePage.waitForTimeout(250);
-    },
-  );
-
-  await capture(
-    page,
     'aftercare',
     'dark',
     760,
@@ -684,7 +671,7 @@ test('phase rail visual evidence screenshots', async ({ page }) => {
     'dark',
     1440,
     900,
-    'paused-on-a-need_user_input-gate-trio-reading-paused-nm-dark-theme-1440x900',
+    'paused-interrupted-run-trio-reading-paused-nm-dark-theme-1440x900',
     '.phase-rail__trio-entry[data-attention="true"]',
     async (p) => {
       const pausedEntry = p.locator('.phase-rail__trio-entry[data-attention="true"]');

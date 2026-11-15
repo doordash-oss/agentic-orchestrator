@@ -219,18 +219,16 @@ function renderWorkspace(
   pass: RefactorPassController,
   attentionItems: AttentionItem[] = [],
   options: {
-    attentionPreviewRequest?: { requestId: number; attentionId?: string } | null;
     refreshAttention?: () => Promise<AttentionItem[]>;
     isNarrow?: boolean;
     inspectorOpen?: boolean;
     onCloseInspector?: () => void;
   } = {},
 ) {
-  const workspace = (request: typeof options.attentionPreviewRequest) => (
+  render(
     <RefactorPassWorkspace
       parent={parent}
       pass={pass}
-      attentionPreviewRequest={request ?? null}
       attentionItems={attentionItems}
       refreshAttention={options.refreshAttention ?? (() => Promise.resolve([]))}
       attentionDrafts={emptyAttentionDrafts()}
@@ -238,30 +236,13 @@ function renderWorkspace(
       isNarrow={options.isNarrow ?? false}
       inspectorOpen={options.inspectorOpen ?? true}
       onCloseInspector={options.onCloseInspector ?? vi.fn()}
-    />
+    />,
   );
-  const view = render(workspace(options.attentionPreviewRequest));
-  return {
-    rerenderWithRequest: (request: { requestId: number; attentionId?: string } | null) =>
-      view.rerender(workspace(request)),
-  };
 }
 
-function gateFor(parent: FeatureSnapshot): AttentionItem {
-  return {
-    kind: 'gate',
-    id: `${CHILD_ID}::`,
-    featureId: CHILD_ID,
-    parentFeatureId: parent.id,
-    waitingSince: '2026-08-01T10:00:00.000Z',
-    summary: 'Choose the slop threshold before the pass continues.',
-    questions: [{ index: 1, prompt: 'Which slop threshold should the pass use?', answer: '' }],
-  };
-}
-
-function waitingChild(): FeatureSnapshot {
+function pausedChild(): FeatureSnapshot {
   return readyChild({
-    status: 'NeedUserInput',
+    status: 'Interrupted',
     actions: [{ id: 'discard', enabled: true, disabledReasons: [] }],
   });
 }
@@ -417,14 +398,14 @@ describe('RefactorPassWorkspace', () => {
     expect(within(rail).getByLabelText('Publish, upcoming')).toBeInTheDocument();
   });
 
-  it('marks the rail held while the pass waits on a gate', () => {
-    installAgenticoMock({ feature: waitingChild() });
-    const parent = parentWith({ status: 'NeedUserInput' });
-    renderWorkspace(parent, controllerFor(parent, waitingChild()), [gateFor(parent)]);
+  it('marks the rail held while the pass is paused', () => {
+    installAgenticoMock({ feature: pausedChild() });
+    const parent = parentWith();
+    renderWorkspace(parent, controllerFor(parent, pausedChild()));
 
     const rail = screen.getByRole('group', { name: 'Pass phases' });
     expect(within(rail).getByLabelText('Plan, held')).toBeInTheDocument();
-    expect(screen.getByText('Paused')).toBeVisible();
+    expect(screen.getByText('Paused', { selector: 'dt' })).toBeVisible();
   });
 
   it('omits the phase rail until the child snapshot arrives', () => {
@@ -908,63 +889,6 @@ describe('RefactorPassWorkspace', () => {
     expect(screen.getByText('src/a.go:10')).toBeVisible();
   });
 
-  it('reopens an answer-later gate when an attention jump routes back to it', async () => {
-    const mock = installAgenticoMock({ feature: waitingChild() });
-    const parent = parentWith({ status: 'NeedUserInput' });
-    const gate = gateFor(parent);
-    const user = userEvent.setup();
-    const { rerenderWithRequest } = renderWorkspace(parent, controllerFor(parent, waitingChild()), [
-      gate,
-    ]);
-
-    const sheet = screen.getByRole('dialog', { name: 'Answer one question to resume' });
-    await user.click(within(sheet).getByRole('button', { name: 'Answer later' }));
-    expect(
-      screen.queryByRole('dialog', { name: 'Answer one question to resume' }),
-    ).not.toBeInTheDocument();
-    // Answering later still saves the draft.
-    await waitFor(() => expect(mock.api.saveGateDraft).toHaveBeenCalled());
-
-    rerenderWithRequest({ requestId: 1, attentionId: gate.id });
-    expect(screen.getByRole('dialog', { name: 'Answer one question to resume' })).toBeVisible();
-  });
-
-  it('keeps a resolved gate suppressed even while the attention list is stale', async () => {
-    const mock = installAgenticoMock({ feature: waitingChild() });
-    const parent = parentWith({ status: 'NeedUserInput' });
-    const gate = gateFor(parent);
-    if (gate.kind === 'gate') gate.questions[0]!.answer = 'Half a slop.';
-    const user = userEvent.setup();
-    renderWorkspace(parent, controllerFor(parent, waitingChild()), [gate], {
-      refreshAttention: () => Promise.resolve([gate]),
-    });
-
-    const sheet = screen.getByRole('dialog', { name: 'Answer one question to resume' });
-    await user.click(within(sheet).getByRole('button', { name: 'Resume agent' }));
-
-    await waitFor(() => expect(mock.api.resolveGate).toHaveBeenCalled());
-    await waitFor(() =>
-      expect(
-        screen.queryByRole('dialog', { name: 'Answer one question to resume' }),
-      ).not.toBeInTheDocument(),
-    );
-  });
-
-  it('offers Answer now on the waiting sentence while the gate is dismissed', async () => {
-    installAgenticoMock({ feature: waitingChild() });
-    const parent = parentWith({ status: 'NeedUserInput' });
-    const gate = gateFor(parent);
-    const user = userEvent.setup();
-    renderWorkspace(parent, controllerFor(parent, waitingChild()), [gate]);
-
-    const sheet = screen.getByRole('dialog', { name: 'Answer one question to resume' });
-    await user.click(within(sheet).getByRole('button', { name: 'Answer later' }));
-
-    const state = screen.getByText('The agent is waiting for your input.');
-    await user.click(within(state).getByRole('button', { name: 'Answer now' }));
-    expect(screen.getByRole('dialog', { name: 'Answer one question to resume' })).toBeVisible();
-  });
-
   it('omits the selected-comment summary for a refactor child', () => {
     installAgenticoMock({ feature: readyChild() });
     const parent = parentWith({ kind: 'refactor' });
@@ -1043,7 +967,6 @@ describe('RefactorPassWorkspace explain-in-chat', () => {
         <RefactorPassWorkspace
           parent={parent}
           pass={pass}
-          attentionPreviewRequest={null}
           attentionItems={attentionItems}
           refreshAttention={() => Promise.resolve([])}
           attentionDrafts={emptyAttentionDrafts()}

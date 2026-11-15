@@ -14,7 +14,6 @@ See the License for the specific language governing permissions and
 limitations under the License.
 */
 
-import fs from 'node:fs';
 import { expect, test, type Page } from '@playwright/test';
 import {
   assertNoLeakedProcesses,
@@ -25,7 +24,7 @@ import {
   persistAppLogs,
   type AppHandle,
 } from '../helpers/app';
-import { seedVerificationNeedUserInputGate } from '../helpers/verificationGateFixture';
+import { setFeatureStatus } from '../helpers/seed';
 import { Transcript } from '../helpers/transcript';
 import {
   createRepo,
@@ -35,12 +34,10 @@ import {
   type JourneyWorld,
 } from '../helpers/world';
 
-type AttentionItems = Awaited<ReturnType<Window['agentico']['getAttention']>>['items'];
-
 test('packaged phase rail: a hold opens with the paused dot and tooltip, then resolves back to Elapsed/Cost/Context', async ({}, testInfo) => {
   const transcript = new Transcript(
     'phase-rail',
-    'Rail hold journey — Paused substitution and dot on a NEED_USER_INPUT gate, Elapsed/Cost/Context restored after retry',
+    'Rail hold journey — Paused substitution and dot on an Interrupted feature, Elapsed/Cost/Context restored after Resume',
   );
   const world = createWorld('phase-rail', {
     auth: { loggedIn: true, authMethod: 'oauth', email: 'e2e@example.invalid' },
@@ -56,30 +53,26 @@ test('packaged phase rail: a hold opens with the paused dot and tooltip, then re
       timeout: 60_000,
     });
 
-    transcript.section('Create a feature and seed a NEED_USER_INPUT gate on it');
+    transcript.section('Create a feature and seed it as Interrupted');
     await createFeatureViaForm(handle, {
       name: 'Phase Rail Hold Journey',
       description:
-        'Exercises the rail hold->answer->restore contract against the real bundled server.',
+        'Exercises the rail hold->resume->restore contract against the real bundled server.',
       repoPatterns: [/phase-rail-lab/],
     });
     const feature = await waitForFeatureNamed(handle.page, 'Phase Rail Hold Journey');
-    const gatePath = seedVerificationNeedUserInputGate(world, feature.id, 'phase-rail-lab');
 
     await closeApp(handle);
     handle = null;
     await assertNoLeakedProcessesEventually(world);
+    setFeatureStatus(world.stateDir, feature.id, 'Interrupted');
 
     handle = await launchApp(world, testInfo, { traceName: 'phase-rail-seeded' });
     await expect(handle.page.getByRole('navigation', { name: 'Feature sidebar' })).toBeVisible({
       timeout: 60_000,
     });
-    await waitForAttentionGate(handle.page, feature.id);
+    await handle.page.getByRole('option', { name: /Phase Rail Hold Journey/ }).click();
     const cockpit = handle.page.getByLabel('Feature Phase Rail Hold Journey');
-    const gateDialog = handle.page.getByRole('dialog', { name: 'Verification needs your input' });
-    await expect(gateDialog).toBeVisible();
-    await gateDialog.getByRole('button', { name: 'Answer later' }).click();
-    await expect(gateDialog).toHaveCount(0);
 
     transcript.section(
       'The current segment turns attention-colored with a dot and a Paused readout',
@@ -88,27 +81,17 @@ test('packaged phase rail: a hold opens with the paused dot and tooltip, then re
     await expect(rail).toBeVisible({ timeout: 30_000 });
     const dot = rail.locator('.phase-rail__dot');
     await expect(dot).toBeVisible({ timeout: 30_000 });
-    await expect(dot).toHaveAttribute('title', /^Held( <1m|\d+[mhd])? for your answer$/);
+    await expect(dot).toHaveAttribute('title', /^Held( <1m| \d+[mhd])? for your answer$/);
     await expect(rail.locator('.phase-rail__segment[data-held="true"]')).toHaveCount(1);
     const trioLabels = rail.locator('.phase-rail__trio-entry dt');
     await expect(trioLabels.first()).toHaveText('Paused');
     await expect(rail.locator('.phase-rail__trio-entry[data-attention="true"]')).toHaveCount(1);
     await evidenceShot(handle, 'phase-rail-held-paused');
 
-    transcript.section('Retrying verification closes the hold and restores the plain trio');
-    await handle.page.getByRole('button', { name: /Attention inbox, \d+ pending/ }).click();
-    const inbox = handle.page.getByRole('complementary', { name: 'Attention inbox' });
-    await expect(inbox).toBeVisible();
-    await inbox.getByRole('button', { name: /Input gate/ }).click();
-    await expect(gateDialog).toBeVisible();
-    await gateDialog
-      .getByRole('radio', { name: /I've granted access — retry verification/ })
-      .click();
-    await gateDialog.getByRole('button', { name: 'Retry verification' }).click();
-    await waitForAttentionMissing(handle.page, feature.id, 'gate');
-    await waitForProviderLog(world, 'session');
+    transcript.section('Resuming closes the hold and restores the plain trio');
+    await cockpit.getByRole('button', { name: 'Resume', exact: true }).click();
 
-    await expect(dot).toHaveCount(0);
+    await expect(dot).toHaveCount(0, { timeout: 30_000 });
     await expect(rail.locator('.phase-rail__segment[data-held="true"]')).toHaveCount(0);
     await expect(rail.locator('.phase-rail__trio-entry[data-attention="true"]')).toHaveCount(0);
     await waitFor(
@@ -119,13 +102,12 @@ test('packaged phase rail: a hold opens with the paused dot and tooltip, then re
       'the rail trio to read Elapsed/Cost/Context again after the hold resolves',
       30_000,
     );
-    await evidenceShot(handle, 'phase-rail-restored-after-retry');
+    await evidenceShot(handle, 'phase-rail-restored-after-resume');
     transcript.step(
-      'rail hold opened with the dot/tooltip and Paused readout, then resolved after retrying verification',
+      'rail hold opened with the dot/tooltip and Paused readout, then resolved after Resume',
     );
 
     persistAppLogs(handle, 'phase-rail-app-server');
-    transcript.codeBlock('seeded need-user-input gate', fs.readFileSync(gatePath, 'utf8'));
     transcript.write(testInfo);
   } finally {
     if (handle !== null) await closeApp(handle).catch(() => {});
@@ -149,59 +131,6 @@ async function waitForFeatureNamed(
     30_000,
   );
   return found!;
-}
-
-async function waitForAttentionGate(page: Page, featureId: string): Promise<void> {
-  await waitForAttention(
-    page,
-    (items) => items.some((item) => item.kind === 'gate' && item.featureId === featureId),
-    60_000,
-  );
-}
-
-async function waitForAttentionMissing(
-  page: Page,
-  featureId: string,
-  kind: AttentionItems[number]['kind'],
-): Promise<void> {
-  await waitForAttention(
-    page,
-    (items) =>
-      !items.some(
-        (item) => item.kind === kind && item.kind !== 'recovery' && item.featureId === featureId,
-      ),
-    30_000,
-  );
-}
-
-async function waitForAttention(
-  page: Page,
-  predicate: (items: AttentionItems) => boolean,
-  timeoutMs: number,
-): Promise<void> {
-  await waitFor(
-    async () => {
-      try {
-        const snapshot = await page.evaluate(() => window.agentico.getAttention());
-        return predicate(snapshot.items);
-      } catch (error) {
-        if (error instanceof Error && error.message.includes('E_NOT_CONNECTED')) return false;
-        throw error;
-      }
-    },
-    'matching attention snapshot',
-    timeoutMs,
-  );
-}
-
-async function waitForProviderLog(world: JourneyWorld, needle: string): Promise<void> {
-  await waitFor(
-    () =>
-      fs.existsSync(world.providerInvocationLog) &&
-      fs.readFileSync(world.providerInvocationLog, 'utf8').includes(needle),
-    `provider log entry ${needle}`,
-    30_000,
-  );
 }
 
 async function assertNoLeakedProcessesEventually(world: JourneyWorld): Promise<void> {

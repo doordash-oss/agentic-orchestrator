@@ -291,7 +291,6 @@ function toRunSummaryView(run: ServerRunSummary): RunSummaryView {
     ...defined('pendingReviewPhase', run.pending_review_phase),
     ...defined('isRewind', run.is_rewind),
     artifactCount: run.artifact_count,
-    ...defined('hasNeedUserGate', run.has_need_user_gate),
   };
 }
 

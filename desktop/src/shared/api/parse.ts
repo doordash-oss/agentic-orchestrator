@@ -79,7 +79,6 @@ export const ServerModelDefaultsSchema = z.object({
   implementation: z.string().optional(),
   review: z.string().optional(),
   utilities: z.string().optional(),
-  kb_build: z.string().optional(),
   automatic_review: z.string().optional(),
 });
 export const ServerEffortDefaultsSchema = ServerModelDefaultsSchema.omit({
@@ -290,45 +289,10 @@ const ServerHelpQueueSchema = z.object({
   pending: z.boolean(),
   time: z.string().max(100).optional(),
 });
-const ServerNeedUserInputVerificationBlockerSchema = z.object({
-  item_id: AttentionIDSchema,
-  name: AttentionTextSchema,
-  repo_name: z.string().max(500).optional(),
-  command: AttentionTextSchema,
-  reason: AttentionTextSchema,
-  capabilities: z.array(AttentionTextSchema).max(20),
-  remediation: AttentionTextSchema,
-});
-const ServerNeedUserInputVerificationSchema = z.object({
-  blockers: z.array(ServerNeedUserInputVerificationBlockerSchema).max(100),
-  allowed_actions: z.array(z.string().max(50)).max(3),
-});
-const ServerNeedUserInputGateSchema = z.object({
-  feature_id: AttentionIDSchema.optional(),
-  open: z.boolean(),
-  scope: z.string().max(100).optional(),
-  repo_name: z.string().max(500).optional(),
-  iteration: z.number().int().nonnegative().optional(),
-  summary: AttentionTextSchema.optional(),
-  questions: z
-    .array(
-      z.object({
-        // The stored one-based gate index; drafts and answers are keyed by it.
-        index: z.number().int().min(1),
-        prompt: AttentionTextSchema.optional(),
-        answer: AttentionTextSchema.optional(),
-      }),
-    )
-    .max(100)
-    .optional(),
-  verification: ServerNeedUserInputVerificationSchema.optional(),
-  waiting_since: z.string().max(100).optional(),
-});
 export const PromptSnapshotResponseSchema = z.object({
   api_version: z.string(),
   ask_user_questions: z.array(ServerControlRequestSchema).max(1000),
   help_queue: z.array(ServerHelpQueueSchema).max(1000),
-  need_user_inputs: z.array(ServerNeedUserInputGateSchema).max(1000),
 });
 export const PermissionSnapshotResponseSchema = z.object({
   api_version: z.string(),
@@ -1010,26 +974,6 @@ const ServerRepoStatusSchema = z.object({
 });
 type ServerRepoStatus = z.output<typeof ServerRepoStatusSchema>;
 
-const ServerNeedUserInputGateDetailSchema = z.object({
-  feature_id: z.string().optional(),
-  open: z.boolean(),
-  scope: z.string().optional(),
-  repo_name: z.string().optional(),
-  iteration: z.number().int().nonnegative().optional(),
-  summary: z.string().optional(),
-  questions: z
-    .array(
-      z.object({
-        index: z.number().int().min(1),
-        prompt: z.string().optional(),
-        answer: z.string().optional(),
-      }),
-    )
-    .optional(),
-  verification: ServerNeedUserInputVerificationSchema.optional(),
-});
-type ServerNeedUserInputGateDetail = z.output<typeof ServerNeedUserInputGateDetailSchema>;
-
 const ServerReviewFeedbackCommentSchema = z.object({
   repo: z.string(),
   id: z.number().int(),
@@ -1061,7 +1005,6 @@ const ServerReviewFeedbackRepoCommentsSchema = z.object({
 
 const ServerFeatureDetailSchema = ServerFeatureSummarySchema.extend({
   description: z.string().optional(),
-  wait_reason: z.string().optional(),
   pipeline: z.string().optional(),
   risk_level: z.string().optional(),
   exit_criteria: z.string().optional(),
@@ -1088,7 +1031,6 @@ const ServerFeatureDetailSchema = ServerFeatureSummarySchema.extend({
     validator_statuses: z.record(z.string(), z.string()).optional(),
     validator_errors: z.record(z.string(), z.string()).optional(),
   }),
-  need_user_input: ServerNeedUserInputGateDetailSchema.optional(),
   // The durable run failure, rendered by the server through the error
   // catalog at read time; strict canonical contract, same as ErrorResponse.
   failure: CanonicalErrorSchema.optional(),
@@ -1102,7 +1044,6 @@ const ServerFeatureDetailSchema = ServerFeatureSummarySchema.extend({
       scheduled_at: z.string(),
     })
     .optional(),
-  verification_items: z.array(z.object({ name: z.string(), state: z.string() })).optional(),
   timing: z.object({ total_seconds: z.number().int().nonnegative() }).optional(),
   parent_id: z.string().optional(),
   parent_kind: z.string().optional(),
@@ -1162,38 +1103,6 @@ export const FeatureDetailResponseSchema = z.object({
 
 type FeatureDetailResponse = z.output<typeof FeatureDetailResponseSchema>;
 
-// --- Testing contract (GET /features/{id}/testing-contract) ----------------
-
-const ServerTestingContractDispositionSchema = z.object({
-  status: z.string().min(1).max(100),
-  reason: z.string().max(2000).optional(),
-  changed_by: z.string().max(200).optional(),
-});
-const ServerTestingContractItemSchema = z.object({
-  item_id: AttentionIDSchema,
-  source: z.string().min(1).max(100),
-  owner: z.string().min(1).max(100),
-  repo: z.string().max(500).optional(),
-  name: AttentionTextSchema,
-  command: AttentionTextSchema,
-  required: z.boolean(),
-  allow_substitution: z.boolean(),
-  allow_blocked: z.boolean(),
-  allow_waiver: z.boolean(),
-  disposition: ServerTestingContractDispositionSchema.optional(),
-  capabilities: z.array(z.string().max(500)).max(20),
-});
-export type ServerTestingContractItem = z.output<typeof ServerTestingContractItemSchema>;
-export const TestingContractResponseSchema = z.object({
-  api_version: z.string(),
-  feature_id: AttentionIDSchema,
-  active_run: z.number().int().positive(),
-  roadmap_phase: z.number().int().positive(),
-  revision: z.number().int().positive(),
-  items: z.array(ServerTestingContractItemSchema).max(500),
-});
-type TestingContractResponse = z.output<typeof TestingContractResponseSchema>;
-
 // --- Run listing (GET /runs, GET /runs/{n}, GET /runs/{n}/sessions) --------
 
 const ServerRunSummarySchema = z.object({
@@ -1209,7 +1118,6 @@ const ServerRunSummarySchema = z.object({
   pending_review_phase: z.string().optional(),
   is_rewind: z.boolean().optional(),
   artifact_count: z.number().int().nonnegative(),
-  has_need_user_gate: z.boolean().optional(),
 });
 export type ServerRunSummary = z.output<typeof ServerRunSummarySchema>;
 
@@ -1923,7 +1831,6 @@ type _runtimeConfigSubset = DriftGuard<
   Omit<z.output<typeof RuntimeConfigResponseSchema>, 'feature_defaults'>
 >;
 type _featureListSubset = DriftGuard<Wire['FeatureListResponse'], FeatureListResponse>;
-type _testingContractSubset = DriftGuard<Wire['TestingContractResponse'], TestingContractResponse>;
 type _featureDetailSubset = DriftGuard<Wire['FeatureDetailResponse'], FeatureDetailResponse>;
 type _setupSubset = DriftGuard<components['schemas']['Setup'], ServerSetup>;
 type _setupTaskSubset = DriftGuard<components['schemas']['SetupTask'], ServerSetupTask>;
@@ -1997,14 +1904,6 @@ type _reviewFeedbackFeatureSubset = DriftGuard<
   ReviewFeedbackFeatureResponse
 >;
 type _repoStatusSubset = DriftGuard<components['schemas']['RepoStatus'], ServerRepoStatus>;
-type _needUserInputGateSubset = DriftGuard<
-  components['schemas']['NeedUserInputGate'],
-  ServerNeedUserInputGateDetail
->;
-type _needUserInputVerificationSubset = DriftGuard<
-  components['schemas']['NeedUserInputVerification'],
-  z.output<typeof ServerNeedUserInputVerificationSchema>
->;
 type _askUserQuestionSubset = DriftGuard<
   components['schemas']['AskUserQuestion'],
   z.output<typeof ServerAskUserQuestionSchema>
@@ -2012,14 +1911,6 @@ type _askUserQuestionSubset = DriftGuard<
 type _askUserQuestionAssignable = DriftGuard<
   z.output<typeof ServerAskUserQuestionSchema>,
   components['schemas']['AskUserQuestion']
->;
-type _needUserInputQuestionSubset = DriftGuard<
-  components['schemas']['NeedUserInputQuestion'],
-  NonNullable<z.output<typeof ServerNeedUserInputGateSchema>['questions']>[number]
->;
-type _needUserInputQuestionAssignable = DriftGuard<
-  NonNullable<z.output<typeof ServerNeedUserInputGateSchema>['questions']>[number],
-  components['schemas']['NeedUserInputQuestion']
 >;
 type _rewindPreviewSubset = DriftGuard<
   components['schemas']['RewindPreviewResponse'],

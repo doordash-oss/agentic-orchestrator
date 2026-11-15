@@ -23,11 +23,10 @@ async function open(
   theme: 'light' | 'dark',
   waitFor: string,
 ): Promise<void> {
-  // The gate sheet overlays the draggable toolbar, which only exists on darwin.
   await openScene(page, scene, theme, 1440, 900, waitFor, { platform: 'darwin' });
 }
 
-test('question turn and gate sheet visual evidence', async ({ page }) => {
+test('question turn visual evidence', async ({ page }) => {
   skipWithoutEvidenceDir();
 
   await open(page, 'feature-question-bench', 'dark', '.question-turn');
@@ -50,22 +49,5 @@ test('question turn and gate sheet visual evidence', async ({ page }) => {
   await shoot(
     page,
     'inline-question-turn-with-an-accent-filled-selection-and-the-your-reply-not-sent-1440x900',
-  );
-
-  await open(page, 'gate-sheet-plain', 'dark', '.need-input-sheet');
-  await expect(page.getByRole('button', { name: 'Resume agent' })).toBeDisabled();
-  await page.waitForTimeout(400);
-  await shoot(
-    page,
-    'gate-sheet-plain-branch-with-two-questions-and-one-answer-drafted-spelled-out-ti-1440x900',
-  );
-
-  await open(page, 'gate-sheet-verification', 'light', '.need-input-sheet');
-  await page.getByRole('radio', { name: /Waive blocked checks/ }).click();
-  await expect(page.getByRole('button', { name: 'Waive and resume' })).toBeEnabled();
-  await page.waitForTimeout(300);
-  await shoot(
-    page,
-    'gate-sheet-verification-decision-branch-with-waive-and-resume-selected-and-its-w-1440x900',
   );
 });

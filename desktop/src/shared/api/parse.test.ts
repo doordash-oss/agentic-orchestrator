@@ -34,7 +34,6 @@ import {
   RepositoryDiffResponseSchema,
   RewindActionResponseSchema,
   SupervisorTranscriptResponseSchema,
-  TestingContractResponseSchema,
 } from './parse';
 import { CanonicalErrorException, type CanonicalError } from '../errors';
 import { MAX_PAYLOAD_BYTES } from '../sanitize';
@@ -659,56 +658,6 @@ function failure(fn: () => unknown): CanonicalError {
   throw new Error('expected parse to fail closed');
 }
 
-describe('testing contract response contract', () => {
-  const row = {
-    item_id: 'deploy-smoke',
-    source: 'plan',
-    owner: 'harness',
-    name: 'Deployment smoke test',
-    command: 'make smoke',
-    required: true,
-    allow_substitution: false,
-    allow_blocked: false,
-    allow_waiver: true,
-    capabilities: ['network'],
-  };
-  const response = {
-    api_version: 'v1',
-    feature_id: 'abcd1234ef567890',
-    active_run: 1,
-    roadmap_phase: 2,
-    revision: 3,
-    items: [row, { ...row, item_id: 'manual', disposition: { status: 'waived', reason: 'r' } }],
-  };
-
-  it('accepts rows with and without a recorded disposition', () => {
-    const parsed = TestingContractResponseSchema.parse(response);
-    expect(parsed.items).toHaveLength(2);
-    expect(parsed.items[1]?.disposition).toEqual({ status: 'waived', reason: 'r' });
-  });
-
-  it('rejects missing policy flags, a zero phase or run, and disposition without status', () => {
-    const { allow_waiver: _omitted, ...noFlag } = row;
-    expect(TestingContractResponseSchema.safeParse({ ...response, items: [noFlag] }).success).toBe(
-      false,
-    );
-    expect(TestingContractResponseSchema.safeParse({ ...response, roadmap_phase: 0 }).success).toBe(
-      false,
-    );
-    expect(TestingContractResponseSchema.safeParse({ ...response, active_run: 0 }).success).toBe(
-      false,
-    );
-    const { active_run: _noRun, ...withoutRun } = response;
-    expect(TestingContractResponseSchema.safeParse(withoutRun).success).toBe(false);
-    expect(
-      TestingContractResponseSchema.safeParse({
-        ...response,
-        items: [{ ...row, disposition: { reason: 'r' } }],
-      }).success,
-    ).toBe(false);
-  });
-});
-
 describe('parseServerJson', () => {
   it('parses a well-formed health response', () => {
     const parsed = parseServerJson(JSON.stringify(healthFixture), ProbeHealthSchema);
@@ -828,8 +777,8 @@ describe('parseServerJson', () => {
     expect(error.summary).toContain('items.0.messages.1929.block_index');
   });
 
-  it('requires the one-based index on ask-user and gate questions', () => {
-    const prompts = (askQuestion: object, gateQuestion: object) =>
+  it('requires the one-based index on ask-user questions', () => {
+    const prompts = (askQuestion: object) =>
       JSON.stringify({
         api_version: 'v1',
         ask_user_questions: [
@@ -841,168 +790,25 @@ describe('parseServerJson', () => {
           },
         ],
         help_queue: [],
-        need_user_inputs: [{ feature_id: 'feature-1', open: true, questions: [gateQuestion] }],
       });
     const ask = { index: 1, question: 'Which branch?', options: [{ label: 'main' }] };
-    const gate = { index: 2, prompt: 'Which window?', answer: '' };
 
-    const parsed = parseServerJson(prompts(ask, gate), PromptSnapshotResponseSchema);
+    const parsed = parseServerJson(prompts(ask), PromptSnapshotResponseSchema);
     expect(parsed.ask_user_questions[0]?.questions?.[0]).toMatchObject({
       index: 1,
       question: 'Which branch?',
     });
-    expect(parsed.need_user_inputs[0]?.questions?.[0]?.index).toBe(2);
 
-    for (const [askQuestion, gateQuestion] of [
-      [{ question: 'Which branch?' }, gate],
-      [{ index: 0, question: 'Which branch?' }, gate],
-      [{ index: 1.5, question: 'Which branch?' }, gate],
-      [{ index: 1 }, gate],
-      [ask, { prompt: 'Which window?' }],
-      [ask, { index: 0, prompt: 'Which window?' }],
-    ] as const) {
+    for (const askQuestion of [
+      { question: 'Which branch?' },
+      { index: 0, question: 'Which branch?' },
+      { index: 1.5, question: 'Which branch?' },
+      { index: 1 },
+    ]) {
       expect(
-        failure(() =>
-          parseServerJson(prompts(askQuestion, gateQuestion), PromptSnapshotResponseSchema),
-        ).code,
+        failure(() => parseServerJson(prompts(askQuestion), PromptSnapshotResponseSchema)).code,
       ).toBe('E_SCHEMA_MISMATCH');
     }
-  });
-
-  it('accepts bounded unknown verification actions but rejects unbounded ones', () => {
-    const promptFixture = {
-      api_version: 'v1',
-      ask_user_questions: [],
-      help_queue: [],
-      need_user_inputs: [
-        {
-          feature_id: 'feature-1',
-          open: true,
-          verification: {
-            blockers: [
-              {
-                item_id: 'deploy',
-                name: 'Deployment smoke test',
-                command: 'make deploy-smoke',
-                reason: 'a newer server needs another decision',
-                capabilities: [],
-                remediation: 'Choose a supported action or answer the generic prompt.',
-              },
-            ],
-            allowed_actions: ['WAIVE', 'x'.repeat(50)],
-          },
-        },
-      ],
-    };
-
-    const parsed = parseServerJson(JSON.stringify(promptFixture), PromptSnapshotResponseSchema);
-    expect(parsed.need_user_inputs[0]?.verification?.allowed_actions).toEqual([
-      'WAIVE',
-      'x'.repeat(50),
-    ]);
-
-    promptFixture.need_user_inputs[0]!.verification.allowed_actions = [
-      'WAIVE',
-      'RETRY_AFTER_AUTH',
-      'ALLOW_SUBSTITUTE',
-    ];
-    expect(
-      parseServerJson(JSON.stringify(promptFixture), PromptSnapshotResponseSchema)
-        .need_user_inputs[0]?.verification?.allowed_actions,
-    ).toHaveLength(3);
-
-    promptFixture.need_user_inputs[0]!.verification.allowed_actions = [
-      'WAIVE',
-      'RETRY_AFTER_AUTH',
-      'ALLOW_SUBSTITUTE',
-      'EXTRA',
-    ];
-    expect(
-      failure(() => parseServerJson(JSON.stringify(promptFixture), PromptSnapshotResponseSchema))
-        .code,
-    ).toBe('E_SCHEMA_MISMATCH');
-
-    promptFixture.need_user_inputs[0]!.verification.allowed_actions = ['x'.repeat(51)];
-    expect(
-      failure(() => parseServerJson(JSON.stringify(promptFixture), PromptSnapshotResponseSchema))
-        .code,
-    ).toBe('E_SCHEMA_MISMATCH');
-  });
-
-  it('accepts aggregate-fallback blockers only with an empty capability array', () => {
-    const fallbackFixture = {
-      api_version: 'v1',
-      ask_user_questions: [],
-      help_queue: [],
-      need_user_inputs: [
-        {
-          feature_id: 'feature-1',
-          open: true,
-          questions: [{ index: 1, prompt: 'Choose an action.', answer: '' }],
-          verification: {
-            blockers: [
-              {
-                item_id: 'capability-heavy',
-                name: 'Capability-heavy check',
-                command: 'make verify',
-                reason: 'missing access',
-                capabilities: [],
-                remediation: 'Grant access and retry.',
-              },
-            ],
-            allowed_actions: ['WAIVE', 'RETRY_AFTER_AUTH'],
-          },
-        },
-      ],
-    };
-
-    expect(
-      parseServerJson(JSON.stringify(fallbackFixture), PromptSnapshotResponseSchema)
-        .need_user_inputs[0]?.verification?.blockers[0]?.capabilities,
-    ).toEqual([]);
-    fallbackFixture.need_user_inputs[0]!.verification.blockers[0]!.capabilities = null as never;
-    expect(
-      failure(() => parseServerJson(JSON.stringify(fallbackFixture), PromptSnapshotResponseSchema))
-        .code,
-    ).toBe('E_SCHEMA_MISMATCH');
-  });
-
-  it('accepts generic verification fallback only with an empty action array', () => {
-    const fallbackFixture = {
-      api_version: 'v1',
-      ask_user_questions: [],
-      help_queue: [],
-      need_user_inputs: [
-        {
-          feature_id: 'feature-1',
-          open: true,
-          questions: [{ index: 1, prompt: 'Choose an action.', answer: '' }],
-          verification: {
-            blockers: [
-              {
-                item_id: 'future-action',
-                name: 'Future verification check',
-                command: 'make verify',
-                reason: 'the server did not recognize a legacy action',
-                capabilities: [],
-                remediation: 'Answer the generic prompt.',
-              },
-            ],
-            allowed_actions: [],
-          },
-        },
-      ],
-    };
-
-    expect(
-      parseServerJson(JSON.stringify(fallbackFixture), PromptSnapshotResponseSchema)
-        .need_user_inputs[0]?.verification?.allowed_actions,
-    ).toEqual([]);
-    fallbackFixture.need_user_inputs[0]!.verification.allowed_actions = null as never;
-    expect(
-      failure(() => parseServerJson(JSON.stringify(fallbackFixture), PromptSnapshotResponseSchema))
-        .code,
-    ).toBe('E_SCHEMA_MISMATCH');
   });
 });
 

@@ -522,7 +522,7 @@ describe('the creation sheet across its four steps', () => {
     // Medium runs planning, implementation, and review only.
     expect(screen.getByLabelText('Planning model')).toBeVisible();
     expect(screen.queryByLabelText('Clarify model')).toBeNull();
-    expect(screen.queryByLabelText('KB Build model')).toBeNull();
+    expect(screen.queryByLabelText('Research model')).toBeNull();
     expect(screen.queryByLabelText('Utilities model')).toBeNull();
     expect(screen.queryByLabelText('Auto mode reviewer model')).toBeNull();
 
@@ -530,7 +530,7 @@ describe('the creation sheet across its four steps', () => {
     await user.click(screen.getByRole('radio', { name: /Large/ }));
     await user.click(screen.getByRole('button', { name: 'Next: Contract' }));
     expect(screen.getByLabelText('Clarify model')).toBeVisible();
-    expect(screen.getByLabelText('KB Build model')).toBeVisible();
+    expect(screen.getByLabelText('Research model')).toBeVisible();
     // Utilities and the automatic reviewer stay workspace-scoped.
     expect(screen.queryByLabelText('Utilities model')).toBeNull();
     expect(screen.queryByLabelText('Auto mode reviewer model')).toBeNull();
@@ -545,7 +545,7 @@ describe('the creation sheet across its four steps', () => {
           inquireness: 'medium',
           models: [
             { phase: 'Planning', model: 'model-plan' },
-            { phase: 'Knowledge base', model: 'model-kb' },
+            { phase: 'Research', model: 'model-research' },
           ],
           effort: [{ phase: 'Planning', effort: 'auto' }],
           useCurrentBranch: false,

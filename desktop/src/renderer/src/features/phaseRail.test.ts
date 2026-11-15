@@ -20,7 +20,6 @@ import { ACTIVE_STATUSES } from './featureView';
 import {
   classifyHold,
   formatWaitingDuration,
-  railSegmentLabel,
   railSegments,
   railTrio,
   type RailHold,
@@ -133,7 +132,7 @@ describe('classifyHold', () => {
     ]);
     expect(hold).toEqual({ kind: 'waiting', waitingSince: '2026-08-06T11:55:00.000Z' });
     expect(
-      classifyHold('NeedUserInput', [
+      classifyHold('Interrupted', [
         helpItem({ waitingKind: 'coordinating', waitingSince: '2026-08-06T10:00:00.000Z' }),
       ]),
     ).toEqual({ kind: 'paused' });
@@ -146,12 +145,8 @@ describe('classifyHold', () => {
     });
   });
 
-  it('NeedUserInput pauses', () => {
-    expect(classifyHold('NeedUserInput', [])).toEqual({ kind: 'paused' });
-  });
-
-  it('NeedUserInput pauses with the open item duration when one is present', () => {
-    expect(classifyHold('NeedUserInput', [reviewItem()])).toEqual({
+  it('Interrupted pauses with the open item duration when one is present', () => {
+    expect(classifyHold('Interrupted', [reviewItem()])).toEqual({
       kind: 'paused',
       waitingSince: '2026-08-06T11:40:00.000Z',
     });
@@ -199,7 +194,7 @@ describe('classifyHold', () => {
 
   it('ignores recovery items entirely — they carry no feature-specific hold', () => {
     expect(classifyHold('Implementing', [recoveryItem()])).toBeNull();
-    expect(classifyHold('NeedUserInput', [recoveryItem()])).toEqual({ kind: 'paused' });
+    expect(classifyHold('Interrupted', [recoveryItem()])).toEqual({ kind: 'paused' });
   });
 });
 
@@ -229,7 +224,7 @@ describe('railSegments', () => {
     expect(segments.every((segment) => !segment.held)).toBe(true);
   });
 
-  it('renders Final Review as the held current Review segment, never a tenth segment', () => {
+  it('renders Final Review as the held current Review segment, never a ninth segment', () => {
     const snapshot = featureSnapshot({
       status: 'FinalReviewing',
       currentPhase: 'Final Review',
@@ -238,7 +233,7 @@ describe('railSegments', () => {
     });
     const hold: RailHold = { kind: 'waiting', waitingSince: '2026-08-06T11:00:00.000Z' };
     const segments = railSegments(snapshot, hold);
-    expect(segments).toHaveLength(9);
+    expect(segments).toHaveLength(8);
     const review = segments.find((segment) => segment.id === 'review');
     expect(review?.state).toBe('current');
     expect(review?.held).toBe(true);
@@ -256,39 +251,6 @@ describe('railSegments', () => {
     const segments = railSegments(snapshot, null);
     const implement = segments.find((segment) => segment.id === 'implement');
     expect(implement?.state).toBe('completed');
-  });
-
-  it('shortens Knowledge Base at rail scale via the shared label helper', () => {
-    const snapshot = featureSnapshot({
-      status: 'BuildingKB',
-      currentPhase: 'Knowledge Base',
-      pipeline: 'large',
-      setup: undefined,
-    });
-    const segments = railSegments(snapshot, null);
-    const kb = segments.find((segment) => segment.id === 'knowledge-base');
-    expect(kb?.label).toBe('Knowledge');
-  });
-});
-
-describe('railSegmentLabel', () => {
-  it('shortens Knowledge Base to Knowledge', () => {
-    expect(railSegmentLabel('Knowledge Base')).toBe('Knowledge');
-  });
-
-  it('passes every other label through verbatim', () => {
-    for (const label of [
-      'Setup',
-      'Inquire',
-      'Research',
-      'Design',
-      'Plan',
-      'Implement',
-      'Review',
-      'Publish',
-    ]) {
-      expect(railSegmentLabel(label)).toBe(label);
-    }
   });
 });
 

@@ -57,22 +57,6 @@ afterEach(() => {
 
 const FEATURE_ID = 'abcd1234ef567890';
 
-const gateAttention: AttentionItem = {
-  kind: 'gate',
-  id: `${FEATURE_ID}::`,
-  featureId: FEATURE_ID,
-  waitingSince: '2026-07-15T10:00:00.000Z',
-  summary: 'Choose the deployment window before implementation continues.',
-  iteration: 6,
-  questions: [
-    {
-      index: 1,
-      prompt: 'Which deployment window should implementation use?',
-      answer: '',
-    },
-  ],
-};
-
 const helpAttention: AttentionItem = {
   kind: 'help',
   id: `${FEATURE_ID}:help-session`,
@@ -335,34 +319,6 @@ describe('FeatureCockpit snapshot rendering', () => {
 
     await user.click(expandButton);
     expect(await screen.findByRole('dialog', { name: 'Live agent preview' })).toBeVisible();
-  });
-
-  it('opens the testing-contract waiver from the Files tab', async () => {
-    const mock = installAgenticoMock({
-      feature: featureSnapshot({
-        status: 'Implementing',
-        currentPhase: 'Implement',
-        currentRoadmapPhase: 2,
-        setup: { status: 'done', attempt: 1, tasks: [] },
-        actions: [],
-      }),
-    });
-    renderCockpit(mock);
-    const user = userEvent.setup();
-
-    const tablist = await screen.findByRole('tablist', { name: 'Stage view' });
-    await user.click(within(tablist).getByRole('tab', { name: 'Files' }));
-    const opener = await screen.findByRole('button', { name: 'Waive contract items' });
-    await user.click(opener);
-
-    const dialog = await screen.findByRole('dialog', { name: 'Waive contract items?' });
-    expect(dialog).toBeVisible();
-    expect(mock.api.getTestingContract).toHaveBeenCalledWith({ featureId: FEATURE_ID });
-    expect(await screen.findByText('This phase has no testing contract yet.')).toBeVisible();
-
-    await user.click(within(dialog).getByRole('button', { name: 'Cancel' }));
-    expect(screen.queryByRole('dialog', { name: 'Waive contract items?' })).not.toBeInTheDocument();
-    await waitFor(() => expect(opener).toHaveFocus());
   });
 
   it('opens configuration from the overflow menu', async () => {
@@ -2673,56 +2629,6 @@ describe('FeatureCockpit convergence', () => {
     expect(screen.queryByText(/Retry failed/)).not.toBeInTheDocument();
   });
 
-  it('saves floating gate drafts while leaving the agent paused', async () => {
-    const mock = installAgenticoMock({
-      feature: featureSnapshot({
-        status: 'Implementing',
-        currentPhase: 'Implement',
-        setup: { status: 'done', attempt: 1, tasks: [] },
-        actions: [],
-      }),
-    });
-    mock.api.saveGateDraft.mockResolvedValue({ result: 'drafted' });
-    function Harness() {
-      const [drafts, setDrafts] = useState(emptyAttentionDrafts);
-      return (
-        <FeatureCockpit
-          featureId={FEATURE_ID}
-          titleHint="Search revamp"
-          onClose={vi.fn()}
-          onLoadedName={vi.fn()}
-          attentionItems={[gateAttention]}
-          refreshAttention={() => Promise.resolve([gateAttention])}
-          attentionDrafts={drafts}
-          setAttentionDrafts={setDrafts}
-          attentionPreviewRequest={{ requestId: 1, attentionId: gateAttention.id }}
-        />
-      );
-    }
-    render(<Harness />);
-    const user = userEvent.setup();
-
-    const request = await screen.findByRole('dialog', { name: 'Answer one question to resume' });
-    await user.type(
-      within(request).getByLabelText(/Which deployment window should implementation use/),
-      'After packaged attention evidence passes.',
-    );
-    await user.click(within(request).getByRole('button', { name: 'Answer later' }));
-
-    expect(mock.api.saveGateDraft).toHaveBeenCalledWith({
-      featureId: FEATURE_ID,
-      answers: {
-        '1': 'After packaged attention evidence passes.',
-      },
-    });
-    expect(mock.api.resolveGate).not.toHaveBeenCalled();
-    await waitFor(() =>
-      expect(
-        screen.queryByRole('dialog', { name: 'Answer one question to resume' }),
-      ).not.toBeInTheDocument(),
-    );
-  });
-
   it('sends a help reply from the expanded conversation footer', async () => {
     const mock = installAgenticoMock({
       feature: featureSnapshot({
@@ -2838,68 +2744,6 @@ describe('FeatureCockpit convergence', () => {
         within(inspection).queryByRole('region', { name: 'Agent request' }),
       ).not.toBeInTheDocument(),
     );
-  });
-
-  it('opens a new floating modal when the next gate becomes active', async () => {
-    installAgenticoMock({
-      feature: featureSnapshot({
-        status: 'Implementing',
-        currentPhase: 'Implement',
-        setup: { status: 'done', attempt: 1, tasks: [] },
-        actions: [],
-      }),
-    });
-    const nextGate: AttentionItem = {
-      ...gateAttention,
-      id: `${FEATURE_ID}::next`,
-      summary: 'Choose the follow-up deployment window.',
-      questions: [
-        {
-          index: 1,
-          prompt: 'Which follow-up deployment window should implementation use?',
-          answer: '',
-        },
-      ],
-    };
-
-    function Harness() {
-      const [items, setItems] = useState<AttentionItem[]>([gateAttention, nextGate]);
-      const [drafts, setDrafts] = useState(emptyAttentionDrafts);
-      return (
-        <>
-          <button type="button" onClick={() => setItems([nextGate])}>
-            Advance attention
-          </button>
-          <FeatureCockpit
-            featureId={FEATURE_ID}
-            titleHint="Search revamp"
-            onClose={vi.fn()}
-            onLoadedName={vi.fn()}
-            attentionItems={items}
-            refreshAttention={() => Promise.resolve(items)}
-            attentionDrafts={drafts}
-            setAttentionDrafts={setDrafts}
-          />
-        </>
-      );
-    }
-
-    render(<Harness />);
-    const user = userEvent.setup();
-
-    const request = await screen.findByRole('dialog', { name: 'Answer one question to resume' });
-    await user.click(within(request).getByRole('button', { name: 'Answer later' }));
-    expect(
-      screen.queryByRole('dialog', { name: 'Answer one question to resume' }),
-    ).not.toBeInTheDocument();
-
-    await user.click(screen.getByRole('button', { name: 'Advance attention' }));
-
-    expect(
-      within(
-        await screen.findByRole('dialog', { name: 'Answer one question to resume' }),
-      ).getByLabelText(/Which follow-up deployment window should implementation use/),
-    ).toBeVisible();
   });
 
   it('skips review items when selecting an embedded feature response', async () => {

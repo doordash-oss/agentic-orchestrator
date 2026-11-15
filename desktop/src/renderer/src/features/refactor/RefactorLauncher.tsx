@@ -53,7 +53,6 @@ import {
   PIPELINES,
   checkpointSummary,
   isPipeline,
-  modelConfigKey,
   type CheckpointState,
   type Pipeline,
 } from '../runContract';
@@ -175,9 +174,9 @@ export function RefactorLauncher({
     const effort: Record<string, EffortLevel> = {};
     for (const field of applicablePhaseFields(pipeline, false)) {
       const chosen = modelChoices[field.key] ?? '';
-      if (chosen !== '') models[modelConfigKey(field.key)] = chosen;
+      if (chosen !== '') models[field.key] = chosen;
       const chosenEffort = effortChoices[field.key];
-      if (chosenEffort !== undefined) effort[modelConfigKey(field.key)] = chosenEffort;
+      if (chosenEffort !== undefined) effort[field.key] = chosenEffort;
     }
     const gates = applicableGates(pipeline);
     const imageRefs = submittableReferences(imageUploads, 'image', serverKey);

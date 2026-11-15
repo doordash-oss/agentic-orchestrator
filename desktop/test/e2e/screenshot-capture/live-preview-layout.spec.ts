@@ -16,7 +16,7 @@ limitations under the License.
 
 import { expect, test, type Page } from '@playwright/test';
 
-type LiveScene = 'run-gauge' | 'run-gauge-reviewing' | 'run-gauge-verifying';
+type LiveScene = 'run-gauge' | 'run-gauge-reviewing';
 
 interface LayoutSection {
   name: string;
@@ -61,12 +61,8 @@ async function measureLayout(
   await page.setViewportSize({ width: 1440, height });
   await page.goto(`http://localhost:9871/?scene=${scene}&theme=dark`);
   await expect(page.locator('.phase-rail')).toBeVisible();
-  if (scene === 'run-gauge-verifying') {
-    await expect(page.getByText('Verification: 1 of 3 checks passing')).toBeVisible();
-  } else {
-    await expect(page.locator('.conversation__scroll > *')).toHaveCount(5);
-    await expect(page.locator('.live-preview__strip [role="tab"]')).toHaveCount(3);
-  }
+  await expect(page.locator('.conversation__scroll > *')).toHaveCount(5);
+  await expect(page.locator('.live-preview__strip [role="tab"]')).toHaveCount(3);
   return page.evaluate(
     async ({ measuredScene, measuredHeight }) => {
       const requireElement = (selector: string, label: string): HTMLElement => {
@@ -170,7 +166,7 @@ test('all collapsed live phases fit ordinary surfaces and summaries reduce previ
 }) => {
   const heights = [600, 900, 1200] as const;
   const byScene = new Map<LiveScene, LayoutMeasurements[]>();
-  for (const scene of ['run-gauge', 'run-gauge-reviewing', 'run-gauge-verifying'] as const) {
+  for (const scene of ['run-gauge', 'run-gauge-reviewing'] as const) {
     const layouts: LayoutMeasurements[] = [];
     for (const height of heights) {
       layouts.push(await measureLayout(page, scene, height));
@@ -199,18 +195,13 @@ test('all collapsed live phases fit ordinary surfaces and summaries reduce previ
 
   const active = byScene.get('run-gauge')!;
   const reviewing = byScene.get('run-gauge-reviewing')!;
-  const verifying = byScene.get('run-gauge-verifying')!;
   for (const [index] of heights.entries()) {
     expect(reviewing[index]!.previewHeight).toBeLessThanOrEqual(active[index]!.previewHeight);
     expect(reviewing[index]!.reviewSummary).toBeNull();
-    expect(verifying[index]!.reviewSummary).toBeNull();
   }
   expect(active[0]!.reviewSummary).toBeNull();
   expect(active[0]!.sections.map(({ name }) => name)).toEqual(['live column', 'activity']);
   expect(reviewing[0]!.sections.map(({ name }) => name)).toEqual(['live column', 'activity']);
-  // While verifying, the activity line is suppressed too — the harness
-  // contract's per-command log is the whole story.
-  expect(verifying[0]!.sections.map(({ name }) => name)).toEqual(['live column']);
 });
 
 test('surface owns scrolling only below the complete-panel floor', async ({ page }) => {

@@ -109,11 +109,11 @@ function detailBody(overrides: Record<string, unknown> = {}): Record<string, unk
         setup: {
           status: 'running',
           attempt: 1,
-          task_order: ['worktree:repo-a', 'kb:repo-a'],
+          task_order: ['worktree:repo-a', 'image:diagram.png'],
           tasks: {
             // Deliberately declared in non-execution order: the server map
             // has no order; task_order is authoritative.
-            'kb:repo-a': { key: 'kb:repo-a', kind: 'kb', status: 'queued' },
+            'image:diagram.png': { key: 'image:diagram.png', kind: 'image', status: 'queued' },
             'worktree:repo-a': {
               key: 'worktree:repo-a',
               kind: 'worktree',
@@ -1479,34 +1479,14 @@ describe('FeatureService.getFeature', () => {
     });
   });
 
-  it('carries ordered harness verification items into the snapshot', async () => {
-    const body = detailBody({
-      verification_items: [
-        { name: 'go test ./...', state: 'passed' },
-        { name: 'npm run build', state: 'running' },
-      ],
-    });
-    const { service } = makeService(() => ({ status: 200, body }));
-
-    await expect(service.getFeature('abcd1234ef567890')).resolves.toMatchObject({
-      verificationItems: [
-        { name: 'go test ./...', state: 'passed' },
-        { name: 'npm run build', state: 'running' },
-      ],
-    });
-  });
-
-  it('omits verificationItems when the server sends none', async () => {
-    const { service } = makeService(() => ({ status: 200, body: detailBody() }));
-    const snapshot = await service.getFeature('abcd1234ef567890');
-    expect(snapshot.verificationItems).toBeUndefined();
-  });
-
   it('orders setup tasks by the server-owned task_order', async () => {
     const { service } = makeService(() => ({ status: 200, body: detailBody() }));
     const snapshot = await service.getFeature('abcd1234ef567890');
     expect(snapshot.setup?.status).toBe('running');
-    expect(snapshot.setup?.tasks.map((task) => task.key)).toEqual(['worktree:repo-a', 'kb:repo-a']);
+    expect(snapshot.setup?.tasks.map((task) => task.key)).toEqual([
+      'worktree:repo-a',
+      'image:diagram.png',
+    ]);
     expect(snapshot.setup?.tasks[0]).toMatchObject({
       label: 'Create worktree',
       repo: 'repo-a',
@@ -1514,7 +1494,7 @@ describe('FeatureService.getFeature', () => {
       branch: 'feature/search-revamp',
       attempt: 2,
     });
-    expect(snapshot.setup?.tasks[1]).toMatchObject({ label: 'kb:repo-a', attempt: 0 });
+    expect(snapshot.setup?.tasks[1]).toMatchObject({ label: 'image:diagram.png', attempt: 0 });
   });
 
   it('passes the canonical failure across IPC with only diagnostics redacted', async () => {

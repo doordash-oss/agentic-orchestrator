@@ -33,9 +33,7 @@ interface DashboardState {
 }
 
 const STATUS_LABELS: Readonly<Record<string, string>> = {
-  BuildingKB: 'Building knowledge base',
   CodeReady: 'Code ready',
-  NeedUserInput: 'Input needed',
   SettingUpWorktrees: 'Setting up worktrees',
 };
 
@@ -61,7 +59,6 @@ export function displayFeatureMessage(message: string): string {
 /** Top-level statuses that represent actively executing phase work. */
 export const ACTIVE_STATUSES = new Set([
   'SettingUpWorktrees',
-  'BuildingKB',
   'Inquiring',
   'Researching',
   'Designing',
@@ -127,9 +124,6 @@ export function dashboardState(snapshot: FeatureSnapshot): DashboardState {
   if (snapshot.status.endsWith('NeedsReview')) {
     return { bucket: 'intervention', label: 'Review needed', tone: 'attention' };
   }
-  if (snapshot.status === 'NeedUserInput') {
-    return { bucket: 'intervention', label: 'Input needed', tone: 'attention' };
-  }
   if (ACTIVE_STATUSES.has(snapshot.status) || snapshot.setup?.status === 'running') {
     return { bucket: 'active', label: 'Active', tone: 'active' };
   }
@@ -168,7 +162,6 @@ export interface SpineStage {
 /** Phase order per pipeline profile (internal/feature/pipeline.go). */
 const MEDIUM_PHASES = ['Plan', 'Implement', 'Review', 'Publish'] as const;
 const FULL_PHASES = [
-  'Knowledge Base',
   'Inquire',
   'Research',
   'Design',
@@ -197,8 +190,18 @@ export function displayPhaseLabel(phase: string): string {
     .trim()
     .toLocaleLowerCase()
     .replace(/[_\s]+/g, '-');
-  return spineStages('large').find((stage) => stage.id === normalized)?.label ?? phase;
+  return (
+    spineStages('large').find((stage) => stage.id === normalized)?.label ??
+    RETIRED_PHASE_LABELS[normalized] ??
+    phase
+  );
 }
+
+/** Phases no profile schedules any more that older runs still record. */
+const RETIRED_PHASE_LABELS: Readonly<Record<string, string>> = {
+  'knowledge-base': 'Knowledge Base',
+  knowledgebase: 'Knowledge Base',
+};
 
 /**
  * Where the needle points: on Setup until durable setup completes, on the
@@ -231,7 +234,6 @@ export function spineActiveIndexForPhase(
 
 /** Phase a working/reviewing status runs in, for spine placement. */
 const STATUS_PHASE_LABELS: Readonly<Record<string, string>> = {
-  BuildingKB: 'Knowledge Base',
   Inquiring: 'Inquire',
   Inquiry: 'Inquire',
   Researching: 'Research',
@@ -275,7 +277,7 @@ export function childStatusSpineIndex(
  * The run finished and the feature is resting (awaiting publish/completion).
  * The server keeps current_phase at the last worked phase in these statuses,
  * so position alone would falsely read as "still working". Checkpoint pauses
- * (PlanReady, NeedUserInput, *NeedsReview, Interrupted) are NOT at rest —
+ * (PlanReady, *NeedsReview, Interrupted) are NOT at rest —
  * those runs are genuinely parked at their phase.
  */
 export function isRunAtRest(status: string): boolean {

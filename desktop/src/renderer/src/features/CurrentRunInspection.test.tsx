@@ -17,7 +17,7 @@ limitations under the License.
 import { act, cleanup, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import type { SessionSummary, VerificationItemView } from '../../../shared/ipc';
+import type { SessionSummary } from '../../../shared/ipc';
 import { installAgenticoMock, ipcError } from '../test/agenticoMock';
 import { CurrentRunInspection } from './CurrentRunInspection';
 
@@ -935,35 +935,6 @@ describe('CurrentRunInspection', () => {
     expect(autoPick).not.toHaveTextContent('85% confidence');
   });
 
-  it('shows the durable wait reason when no session exists for the current run', async () => {
-    const mock = installAgenticoMock();
-    mock.api.getLivePreview.mockResolvedValue({
-      featureId: 'abcd1234ef567890',
-      activity: 'Building knowledge base',
-      contextPercentage: -1,
-      totalSeconds: 0,
-      totalUsd: 0,
-      transcript: [],
-    });
-    mock.api.listRunArtifacts.mockResolvedValue({ artifacts: [] });
-    mock.api.listRunSessions.mockResolvedValue({ runNumber: 8, sessions: [] });
-
-    render(
-      <CurrentRunInspection
-        featureId="abcd1234ef567890"
-        runNumber={8}
-        currentPhase="KnowledgeBase"
-        reviewGate={REVIEW_GATE}
-        waitReason='Waiting for KB build on repo "repo-a" by feature "Other feature"'
-      />,
-    );
-
-    expect(
-      await screen.findByText('Waiting for KB build on repo "repo-a" by feature "Other feature"'),
-    ).toBeVisible();
-    expect(screen.queryByText('Waiting for the agent to respond…')).not.toBeInTheDocument();
-  });
-
   it('merges a streamed record into the correct session without touching the selected view', async () => {
     const user = userEvent.setup();
     const mock = renderCohort();
@@ -1069,114 +1040,7 @@ describe('CurrentRunInspection', () => {
     expect(inspector).toHaveTextContent('"index": 0');
   });
 
-  it('renders a verification summary tick inline in the stream, not a separate surface', async () => {
-    const user = userEvent.setup();
-    const mock = installAgenticoMock();
-    mock.api.getLivePreview.mockResolvedValue({
-      featureId: 'abcd1234ef567890',
-      activity: 'Running implementation',
-      contextPercentage: 42,
-      totalSeconds: 73,
-      totalUsd: 0.12,
-      transcript: [],
-    });
-    mock.api.listRunArtifacts.mockResolvedValue({ artifacts: [] });
-    mock.api.listRunSessions.mockResolvedValue({
-      runNumber: 8,
-      sessions: [validator({ id: 'craft', label: 'Craft', status: 'done' })],
-    });
-    mock.api.getSessionTranscript.mockResolvedValue({
-      sessionId: 'craft',
-      cursor: { total: 1, start: 0, end: 1 },
-      messages: [
-        {
-          index: 0,
-          role: 'assistant',
-          type: 'text',
-          text: 'Implementation transcript.',
-        },
-      ],
-    });
-
-    render(
-      <CurrentRunInspection
-        featureId="abcd1234ef567890"
-        runNumber={8}
-        currentPhase="Implement"
-        currentRoadmapPhase={2}
-        phaseStatus="verifying"
-        reviewGate={REVIEW_GATE}
-        verificationItems={[
-          { name: 'go test ./...', state: 'passed' },
-          { name: 'npm run build', state: 'running' },
-          { name: 'lint', state: 'pending' },
-          { name: 'e2e smoke', state: 'failed' },
-        ]}
-      />,
-    );
-
-    // A single current-state summary tick renders at the end of the stream —
-    // the separate verification stage and its per-command log are gone; the
-    // transcript itself keeps rendering alongside it.
-    expect(await screen.findByText('Verification: 1 of 4 checks passing')).toBeVisible();
-    expect(screen.queryByLabelText('Verification progress')).not.toBeInTheDocument();
-    expect(screen.queryByLabelText('Verification commands')).not.toBeInTheDocument();
-    expect(
-      screen.queryByRole('heading', { name: 'Verifying implementation · 2/4' }),
-    ).not.toBeInTheDocument();
-    expect(await screen.findByText('Implementation transcript.')).toBeVisible();
-    expect(screen.queryByLabelText('Review axes')).not.toBeInTheDocument();
-
-    await user.click(screen.getByRole('button', { name: 'Expand live preview to full screen' }));
-    const overlay = await screen.findByRole('dialog', { name: 'Live agent preview' });
-    expect(overlay).toHaveTextContent('Verification: 1 of 4 checks passing');
-    expect(overlay).toHaveTextContent('Implementation transcript.');
-  });
-
-  it('drops verification ticks when the feature moves to another phase', async () => {
-    const mock = installAgenticoMock();
-    mock.api.getLivePreview.mockResolvedValue({
-      featureId: 'abcd1234ef567890',
-      activity: 'Running implementation',
-      contextPercentage: 42,
-      totalSeconds: 73,
-      totalUsd: 0.12,
-      transcript: [],
-    });
-    mock.api.listRunArtifacts.mockResolvedValue({ artifacts: [] });
-    mock.api.listRunSessions.mockResolvedValue({ runNumber: 8, sessions: [] });
-
-    const inspection = (phase: string, roadmapPhase: number, items?: VerificationItemView[]) => (
-      <CurrentRunInspection
-        featureId="abcd1234ef567890"
-        runNumber={8}
-        currentPhase={phase}
-        currentRoadmapPhase={roadmapPhase}
-        phaseStatus={items === undefined ? undefined : 'verifying'}
-        reviewGate={REVIEW_GATE}
-        verificationItems={items}
-      />
-    );
-    const view = render(
-      inspection('Implement', 1, [
-        { name: 'go test ./...', state: 'passed' },
-        { name: 'npm test', state: 'failed' },
-      ]),
-    );
-    expect(await screen.findByText('Verification: 1 of 2 checks passing')).toBeVisible();
-
-    // Same phase, items cleared by the server after the run: history stays.
-    view.rerender(inspection('Implement', 1, undefined));
-    expect(screen.getByText('Verification: 1 of 2 checks passing')).toBeVisible();
-
-    // Next roadmap phase starts planning: the previous phase's checks leave the stream.
-    view.rerender(inspection('Plan', 2, undefined));
-    await waitFor(() =>
-      expect(screen.queryByText('Verification: 1 of 2 checks passing')).not.toBeInTheDocument(),
-    );
-  });
-
-  it('keeps live reviewer tabs when an active gate coincides with a stale verifying marker', async () => {
+  it('keeps live reviewer tabs while a review gate is active', async () => {
     const mock = installAgenticoMock();
     mock.api.getLivePreview.mockResolvedValue({
       featureId: 'abcd1234ef567890',
@@ -1223,7 +1087,6 @@ describe('CurrentRunInspection', () => {
         runNumber={8}
         currentPhase="Implement"
         currentIteration={2}
-        phaseStatus="verifying"
         reviewGate={{
           reviewingGate: true,
           reviewFixing: false,
@@ -1235,14 +1098,10 @@ describe('CurrentRunInspection', () => {
             Design: 'running',
           },
         }}
-        verificationItems={[{ name: 'go test', state: 'running' }]}
       />,
     );
 
     expect(await screen.findByRole('tablist', { name: 'Live agents' })).toBeVisible();
-    expect(
-      screen.queryByRole('heading', { name: /Verifying implementation/ }),
-    ).not.toBeInTheDocument();
     expect(screen.queryByLabelText('Review gate')).not.toBeInTheDocument();
     expect(screen.queryByLabelText('Review axes')).not.toBeInTheDocument();
   });
@@ -1354,30 +1213,6 @@ describe('CurrentRunInspection error surfaces', () => {
       />,
     );
   }
-
-  it('offers the testing-contract waiver only when the files host wires it', async () => {
-    const user = userEvent.setup();
-    const mock = installAgenticoMock();
-    resolveBase(mock);
-    const { rerender } = renderInspection();
-    await screen.findByRole('region', { name: 'Run artifacts' });
-    expect(screen.queryByRole('button', { name: 'Waive contract items' })).not.toBeInTheDocument();
-
-    const onWaive = vi.fn();
-    rerender(
-      <CurrentRunInspection
-        featureId={FEATURE_ID}
-        runNumber={8}
-        currentPhase="Implement"
-        reviewGate={REVIEW_GATE}
-        mode="files"
-        shouldStream
-        onWaiveTestingContract={onWaive}
-      />,
-    );
-    await user.click(screen.getByRole('button', { name: 'Waive contract items' }));
-    expect(onWaive).toHaveBeenCalledOnce();
-  });
 
   it('renders one compact ErrorSurface with Refresh when the files fetch rejects', async () => {
     const user = userEvent.setup();

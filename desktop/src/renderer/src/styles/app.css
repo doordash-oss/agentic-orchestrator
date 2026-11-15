@@ -895,26 +895,6 @@ body {
   margin: 0;
 }
 
-/* Verification results as events in the stream: a small glyph-plus-caption
- * tick line, colored by tone, in arrival order at the stream's current end. */
-.conversation__verification-tick {
-  margin: 0;
-  color: var(--muted);
-  font: 12px var(--bench-font-text);
-}
-
-.conversation__verification-tick[data-tone='passed'] {
-  color: var(--ok);
-}
-
-.conversation__verification-tick[data-tone='failed'] {
-  color: var(--bad);
-}
-
-.conversation__verification-tick[data-tone='running'] {
-  color: var(--accent);
-}
-
 /* Tool activity is one quiet trace line between turns: the dots while the
  * supervisor is still working, a tick once it is done, then what it used. */
 .conversation__activity {
@@ -1419,8 +1399,7 @@ body {
   color: var(--bad);
 }
 
-.refactor-pass__retry-load,
-.refactor-pass__answer-now {
+.refactor-pass__retry-load {
   padding: 0;
   border: 0;
   border-bottom: 1px solid currentColor;
@@ -3007,289 +2986,6 @@ body {
   gap: var(--space-5);
 }
 
-/* ─── The cycle gate, in the sheet ───────────────────────────────────────── */
-.need-input-sheet__header {
-  display: grid;
-  gap: var(--space-2);
-  margin-bottom: var(--space-5);
-}
-
-.need-input-sheet__eyebrow {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  margin: 0;
-  color: var(--attention);
-  font: 600 11px var(--bench-font-mono);
-  letter-spacing: 0.02em;
-}
-
-.need-input-sheet__title {
-  margin: 0;
-  color: var(--text);
-  font: 500 22px/1.25 var(--bench-font-serif);
-}
-
-.need-input-sheet__lede,
-.need-input-sheet__summary {
-  margin: 0;
-  color: var(--muted);
-  font: 13px/1.5 var(--bench-font-text);
-}
-
-.need-input-sheet__questions {
-  display: grid;
-  gap: var(--space-5);
-  min-width: 0;
-}
-
-.need-input-sheet__question {
-  display: grid;
-  gap: var(--space-2);
-  min-width: 0;
-}
-
-.need-input-sheet__question > span {
-  display: grid;
-  gap: var(--space-1);
-  min-width: 0;
-}
-
-.need-input-sheet__question small {
-  color: var(--muted);
-  font: 11px var(--bench-font-mono);
-}
-
-.need-input-sheet__question strong {
-  color: var(--text);
-  font: 400 14px/1.5 var(--bench-font-serif);
-  overflow-wrap: anywhere;
-}
-
-.need-input-sheet__question textarea {
-  min-height: 76px;
-  resize: vertical;
-  border: var(--bench-hairline-width) solid var(--hairline);
-  border-radius: var(--bench-radius-control);
-  padding: var(--space-3);
-  background: var(--raised);
-  color: var(--text);
-  font: 13px/1.5 var(--bench-font-text);
-}
-
-.need-input-sheet__question textarea::placeholder {
-  color: var(--faint);
-}
-
-.need-input-sheet__question textarea:focus-visible {
-  border-color: var(--accent);
-  outline: 2px solid var(--accent);
-  outline-offset: 1px;
-}
-
-/* The hint is the reason Resume agent is inert, so it carries attention. */
-.need-input-sheet__hint {
-  margin: var(--space-4) 0 0;
-  color: var(--attention);
-  font: 12px var(--bench-font-text);
-}
-
-.need-input-verification {
-  display: flex;
-  min-width: 0;
-  flex-direction: column;
-  gap: var(--space-5);
-}
-
-.need-input-verification__blockers,
-.need-input-verification__decisions {
-  min-width: 0;
-  margin: 0;
-  padding: 0;
-  border: 0;
-}
-
-.need-input-verification__section-heading {
-  display: flex;
-  align-items: baseline;
-  justify-content: space-between;
-  gap: var(--space-3);
-  margin-bottom: var(--space-2);
-}
-
-.need-input-verification__section-heading p,
-.need-input-verification__section-heading h2,
-.need-input-verification__decisions legend {
-  margin: 0;
-}
-
-.need-input-verification__section-heading p {
-  color: var(--muted);
-  font: 700 11px var(--bench-font-text);
-  letter-spacing: 0.02em;
-}
-
-.need-input-verification__section-heading h2,
-.need-input-verification__decisions legend {
-  font: 700 16px var(--bench-font-text);
-}
-
-.need-input-verification__blocker-list {
-  display: grid;
-  max-height: min(40vh, 24rem);
-  gap: var(--space-2);
-  margin: 0;
-  padding: 0;
-  overflow: auto;
-  list-style: none;
-}
-
-/* A blocker is something to attend to: the attention wash carries that, and
- * the card keeps the grouped-list edge instead of a bar. */
-.need-input-verification__blocker-card {
-  min-width: 0;
-  padding: var(--space-3);
-  border: var(--bench-hairline-width) solid
-    color-mix(in srgb, var(--attention) 34%, var(--hairline));
-  border-radius: var(--bench-radius-card);
-  background: color-mix(in srgb, var(--attention) 9%, var(--raised));
-}
-
-.need-input-verification__blocker-card header {
-  display: flex;
-  min-width: 0;
-  align-items: baseline;
-  justify-content: space-between;
-  gap: var(--space-3);
-}
-
-.need-input-verification__blocker-card h3 {
-  min-width: 0;
-  margin: 0;
-  font: 700 14px var(--bench-font-text);
-}
-
-.need-input-verification__blocker-card code {
-  overflow-wrap: anywhere;
-  font: 12px/1.45 var(--bench-font-mono);
-}
-
-.need-input-verification__blocker-card header > code {
-  flex: 0 1 auto;
-  color: var(--muted);
-}
-
-.need-input-verification__blocker-card dl {
-  display: grid;
-  gap: var(--space-2);
-  margin: var(--space-3) 0 0;
-}
-
-.need-input-verification__blocker-card dl > div {
-  display: grid;
-  grid-template-columns: minmax(4.5rem, auto) minmax(0, 1fr);
-  gap: var(--space-2);
-}
-
-.need-input-verification__blocker-card dt {
-  color: var(--muted);
-  font: 700 11px/1.5 var(--bench-font-text);
-  letter-spacing: 0.02em;
-}
-
-.need-input-verification__blocker-card dd {
-  min-width: 0;
-  margin: 0;
-  overflow-wrap: anywhere;
-  font-size: 13px;
-}
-
-.need-input-verification__decisions legend {
-  margin-bottom: var(--space-2);
-}
-
-.need-input-verification__decision-list {
-  display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: var(--space-2);
-}
-
-.need-input-verification__decision {
-  display: flex;
-  min-width: 0;
-  gap: var(--space-2);
-  padding: var(--space-3);
-  border: 1px solid var(--hairline);
-  border-radius: var(--radius);
-  background: var(--raised);
-  cursor: pointer;
-  transition:
-    border-color 120ms ease,
-    background-color 120ms ease;
-}
-
-.need-input-verification__decision[data-selected='true'] {
-  border-color: var(--accent);
-  background: color-mix(in srgb, var(--accent) 8%, var(--raised));
-}
-
-.need-input-verification__decision[data-tone='warning'][data-selected='true'] {
-  border-color: var(--bad);
-  background: color-mix(in srgb, var(--bad) 7%, var(--raised));
-}
-
-.need-input-verification__decision input {
-  flex: 0 0 auto;
-  margin: 0.2rem 0 0;
-  accent-color: var(--accent);
-}
-
-.need-input-verification__decision[data-tone='warning'] input {
-  accent-color: var(--bad);
-}
-
-.need-input-verification__decision input:focus-visible {
-  outline: var(--focus-ring);
-  outline-offset: 2px;
-}
-
-.need-input-verification__decision > span {
-  display: flex;
-  min-width: 0;
-  flex-direction: column;
-  gap: var(--space-1);
-}
-
-.need-input-verification__decision strong {
-  font: 700 13px/1.35 var(--bench-font-text);
-}
-
-.need-input-verification__decision small {
-  color: var(--muted);
-  font: 12px/1.45 var(--bench-font-text);
-}
-
-.need-input-verification__decision[data-tone='warning'] strong {
-  color: var(--bad);
-}
-
-@media (max-width: 560px) {
-  .need-input-verification__decision-list {
-    grid-template-columns: 1fr;
-  }
-
-  .need-input-verification__blocker-card dl > div {
-    grid-template-columns: 1fr;
-    gap: var(--space-1);
-  }
-}
-
-@media (prefers-reduced-motion: reduce) {
-  .need-input-verification__decision {
-    transition: none;
-  }
-}
-
 @media (max-width: 620px) {
   .aftercare-workspace__main {
     padding: var(--space-4);
@@ -3666,8 +3362,7 @@ body {
   font-size: 11px;
 }
 
-.attention-question,
-.attention-gate-question {
+.attention-question {
   display: grid;
   gap: var(--space-2);
 }
@@ -3881,11 +3576,6 @@ body {
   border-color: var(--accent);
   outline: var(--focus-ring);
   outline-offset: 1px;
-}
-
-.attention-gate-question > span:first-child {
-  font-weight: 700;
-  font-size: 12px;
 }
 
 .attention-free-text__hint {
@@ -6585,7 +6275,6 @@ body {
   color: var(--bad);
 }
 .cockpit__phase-status code[data-status='Interrupted']::before,
-.cockpit__phase-status code[data-status='NeedUserInput']::before,
 .cockpit__phase-status code[data-status='ResearchNeedsReview']::before,
 .cockpit__phase-status code[data-status='FinalReviewNeedsReview']::before {
   color: var(--attention);
@@ -6600,7 +6289,6 @@ body {
   color: var(--attention);
 }
 .cockpit__phase-status code[data-status='SettingUpWorktrees']::before,
-.cockpit__phase-status code[data-status='BuildingKB']::before,
 .cockpit__phase-status code[data-status='Inquiring']::before,
 .cockpit__phase-status code[data-status='Researching']::before,
 .cockpit__phase-status code[data-status='Designing']::before,
@@ -7195,188 +6883,6 @@ body {
 
 .recovery-workspace__item-link:hover {
   text-decoration: none;
-}
-
-/* Neutral variant of the impact dialog: a contract amendment, not a removal.
- * Bounded to the window; the header and the reason/actions footer stay put
- * and only the checklist scrolls. The checklist keeps at least two rows, so
- * a window too short for that scrolls the whole card instead. */
-.contract-waive-dialog {
-  display: flex;
-  flex-direction: column;
-  gap: var(--space-3);
-  max-height: calc(100vh - 2 * var(--space-4));
-  overflow-y: auto;
-}
-
-.contract-waive-dialog__eyebrow {
-  color: var(--muted);
-}
-
-.contract-waive-dialog__header,
-.contract-waive-dialog__footer {
-  flex: 0 0 auto;
-  display: grid;
-  gap: var(--space-3);
-}
-
-.contract-waive-dialog__header {
-  gap: 0;
-}
-
-.contract-waive-dialog h3 {
-  margin: var(--space-2) 0 var(--space-3);
-}
-
-.contract-waive-dialog__body {
-  flex: 1 1 auto;
-  min-height: 7rem;
-  overflow-y: auto;
-}
-
-.contract-waive-dialog__items {
-  display: grid;
-  gap: var(--space-2);
-  margin: 0;
-  border: 1px solid var(--hairline);
-  border-radius: var(--radius);
-  padding: var(--space-3);
-}
-
-.contract-waive-dialog__items legend {
-  padding: 0 var(--space-1);
-  color: var(--muted);
-  font: 500 12px var(--bench-font-text);
-}
-
-.contract-waive-dialog__notice {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: var(--space-3);
-  margin: 0;
-  color: var(--muted);
-  font-size: 13px;
-}
-
-.contract-waive-dialog__item {
-  display: flex;
-  align-items: flex-start;
-  gap: var(--space-2);
-  font-size: 13px;
-}
-
-.contract-waive-dialog__item > input {
-  margin-top: 2px;
-}
-
-.contract-waive-dialog__item > span {
-  display: grid;
-  gap: 2px;
-  min-width: 0;
-}
-
-.contract-waive-dialog__repo {
-  color: var(--muted);
-}
-
-.contract-waive-dialog__item code {
-  color: var(--muted);
-  font-size: 11px;
-  word-break: break-all;
-}
-
-.contract-waive-dialog__item small {
-  color: var(--muted);
-  font-size: 12px;
-}
-
-.contract-waive-dialog__meta {
-  font-size: 11px;
-}
-
-.contract-waive-dialog__item[data-lock] {
-  color: var(--muted);
-}
-
-.contract-waive-dialog__tags {
-  display: flex;
-  flex-wrap: wrap;
-  gap: var(--space-1);
-}
-
-.contract-waive-dialog__tags:empty {
-  display: none;
-}
-
-.contract-waive-dialog__tag {
-  border: 1px solid var(--hairline);
-  border-radius: 999px;
-  padding: 0 var(--space-2);
-  color: var(--muted);
-  font: 500 11px var(--bench-font-text);
-}
-
-/* A recorded state, not a policy hint: full text color on a filled chip. */
-.contract-waive-dialog__tag--state {
-  color: var(--text);
-  background: color-mix(in srgb, var(--content) 6%, transparent);
-  border-color: color-mix(in srgb, var(--text) 30%, transparent);
-}
-
-.contract-waive-dialog .impact-dialog__actions {
-  margin-top: 0;
-}
-
-/* A short window keeps more of the checklist in view. */
-.contract-waive-dialog .need-input-sheet__question textarea {
-  min-height: 56px;
-}
-
-/* A long failure scrolls inside its own box instead of pushing the
- * checklist out of the card. */
-.contract-waive-dialog__result {
-  max-height: 6rem;
-  overflow-y: auto;
-}
-
-/* A short window: the title names the dialog on its own, and the card
- * tightens so the two checklist rows, the reason, the verbs, and a failure
- * all fit without scrolling the card. */
-@media (max-height: 600px) {
-  .contract-waive-dialog {
-    padding: var(--space-4);
-    gap: var(--space-2);
-  }
-
-  .contract-waive-dialog .impact-dialog__lede {
-    display: none;
-  }
-
-  .contract-waive-dialog h3 {
-    margin-bottom: 0;
-  }
-
-  .contract-waive-dialog__footer {
-    gap: var(--space-2);
-  }
-
-  .contract-waive-dialog .need-input-sheet__question textarea {
-    min-height: 40px;
-  }
-
-  .contract-waive-dialog__result {
-    max-height: 4rem;
-  }
-}
-
-/* The Files heading's contract action: a real button, set apart from the
- * count chip beside it. */
-.current-inspection__files-action {
-  margin-left: auto;
-  font-weight: 500;
-  font-size: 12px;
-  padding: var(--space-1) var(--space-3);
 }
 
 /* --- Completion workspace -------------------------------------------------- */

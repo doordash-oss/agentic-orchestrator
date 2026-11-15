@@ -422,6 +422,37 @@ func TestHandoffQuestionListsBlockingFindings(t *testing.T) {
 	}
 }
 
+func TestHandoffAnswerOnlyMatchesTheHandoffQuestion(t *testing.T) {
+	t.Parallel()
+	question := handoffQuestion("Final Review", reviewHandoff{Reason: "QA stalled."}, "/handoff.md")
+	qa := []ports.QAPair{
+		{Question: "Should the retry stop after five attempts?", Answer: "Stop"},
+		{Question: "Final Review needs your decision. QA stalled.\n\nHow should Final Review proceed?", Answer: "Accept and proceed to Publish"},
+		{Question: "Final Review needs your decision. QA stalled.\n\nHow should Final Review proceed?", Answer: "Stop"},
+	}
+	if answer, ok := handoffAnswer(qa, question); !ok || answer != "Accept and proceed to Publish" {
+		t.Fatalf("handoffAnswer() = %q, %v; want the first answer to the handoff question", answer, ok)
+	}
+	if got := reviewDecisionPairs(qa[:1], question); len(got) != 0 {
+		t.Fatalf("reviewDecisionPairs() = %+v, want an unrelated question left out", got)
+	}
+}
+
+func TestClassifyHandoffAnswerWithTrailingText(t *testing.T) {
+	t.Parallel()
+	for answer, want := range map[string]reviewHandoffChoice{
+		"Stop, I'll fix it myself":                    handoffStop,
+		"Accept and finish the phase. Ship it.":       handoffAccept,
+		"Fix the tests first, then stop":              handoffContinue,
+		"Accept and proceed to Publish, Stop":         handoffUnanswered,
+		"Continue with guidance: add the CSV export.": handoffContinue,
+	} {
+		if got := classifyHandoffAnswer(answer); got != want {
+			t.Errorf("classifyHandoffAnswer(%q) = %v, want %v", answer, got, want)
+		}
+	}
+}
+
 // Unknown repo state keeps an approval only while nothing could have changed
 // the code since: no fix, no change in what is known, and no gap between loop
 // runs. Each stale approval reruns once, in full.

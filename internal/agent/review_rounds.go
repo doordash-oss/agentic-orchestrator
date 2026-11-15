@@ -366,25 +366,22 @@ func handoffQuestionMarker(gateLabel string) string {
 	return fmt.Sprintf("How should %s proceed?", gateLabel)
 }
 
-// isHandoffPair reports whether pair answers the handoff question: it
-// carries the question's closing line, or its answer is one of the options.
+// isHandoffPair reports whether pair answers the handoff question, which
+// carries the question's closing line.
 func isHandoffPair(pair ports.QAPair, handoffQuestion string) bool {
 	if handoffQuestion == "" {
 		return false
 	}
 	lines := strings.Split(strings.TrimSpace(handoffQuestion), "\n")
-	if marker := strings.TrimSpace(lines[len(lines)-1]); marker != "" && strings.Contains(pair.Question, marker) {
-		return true
-	}
-	_, exact := handoffLabelChoice(answerLabel(pair.Answer))
-	return exact
+	marker := strings.TrimSpace(lines[len(lines)-1])
+	return marker != "" && strings.Contains(pair.Question, marker)
 }
 
-// handoffAnswer returns the user's answer to the handoff question, if any.
+// handoffAnswer returns the user's first answer to the handoff question.
 func handoffAnswer(qa []ports.QAPair, handoffQuestion string) (string, bool) {
-	for i := len(qa) - 1; i >= 0; i-- {
-		if !qa[i].AutoPicked && strings.TrimSpace(qa[i].Answer) != "" && isHandoffPair(qa[i], handoffQuestion) {
-			return qa[i].Answer, true
+	for _, pair := range qa {
+		if !pair.AutoPicked && strings.TrimSpace(pair.Answer) != "" && isHandoffPair(pair, handoffQuestion) {
+			return pair.Answer, true
 		}
 	}
 	return "", false
@@ -421,8 +418,8 @@ func handoffLabelChoice(label string) (reviewHandoffChoice, bool) {
 }
 
 // classifyHandoffAnswer maps the handoff answer to the way forward. An
-// answer naming more than one option is not an answer; any other text is
-// guidance.
+// answer that opens with an option takes it, whatever text follows; one
+// naming more than one option is not an answer; any other text is guidance.
 func classifyHandoffAnswer(answer string) reviewHandoffChoice {
 	label := answerLabel(answer)
 	if label == "" {
@@ -431,24 +428,23 @@ func classifyHandoffAnswer(answer string) reviewHandoffChoice {
 	if choice, ok := handoffLabelChoice(label); ok {
 		return choice
 	}
-	if parts := strings.Split(label, ", "); len(parts) > 1 {
-		seen := map[reviewHandoffChoice]bool{}
-		for _, part := range parts {
-			choice, ok := handoffLabelChoice(strings.TrimSpace(part))
-			if !ok {
-				return handoffContinue
-			}
+	parts := answerClauses.Split(label, -1)
+	seen := map[reviewHandoffChoice]bool{}
+	for _, part := range parts {
+		if choice, ok := handoffLabelChoice(strings.TrimSpace(part)); ok {
 			seen[choice] = true
 		}
-		if len(seen) > 1 {
-			return handoffUnanswered
-		}
-		for choice := range seen {
-			return choice
-		}
+	}
+	if len(seen) > 1 {
+		return handoffUnanswered
+	}
+	if choice, ok := handoffLabelChoice(strings.TrimSpace(parts[0])); ok {
+		return choice
 	}
 	return handoffContinue
 }
+
+var answerClauses = regexp.MustCompile(`[,;:.]|\s[-–—]\s`)
 
 func answerLabel(answer string) string {
 	label := strings.ToLower(strings.TrimSpace(answer))

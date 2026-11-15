@@ -31,7 +31,7 @@ For roadmaps:
 - **DO NOT evaluate**: Whether every latency-sensitive path is optimized, whether every timeout is configured, or whether caching is tuned. These are implementation details for per-phase planning
 - **Calibrate to actual scale**: Evaluate performance concerns against the project's actual usage patterns, not theoretical load levels. A development workflow tool managing a handful of concurrent features has different performance requirements than a high-throughput production service
 
-For per-phase plans using `skills/plan-phase/format.md`, review only `## Overview`, `## Tasks`, task acceptance criteria, and `## Success Criteria`. Do NOT require a separate performance section, benchmark plan, or implementation-level tuning details. Reject only when the phase introduces a fundamental bottleneck or unbounded resource pattern that is invisible from the task/criteria model.
+For per-phase plans using `skills/plan-phase/format.md`, review only `## Overview`, `## Tasks`, task acceptance criteria, and `## Verification`. Do NOT require a separate performance section, benchmark plan, or implementation-level tuning details. Reject only when the phase introduces a fundamental bottleneck or unbounded resource pattern that is invisible from the task/criteria model.
 
 ## Human Decisions Are Authoritative
 
@@ -45,7 +45,7 @@ For per-phase plans, examples of blocking gaps are:
 - A task introduces unbounded fan-out, goroutines, queue growth, or file reads without acceptance criteria covering bounds.
 - A task adds large-list or recursive processing without criteria covering pagination, streaming, or expected limits.
 - A task adds external calls on a hot path without criteria covering timeout/failure behavior.
-- A task changes a critical user-facing path but success criteria do not include a relevant performance-sensitive smoke check.
+- A task changes a critical user-facing path but the Verification section does not include a relevant performance-sensitive smoke check.
 
 ### 1. Scalability
 - Will the approach scale with growth in data volume and traffic?

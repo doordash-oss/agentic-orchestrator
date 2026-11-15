@@ -26,14 +26,18 @@ surfaces are strictly additive: neither the compatibility declaration nor
 the discovery schema version changes for it, so older consumers keep working
 against named servers and newer consumers tolerate name-less servers.
 
-The compatibility declaration on `/api/v1/health` reports schema series 5
-and minimum client series 5 under the `loopback-bearer-v1` runtime policy
-(`network-bearer-v1` for non-loopback listeners). Series 5 merges the
-feature-action and child-launch response schemas, removes the unused action
-union and static rebase operation declaration, drops the never-sent start `phase` and `session_ids` fields and the
-restart `phase`, `dispatch`, and `session_ids` fields (the first two were
-emitted but not consumed), adds the routed `selection` subaction enum value, and
-declares the delete response's existing `retryable` field. The rebase URL
+The compatibility declaration on `/api/v1/health` reports schema series 6
+and minimum client series 6 under the `loopback-bearer-v1` runtime policy
+(`network-bearer-v1` for non-loopback listeners). Series 6 removes the
+testing-contract route, the need-user-input gate with its
+`need-user-input`, `need-user-input-draft` and `testing-contract-waive`
+actions, and the required `need_user_inputs` prompt-snapshot field. Series 5
+merged the feature-action and child-launch response schemas, removed the
+unused action union and static rebase operation declaration, dropped the
+never-sent start `phase` and `session_ids` fields and the restart `phase`,
+`dispatch`, and `session_ids` fields (the first two were emitted but not
+consumed), added the routed `selection` subaction enum value, and declared the
+delete response's existing `retryable` field. The rebase URL
 remains served through the generic action route. In schema series 4,
 ask-user questions carry a required one-based `index`; ask-user answers are
 keyed by that index as a string (`"1"`, `"2"`, ...). Ask-user selections use

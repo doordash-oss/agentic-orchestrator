@@ -15,6 +15,7 @@
 package agent
 
 import (
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -311,6 +312,57 @@ func TestImplementLoopPhaseReview_ReadOnlyRepoGuard(t *testing.T) {
 	if _, err := os.Stat(stray); !os.IsNotExist(err) {
 		t.Fatalf("stray reviewer write stat = %v, want restored", err)
 	}
+}
+
+// reviewerCommitOnce commits a change in repo the first time any reviewer
+// runs it, as a reviewer that ignores its read-only posture would.
+func reviewerCommitOnce(repo, marker string) string {
+	return fmt.Sprintf(`if [ ! -f %[2]q ]; then touch %[2]q; echo stray >> %[1]q/reviewer.txt; git -C %[1]q add -A; git -C %[1]q commit -qm reviewer-commit; fi`, repo, marker)
+}
+
+func requireNoReviewerCommit(t *testing.T, repo string) {
+	t.Helper()
+	out, err := exec.Command("git", "-C", repo, "log", "--format=%s").CombinedOutput()
+	if err != nil {
+		t.Fatalf("git log: %v\n%s", err, out)
+	}
+	if strings.Contains(string(out), "reviewer-commit") {
+		t.Fatalf("a reviewer's commit stayed on the branch:\n%s", out)
+	}
+}
+
+// A reviewer's commit leaves a clean tree; both gates still catch and undo it.
+func TestReviewGates_ReadOnlyGuardCatchesReviewerCommit(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping loop test in short mode")
+	}
+	t.Run("final_review", func(t *testing.T) {
+		env := newFRLoopEnv(t)
+		store, f, repo, artDir := newFRGitFeature(t, env, "fr-reviewer-commit")
+		script := reviewerCommitOnce(repo, filepath.Join(env.scriptsDir, "committed")) + "\n" + frAxisVerdictScript(artDir, nil)
+		reviewScript := testutil.WriteScript(t, env.scriptsDir, "review.sh", testutil.JSONLInit+"\n"+script+"\n"+testutil.JSONLSuccess+"\n")
+		result, _ := runFRLoop(t, f, store, env, reviewScript, frFixerScript(t, env, artDir, ":", ":"), 3, nil)
+		if result.FinalStatus != finalStatusReviewPassed || result.Iterations != 2 {
+			t.Fatalf("result = %+v, want the round with the commit failed and the next one passing", result)
+		}
+		requireNoReviewerCommit(t, repo)
+	})
+	t.Run("per_phase", func(t *testing.T) {
+		env := newPhaseGateEnv(t, "feat-phase-reviewer-commit", feature.PipelineMoonshot)
+		env.f.Repos[0].WorktreePath = env.repo
+		if err := env.store.Save(env.f); err != nil {
+			t.Fatal(err)
+		}
+		env.reviewBody = reviewerCommitOnce(env.repo, filepath.Join(env.scriptsDir, "committed"))
+		run := runPhaseGate(t, env, 5, nil, nil, nil)
+		if run.result.FinalStatus != finalStatusReviewPassed || run.result.Iterations != 2 {
+			t.Fatalf("result = %+v, want the round with the commit failed and the next one passing", run.result)
+		}
+		if meta := phaseGateMeta(t, env, 1); meta.AgentStatus != agentStatusProtocolViolation {
+			t.Fatalf("iteration 1 agent status = %q, want a protocol violation", meta.AgentStatus)
+		}
+		requireNoReviewerCommit(t, env.repo)
+	})
 }
 
 // Decisions from a phase's review reach Final Review.

@@ -34,6 +34,10 @@ Do not block merely because recorded implementation evidence is missing; that is
 
 When you cannot exercise a surface for a reason you cannot attribute to the code, record a non-blocking caveat in `## Suggestions`. Examples: a headless browser unavailable in this environment, a local service dependency not present, or a toolchain requiring in-tree writes under an OS sandbox. Be explicit about what you could not verify and why.
 
+## Review Rounds
+
+When your prompt has an Acceptance Authority section, the decisions it names outrank acceptance criteria, and a finding the decisions file records as accepted as is is not raised again. When it has a Round Scope section, that section narrows this skill's scope for the round: in a follow-up, judge your open findings and what the delta changed; in a confirmation, request changes only for a regression the delta introduced.
+
 ## Handoff Contract
 
 Write exactly one `review-feedback.md` with these three `## ` sections, in order:

@@ -35,13 +35,15 @@ Never create or edit `phase_complete`.
 
 ## Disputing a Review Finding
 
-Later approved decisions outrank the plan's acceptance criteria: the roadmap's out-of-scope list, the user's recorded answers, and the phase's review decisions file. A reviewer finding that one of them supersedes, or that is wrong on the facts, is not fixed. Follow a decision the decisions file already records; for any other disputed blocking finding, call the formal AskUserQuestion control once per finding. Quote the finding, name its axis, and say why you dispute it, citing the decision when there is one. Offer exactly these options:
+Later approved decisions outrank the plan's acceptance criteria: the roadmap's out-of-scope list, the user's recorded answers, and the phase's review decisions file. A reviewer finding that one of them supersedes, or that is wrong on the facts, is not fixed. Follow a decision the decisions file already records; for any other disputed blocking finding, call the formal AskUserQuestion control once per finding. Start the question with "Dispute:", quote the finding, name its axis, and say why you dispute it, citing the decision when there is one. Offer exactly these options:
 
 - "Fix it": you fix the finding as the reviewer asked.
 - "Accept as is": the finding stands accepted and is not raised again.
 - "Change the scope": the user describes the scope change in the answer, and you apply it.
 
-Act on the answer. The harness records every question and answer in the decisions file that later reviewers and implementers read. When you worked on review findings, end your final response with a short note for the next reviewers: what you fixed, what you disputed, and why.
+Act on the answer. The harness records dispute and handoff answers in the decisions file that later reviewers and implementers read; other questions are not decisions. When you worked on review findings, end your final response with a short note for the next reviewers: what you fixed, what you disputed, and why.
+
+When your prompt has a Handoff to the User section, the phase review stopped converging. Ask that section's question first, verbatim and as a single choice, ask no dispute questions this iteration, and act on the answer as the section says.
 
 ## Task Fan-Out
 

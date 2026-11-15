@@ -34,6 +34,10 @@ Consult the relevant language guidelines and the repository's own instruction fi
 
 At the Final gate, judge Cleanliness over the whole assembled feature and cumulative cross-repo diff. Cross-repo atomicity, stale artifacts, and publish/revert risk are naturally in scope across the full feature.
 
+## Review Rounds
+
+When your prompt has an Acceptance Authority section, the decisions it names outrank acceptance criteria, and a finding the decisions file records as accepted as is is not raised again. When it has a Round Scope section, that section narrows this skill's scope for the round: in a follow-up, judge your open findings and what the delta changed; in a confirmation, request changes only for a regression the delta introduced.
+
 ## Non-Goals
 
 - Do not audit whether every verification row passed.

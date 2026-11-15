@@ -3444,6 +3444,7 @@ body {
   line-height: 1.55;
   font-weight: 400;
   overflow-wrap: anywhere;
+  white-space: pre-line;
 }
 
 .attention-question__cue {
@@ -3717,6 +3718,7 @@ body {
   color: var(--text);
   font: 400 15px/1.5 var(--bench-font-serif);
   overflow-wrap: anywhere;
+  white-space: pre-line;
 }
 
 .question-turn__cue {

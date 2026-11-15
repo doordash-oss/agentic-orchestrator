@@ -25,7 +25,7 @@ Own functionality and acceptance for the current phase:
 ## Process
 
 1. Read the phase plan, the roadmap scope guidance, the progress notes when they exist, and the iteration's diff so you know what changed and what was promised.
-2. Follow the `## Verification` section yourself: run each command from the root of the repository it belongs to (the only repo when the feature has one), and drive and look at what it asks you to look at. Save command output, screenshots, and notes under the evidence root.
+2. Follow the `## Verification` section yourself: run each command from the root of the repository it belongs to (the only repo when the feature has one), and drive and look at what it asks you to look at. Save command output, screenshots, and notes under the evidence root. An older plan without `## Verification` keeps its checks under `## Success Criteria`; treat that section as the verification.
 3. Check each acceptance criterion and exit criterion against what you observed and against the diff. Implementer-captured evidence and progress notes are context, not proof: confirm the claim yourself.
 
 ## Judging

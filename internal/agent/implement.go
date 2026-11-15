@@ -720,6 +720,11 @@ func runImplementationLoop(cfg ImplementConfig, sm ports.SessionManager) (result
 		// uncommitted changes into its own commit. FAILED and
 		// protocol-violation rounds do not commit; their partial work is
 		// absorbed by the next round, mirroring the crash-recovery policy.
+		// An accepted handoff ends the round whatever the session's outcome,
+		// so its edits commit and reach the review the gate may still owe.
+		if asked := gatePending(gate); asked != nil && classifyHandoffAnswer(asked.Answer) == handoffAccept {
+			agentStatus, waitResult.Err = agentStatusSuccess, nil
+		}
 		if agentStatus == agentStatusSuccess {
 			roundCommits.semanticSessions = true
 			if cfg.RoundCommitHook != nil {
@@ -765,12 +770,11 @@ func runImplementationLoop(cfg ImplementConfig, sm ports.SessionManager) (result
 		// asking session's outcome; without one it stays pending.
 		if asked := gatePending(gate); asked != nil {
 			switch choice := classifyHandoffAnswer(asked.Answer); {
-			case choice == handoffAccept:
-				gate.resolveHandoff()
+			case choice == handoffAccept && !gate.changedSinceReview():
+				gate.resolveHandoff(handoffAccept)
 				meta.Handoff = reviewHandoffAccepted
-				agentStatus, waitResult.Err = agentStatusSuccess, nil
 			case choice == handoffStop:
-				gate.resolveHandoff()
+				gate.resolveHandoff(handoffStop)
 				meta.Handoff = reviewHandoffStopped
 				meta.ReviewStatus = reviewChangesRequested.String()
 				carryOpenFindings(iterDir, gate.openFindings(reviewerFeedback))
@@ -778,8 +782,10 @@ func runImplementationLoop(cfg ImplementConfig, sm ports.SessionManager) (result
 				_ = am.writeSummary(summaryPath, meta)
 				cfg.Observer.IterationEnded(iterCtx, i, toSessionUsage(cost), time.Since(iterStart), finalStatusStopped)
 				return &LoopResult{FinalStatus: finalStatusStopped, Iterations: i, LastError: asked.Reason}, nil
-			case choice == handoffContinue && agentStatus == agentStatusSuccess && waitResult.Err == nil:
-				gate.resolveHandoff()
+			// Accepted code that changed since the last review is reviewed
+			// first, as after guidance.
+			case choice == handoffAccept, choice == handoffContinue && agentStatus == agentStatusSuccess && waitResult.Err == nil:
+				gate.resolveHandoff(handoffContinue)
 				meta.Handoff = reviewHandoffContinued
 			default:
 				meta.ReviewStatus = reviewChangesRequested.String()

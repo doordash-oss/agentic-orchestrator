@@ -189,10 +189,8 @@ func (g *phaseReviewGate) raiseHandoff(iteration int, iterDir string, h reviewHa
 	return nil
 }
 
-// resolveHandoff classifies the user's answer to the pending handoff. A
-// session that ended without an answer keeps the handoff pending.
-func (g *phaseReviewGate) resolveHandoff() reviewHandoffChoice {
-	choice := classifyHandoffAnswer(g.pending.Answer)
+// resolveHandoff settles the pending handoff the way choice says.
+func (g *phaseReviewGate) resolveHandoff(choice reviewHandoffChoice) {
 	switch choice {
 	case handoffAccept:
 		g.history.accepted = true
@@ -203,7 +201,6 @@ func (g *phaseReviewGate) resolveHandoff() reviewHandoffChoice {
 		g.history.resetStreaks()
 		g.pending = nil
 	}
-	return choice
 }
 
 // latestNote returns the most recent implementer note before iteration.

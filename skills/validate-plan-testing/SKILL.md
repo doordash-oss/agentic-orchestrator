@@ -99,7 +99,7 @@ Three `## ` sections, in this exact order, are mandatory:
 
 ## Approval Threshold
 
-Only reject for test strategy gaps that would leave **critical functionality unverified** — missing happy-path tests for core features, missing backward compatibility tests for data migration, missing verification for roadmap-identified risks, or a per-phase plan whose acceptance criteria / success criteria do not prove the slice works.
+Only reject for test strategy gaps that would leave **critical functionality unverified** — missing happy-path tests for core features, missing backward compatibility tests for data migration, missing verification for roadmap-identified risks, or a per-phase plan whose acceptance criteria and Verification section do not prove the slice works.
 
 Do NOT request changes for:
 - Missing code-level details (exact test function names, specific mock implementations)

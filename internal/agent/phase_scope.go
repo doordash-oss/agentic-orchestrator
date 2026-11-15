@@ -110,7 +110,7 @@ func phaseScopeFromText(feat *feature.Feature, planText string) PhaseScopeResult
 			if multiRepo {
 				issues = append(issues, phaseScopeIssue{
 					Code:    "untagged-task",
-					Message: "task missing required '**Repo:** <name>' tag (every task in a multi-repo phase must declare its repo)",
+					Message: "task missing required '**Repo:** <name>' tag, alone on its own line under the task heading (every task in a multi-repo phase must declare its repo)",
 					Task:    strings.TrimSpace(t.Heading),
 				})
 			}

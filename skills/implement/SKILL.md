@@ -49,7 +49,7 @@ When your prompt has a Handoff to the User section, the phase review stopped con
 
 Parallelize independent non-trivial Tasks. Give each worker the exact Task and acceptance criteria, its repo/file boundary, dependencies, and the focused development test it should use. Sequentialize shared migrations, API decisions, and overlapping edits. Review returned diffs and integrate them before unlocking dependents.
 
-Workers validate the code they change. Before reporting success, follow the plan's `## Verification` section yourself: run its commands from the root of the repository each belongs to, and look at what it asks you to look at. Success asserts that the verification passes. Save any screenshots, logs, or recordings you produce under `{iteration_dir}`.
+Workers validate the code they change. Before reporting success, follow the plan's `## Verification` section yourself: run its commands from the root of the repository each belongs to, and look at what it asks you to look at. Success asserts that the verification passes. An older plan without `## Verification` keeps its checks under `## Success Criteria`; treat that section as the verification. Save any screenshots, logs, or recordings you produce under `{iteration_dir}`.
 
 Never report a result you did not observe. If verification needs authorization, hardware, or an environment this session lacks, call the formal AskUserQuestion control, or say in your notes exactly what you could not check and why.
 

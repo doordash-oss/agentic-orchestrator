@@ -726,7 +726,6 @@ func TestPhasePlanningLoopApprovesPlainVerificationOnEveryProfile(t *testing.T) 
 	plans := map[string]string{
 		"plain":    validPhasePlanText(),
 		"frontend": frontendPhasePlanText(),
-		"legacy":   legacyPhasePlanText(),
 	}
 	for _, profile := range []feature.PipelineProfile{feature.PipelineMedium, feature.PipelineLarge, feature.PipelineMoonshot} {
 		for name, planText := range plans {
@@ -3164,5 +3163,40 @@ func TestLatestPlanRevisionFeedbackAttemptReadsParkedFeedback(t *testing.T) {
 	attempt, feedback := latestPlanRevisionFeedbackAttempt(planDir)
 	if attempt != 2 || feedback != "Scope the verification commands." {
 		t.Fatalf("latestPlanRevisionFeedbackAttempt() = (%d, %q), want attempt 2 feedback", attempt, feedback)
+	}
+}
+
+func TestPhasePlanStructureViolations(t *testing.T) {
+	multiRepo := &feature.Feature{Repos: []feature.FeatureRepo{{Name: "api"}, {Name: "web"}}}
+	tests := []struct {
+		name string
+		plan string
+		want []string
+	}{
+		{name: "valid", plan: strings.Replace(validPhasePlanText(), "#### What to build", "**Repo:** api\n\n#### What to build", 1)},
+		{name: "malformed repo tag", plan: strings.Replace(validPhasePlanText(), "#### What to build", "**Repo:** api, web\n\n#### What to build", 1), want: []string{"Task 1: Build the slice: task missing required '**Repo:** <name>' tag"}},
+		{name: "foreign repo", plan: strings.Replace(validPhasePlanText(), "#### What to build", "**Repo:** cli\n\n#### What to build", 1), want: []string{`task tagged repo "cli" is not in Feature.Repos`}},
+		{name: "missing frontend", plan: strings.Replace(strings.Replace(validPhasePlanText(), "**Frontend:** false\n", "", 1), "#### What to build", "**Repo:** api\n\n#### What to build", 1), want: []string{"**Frontend:** true"}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			artifactDir := t.TempDir()
+			attemptDir := filepath.Join(artifactDir, "attempt-01")
+			if err := os.MkdirAll(attemptDir, 0o755); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(filepath.Join(artifactDir, "plan.md"), []byte(tt.plan), 0o644); err != nil {
+				t.Fatal(err)
+			}
+			got := phasePlanStructureViolations(multiRepo, attemptDir)
+			if len(got) != len(tt.want) {
+				t.Fatalf("violations = %+v, want %d", got, len(tt.want))
+			}
+			for i, want := range tt.want {
+				if !strings.Contains(got[i].Reason, want) {
+					t.Fatalf("violation %d = %q, want it to contain %q", i, got[i].Reason, want)
+				}
+			}
+		})
 	}
 }

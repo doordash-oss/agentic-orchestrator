@@ -1712,6 +1712,12 @@ attemptLoop:
 
 				waitResult := WaitForPhaseOutcome(sess, PhaseOutcomeWaitOptions{
 					CommitOutcome: func(intent llm.CompletionIntent) ([]ProtocolViolation, error) {
+						if kind.phasePlanGates {
+							if violations := phasePlanStructureViolations(cfg.Feature, attemptDir); len(violations) > 0 {
+								_ = removeCompletionReceipt(attemptDir)
+								return violations, nil
+							}
+						}
 						_, _, violations, err := CommitPhaseOutcome(CompletionCommitInput{
 							Phase:       plannerSpec.Phase,
 							Role:        plannerSpec.Role,
@@ -2062,6 +2068,28 @@ func setValidatingPlan(cfg planLoopConfig, validating bool) {
 		f.ValidatingPlan = validating
 		return nil
 	})
+}
+
+// phasePlanStructureViolations reports problems in the plan structure the
+// harness reads: the Task repo tags and the Frontend metadata field.
+func phasePlanStructureViolations(f *feature.Feature, attemptDir string) []ProtocolViolation {
+	path := resolvePlanMarkdownRoleArtifact("phase-plan.md")(roleRuntime{IterationDir: attemptDir}, roleArtifactSpec{})
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return nil
+	}
+	var violations []ProtocolViolation
+	for _, issue := range phaseScopeFromText(f, string(data)).Issues {
+		reason := issue.Message
+		if issue.Task != "" {
+			reason = issue.Task + ": " + reason
+		}
+		violations = append(violations, ProtocolViolation{Artifact: "phase plan markdown", Reason: reason})
+	}
+	if !planDeclaresFrontend(string(data)) {
+		violations = append(violations, ProtocolViolation{Artifact: "phase plan markdown", Reason: "`## Metadata` must set `**Frontend:** true` or `**Frontend:** false`"})
+	}
+	return violations
 }
 
 func formatPlanContractViolationFeedback(role Role, violations []ProtocolViolation) string {

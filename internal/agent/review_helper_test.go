@@ -240,7 +240,10 @@ func TestRunReviewHelper_LiveRunSharedCachesUsesToolchainCaches(t *testing.T) {
 	npmCache := filepath.Join(home, ".npm")
 	goCache := filepath.Join(root, "gocache")
 	inWorktree := filepath.Join(workDir, ".modcache")
-	for _, d := range []string{helperDir, workDir, npmCache, goCache, inWorktree} {
+	// A second worktree that holds a toolchain cache directory.
+	otherRepo := filepath.Join(home, ".cargo")
+	cargoRegistry := filepath.Join(otherRepo, "registry")
+	for _, d := range []string{helperDir, workDir, npmCache, goCache, inWorktree, cargoRegistry} {
 		if err := os.MkdirAll(d, 0o755); err != nil {
 			t.Fatalf("mkdir %s: %v", d, err)
 		}
@@ -287,22 +290,23 @@ func TestRunReviewHelper_LiveRunSharedCachesUsesToolchainCaches(t *testing.T) {
 	}
 
 	result, err := pr.runReviewHelper(context.Background(), reviewHelperConfig{
-		Posture:       reviewPostureLiveRun,
-		SharedCaches:  true,
-		SessionID:     "phase-review-live-run",
-		FeatureID:     "feature-1",
-		Phase:         feature.PhaseReview,
-		Model:         "test-model",
-		Prompt:        "run the checks",
-		PromptPath:    filepath.Join(helperDir, "review-prompt.md"),
-		FeedbackPath:  feedbackPath,
-		HelperIterDir: helperDir,
-		Role:          RoleImplementationReviewCraft,
-		WorkDir:       workDir,
-		LogPath:       filepath.Join(helperDir, "review-output.txt"),
-		EffortLevel:   llm.EffortMedium,
-		Kind:          ports.KindValidator,
-		Label:         "Functionality/Evidence",
+		Posture:        reviewPostureLiveRun,
+		SharedCaches:   true,
+		SessionID:      "phase-review-live-run",
+		FeatureID:      "feature-1",
+		Phase:          feature.PhaseReview,
+		Model:          "test-model",
+		Prompt:         "run the checks",
+		PromptPath:     filepath.Join(helperDir, "review-prompt.md"),
+		FeedbackPath:   feedbackPath,
+		HelperIterDir:  helperDir,
+		Role:           RoleImplementationReviewCraft,
+		WorkDir:        workDir,
+		AdditionalDirs: []string{otherRepo},
+		LogPath:        filepath.Join(helperDir, "review-output.txt"),
+		EffortLevel:    llm.EffortMedium,
+		Kind:           ports.KindValidator,
+		Label:          "Functionality/Evidence",
 	})
 	if err != nil {
 		t.Fatalf("runReviewHelper(shared caches) error = %v", err)
@@ -320,8 +324,10 @@ func TestRunReviewHelper_LiveRunSharedCachesUsesToolchainCaches(t *testing.T) {
 		}
 	}
 	for _, root := range got.WritableRoots {
-		if pathWithin(workDir, root) || pathWithin(root, workDir) {
-			t.Fatalf("WritableRoots include %q, which overlaps the worktree %q", root, workDir)
+		for _, repo := range []string{workDir, otherRepo} {
+			if pathWithin(repo, root) || pathWithin(root, repo) {
+				t.Fatalf("WritableRoots include %q, which overlaps the worktree %q", root, repo)
+			}
 		}
 	}
 	if got := envValue(startEnv, "TMPDIR"); got != tempRoot {

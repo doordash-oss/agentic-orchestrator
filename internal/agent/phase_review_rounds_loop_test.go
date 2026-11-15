@@ -15,6 +15,7 @@
 package agent
 
 import (
+	"cmp"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -36,6 +37,8 @@ type phaseGateEnv struct {
 	planPath    string
 	store       *feature.Store
 	f           *feature.Feature
+	// reviewBody runs in the reviewer for each axis, with $_key set.
+	reviewBody string
 }
 
 // newPhaseGateEnv seeds a phase-1 feature whose repo is a real git
@@ -112,10 +115,11 @@ func runPhaseGate(t *testing.T, env *phaseGateEnv, maxIterations int, implementB
   _findings="- (none)"
   case "$_key" in
 %s  esac
+  %s
   _tmp="$_fb.tmp.$$"
   printf '## Findings\n%%s\n\n## Suggestions\n- (none)\n\n## Verdict\n%%s\n' "$_findings" "$_verdict" > "$_tmp"
   mv "$_tmp" "$_fb"
-done`, env.artifactDir, env.artifactDir, arms.String())+"\n"+testutil.JSONLSuccess+"\n")
+done`, env.artifactDir, env.artifactDir, arms.String(), cmp.Or(env.reviewBody, ":"))+"\n"+testutil.JSONLSuccess+"\n")
 
 	var mu sync.Mutex
 	run := phaseGateRun{reviewPrompts: map[string]string{}}

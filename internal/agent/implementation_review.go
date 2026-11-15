@@ -197,6 +197,12 @@ func runImplementationReviewAxes(cfg ImplementConfig, sm ports.SessionManager, i
 	}
 	defer clearImplementationReviewAxisStatuses(cfg)
 
+	// Reviewers may not change the worktrees; a write is undone and fails
+	// the round, as in Final Review.
+	if err := RecordReadOnlyRepoBaseline(context.Background(), cfg.CommandRunner, cfg.Feature, reviewDir); err != nil {
+		return reviewFailed, "", nil, fmt.Errorf("record implementation review read-only repo baseline: %w", err)
+	}
+
 	validationCtx := reviewCtx.Child()
 	validationStart := time.Now()
 	cfg.Observer.ValidationStarted(validationCtx, "implementation_review", len(plan))
@@ -218,6 +224,15 @@ func runImplementationReviewAxes(cfg ImplementConfig, sm ports.SessionManager, i
 		cfg.Observer.ValidatorCompleted(axisCtx, run.Axis.Name, verdict, time.Since(axisStart))
 		updateImplementationReviewAxisStatus(cfg, run.Axis.Name, status, err)
 	})
+	if cfg.Feature != nil && !isFeatureInterrupted(cfg.FeatureStore, cfg.Feature.ID) {
+		violations, err := EnforceReadOnlyRepoMutations(context.Background(), cfg.CommandRunner, cfg.Feature, feature.PhaseReview, reviewDir)
+		if err != nil {
+			return reviewFailed, "", nil, fmt.Errorf("enforce implementation review read-only repo guard: %w", err)
+		}
+		if len(violations) > 0 {
+			return reviewFailed, "", nil, newProtocolViolationError(roleImplementationReviewCleanliness, iterDir, violations)
+		}
+	}
 
 	status, feedback, err := composeImplementationReviewFeedback(results, len(plan))
 	verdict := status.String()

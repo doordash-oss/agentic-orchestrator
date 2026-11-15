@@ -19,6 +19,7 @@ import (
 	"log"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 
 	"github.com/doordash-oss/agentic-orchestrator/internal/agent/prompts"
@@ -41,9 +42,10 @@ type phaseReviewGate struct {
 
 	lastReview int
 	lastState  repoState
-	decided    bool
 	pending    *reviewHandoffPromptInput
 	pendingDir string
+	// stoppedAt is the iteration the user last stopped the phase at.
+	stoppedAt int
 }
 
 func newPhaseReviewGate(cfg ImplementConfig, am *artifactManager, upTo int) *phaseReviewGate {
@@ -51,7 +53,7 @@ func newPhaseReviewGate(cfg ImplementConfig, am *artifactManager, upTo int) *pha
 		cfg:     cfg,
 		repos:   implementRoundCommitRepos(cfg),
 		axes:    perPhaseReviewAxes(cfg),
-		history: &reviewRoundHistory{axes: map[string]*reviewAxisRecord{}},
+		history: &reviewRoundHistory{axes: map[string]*reviewAxisRecord{}, loadedAt: upTo},
 	}
 	askedAt := 0
 	scanIterationMetas(am, cfg.ArtifactDir, upTo, func(meta iterationMeta) {
@@ -64,6 +66,9 @@ func newPhaseReviewGate(cfg ImplementConfig, am *artifactManager, upTo int) *pha
 		case reviewHandoffContinued, reviewHandoffStopped:
 			askedAt = 0
 			g.history.resetStreaks()
+		}
+		if meta.Handoff == reviewHandoffStopped {
+			g.stoppedAt = meta.Iteration
 		}
 		if len(meta.AxisVerdicts) > 0 {
 			g.recordReview(meta.Iteration, meta.AxisVerdicts, metaRepoState(meta), meta.CodeChanged)
@@ -108,7 +113,12 @@ func (g *phaseReviewGate) recordReview(iteration int, verdicts map[string]string
 	}
 	g.history.recordReview(iteration, verdicts, state)
 	g.lastReview, g.lastState = iteration, state
-	g.decided = false
+}
+
+// decided reports whether a session since the latest review recorded a
+// decision.
+func (g *phaseReviewGate) decided() bool {
+	return decidedAfter(g.decisionsPath(), g.lastReview)
 }
 
 // awaitingFix reports whether the latest review left findings open.
@@ -147,11 +157,9 @@ func (g *phaseReviewGate) recordSession(iteration int, iterDir string, sess port
 			}
 		}
 	}
-	recorded, err := appendReviewDecisions(g.decisionsPath(), heading, reviewDecisionPairs(sess.QALog(), question))
-	if err != nil {
+	if _, err := appendReviewDecisions(g.decisionsPath(), heading, reviewDecisionPairs(sess.QALog(), question)); err != nil {
 		log.Printf("phase review: %v", err)
 	}
-	g.decided = g.decided || recorded
 	note := sessionClosingNote(sess)
 	if note != "" && (g.awaitingFix() || g.pending != nil) {
 		_ = os.WriteFile(filepath.Join(iterDir, fixNotesFile), []byte(note+"\n"), 0o644)
@@ -244,7 +252,7 @@ func (g *phaseReviewGate) reviewRoundInput(iteration int, run reviewAxisRun) rev
 		DecisionsPath:    existingPath(g.decisionsPath()),
 	}
 	if g.cfg.RunDir != "" {
-		in.UserAnswerPaths = userAnswerPaths(g.cfg.RunDir)
+		in.UserAnswerPaths = slices.DeleteFunc(userAnswerPaths(g.cfg.RunDir), func(p string) bool { return p == g.decisionsPath() })
 	}
 	if run.Mode == reviewRoundFull {
 		return in
@@ -271,7 +279,7 @@ const confirmRoundDir = "confirm"
 // clone copies the history so a confirmation round can be planned before the
 // iteration's verdicts are committed.
 func (h *reviewRoundHistory) clone() *reviewRoundHistory {
-	c := &reviewRoundHistory{axes: make(map[string]*reviewAxisRecord, len(h.axes)), lastFixChange: h.lastFixChange, accepted: h.accepted}
+	c := &reviewRoundHistory{axes: make(map[string]*reviewAxisRecord, len(h.axes)), lastFixChange: h.lastFixChange, loadedAt: h.loadedAt, accepted: h.accepted}
 	for slug, rec := range h.axes {
 		copied := *rec
 		c.axes[slug] = &copied
@@ -322,6 +330,36 @@ func (g *phaseReviewGate) implementContext() string {
 type implementReviewUserInput struct {
 	Handoff       *reviewHandoffPromptInput
 	DecisionsPath string
+}
+
+// resolvesWithoutSession reports a pending handoff whose saved answer
+// accepts or stops, which needs no further session.
+func (g *phaseReviewGate) resolvesWithoutSession() bool {
+	if g == nil || g.pending == nil {
+		return false
+	}
+	choice := classifyHandoffAnswer(g.pending.Answer)
+	return choice == handoffAccept || choice == handoffStop
+}
+
+// parkReason explains a handoff left pending by its asking session.
+func (g *phaseReviewGate) parkReason(asked *reviewHandoffPromptInput, agentStatus string, err error) string {
+	detail := ""
+	switch {
+	case err != nil:
+		detail = fmt.Sprintf(" (the asking session failed: %v)", err)
+	case agentStatus != agentStatusSuccess:
+		detail = fmt.Sprintf(" (the asking session ended %s)", agentStatus)
+	}
+	if asked.Answer != "" {
+		return fmt.Sprintf("%s stopped before your guidance was applied%s: %s Resume the feature to apply it; see %s.", g.label(), detail, asked.Reason, asked.NotePath)
+	}
+	return fmt.Sprintf("%s needs your decision, and the handoff question has no answer yet%s: %s Resume the feature to ask again; see %s.", g.label(), detail, asked.Reason, asked.NotePath)
+}
+
+// owes reports whether the loop must run another iteration past the cap.
+func (g *phaseReviewGate) owes(resumeOwed bool) bool {
+	return g != nil && (g.pending != nil || resumeOwed)
 }
 
 func gatePending(g *phaseReviewGate) *reviewHandoffPromptInput {

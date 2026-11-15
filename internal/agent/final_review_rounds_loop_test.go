@@ -257,7 +257,7 @@ func TestRunFeatureFinalReviewLoop_NoChangeFixHandsOff(t *testing.T) {
 				}
 			}
 			handoffPrompt := readFRFile(t, filepath.Join(artDir, "iteration-01", "handoff", "fix-prompt.md"))
-			for _, want := range []string{"## Handoff to the User", handoffContinueLabel, handoffAcceptLabel, handoffStopLabel, "Craft: **High**: CSV export is missing"} {
+			for _, want := range []string{"## Handoff to the User", handoffContinueLabel, handoffAcceptLabel, handoffStopLabel, "Craft: High: CSV export is missing"} {
 				if !strings.Contains(handoffPrompt, want) {
 					t.Fatalf("handoff prompt missing %q:\n%s", want, handoffPrompt)
 				}

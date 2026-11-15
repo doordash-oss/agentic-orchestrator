@@ -22,6 +22,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"sort"
+	"strconv"
 	"strings"
 
 	"gopkg.in/yaml.v3"
@@ -51,11 +52,14 @@ type reviewAxisRecord struct {
 type reviewRoundHistory struct {
 	axes          map[string]*reviewAxisRecord
 	lastFixChange int
-	accepted      bool
+	// loadedAt is the last iteration replayed from disk; the repos may have
+	// changed while the loop was not running.
+	loadedAt int
+	accepted bool
 }
 
 func loadReviewRoundHistory(am *artifactManager, artifactDir string, upTo int) *reviewRoundHistory {
-	h := &reviewRoundHistory{axes: map[string]*reviewAxisRecord{}}
+	h := &reviewRoundHistory{axes: map[string]*reviewAxisRecord{}, loadedAt: upTo}
 	scanIterationMetas(am, artifactDir, upTo, func(meta iterationMeta) {
 		h.recordReview(meta.Iteration, meta.AxisVerdicts, metaRepoState(meta))
 		h.recordFix(meta.Iteration, meta.MadeProgress)
@@ -129,7 +133,9 @@ type reviewAxisRun struct {
 // first round. Approvals stick until the repos differ from what the axis
 // approved, or a recorded fix landed after it; once nothing is open, each
 // stale approval confirms once. An axis whose delta is unknown reruns in
-// full. An empty plan means approval.
+// full; with no state to compare, its approval stands only while it saw the
+// same kind of state, no fix followed it, and the loop has run since it was
+// given. An empty plan means approval.
 func (h *reviewRoundHistory) planRound(axes []implementationReviewAxis, now repoState) []reviewAxisRun {
 	if h.accepted {
 		return nil
@@ -152,10 +158,10 @@ func (h *reviewRoundHistory) planRound(axes []implementationReviewAxis, now repo
 				run.Mode = reviewRoundFollowUp
 			}
 			open = append(open, run)
-		case h.lastFixChange >= rec.lastReview || (scoped && now.differs(rec.lastState)):
-			if scoped {
-				run.Mode = reviewRoundConfirm
-			}
+		case !scoped && (h.lastFixChange >= rec.lastReview || rec.lastState.known() != now.known() || rec.lastReview <= h.loadedAt):
+			confirm = append(confirm, run)
+		case scoped && (h.lastFixChange >= rec.lastReview || now.differs(rec.lastState)):
+			run.Mode = reviewRoundConfirm
 			confirm = append(confirm, run)
 		}
 	}
@@ -251,40 +257,65 @@ func reviewDecisionPairs(qa []ports.QAPair, handoffQuestion string) []ports.QAPa
 	return decisions
 }
 
-// appendReviewDecisions records one session's decisions under heading,
-// replacing an earlier section with the same heading so a rerun session
-// does not record twice. It reports whether any were recorded.
+// appendReviewDecisions records one session's decisions under heading. A
+// rerun session adds only answers its section does not hold yet, so nothing
+// recorded earlier is lost or doubled. It reports whether the section holds
+// any decisions.
 func appendReviewDecisions(path, heading string, qa []ports.QAPair) (bool, error) {
-	if len(qa) == 0 {
-		return false, nil
-	}
 	data, err := os.ReadFile(path)
 	if err != nil && !os.IsNotExist(err) {
 		return false, fmt.Errorf("reading review decisions: %w", err)
 	}
 	body := string(data)
-	if body == "" {
-		body = "# Review Decisions\n\nThe user made these decisions during review. They override the design's acceptance criteria and earlier findings; a finding accepted as is is not raised again.\n"
-	}
 	marker := "\n## " + heading + "\n"
-	if start := strings.Index(body, marker); start >= 0 {
+	head, section, tail := body, "", ""
+	start := strings.Index(body, marker)
+	if start >= 0 {
 		rest := body[start+len(marker):]
-		end := len(body)
+		end := len(rest)
 		if next := strings.Index(rest, "\n## "); next >= 0 {
-			end = start + len(marker) + next
+			end = next
 		}
-		body = body[:start] + body[end:]
+		head, section, tail = body[:start+len(marker)], rest[:end], rest[end:]
 	}
-	var b strings.Builder
-	b.WriteString(body)
-	fmt.Fprintf(&b, "\n## %s\n", heading)
+	added := false
 	for _, pair := range qa {
-		fmt.Fprintf(&b, "\n**Q:** %s\n\n**A:** %s\n", strings.TrimSpace(pair.Question), strings.TrimSpace(pair.Answer))
+		block := fmt.Sprintf("\n**Q:** %s\n\n**A:** %s\n", strings.TrimSpace(pair.Question), strings.TrimSpace(pair.Answer))
+		if !strings.Contains(section, block) {
+			section += block
+			added = true
+		}
 	}
-	if err := os.WriteFile(path, []byte(b.String()), 0o644); err != nil {
+	if !added {
+		return start >= 0, nil
+	}
+	if start < 0 {
+		if head == "" {
+			head = "# Review Decisions\n\nThe user made these decisions during review. They override the design's acceptance criteria and earlier findings; a finding accepted as is is not raised again.\n"
+		}
+		head += marker
+	}
+	if err := os.WriteFile(path, []byte(head+section+tail), 0o644); err != nil {
 		return false, fmt.Errorf("writing review decisions: %w", err)
 	}
 	return true, nil
+}
+
+var decisionHeadingPattern = regexp.MustCompile(`(?m)^## Iteration (\d+) `)
+
+// decidedAfter reports whether the decisions file records a session of an
+// iteration after the given one.
+func decidedAfter(path string, iteration int) bool {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return false
+	}
+	for _, m := range decisionHeadingPattern.FindAllStringSubmatch(string(data), -1) {
+		if n, err := strconv.Atoi(m[1]); err == nil && n > iteration {
+			return true
+		}
+	}
+	return false
 }
 
 func existingPath(path string) string {
@@ -294,11 +325,11 @@ func existingPath(path string) string {
 	return path
 }
 
-// userAnswerPaths lists the user's recorded answers from earlier phases of
-// the run.
+// userAnswerPaths lists the user's recorded answers across the run: phase
+// answers and the decisions from each phase's review.
 func userAnswerPaths(runDir string) []string {
 	var paths []string
-	for _, pattern := range []string{"*/qa-answers.md", "*/*/qa-answers.md"} {
+	for _, pattern := range []string{"*/qa-answers.md", "*/*/qa-answers.md", "implement/" + reviewDecisionsFile, "*/implement/" + reviewDecisionsFile} {
 		matches, _ := filepath.Glob(filepath.Join(runDir, pattern))
 		paths = append(paths, matches...)
 	}
@@ -361,25 +392,22 @@ func handoffQuestionMarker(gateLabel string) string {
 	return fmt.Sprintf("How should %s proceed?", gateLabel)
 }
 
-// isHandoffPair reports whether pair answers the handoff question: it
-// carries the question's closing line, or its answer is one of the options.
+// isHandoffPair reports whether pair answers the handoff question, which
+// carries the question's closing line.
 func isHandoffPair(pair ports.QAPair, handoffQuestion string) bool {
 	if handoffQuestion == "" {
 		return false
 	}
 	lines := strings.Split(strings.TrimSpace(handoffQuestion), "\n")
-	if marker := strings.TrimSpace(lines[len(lines)-1]); marker != "" && strings.Contains(pair.Question, marker) {
-		return true
-	}
-	_, exact := handoffLabelChoice(answerLabel(pair.Answer))
-	return exact
+	marker := strings.TrimSpace(lines[len(lines)-1])
+	return marker != "" && strings.Contains(pair.Question, marker)
 }
 
-// handoffAnswer returns the user's answer to the handoff question, if any.
+// handoffAnswer returns the user's first answer to the handoff question.
 func handoffAnswer(qa []ports.QAPair, handoffQuestion string) (string, bool) {
-	for i := len(qa) - 1; i >= 0; i-- {
-		if !qa[i].AutoPicked && strings.TrimSpace(qa[i].Answer) != "" && isHandoffPair(qa[i], handoffQuestion) {
-			return qa[i].Answer, true
+	for _, pair := range qa {
+		if !pair.AutoPicked && strings.TrimSpace(pair.Answer) != "" && isHandoffPair(pair, handoffQuestion) {
+			return pair.Answer, true
 		}
 	}
 	return "", false
@@ -416,8 +444,8 @@ func handoffLabelChoice(label string) (reviewHandoffChoice, bool) {
 }
 
 // classifyHandoffAnswer maps the handoff answer to the way forward. An
-// answer naming more than one option is not an answer; any other text is
-// guidance.
+// answer that opens with an option takes it, whatever text follows; one
+// naming more than one option is not an answer; any other text is guidance.
 func classifyHandoffAnswer(answer string) reviewHandoffChoice {
 	label := answerLabel(answer)
 	if label == "" {
@@ -426,24 +454,23 @@ func classifyHandoffAnswer(answer string) reviewHandoffChoice {
 	if choice, ok := handoffLabelChoice(label); ok {
 		return choice
 	}
-	if parts := strings.Split(label, ", "); len(parts) > 1 {
-		seen := map[reviewHandoffChoice]bool{}
-		for _, part := range parts {
-			choice, ok := handoffLabelChoice(strings.TrimSpace(part))
-			if !ok {
-				return handoffContinue
-			}
+	parts := answerClauses.Split(label, -1)
+	seen := map[reviewHandoffChoice]bool{}
+	for _, part := range parts {
+		if choice, ok := handoffLabelChoice(strings.TrimSpace(part)); ok {
 			seen[choice] = true
 		}
-		if len(seen) > 1 {
-			return handoffUnanswered
-		}
-		for choice := range seen {
-			return choice
-		}
+	}
+	if len(seen) > 1 {
+		return handoffUnanswered
+	}
+	if choice, ok := handoffLabelChoice(strings.TrimSpace(parts[0])); ok {
+		return choice
 	}
 	return handoffContinue
 }
+
+var answerClauses = regexp.MustCompile(`[,;:.]|\s[-–—]\s`)
 
 func answerLabel(answer string) string {
 	label := strings.ToLower(strings.TrimSpace(answer))

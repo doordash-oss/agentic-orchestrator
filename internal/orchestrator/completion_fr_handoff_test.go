@@ -20,7 +20,22 @@ import (
 	"github.com/doordash-oss/agentic-orchestrator/internal/agent"
 	"github.com/doordash-oss/agentic-orchestrator/internal/feature"
 	"github.com/doordash-oss/agentic-orchestrator/internal/orchestrator"
+	"github.com/doordash-oss/agentic-orchestrator/internal/ports"
 )
+
+// requireInterruptedReason checks the park carries the loop's reason.
+func requireInterruptedReason(t *testing.T, o *orchestrator.Orchestrator, want string) {
+	t.Helper()
+	for _, ev := range drainEvents(o) {
+		if ev.Type == ports.FeatureInterrupted {
+			if ev.Message != want {
+				t.Fatalf("FeatureInterrupted message = %q, want %q", ev.Message, want)
+			}
+			return
+		}
+	}
+	t.Fatal("no FeatureInterrupted event")
+}
 
 // A user who answers "Stop" at a Final Review handoff parks the feature the
 // way a pause-stop does: Interrupted, no failure, and nothing advances to
@@ -65,6 +80,7 @@ func TestOrchestrator_FeatureFinalReview_StoppedAtHandoffParksInterrupted(t *tes
 	if stored.Run().Failure != nil {
 		t.Fatalf("unexpected failure: %+v", stored.Run().Failure)
 	}
+	requireInterruptedReason(t, o, "The QA axis requested changes in 3 consecutive rounds.")
 }
 
 // A user who answers "Stop" at a per-phase review handoff parks the feature
@@ -99,4 +115,5 @@ func TestOrchestrator_PhaseImplement_StoppedAtHandoffParksInterrupted(t *testing
 	if stored.Run().Failure != nil {
 		t.Fatalf("unexpected failure: %+v", stored.Run().Failure)
 	}
+	requireInterruptedReason(t, o, "The Craft axis requested changes in 3 consecutive rounds.")
 }

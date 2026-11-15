@@ -89,7 +89,7 @@ test('packaged phase rail: a hold opens with the paused dot and tooltip, then re
     await evidenceShot(handle, 'phase-rail-held-paused');
 
     transcript.section('Resuming closes the hold and restores the plain trio');
-    await cockpit.getByRole('button', { name: 'Resume', exact: true }).click();
+    await handle.page.getByRole('button', { name: 'Resume', exact: true }).click();
 
     await expect(dot).toHaveCount(0, { timeout: 30_000 });
     await expect(rail.locator('.phase-rail__segment[data-held="true"]')).toHaveCount(0);

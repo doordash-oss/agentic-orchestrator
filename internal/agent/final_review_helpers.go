@@ -21,7 +21,6 @@ package agent
 
 import (
 	"path/filepath"
-	"strings"
 
 	"github.com/doordash-oss/agentic-orchestrator/internal/agent/prompts"
 	"github.com/doordash-oss/agentic-orchestrator/internal/feature"
@@ -57,41 +56,18 @@ func buildFinalFixPrompt(opts finalFixPromptOpts) string {
 			Images: opts.Images,
 			Label:  "applying this fix",
 		},
-		Iteration:                         opts.Iteration,
-		ExitCriteria:                      opts.ExitCriteria,
-		AcceptanceClause:                  opts.AcceptanceClause,
-		Feedback:                          opts.Feedback,
-		FeedbackPath:                      opts.FeedbackPath,
-		IncludeManualVerificationOutcomes: feedbackMentionsManualVerification(opts.Feedback),
-		Publishable:                       opts.Publishable,
-		RefactorPassForkPoint:             opts.RefactorPassForkPoint,
-		RoadmapPath:                       opts.RoadmapPath,
-		UserAnswerPaths:                   opts.UserAnswerPaths,
-		DecisionsPath:                     opts.DecisionsPath,
-		Handoff:                           opts.Handoff,
+		Iteration:             opts.Iteration,
+		ExitCriteria:          opts.ExitCriteria,
+		AcceptanceClause:      opts.AcceptanceClause,
+		Feedback:              opts.Feedback,
+		FeedbackPath:          opts.FeedbackPath,
+		Publishable:           opts.Publishable,
+		RefactorPassForkPoint: opts.RefactorPassForkPoint,
+		RoadmapPath:           opts.RoadmapPath,
+		UserAnswerPaths:       opts.UserAnswerPaths,
+		DecisionsPath:         opts.DecisionsPath,
+		Handoff:               opts.Handoff,
 	})
-}
-
-// feedbackMentionsManualVerification returns true if the reviewer feedback
-// references a manual-verification gate. Used to decide whether to inject
-// the outcomes guidance into the fix prompt. Phrasings observed in real
-// feedback: "manual verification", "manual-verification bullets", "manual
-// bullet(s)", "manual evidence", "unattested manual".
-func feedbackMentionsManualVerification(feedback string) bool {
-	lower := strings.ToLower(feedback)
-	needles := []string{
-		"manual verification",
-		"manual-verification",
-		"manual bullet",
-		"manual evidence",
-		"unattested manual",
-	}
-	for _, needle := range needles {
-		if strings.Contains(lower, needle) {
-			return true
-		}
-	}
-	return false
 }
 
 // guidelineAdditionalDirs returns a single-element slice containing dir when

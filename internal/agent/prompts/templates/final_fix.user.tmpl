@@ -36,5 +36,5 @@ Later approved decisions override the design's acceptance criteria where they co
 
 Read the reviewer feedback at: {{ .FeedbackPath }}
 
-{{ end }}{{ if .IncludeManualVerificationOutcomes }}{{ template "manual_verification_outcomes" . }}{{ end }}{{ if not .Publishable }}NOTE: Local-only repository — no remote (origin) available.
+{{ end }}{{ if not .Publishable }}NOTE: Local-only repository — no remote (origin) available.
 {{ end }}{{- end -}}

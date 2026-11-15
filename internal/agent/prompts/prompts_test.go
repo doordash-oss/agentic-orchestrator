@@ -220,9 +220,8 @@ type FinalFixUserInput struct {
 	Feedback         string
 	FeedbackPath     string
 
-	IncludeManualVerificationOutcomes bool
-	Publishable                       bool
-	RefactorPassForkPoint             string
+	Publishable           bool
+	RefactorPassForkPoint string
 
 	RoadmapPath     string
 	UserAnswerPaths []string
@@ -759,20 +758,6 @@ func TestGoldenSnapshots(t *testing.T) {
 					Roadmap:            "Phase 1: scaffolding.\nPhase 2: PKCE.",
 					CommitBodies:       "feat: add login route\n---commit---\nfeat: wire PKCE",
 					DiffStat:           " 5 files changed, 100 insertions(+), 4 deletions(-)",
-				})
-			},
-		},
-		{
-			name: "final_fix_user_with_manual",
-			render: func() string {
-				return MustRender(TemplateFinalFixUser, FinalFixUserInput{
-					VisualReferences:                  VisualReferencesInput{Images: []string{"/tmp/login.png"}, Label: "applying this fix"},
-					Iteration:                         2,
-					AcceptanceClause:                  "Feature acceptance is defined by the `## Acceptance Criteria` section of the approved design at /state/feat-x/run-1/design/design.md. Judge acceptance against that section, not against any restatement of it.",
-					Feedback:                          "Manual verification bullet 'Inspect login UI' is unattested.",
-					FeedbackPath:                      "/state/feat-x/run-1/review/iteration-2/review-feedback.md",
-					IncludeManualVerificationOutcomes: true,
-					Publishable:                       true,
 				})
 			},
 		},

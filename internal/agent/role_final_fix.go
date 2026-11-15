@@ -45,8 +45,7 @@ type finalFixUserInput struct {
 	Feedback         string
 	FeedbackPath     string
 
-	IncludeManualVerificationOutcomes bool
-	Publishable                       bool
+	Publishable bool
 	// RefactorPassForkPoint resolves the spec's "fork point" references for a
 	// refactor child ("repo @ sha"). Empty for top-level features.
 	RefactorPassForkPoint string

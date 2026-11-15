@@ -119,25 +119,22 @@ func TestFinalFixPromptBranches(t *testing.T) {
 		wantOmit     []string
 	}{
 		{
-			name: "manual_verification_and_publishable_sections_emitted_when_enabled",
+			name: "local_only_note_omitted_when_publishable",
 			input: FinalFixUserInput{
-				Iteration:                         2,
-				Feedback:                          "Manual verification is missing.",
-				IncludeManualVerificationOutcomes: true,
-				Publishable:                       true,
+				Iteration:   2,
+				Feedback:    "Tighten wording.",
+				Publishable: true,
 			},
-			wantContains: []string{"## Manual Verification Outcomes", "describe in your fix output what you actually observed"},
-			wantOmit:     []string{"NOTE: Local-only repository"},
+			wantOmit: []string{"NOTE: Local-only repository"},
 		},
 		{
-			name: "manual_verification_omitted_and_local_only_note_emitted_when_not_publishable",
+			name: "local_only_note_emitted_when_not_publishable",
 			input: FinalFixUserInput{
 				Iteration:   1,
 				Feedback:    "Tighten wording.",
 				Publishable: false,
 			},
 			wantContains: []string{"NOTE: Local-only repository"},
-			wantOmit:     []string{"## Manual Verification Outcomes"},
 		},
 	}
 
@@ -256,7 +253,6 @@ func TestGoldenSnapshotsNoOrphanFiles(t *testing.T) {
 		"implement_review_user_decisions":          true,
 		"implement_review_user_handoff":            true,
 		"implement_review_user_handoff_answered":   true,
-		"final_fix_user_with_manual":               true,
 		"implement_system_rolespec":                true,
 		"implementation_review_axis_final_user":    true,
 		"implementation_review_axis_live_run_user": true,

@@ -396,8 +396,9 @@ func runImplementationLoop(cfg ImplementConfig, sm ports.SessionManager) (result
 			// The implementer's closing note, kept by the review gate.
 			implementerNote string
 		)
-		if skipImplement {
-			// Resume point: implement phase already finished in the prior run.
+		if skipImplement || gate.resolvesWithoutSession() {
+			// Resume point: implement phase already finished in the prior run,
+			// or the user's saved handoff answer needs no session.
 			// Skip session creation and jump to the review gate. Cost was
 			// already accounted at that run's line ~430, so leave zero here.
 			skipImplement = false

@@ -205,6 +205,36 @@ func TestImplementLoopPhaseReview_HandoffSessionFailure(t *testing.T) {
 	})
 }
 
+// A saved Accept or Stop answer is acted on at resume without another
+// implement session.
+func TestImplementLoopPhaseReview_SavedAnswerResolvesWithoutASession(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping loop test in short mode")
+	}
+	for _, tc := range []struct {
+		answer string
+		want   string
+	}{
+		{phaseHandoffAcceptLabel, finalStatusReviewPassed},
+		{handoffStopLabel, finalStatusStopped},
+	} {
+		t.Run(tc.answer, func(t *testing.T) {
+			env := newPhaseGateEnv(t, "feat-phase-saved-"+strings.ToLower(tc.answer[:4]), feature.PipelineMoonshot)
+			phaseGateAskedHandoff(t, env, phaseGateHandoffAsk(), tc.answer)
+			if err := os.Remove(filepath.Join(env.artifactDir, "iteration-03", "meta.yaml")); err != nil {
+				t.Fatal(err)
+			}
+			resumed := runPhaseGate(t, env, 5, []string{phaseGateCommit(env.repo)}, nil, nil)
+			if resumed.result.FinalStatus != tc.want {
+				t.Fatalf("resumed = %+v, want %s", resumed.result, tc.want)
+			}
+			if len(resumed.implementPrompts) != 0 {
+				t.Fatalf("resume ran %d implement sessions for a saved %q answer", len(resumed.implementPrompts), tc.answer)
+			}
+		})
+	}
+}
+
 // Decisions from a phase's review reach Final Review.
 func TestRunFeatureFinalReviewLoop_SeesPhaseReviewDecisions(t *testing.T) {
 	if testing.Short() {

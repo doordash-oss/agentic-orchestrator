@@ -332,6 +332,16 @@ type implementReviewUserInput struct {
 	DecisionsPath string
 }
 
+// resolvesWithoutSession reports a pending handoff whose saved answer
+// accepts or stops, which needs no further session.
+func (g *phaseReviewGate) resolvesWithoutSession() bool {
+	if g == nil || g.pending == nil {
+		return false
+	}
+	choice := classifyHandoffAnswer(g.pending.Answer)
+	return choice == handoffAccept || choice == handoffStop
+}
+
 // parkReason explains a handoff left pending by its asking session.
 func (g *phaseReviewGate) parkReason(asked *reviewHandoffPromptInput, agentStatus string, err error) string {
 	detail := ""

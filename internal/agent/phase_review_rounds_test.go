@@ -110,3 +110,21 @@ func TestPhaseReviewGateReplaysRoundsAndPendingHandoff(t *testing.T) {
 		t.Fatalf("plan = %+v, want the two earlier approvals to confirm", got)
 	}
 }
+
+// Reviewers are pointed at the implementer's progress notes only when the
+// file exists.
+func TestPhaseReviewGateProgressNotesOnlyWhenPresent(t *testing.T) {
+	t.Parallel()
+	cfg, am := phaseGateConfigForTest(t)
+	g := newPhaseReviewGate(cfg, am, 0)
+	if got := g.reviewInput(1, nil).ProgressPath; got != "" {
+		t.Fatalf("ProgressPath = %q, want empty without progress notes", got)
+	}
+	progress := filepath.Join(cfg.ArtifactDir, "progress.md")
+	if err := os.WriteFile(progress, []byte("notes\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if got := g.reviewInput(1, nil).ProgressPath; got != progress {
+		t.Fatalf("ProgressPath = %q, want %q", got, progress)
+	}
+}

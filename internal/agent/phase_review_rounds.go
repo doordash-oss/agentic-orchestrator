@@ -225,7 +225,7 @@ func (g *phaseReviewGate) reviewInput(iteration int, plan []reviewAxisRun) imple
 		}
 	}
 	return implementationReviewInput{
-		ProgressPath: filepath.Join(g.cfg.ArtifactDir, "progress.md"),
+		ProgressPath: existingPath(filepath.Join(g.cfg.ArtifactDir, "progress.md")),
 		Plan:         plan,
 		Sticky:       sticky,
 		RoundSection: func(run reviewAxisRun) string {

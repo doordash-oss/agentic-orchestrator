@@ -65,6 +65,10 @@ func isTerminalForCompletion(f *feature.Feature) bool {
 // to give that caller an unambiguous short-circuit signal.
 var errFinalReviewInterrupted = errors.New("final review interrupted")
 
+// finalReviewStatusStopped is the Final Review result when the user chose to
+// stop at a review handoff.
+const finalReviewStatusStopped = "stopped"
+
 // finalReviewRootOrchestrationArtifacts are the repo-root files the publish
 // path scrubs and the Final Review approval dirty-check tolerates; the
 // canonical list lives with the agent-side round-commit contract.
@@ -1345,6 +1349,18 @@ func (o *Orchestrator) finishDeferredFinalReviewResult(featureID string, res *ag
 		// on the Interrupted feature or surface as a spurious "Failed" with
 		// failure_type=infrastructure.
 		o.emitPhaseCompleted(featureID, feature.PhaseFinalReview, nil)
+		return errFinalReviewInterrupted
+	case finalReviewStatusStopped:
+		// The user chose to stop at a review handoff: park the feature as a
+		// pause-stop would, so resuming re-enters Final Review.
+		if err := o.deps.Manager.Transition(featureID, feature.StatusInterrupted); err != nil {
+			return fmt.Errorf("stop after final review handoff: %w", err)
+		}
+		o.emitPhaseCompleted(featureID, feature.PhaseFinalReview, nil)
+		if o.hooks.OnFeatureInterrupted != nil {
+			o.hooks.OnFeatureInterrupted(featureID)
+		}
+		o.emitEvent(ports.Event{Type: ports.FeatureInterrupted, FeatureID: featureID})
 		return errFinalReviewInterrupted
 	case "failed":
 		errMsg := res.LastError

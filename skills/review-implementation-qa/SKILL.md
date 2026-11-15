@@ -22,9 +22,9 @@ Own functional QA at Final Review:
 - failed smoke paths across the assembled feature, including cross-repo integration behavior
 - evidence you personally capture while exercising the app
 
-Read the design artifact (its acceptance criteria are the feature-level definition of done), roadmap and plan context, previous aggregate feedback, and prior implementation evidence before choosing what to exercise. Prefer a few representative end-to-end journeys over static inspection.
+Read the design artifact (its acceptance criteria are the feature-level definition of done), roadmap and plan context, and any acceptance authority and round scope sections in your prompt before choosing what to exercise. Prefer a few representative end-to-end journeys over static inspection.
 
-Before returning APPROVED, execute the repository's full automated test suites (the documented aggregate commands) yourself and confirm they pass. For features without per-iteration machine verification you are the only execution gate; do not approve on code reading alone.
+Before returning APPROVED, execute the repository's full automated test suites (the documented aggregate commands) yourself and confirm they pass. You are the execution gate for the assembled feature; do not approve on code reading alone.
 
 ## Blocking Mandate
 

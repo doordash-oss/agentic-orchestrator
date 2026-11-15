@@ -30,8 +30,8 @@ var finalReviewFixerRoleSpec = roleSpec{
 	OutputRoots: []outputRootSpec{
 		iterationOutputRoot("iteration_dir", "Final-review fix iteration artifact directory."),
 	},
-	// No required artifacts: no testing contract executes at Final Review;
-	// the next review iteration's live-run axes re-exercise the product.
+	// No required artifacts: the next review round's live-run axes
+	// re-exercise the product.
 	Artifacts: []roleArtifactSpec{},
 }
 

@@ -32,7 +32,7 @@ Act on the answer. The harness records every question and answer in the decision
 
 - Address only the requested final-review changes and directly necessary mechanical follow-ons.
 - Keep access to every mounted feature repo; cross-repo fixes are valid when the reviewer feedback spans repos.
-- Do not write `progress.md` or `need-user-input.yaml`.
+- Do not write `progress.md`.
 - Do not create orchestration files at a repository worktree root.
 - Never fabricate evidence: if a required semantic observation cannot be re-captured in this environment, say so in your final summary rather than inventing an artifact.
 - Add comments only when they explain intent, rationale, invariants, or non-obvious tradeoffs. Keep required API/doc comments. Do not add comments that merely restate self-explanatory code.

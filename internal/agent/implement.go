@@ -1117,7 +1117,7 @@ const crashResumeMessageFragment = "process terminated unexpectedly mid-turn"
 // the process boundary and re-anchors the completion protocol.
 const crashResumeMessage = "Your previous process terminated unexpectedly mid-turn; this session resumes that conversation. " +
 	"Reassess the repository and your artifacts: if the iteration's work is already complete, write any missing " +
-	"required artifacts, run the artifact preflight, and request completion using the phase's declared protocol; otherwise update progress " +
+	"required artifacts, run the artifact preflight if your instructions include one, and request completion using the phase's declared protocol; otherwise update progress " +
 	"and continue from where you left off."
 
 // providerSessionID returns the provider-native session identifier for a
@@ -1401,11 +1401,11 @@ const maxAutoResumeAttempts = 3
 // autoResumeMessage is the user-facing continuation sent to the session
 // when the CLI truncated an invocation mid-work. It reminds the agent of
 // the completion protocol so a genuinely-finished agent can exit cleanly.
-const autoResumeMessage = `Continue where you left off. If the task is complete, validate the required artifacts and finish with exactly one <agentico-outcome>{"status":"success"}</agentico-outcome> or <agentico-outcome>{"status":"retry"}</agentico-outcome> tag.`
+const autoResumeMessage = `Continue where you left off. If the task is complete, validate any required artifacts and finish with exactly one <agentico-outcome>{"status":"success"}</agentico-outcome> or <agentico-outcome>{"status":"retry"}</agentico-outcome> tag.`
 
 func autoResumeMessageForSession(sess ports.SessionView) string {
 	if phaseCompletionRequests(sess) != nil {
-		return "Continue where you left off. Validate the required artifacts before calling `" + llm.CompletePhaseToolName +
+		return "Continue where you left off. Validate any required artifacts before calling `" + llm.CompletePhaseToolName +
 			"` with an outcome allowed by your role contract. Ask any unresolved user question through `" + llm.AskUserToolName + "` and wait for the answer."
 	}
 	return autoResumeMessage
@@ -1640,9 +1640,9 @@ const finishOrViolateNudgeFragment = "do not re-investigate"
 // session ended its turn without a committable root outcome.
 func formatFinishOrViolateNudge(missing []string) string {
 	if len(missing) == 0 {
-		return `You ended your turn without a valid completion outcome. Finish the required artifacts, run the artifact preflight, then emit exactly one <agentico-outcome>{"status":"success"}</agentico-outcome> or <agentico-outcome>{"status":"retry"}</agentico-outcome> tag. Do not start new work, ` + finishOrViolateNudgeFragment + ", and use AskUserQuestion only if the task is genuinely blocked on the user."
+		return `You ended your turn without a valid completion outcome. Finish any required artifacts, run the artifact preflight if your instructions include one, then emit exactly one <agentico-outcome>{"status":"success"}</agentico-outcome> or <agentico-outcome>{"status":"retry"}</agentico-outcome> tag. Do not start new work, ` + finishOrViolateNudgeFragment + ", and use AskUserQuestion only if the task is genuinely blocked on the user."
 	}
-	return fmt.Sprintf(`You ended your turn without a committable completion outcome. Still invalid or missing: %s. Fix only those artifacts, rerun the artifact preflight, then emit exactly one <agentico-outcome>{"status":"success"}</agentico-outcome> or <agentico-outcome>{"status":"retry"}</agentico-outcome> tag. Do not start new work, %s, and use AskUserQuestion only if the task is genuinely blocked on the user.`,
+	return fmt.Sprintf(`You ended your turn without a committable completion outcome. Still invalid or missing: %s. Fix only those artifacts, rerun the artifact preflight if your instructions include one, then emit exactly one <agentico-outcome>{"status":"success"}</agentico-outcome> or <agentico-outcome>{"status":"retry"}</agentico-outcome> tag. Do not start new work, %s, and use AskUserQuestion only if the task is genuinely blocked on the user.`,
 		strings.Join(missing, ", "), finishOrViolateNudgeFragment)
 }
 
@@ -1672,8 +1672,8 @@ func sendCompletionNudge(sess ports.SessionView, nudges *int, message string) bo
 // formatCommitViolationNudge builds the correction sent when a parsed root
 // outcome was rejected at commit time. Unlike the missing-outcome nudge it
 // carries the rejection reasons verbatim and offers only the outcome verbs the
-// role may actually use — re-offering "retry" to a role without iteration
-// state would invite the same violation again.
+// role may actually use — re-offering "retry" to a role that cannot ask for
+// another pass would invite the same violation again.
 func formatCommitViolationNudge(violations []ProtocolViolation, retryAllowed bool) string {
 	var reasons strings.Builder
 	for _, violation := range violations {
@@ -1691,7 +1691,7 @@ func formatCommitViolationNudge(violations []ProtocolViolation, retryAllowed boo
 	}
 	return fmt.Sprintf(`Your completion outcome was rejected:
 %s
-Fix only what is listed, rerun the artifact preflight, then emit exactly one %s tag.%s Do not start new work, %s, and use AskUserQuestion only if the task is genuinely blocked on the user.`,
+Fix only what is listed, rerun the artifact preflight if your instructions include one, then emit exactly one %s tag.%s Do not start new work, %s, and use AskUserQuestion only if the task is genuinely blocked on the user.`,
 		strings.TrimRight(reasons.String(), "\n"), verbs, roleNote, finishOrViolateNudgeFragment)
 }
 

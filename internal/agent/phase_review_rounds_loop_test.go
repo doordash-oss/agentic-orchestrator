@@ -264,7 +264,7 @@ func TestPhaseReviewGate_DisputeRecordsDecisionForLaterRounds(t *testing.T) {
 		t.Skip("skipping loop test in short mode")
 	}
 	env := newPhaseGateEnv(t, "feat-phase-dispute", feature.PipelineMoonshot)
-	dispute := "Craft: **High**: rename the retry helper. The roadmap keeps the existing name; dispute?"
+	dispute := "Dispute: Craft: **High**: rename the retry helper. The roadmap keeps the existing name."
 	run := runPhaseGate(t, env, 4, []string{
 		"",
 		frAskUser(dispute, "Fix it", "Accept as is", "Change the scope") + "\n" + phaseGateCommit(env.repo),
@@ -310,7 +310,7 @@ func TestPhaseReviewGate_NoChangeFixHandsOff(t *testing.T) {
 	}{
 		{name: "stop", ask: true, answer: handoffStopLabel, wantStatus: finalStatusStopped},
 		{name: "accept", ask: true, answer: phaseHandoffAcceptLabel, wantStatus: finalStatusReviewPassed},
-		{name: "unanswered", wantStatus: "safety_rail"},
+		{name: "unanswered", wantStatus: finalStatusStopped},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -359,7 +359,7 @@ func TestPhaseReviewGate_NoChangeFixHandsOff(t *testing.T) {
 				}
 				requireReviewed(t, resumed, "iteration-04/craft", "iteration-04/confirm/cleanliness", "iteration-04/confirm/functionality-evidence")
 			case "unanswered":
-				if !strings.Contains(run.result.LastError, "went unanswered") {
+				if !strings.Contains(run.result.LastError, "has no answer yet") {
 					t.Fatalf("LastError = %q", run.result.LastError)
 				}
 			}
@@ -435,5 +435,46 @@ func TestPhaseReviewGate_StalledAxisHandsOffAfterThreeRounds(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+// A clarifying question is not a review decision: it neither lands in the
+// decisions file nor saves a fix iteration that changed nothing.
+func TestPhaseReviewGate_ClarifyingQuestionIsNotADecision(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping loop test in short mode")
+	}
+	env := newPhaseGateEnv(t, "feat-phase-clarify", feature.PipelineMoonshot)
+	const clarify = "Which logger should the retry loop use?"
+	run := runPhaseGate(t, env, 5, []string{"", frAskUser(clarify, "slog", "zap"), phaseGateHandoffAsk()},
+		map[string]string{"iteration-01/craft": "retry loop has no backoff"},
+		func(q string) string {
+			if q == clarify {
+				return "slog"
+			}
+			return handoffStopLabel
+		})
+	if run.result.FinalStatus != finalStatusStopped || run.result.Iterations != 3 {
+		t.Fatalf("result = %+v, want the no-change handoff stopped in iteration 3", run.result)
+	}
+	if got := phaseGateMeta(t, env, 2).Handoff; got != reviewHandoffAsked {
+		t.Fatalf("iteration 2 handoff = %q, want %q", got, reviewHandoffAsked)
+	}
+	if decisions := readFRFile(t, filepath.Join(env.artifactDir, reviewDecisionsFile)); strings.Contains(decisions, clarify) {
+		t.Fatalf("clarifying question recorded as a decision:\n%s", decisions)
+	}
+}
+
+// A handoff raised on the last allowed iteration is still asked.
+func TestPhaseReviewGate_HandoffAtMaxIterationsIsAsked(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping loop test in short mode")
+	}
+	env := newPhaseGateEnv(t, "feat-phase-cap", feature.PipelineMoonshot)
+	run := runPhaseGate(t, env, 2, []string{"", "", phaseGateHandoffAsk()},
+		map[string]string{"iteration-01/craft": "retry loop has no backoff"},
+		func(string) string { return phaseHandoffAcceptLabel })
+	if run.result.FinalStatus != finalStatusReviewPassed || run.result.Iterations != 3 {
+		t.Fatalf("result = %+v, want the handoff asked and accepted in iteration 3", run.result)
 	}
 }

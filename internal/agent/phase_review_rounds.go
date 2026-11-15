@@ -21,8 +21,6 @@ import (
 	"path/filepath"
 	"strings"
 
-	"gopkg.in/yaml.v3"
-
 	"github.com/doordash-oss/agentic-orchestrator/internal/agent/prompts"
 	"github.com/doordash-oss/agentic-orchestrator/internal/feature"
 	"github.com/doordash-oss/agentic-orchestrator/internal/ports"
@@ -31,8 +29,6 @@ import (
 // reviewHandoffAsked marks the per-phase iteration that raised a handoff; the
 // next implement session asks it.
 const reviewHandoffAsked = "asked"
-
-const handoffPromptFile = "handoff.yaml"
 
 // phaseReviewGate applies the review round rules to Moonshot's per-phase
 // review. Unlike Final Review, the fix for a review is the next implement
@@ -44,9 +40,10 @@ type phaseReviewGate struct {
 	history *reviewRoundHistory
 
 	lastReview int
-	lastHeads  map[string]string
+	lastState  repoState
 	decided    bool
 	pending    *reviewHandoffPromptInput
+	pendingDir string
 }
 
 func newPhaseReviewGate(cfg ImplementConfig, am *artifactManager, upTo int) *phaseReviewGate {
@@ -69,11 +66,12 @@ func newPhaseReviewGate(cfg ImplementConfig, am *artifactManager, upTo int) *pha
 			g.history.resetStreaks()
 		}
 		if len(meta.AxisVerdicts) > 0 {
-			g.recordReview(meta.Iteration, meta.AxisVerdicts, meta.ReviewHeads, meta.CodeChanged)
+			g.recordReview(meta.Iteration, meta.AxisVerdicts, metaRepoState(meta), meta.CodeChanged)
 		}
 	})
 	if askedAt > 0 {
-		g.pending = loadHandoffPrompt(filepath.Join(g.iterDir(askedAt), handoffDirName))
+		g.pendingDir = filepath.Join(g.iterDir(askedAt), handoffDirName)
+		g.pending = loadHandoffPrompt(g.pendingDir)
 	}
 	return g
 }
@@ -98,18 +96,18 @@ func (g *phaseReviewGate) decisionsPath() string {
 	return filepath.Join(g.cfg.ArtifactDir, reviewDecisionsFile)
 }
 
-func (g *phaseReviewGate) plan() []reviewAxisRun {
-	return g.history.planRound(g.axes)
+func (g *phaseReviewGate) plan(now repoState) []reviewAxisRun {
+	return g.history.planRound(g.axes, now)
 }
 
 // recordReview records a completed round; changed says code changed since
 // the previous round.
-func (g *phaseReviewGate) recordReview(iteration int, verdicts, heads map[string]string, changed bool) {
+func (g *phaseReviewGate) recordReview(iteration int, verdicts map[string]string, state repoState, changed bool) {
 	if changed {
 		g.history.recordFix(g.lastReview, true)
 	}
-	g.history.recordReview(iteration, verdicts, heads)
-	g.lastReview, g.lastHeads = iteration, heads
+	g.history.recordReview(iteration, verdicts, state)
+	g.lastReview, g.lastState = iteration, state
 	g.decided = false
 }
 
@@ -127,20 +125,29 @@ func (g *phaseReviewGate) awaitingFix() bool {
 }
 
 func (g *phaseReviewGate) changedSinceReview() bool {
-	return reposChangedSince(g.repos, g.lastHeads)
+	return reposChangedSince(g.repos, g.lastState)
 }
 
-// recordSession appends the session's user answers to the decisions file and
-// keeps its closing note for the next reviewers when it worked on findings.
+// recordSession records the session's dispute and handoff answers in the
+// decisions file, keeps a handoff answer with the pending handoff, and keeps
+// the closing note for the next reviewers when it worked on findings.
 func (g *phaseReviewGate) recordSession(iteration int, iterDir string, sess ports.SessionView) string {
 	if sess == nil {
 		return ""
 	}
 	heading := fmt.Sprintf("Iteration %d implementation", iteration)
+	question := ""
 	if g.pending != nil {
 		heading = fmt.Sprintf("Iteration %d handoff", iteration)
+		question = g.pending.Question
+		if answer, ok := handoffAnswer(sess.QALog(), question); ok && g.pending.Answer == "" {
+			g.pending.Answer = answer
+			if err := saveHandoffPrompt(g.pendingDir, g.pending); err != nil {
+				log.Printf("phase review: %v", err)
+			}
+		}
 	}
-	recorded, err := appendReviewDecisions(g.decisionsPath(), heading, sess.QALog())
+	recorded, err := appendReviewDecisions(g.decisionsPath(), heading, reviewDecisionPairs(sess.QALog(), question))
 	if err != nil {
 		log.Printf("phase review: %v", err)
 	}
@@ -167,33 +174,17 @@ func (g *phaseReviewGate) raiseHandoff(iteration int, iterDir string, h reviewHa
 	if err != nil {
 		return err
 	}
-	data, err := yaml.Marshal(prompt)
-	if err != nil {
-		return fmt.Errorf("encoding review handoff: %w", err)
+	if err := saveHandoffPrompt(dir, prompt); err != nil {
+		return err
 	}
-	if err := os.WriteFile(filepath.Join(dir, handoffPromptFile), data, 0o644); err != nil {
-		return fmt.Errorf("writing review handoff: %w", err)
-	}
-	g.pending = prompt
+	g.pending, g.pendingDir = prompt, dir
 	return nil
-}
-
-func loadHandoffPrompt(dir string) *reviewHandoffPromptInput {
-	data, err := os.ReadFile(filepath.Join(dir, handoffPromptFile))
-	if err != nil {
-		return nil
-	}
-	var prompt reviewHandoffPromptInput
-	if err := yaml.Unmarshal(data, &prompt); err != nil || prompt.Question == "" {
-		return nil
-	}
-	return &prompt
 }
 
 // resolveHandoff classifies the user's answer to the pending handoff. A
 // session that ended without an answer keeps the handoff pending.
-func (g *phaseReviewGate) resolveHandoff(qa []ports.QAPair) reviewHandoffChoice {
-	choice := classifyHandoffAnswer(qa)
+func (g *phaseReviewGate) resolveHandoff() reviewHandoffChoice {
+	choice := classifyHandoffAnswer(g.pending.Answer)
 	switch choice {
 	case handoffAccept:
 		g.history.accepted = true
@@ -290,13 +281,13 @@ func (h *reviewRoundHistory) clone() *reviewRoundHistory {
 
 // confirmPlan is the confirmation round due once this iteration's verdicts
 // are recorded.
-func (g *phaseReviewGate) confirmPlan(iteration int, verdicts, heads map[string]string, changed bool) []reviewAxisRun {
+func (g *phaseReviewGate) confirmPlan(iteration int, verdicts map[string]string, state repoState, changed bool) []reviewAxisRun {
 	h := g.history.clone()
 	if changed {
 		h.recordFix(g.lastReview, true)
 	}
-	h.recordReview(iteration, verdicts, heads)
-	return h.planRound(g.axes)
+	h.recordReview(iteration, verdicts, state)
+	return h.planRound(g.axes, state)
 }
 
 // openFindings returns the latest review's aggregate findings.
@@ -331,4 +322,11 @@ func (g *phaseReviewGate) implementContext() string {
 type implementReviewUserInput struct {
 	Handoff       *reviewHandoffPromptInput
 	DecisionsPath string
+}
+
+func gatePending(g *phaseReviewGate) *reviewHandoffPromptInput {
+	if g == nil {
+		return nil
+	}
+	return g.pending
 }

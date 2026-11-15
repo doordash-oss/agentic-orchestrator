@@ -243,6 +243,7 @@ type FinalFixHandoffInput struct {
 	ContinueLabel string
 	AcceptLabel   string
 	StopLabel     string
+	Answer        string
 }
 
 type ImplementReviewUserInput struct {
@@ -737,6 +738,24 @@ func TestGoldenSnapshots(t *testing.T) {
 						ContinueLabel: "Continue with guidance",
 						AcceptLabel:   "Accept and finish the phase",
 						StopLabel:     "Stop",
+					},
+				})
+			},
+		},
+		{
+			name: "implement_review_user_handoff_answered",
+			render: func() string {
+				return MustRender(TemplateImplementReviewUser, ImplementReviewUserInput{
+					Handoff: &FinalFixHandoffInput{
+						GateLabel:     "Phase 2 review",
+						AcceptOutcome: "the phase passes",
+						Reason:        "The Craft axis requested changes in 3 consecutive rounds.",
+						Question:      "Phase 2 review needs your decision.\n\nHow should Phase 2 review proceed?",
+						NotePath:      "/state/feat-x/run-1/phase-02/implement/iteration-03/handoff/handoff.md",
+						ContinueLabel: "Continue with guidance",
+						AcceptLabel:   "Accept and finish the phase",
+						StopLabel:     "Stop",
+						Answer:        "Use exponential backoff with jitter.",
 					},
 				})
 			},

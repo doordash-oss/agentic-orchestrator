@@ -211,9 +211,20 @@ type featureFinalReviewLoopState struct {
 // finalReviewRound is what one iteration persists for resume.
 type finalReviewRound struct {
 	verdicts map[string]string
-	heads    map[string]string
+	state    repoState
 	changed  bool
 	handoff  string
+	pending  string
+}
+
+// Stages a review iteration can still owe after its review.
+const (
+	pendingFix     = "fix"
+	pendingHandoff = "handoff"
+)
+
+func roundFromMeta(meta iterationMeta) finalReviewRound {
+	return finalReviewRound{verdicts: meta.AxisVerdicts, state: metaRepoState(meta), changed: meta.MadeProgress, handoff: meta.Handoff}
 }
 
 // run executes the FR iteration loop. Returns a result with FinalStatus
@@ -254,7 +265,22 @@ func (s *featureFinalReviewLoopState) run() (*FeatureFinalReviewResult, error) {
 		maxConsecFails = 3
 	}
 
-	for i := startIter + 1; i <= cfg.MaxIterations; i++ {
+	// A round owed to the user, a confirmation or the review of their
+	// guidance, runs even past MaxIterations.
+	owed := false
+	if startIter > 0 {
+		iterDir := filepath.Join(s.artifactDir, fmt.Sprintf("iteration-%02d", startIter))
+		if meta, err := am.readMeta(iterDir); err == nil && meta.Pending != "" {
+			done, nextOwed := s.resumePending(startIter, iterDir, meta, roundCommits.changesRequested, &consecutiveFailures)
+			if done != nil {
+				return done, nil
+			}
+			owed = nextOwed
+		}
+	}
+
+	for i := startIter + 1; i <= cfg.MaxIterations || owed; i++ {
+		owed = false
 		if isFeatureInterrupted(cfg.FeatureStore, cfg.Feature.ID) {
 			return &FeatureFinalReviewResult{FinalStatus: "interrupted", Iterations: i - 1}, nil
 		}
@@ -271,14 +297,15 @@ func (s *featureFinalReviewLoopState) run() (*FeatureFinalReviewResult, error) {
 			return &FeatureFinalReviewResult{FinalStatus: "failed", Iterations: i, LastError: mkdirErr.Error()}, nil
 		}
 
-		plan := s.history.planRound(s.axes)
+		now := currentRepoState(s.workspace.RepoPaths)
+		plan := s.history.planRound(s.axes, now)
 		if len(plan) == 0 {
 			return s.approve(iterDir, i, finalReviewRound{}), nil
 		}
 
 		// Inverted iteration order: review FIRST, fix SECOND.
 		s.setReviewFixing(false)
-		round := finalReviewRound{heads: repoHeads(s.workspace.RepoPaths)}
+		round := finalReviewRound{state: now}
 		reviewStatus, feedback, verdicts, reviewErr := s.runReview(i, iterDir, plan)
 
 		if reviewErr != nil {
@@ -322,106 +349,34 @@ func (s *featureFinalReviewLoopState) run() (*FeatureFinalReviewResult, error) {
 		}
 
 		round.verdicts = verdicts
-		s.history.recordReview(i, verdicts, round.heads)
+		s.history.recordReview(i, verdicts, round.state)
 
 		switch reviewStatus {
 		case ReviewApproved:
-			if len(s.history.planRound(s.axes)) > 0 {
-				// Earlier approvals predate a fix: they confirm next round.
+			if len(s.history.planRound(s.axes, round.state)) > 0 {
+				// Earlier approvals predate later code: they confirm next round.
 				s.writeIterationMeta(iterDir, i, "", "approved", round)
+				owed = true
 				continue
 			}
 			return s.approve(iterDir, i, round), nil
 
 		case reviewChangesRequested:
 			roundCommits.changesRequested++
-			feedbackPath := filepath.Join(iterDir, "review-feedback.md")
-
+			if i > cfg.MaxIterations {
+				s.writeIterationMeta(iterDir, i, "", frMetaChangesRequested, round)
+				return s.maxIterationsResult(i), nil
+			}
+			var done *FeatureFinalReviewResult
 			if axis, stalled := s.history.stalledAxis(s.axes); stalled {
 				reason := fmt.Sprintf("The %s axis requested changes in %d consecutive rounds.", axis.Name, axisStallLimit)
-				handoff := reviewHandoff{Reason: reason, Findings: feedback, FixerNote: s.latestFixerNote(i)}
-				if done := s.handOff(i, iterDir, handoff, round, roundCommits.changesRequested); done != nil {
-					return done, nil
-				}
-				continue
+				done, owed = s.raiseHandoff(i, iterDir, feedback, reviewHandoff{Reason: reason, Findings: feedback, FixerNote: s.latestFixerNote(i)}, round, roundCommits.changesRequested)
+			} else {
+				done, owed = s.fixStage(i, iterDir, feedback, round, roundCommits.changesRequested, &consecutiveFailures)
 			}
-
-			before := repoHeads(s.workspace.RepoPaths)
-			s.setReviewFixing(true)
-			fix := s.runFix(finalFixRun{
-				Iteration:    i,
-				Dir:          iterDir,
-				Role:         "fix",
-				Feedback:     feedback,
-				FeedbackPath: feedbackPath,
-			})
-
-			// The fix round's work commits immediately, whatever the
-			// session's outcome. FR has no later absorbing round before the
-			// next review, so a FAILED or protocol-violating fixer's partial
-			// edits must not strand the worktree dirty: the next review
-			// reads that state, and an approval over dirt fails the feature.
-			// A fix session that never started (dispatch error) left the
-			// tree untouched, so the hook no-ops on the clean worktree.
-			if err := s.commitFixRound(i, roundCommits.changesRequested); err != nil {
-				return &FeatureFinalReviewResult{FinalStatus: "failed", Iterations: i, LastError: err.Error()}, nil
+			if done != nil {
+				return done, nil
 			}
-			if isFeatureInterrupted(cfg.FeatureStore, cfg.Feature.ID) {
-				return &FeatureFinalReviewResult{FinalStatus: "interrupted", Iterations: i - 1}, nil
-			}
-			round.changed = reposChangedSince(s.workspace.RepoPaths, before)
-			s.history.recordFix(i, round.changed)
-			decided := s.recordDecisions(fmt.Sprintf("Iteration %d fix", i), fix.QA)
-
-			if fix.Status == agentStatusProtocolViolation {
-				violations := protocolViolationsFromError(fix.Err)
-				if done := s.recordFixProtocolViolation(iterDir, i, violations, &consecutiveFailures, round); done != nil {
-					return done, nil
-				}
-				continue
-			}
-
-			if fix.Err != nil || (fix.Status != agentStatusSuccess && fix.Status != "") {
-				consecutiveFailures++
-				agentStatus := "FAILED"
-				if fix.Err == nil {
-					agentStatus = fix.Status
-				}
-				s.writeIterationMeta(iterDir, i, agentStatus, frMetaChangesRequested, round)
-				if consecutiveFailures >= maxConsecFails {
-					return &FeatureFinalReviewResult{
-						FinalStatus: "safety_rail",
-						Iterations:  i,
-						LastError:   fmt.Sprintf("consecutive-failure rail tripped after %d iterations", i),
-					}, nil
-				}
-				continue
-			}
-
-			outcome, violations, validateErr := Validate(feature.PhaseReview, roleFinalReviewFixer, iterDir)
-			if validateErr != nil {
-				return &FeatureFinalReviewResult{FinalStatus: "failed", Iterations: i, LastError: validateErr.Error()}, nil
-			}
-			if !outcome.OK {
-				if done := s.recordFixProtocolViolation(iterDir, i, violations, &consecutiveFailures, round); done != nil {
-					return done, nil
-				}
-				continue
-			}
-
-			consecutiveFailures = 0
-			if !round.changed && !decided {
-				handoff := reviewHandoff{
-					Reason:    fmt.Sprintf("Fix round %d made no code changes, so another review round would repeat the same findings.", roundCommits.changesRequested),
-					Findings:  feedback,
-					FixerNote: fix.Note,
-				}
-				if done := s.handOff(i, iterDir, handoff, round, roundCommits.changesRequested); done != nil {
-					return done, nil
-				}
-				continue
-			}
-			s.writeIterationMeta(iterDir, i, "", frMetaChangesRequested, round)
 			continue
 
 		default:
@@ -430,11 +385,116 @@ func (s *featureFinalReviewLoopState) run() (*FeatureFinalReviewResult, error) {
 		}
 	}
 
+	return s.maxIterationsResult(cfg.MaxIterations), nil
+}
+
+func (s *featureFinalReviewLoopState) maxIterationsResult(iterations int) *FeatureFinalReviewResult {
 	return &FeatureFinalReviewResult{
 		FinalStatus: "max_iterations",
-		Iterations:  cfg.MaxIterations,
-		LastError:   fmt.Sprintf("final review hit MaxIterations=%d without APPROVED verdict", cfg.MaxIterations),
-	}, nil
+		Iterations:  iterations,
+		LastError:   fmt.Sprintf("final review hit MaxIterations=%d without APPROVED verdict", s.cfg.MaxIterations),
+	}
+}
+
+// resumePending runs the fix or handoff a resumed iteration still owes; its
+// review already ran.
+func (s *featureFinalReviewLoopState) resumePending(iteration int, iterDir string, meta iterationMeta, fixNumber int, consecutiveFailures *int) (*FeatureFinalReviewResult, bool) {
+	feedback := ""
+	if data, err := os.ReadFile(filepath.Join(iterDir, "review-feedback.md")); err == nil {
+		feedback = strings.TrimSpace(string(data))
+	}
+	round := roundFromMeta(meta)
+	switch meta.Pending {
+	case pendingFix:
+		return s.fixStage(iteration, iterDir, feedback, round, fixNumber, consecutiveFailures)
+	case pendingHandoff:
+		if prompt := loadHandoffPrompt(filepath.Join(iterDir, handoffDirName)); prompt != nil {
+			return s.handOff(iteration, iterDir, feedback, round, fixNumber, prompt)
+		}
+	}
+	return nil, false
+}
+
+// fixStage runs the fix after a changes-requested review. The round is
+// recorded as owing its fix first, so an interrupted fix resumes. A nil
+// result means the loop continues; owed reports a round the loop owes.
+func (s *featureFinalReviewLoopState) fixStage(iteration int, iterDir, feedback string, round finalReviewRound, fixNumber int, consecutiveFailures *int) (*FeatureFinalReviewResult, bool) {
+	round.pending = pendingFix
+	s.writeIterationMeta(iterDir, iteration, "", frMetaChangesRequested, round)
+	round.pending = ""
+
+	s.setReviewFixing(true)
+	fix := s.runFix(finalFixRun{
+		Iteration:    iteration,
+		Dir:          iterDir,
+		Role:         "fix",
+		Feedback:     feedback,
+		FeedbackPath: filepath.Join(iterDir, "review-feedback.md"),
+	})
+	decided := s.recordDecisions(fmt.Sprintf("Iteration %d fix", iteration), reviewDecisionPairs(fix.QA, ""))
+	failed := fix.Err != nil || (fix.Status != agentStatusSuccess && fix.Status != "")
+
+	// The fix round's work commits immediately, whatever the session's
+	// outcome. FR has no later absorbing round before the next review, so a
+	// FAILED or protocol-violating fixer's partial edits must not strand the
+	// worktree dirty: the next review reads that state, and an approval over
+	// dirt fails the feature. A fix session that never started (dispatch
+	// error) left the tree untouched, so the hook no-ops on the clean
+	// worktree.
+	if err := s.commitFixRound(iteration, fixNumber); err != nil {
+		return &FeatureFinalReviewResult{FinalStatus: "failed", Iterations: iteration, LastError: err.Error()}, false
+	}
+	if s.interruptedAfter(failed) {
+		return &FeatureFinalReviewResult{FinalStatus: "interrupted", Iterations: iteration - 1}, false
+	}
+	round.changed = reposChangedSince(s.workspace.RepoPaths, round.state)
+	s.history.recordFix(iteration, round.changed)
+
+	if fix.Status == agentStatusProtocolViolation {
+		violations := protocolViolationsFromError(fix.Err)
+		return s.recordFixProtocolViolation(iterDir, iteration, violations, consecutiveFailures, round), false
+	}
+
+	if failed {
+		*consecutiveFailures = *consecutiveFailures + 1
+		agentStatus := "FAILED"
+		if fix.Err == nil {
+			agentStatus = fix.Status
+		}
+		s.writeIterationMeta(iterDir, iteration, agentStatus, frMetaChangesRequested, round)
+		if *consecutiveFailures >= s.maxConsecFails() {
+			return &FeatureFinalReviewResult{
+				FinalStatus: "safety_rail",
+				Iterations:  iteration,
+				LastError:   fmt.Sprintf("consecutive-failure rail tripped after %d iterations", iteration),
+			}, false
+		}
+		return nil, false
+	}
+
+	outcome, violations, validateErr := Validate(feature.PhaseReview, roleFinalReviewFixer, iterDir)
+	if validateErr != nil {
+		return &FeatureFinalReviewResult{FinalStatus: "failed", Iterations: iteration, LastError: validateErr.Error()}, false
+	}
+	if !outcome.OK {
+		return s.recordFixProtocolViolation(iterDir, iteration, violations, consecutiveFailures, round), false
+	}
+
+	*consecutiveFailures = 0
+	if !round.changed && !decided {
+		reason := fmt.Sprintf("Fix round %d made no code changes, so another review round would repeat the same findings.", fixNumber)
+		return s.raiseHandoff(iteration, iterDir, feedback, reviewHandoff{Reason: reason, Findings: feedback, FixerNote: fix.Note}, round, fixNumber)
+	}
+	s.writeIterationMeta(iterDir, iteration, "", frMetaChangesRequested, round)
+	return nil, false
+}
+
+// interruptedAfter reports a pause-stop, or a shutdown that ended a session.
+func (s *featureFinalReviewLoopState) interruptedAfter(sessionFailed bool) bool {
+	if isFeatureInterrupted(s.cfg.FeatureStore, s.cfg.Feature.ID) {
+		return true
+	}
+	return sessionFailed && s.sm != nil && waitForShutdownIntent(s.sm, shutdownDetectionGrace)
 }
 
 // approve ends the loop with an approval. Review-approved code must already
@@ -449,58 +509,95 @@ func (s *featureFinalReviewLoopState) approve(iterDir string, iteration int, rou
 	return &FeatureFinalReviewResult{FinalStatus: finalStatusReviewPassed, Iterations: iteration}
 }
 
+// raiseHandoff writes the handoff for iteration and asks it.
+func (s *featureFinalReviewLoopState) raiseHandoff(iteration int, iterDir, feedback string, h reviewHandoff, round finalReviewRound, fixNumber int) (*FeatureFinalReviewResult, bool) {
+	dir := filepath.Join(iterDir, handoffDirName)
+	prompt, err := prepareHandoff(dir, iteration, h, implementationReviewGateLabel(implementationReviewGateFinal), handoffAcceptLabel, "the feature moves on to Publish")
+	if err == nil {
+		err = saveHandoffPrompt(dir, prompt)
+	}
+	if err != nil {
+		return &FeatureFinalReviewResult{FinalStatus: "failed", Iterations: iteration, LastError: err.Error()}, false
+	}
+	return s.handOff(iteration, iterDir, feedback, round, fixNumber, prompt)
+}
+
 // handOff asks the user how Final Review should proceed once it stopped
 // converging. The question runs in a fix session so it travels the existing
-// ask-user path; with guidance, that session also applies it. A nil result
-// means the loop continues.
-func (s *featureFinalReviewLoopState) handOff(iteration int, iterDir string, h reviewHandoff, round finalReviewRound, fixNumber int) *FeatureFinalReviewResult {
-	cfg := s.cfg
+// ask-user path; with guidance, that session also applies it. The question
+// stays pending across restarts and session errors until answered. A nil
+// result means the loop continues; owed reports the round that reviews the
+// guidance.
+func (s *featureFinalReviewLoopState) handOff(iteration int, iterDir, feedback string, round finalReviewRound, fixNumber int, prompt *reviewHandoffPromptInput) (*FeatureFinalReviewResult, bool) {
 	handoffDir := filepath.Join(iterDir, handoffDirName)
-	prompt, err := prepareHandoff(handoffDir, iteration, h, implementationReviewGateLabel(implementationReviewGateFinal), handoffAcceptLabel, "the feature moves on to Publish")
-	if err != nil {
-		return &FeatureFinalReviewResult{FinalStatus: "failed", Iterations: iteration, LastError: err.Error()}
+	round.pending = pendingHandoff
+	s.writeIterationMeta(iterDir, iteration, "", frMetaChangesRequested, round)
+	round.pending = ""
+
+	detail := ""
+	if prompt.Answer == "" || classifyHandoffAnswer(prompt.Answer) == handoffContinue {
+		s.setReviewFixing(true)
+		fix := s.runFix(finalFixRun{
+			Iteration:    iteration,
+			Dir:          handoffDir,
+			Role:         handoffDirName,
+			Feedback:     feedback,
+			FeedbackPath: filepath.Join(iterDir, "review-feedback.md"),
+			Handoff:      prompt,
+		})
+		if answer, ok := handoffAnswer(fix.QA, prompt.Question); ok && prompt.Answer == "" {
+			prompt.Answer = answer
+			if err := saveHandoffPrompt(handoffDir, prompt); err != nil {
+				log.Printf("final review: %v", err)
+			}
+		}
+		s.recordDecisions(fmt.Sprintf("Iteration %d handoff", iteration), reviewDecisionPairs(fix.QA, prompt.Question))
+		failed := fix.Err != nil || (fix.Status != agentStatusSuccess && fix.Status != "")
+		if err := s.commitFixRound(iteration, fixNumber); err != nil {
+			return &FeatureFinalReviewResult{FinalStatus: "failed", Iterations: iteration, LastError: err.Error()}, false
+		}
+		if s.interruptedAfter(failed) {
+			return &FeatureFinalReviewResult{FinalStatus: "interrupted", Iterations: iteration - 1}, false
+		}
+		if failed {
+			if fix.Err != nil {
+				detail = fmt.Sprintf(" (the handoff session failed: %v)", fix.Err)
+			} else {
+				detail = fmt.Sprintf(" (the handoff session ended %s)", fix.Status)
+			}
+			if prompt.Answer != "" && classifyHandoffAnswer(prompt.Answer) == handoffContinue {
+				return s.parkHandoff(iteration, prompt, detail), false
+			}
+		}
 	}
 
-	before := repoHeads(s.workspace.RepoPaths)
-	s.setReviewFixing(true)
-	fix := s.runFix(finalFixRun{
-		Iteration:    iteration,
-		Dir:          handoffDir,
-		Role:         handoffDirName,
-		Feedback:     h.Findings,
-		FeedbackPath: filepath.Join(iterDir, "review-feedback.md"),
-		Handoff:      prompt,
-	})
-	if err := s.commitFixRound(iteration, fixNumber); err != nil {
-		return &FeatureFinalReviewResult{FinalStatus: "failed", Iterations: iteration, LastError: err.Error()}
-	}
-	if isFeatureInterrupted(cfg.FeatureStore, cfg.Feature.ID) {
-		return &FeatureFinalReviewResult{FinalStatus: "interrupted", Iterations: iteration - 1}
-	}
-	s.recordDecisions(fmt.Sprintf("Iteration %d handoff", iteration), fix.QA)
-
-	switch classifyHandoffAnswer(fix.QA) {
+	switch classifyHandoffAnswer(prompt.Answer) {
 	case handoffAccept:
 		round.handoff = reviewHandoffAccepted
-		return s.approve(iterDir, iteration, round)
+		return s.approve(iterDir, iteration, round), false
 	case handoffStop:
 		round.handoff = reviewHandoffStopped
 		s.writeIterationMeta(iterDir, iteration, "", finalStatusStopped, round)
-		return &FeatureFinalReviewResult{FinalStatus: finalStatusStopped, Iterations: iteration, LastError: h.Reason}
+		return &FeatureFinalReviewResult{FinalStatus: finalStatusStopped, Iterations: iteration, LastError: prompt.Reason}, false
 	case handoffContinue:
 		round.handoff = reviewHandoffContinued
-		round.changed = round.changed || reposChangedSince(s.workspace.RepoPaths, before)
+		round.changed = round.changed || reposChangedSince(s.workspace.RepoPaths, round.state)
 		s.history.recordFix(iteration, round.changed)
 		s.history.resetStreaks()
 		s.writeIterationMeta(iterDir, iteration, "", frMetaChangesRequested, round)
-		return nil
+		return nil, true
 	default:
-		s.writeIterationMeta(iterDir, iteration, "", frMetaChangesRequested, round)
-		return &FeatureFinalReviewResult{
-			FinalStatus: "safety_rail",
-			Iterations:  iteration,
-			LastError:   fmt.Sprintf("final review needs a human decision, but the handoff question went unanswered: %s See %s.", h.Reason, prompt.NotePath),
-		}
+		return s.parkHandoff(iteration, prompt, detail), false
+	}
+}
+
+// parkHandoff stops the loop with the handoff still pending, so resuming
+// asks again; it is never a failure.
+func (s *featureFinalReviewLoopState) parkHandoff(iteration int, prompt *reviewHandoffPromptInput, detail string) *FeatureFinalReviewResult {
+	return &FeatureFinalReviewResult{
+		FinalStatus: finalStatusStopped,
+		Iterations:  iteration,
+		LastError:   fmt.Sprintf("Final Review needs your decision, and the handoff question has no answer yet%s: %s Resume the feature to ask again; see %s.", detail, prompt.Reason, prompt.NotePath),
 	}
 }
 
@@ -524,7 +621,7 @@ func (s *featureFinalReviewLoopState) decisionsPath() string {
 	return filepath.Join(s.artifactDir, reviewDecisionsFile)
 }
 
-// recordDecisions appends a session's user answers to the decisions file and
+// recordDecisions records a session's decisions in the decisions file and
 // reports whether any were recorded.
 func (s *featureFinalReviewLoopState) recordDecisions(heading string, qa []ports.QAPair) bool {
 	recorded, err := appendReviewDecisions(s.decisionsPath(), heading, qa)
@@ -1046,8 +1143,10 @@ func (s *featureFinalReviewLoopState) writeIterationMeta(iterDir string, iterati
 		StartedAt:    time.Now(),
 		MadeProgress: round.changed,
 		AxisVerdicts: round.verdicts,
-		ReviewHeads:  round.heads,
+		ReviewHeads:  round.state.Heads,
+		ReviewDirt:   round.state.Dirt,
 		Handoff:      round.handoff,
+		Pending:      round.pending,
 	}
 	am := &artifactManager{}
 	_ = am.writeMeta(iterDir, meta)

@@ -274,6 +274,7 @@ func TestGoldenSnapshotsNoOrphanFiles(t *testing.T) {
 		"final_fix_user_handoff":                               true,
 		"implement_review_user_decisions":                      true,
 		"implement_review_user_handoff":                        true,
+		"implement_review_user_handoff_answered":               true,
 		"final_fix_user_with_manual":                           true,
 		"implement_system_rolespec":                            true,
 		"implementation_review_axis_final_user":                true,

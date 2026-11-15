@@ -695,6 +695,11 @@ func TestRunFeatureFinalReviewLoop_FinalGateRunsAxesAndAggregates(t *testing.T) 
 	store, f, _ := newFRTestFeature(t, env.stateDir, "fr-multi-axis", []string{"api", "web"})
 	f.Pipeline = feature.PipelineMedium
 	f.TraceID = "trace-fr-multi-axis"
+	// Real repositories, so later rounds can name their fix delta.
+	for i := range f.Repos {
+		repo := testutil.InitGitRepo(t)
+		f.Repos[i].Path, f.Repos[i].WorktreePath = repo, repo
+	}
 	if err := store.Save(f); err != nil {
 		t.Fatalf("save feature: %v", err)
 	}
@@ -714,6 +719,7 @@ func TestRunFeatureFinalReviewLoop_FinalGateRunsAxesAndAggregates(t *testing.T) 
 			testutil.JSONLSuccess+"\n")
 	fixScript := testutil.WriteScript(t, env.scriptsDir, "fix.sh",
 		testutil.JSONLInit+"\n"+
+			frCommitChange(f.Repos[0].Path)+"\n"+
 			testutil.JSONLSuccess+"\n")
 
 	bs, captured := capturingBuildSessionByModel(map[string]string{

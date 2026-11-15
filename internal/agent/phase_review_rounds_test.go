@@ -57,7 +57,7 @@ func TestPhaseReviewGateLegacyMetasRunFullRound(t *testing.T) {
 		t.Fatal(err)
 	}
 	g := newPhaseReviewGate(cfg, am, 1)
-	plan := g.plan()
+	plan := g.plan(repoState{})
 	if len(plan) != 3 {
 		t.Fatalf("plan = %+v, want every per-phase axis", plannedAxes(plan))
 	}
@@ -95,7 +95,7 @@ func TestPhaseReviewGateReplaysRoundsAndPendingHandoff(t *testing.T) {
 	if axis, stalled := resumed.history.stalledAxis(resumed.axes); !stalled || axis.Slug != "craft" {
 		t.Fatalf("stalled = %v %q, want craft", stalled, axis.Slug)
 	}
-	plan := resumed.plan()
+	plan := resumed.plan(stateAt("ccc"))
 	if len(plan) != 1 || plan[0].Axis.Slug != "craft" || plan[0].Mode != reviewRoundFollowUp || plan[0].Since != 3 || plan[0].SinceHeads["api"] != "ccc" {
 		t.Fatalf("plan = %+v, want craft follow-up since iteration 3", plannedAxes(plan))
 	}
@@ -106,7 +106,7 @@ func TestPhaseReviewGateReplaysRoundsAndPendingHandoff(t *testing.T) {
 	if answered.pending != nil {
 		t.Fatalf("pending handoff after an answer = %+v, want none", answered.pending)
 	}
-	if got := plannedAxes(answered.plan()); len(got) != 2 || got[0].mode != reviewRoundConfirm || got[1].mode != reviewRoundConfirm {
+	if got := plannedAxes(answered.plan(stateAt("ddd"))); len(got) != 2 || got[0].mode != reviewRoundConfirm || got[1].mode != reviewRoundConfirm {
 		t.Fatalf("plan = %+v, want the two earlier approvals to confirm", got)
 	}
 }

@@ -1,13 +1,19 @@
 {{- /*
   review_handoff: turns a fix or implement session into a review loop's
-  handoff, which first asks the user how the loop should proceed.
+  handoff, which first asks the user how the loop should proceed. With
+  Answer set, the user already answered and the session applies it.
 */ -}}
 {{- define "review_handoff" -}}
 ## Handoff to the User
 
 {{ .GateLabel }} stopped its automatic loop: {{ .Reason }}
 
-Before any other work, ask the user exactly one question with the ask-user tool described under Asking Questions. Use this question text verbatim:
+{{ if .Answer }}The user already answered the handoff question with this guidance:
+
+> {{ blockquote .Answer }}
+
+Do not ask it again. Apply the guidance as this round's fix, using the open findings as reviewer feedback where the guidance leaves something open, then finish. Ask no dispute questions this round.
+{{ else }}Before any other work, ask the user exactly one single-choice question with the ask-user tool described under Asking Questions. Ask no dispute questions this round. Use this question text verbatim:
 
 > {{ blockquote .Question }}
 
@@ -16,8 +22,8 @@ Offer exactly these options, with these labels:
 - "{{ .AcceptLabel }}": the open findings are accepted as they are and {{ .AcceptOutcome }}.
 - "{{ .StopLabel }}": {{ .GateLabel }} stops; the user resumes or rewinds the feature later.
 
-If the answer is "{{ .AcceptLabel }}" or "{{ .StopLabel }}", make no changes and finish. Any other answer is the user's guidance: apply it as this round's fix, using the open findings as reviewer feedback where the guidance leaves something open, then finish. The harness records the answer in the decisions file.
-
+If the answer is "{{ .AcceptLabel }}" or "{{ .StopLabel }}", make no changes and finish. Any other answer is the user's guidance: apply it as this round's fix, using the open findings as reviewer feedback where the guidance leaves something open, then finish. "{{ .ContinueLabel }}" with no further text means fix the open findings. The harness records the answer in the decisions file.
+{{ end }}
 Open findings and the previous fixer's note: {{ .NotePath }}
 
 {{ end -}}

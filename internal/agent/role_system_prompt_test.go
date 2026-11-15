@@ -26,10 +26,7 @@ func TestImplementSystemPromptFromRoleSpec(t *testing.T) {
 		IterationDir:  "/state/feat-x/run-001/phase-01/implement/iteration-02",
 		SkillsDir:     "/skills",
 		GuidelinesDir: "/guidelines",
-		KBInfos: []KBInfo{
-			{Name: "agentic", IndexPath: "/kb/agentic/index.md", RootDir: "/kb/agentic"},
-		},
-		AskingClause: "## Asking Questions\n\nAsk one question at a time.",
+		AskingClause:  "## Asking Questions\n\nAsk one question at a time.",
 	})
 
 	for _, want := range []string{
@@ -41,9 +38,8 @@ func TestImplementSystemPromptFromRoleSpec(t *testing.T) {
 		"/skills/implement/SKILL.md",
 		"Read the SKILL.md file completely before taking any other action.",
 		"# Useful Resources",
-		"/kb/agentic/index.md",
+		"## Repository Instructions",
 		"/guidelines/go/index.md",
-		"/skills/knowledge-reader/SKILL.md",
 		"Ask one question at a time.",
 	} {
 		if !strings.Contains(got, want) {
@@ -163,10 +159,7 @@ func TestBuildSingleShotSystemPromptFromRoleSpec(t *testing.T) {
 		IterationDir:  "/state/feat-x/runs/run-001/design",
 		SkillsDir:     "/skills",
 		GuidelinesDir: "/guidelines",
-		KBInfos: []KBInfo{
-			{Name: "agentic", IndexPath: "/kb/agentic/index.md", RootDir: "/kb/agentic"},
-		},
-		AskingClause: "## Asking Questions\n\nUse numbered alternatives.",
+		AskingClause:  "## Asking Questions\n\nUse numbered alternatives.",
 	})
 
 	for _, want := range []string{
@@ -174,7 +167,7 @@ func TestBuildSingleShotSystemPromptFromRoleSpec(t *testing.T) {
 		"<agentico-outcome>",
 		"/skills/design/SKILL.md",
 		"# Useful Resources",
-		"/kb/agentic/index.md",
+		"## Repository Instructions",
 		"/guidelines/go/index.md",
 		"/skills/guideline-reader/SKILL.md",
 		"Use numbered alternatives.",
@@ -225,10 +218,7 @@ func TestBuildPlanningSystemPromptFromRoleSpec(t *testing.T) {
 		IterationDir:  "/state/feat/run-001/phase-02/plan/attempt-03",
 		SkillsDir:     "/skills",
 		GuidelinesDir: "/guidelines",
-		KBInfos: []KBInfo{
-			{Name: "agentic", IndexPath: "/kb/agentic/index.md", RootDir: "/kb/agentic"},
-		},
-		AskingClause: "## Asking Questions\n\nAsk one question at a time.",
+		AskingClause:  "## Asking Questions\n\nAsk one question at a time.",
 	})
 
 	for _, want := range []string{
@@ -249,7 +239,7 @@ func TestBuildPlanningSystemPromptFromRoleSpec(t *testing.T) {
 func TestReadOnlyOutsideRootsRoleSpecs(t *testing.T) {
 	// Document-only planning roles and bounded implementation-review axes must
 	// refuse source writes outside their declared output roots. Implementer,
-	// validators, KB-builder, and InteractivePTY all have
+	// validators, and InteractivePTY all have
 	// legitimate non-document writes.
 	readOnly := []struct {
 		name string
@@ -300,7 +290,6 @@ func TestReadOnlyOutsideRootsRoleSpecs(t *testing.T) {
 		{"implementer", implementRoleSpec},
 		{"final review fixer", finalReviewFixerRoleSpec},
 		{"researcher", researcherRoleSpec},
-		{"knowledge base builder", knowledgeBaseBuilderRoleSpec},
 	}
 	for _, tt := range writeAllowed {
 		t.Run(tt.name+"_flag_unset", func(t *testing.T) {

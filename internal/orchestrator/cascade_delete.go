@@ -71,12 +71,6 @@ func (o *Orchestrator) deleteCascade(featureID string) (feature.CascadeDeleteRes
 	o.relationshipMu.Lock()
 	defer o.relationshipMu.Unlock()
 
-	// Release any KB locks the feature still owns before its durable record
-	// disappears, so queued KB waiters are woken rather than orphaned.
-	if f, err := o.deps.Store.Load(featureID); err == nil {
-		o.releaseKBLocksForFeature(f)
-	}
-
 	journals := o.deps.Store
 
 	var before *feature.CascadeDeleteIntent
@@ -432,13 +426,6 @@ func (o *Orchestrator) cleanupCascadeResources(
 			} else {
 				err = fmt.Errorf("refusing copied-input path outside feature state: %s", resource.Path)
 			}
-		case feature.CascadeResourceOverlay:
-			expected := feature.ParentOverlayPath(o.stateDir(), intent.ParentID, resource.Repo)
-			if !samePathResolved(resource.Path, expected) {
-				err = fmt.Errorf("refusing unexpected overlay path %s", resource.Path)
-			} else {
-				err = os.RemoveAll(expected)
-			}
 		case feature.CascadeResourceWorktree:
 			if o.deps.Worktrees == nil {
 				err = errors.New("worktree cleanup is not configured")
@@ -453,23 +440,9 @@ func (o *Orchestrator) cleanupCascadeResources(
 			} else {
 				err = errors.New("durable branch cleanup is not configured")
 			}
-		case feature.CascadeResourceKBWorkspace:
-			expected := feature.ChildKBWorkspaceDir(o.stateDir(), resource.OwnerID, resource.Repo)
-			if !samePathResolved(resource.Path, expected) {
-				err = fmt.Errorf("refusing unexpected KB workspace path %s", resource.Path)
-			} else {
-				err = os.RemoveAll(expected)
-			}
-		case feature.CascadeResourcePromotion:
-			owned := filepath.Join(o.stateDir(), resource.OwnerID)
-			if pathWithinResolved(owned, resource.Path) {
-				_ = os.Remove(resource.Path)
-			} else if healed, ok := healCascadePath(resource.Path,
-				filepath.Join(owned, filepath.Base(filepath.Clean(resource.Path)))); ok {
-				_ = os.Remove(healed)
-			} else {
-				err = fmt.Errorf("refusing promotion path outside feature state: %s", resource.Path)
-			}
+		case "overlay", "kb_workspace", "promotion":
+			// Retired knowledge-base resources recorded by older versions;
+			// their files are left on disk.
 		default:
 			err = fmt.Errorf("unknown cascade resource kind %q", resource.Kind)
 		}

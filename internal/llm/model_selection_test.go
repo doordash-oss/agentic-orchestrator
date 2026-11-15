@@ -119,7 +119,7 @@ func TestProviderNominationsAreNotOutrankedByRicherMetadata(t *testing.T) {
 	defaults := r.CatalogDefaultModels()
 	for role, got := range map[string]string{
 		"inquiry": defaults.Inquiry, "research": defaults.Research, "planning": defaults.Planning,
-		"implementation": defaults.Implementation, "review": defaults.Review, "utilities": defaults.Utilities, "kb_build": defaults.KBBuild,
+		"implementation": defaults.Implementation, "review": defaults.Review, "utilities": defaults.Utilities,
 	} {
 		if got != "codex:gpt-5.4[272K]" {
 			t.Fatalf("%s default = %q, want the nominated balanced model", role, got)

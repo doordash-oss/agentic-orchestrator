@@ -74,8 +74,8 @@ func TestBeginCascadeDeletePersistsCompleteStableManifest(t *testing.T) {
 	if got, want := intent.ChildIDs, []string{"child"}; len(got) != len(want) || got[0] != want[0] {
 		t.Fatalf("child ids = %v, want %v", got, want)
 	}
-	if len(intent.Resources) != 10 {
-		t.Fatalf("resources = %d, want 10: %+v", len(intent.Resources), intent.Resources)
+	if len(intent.Resources) != 7 {
+		t.Fatalf("resources = %d, want 7: %+v", len(intent.Resources), intent.Resources)
 	}
 	if len(intent.Refs) != 1 || intent.Refs[0].AnchorSHA != "anchor" ||
 		intent.Refs[0].CandidateSHA != "candidate" {
@@ -147,7 +147,6 @@ func TestBeginCascadeDeleteCanonicalizesSymlinkSpelledResourcePaths(t *testing.T
 	want := map[cascadeResourceKind]string{
 		CascadeResourceCopiedInput: filepath.Join(canonicalStateDir, "parent", "attachments", "notes.txt"),
 		CascadeResourceWorktree:    filepath.Join(root, "worktrees", "parent", "a"),
-		CascadeResourceOverlay:     filepath.Join(root, "overlays", "parent", "repo-a"),
 		CascadeResourceRecord:      filepath.Join(canonicalStateDir, "parent"),
 	}
 	for _, resource := range intent.Resources {
@@ -196,18 +195,6 @@ func TestCanonicalPathFallsBackForMissingComponents(t *testing.T) {
 	}
 	if got := CanonicalPath(broken); got != filepath.Join(root, "broken-link") {
 		t.Fatalf("CanonicalPath(broken symlink) = %q", got)
-	}
-}
-
-func TestParentOverlayPathIsDeterministicAndRepositoryScoped(t *testing.T) {
-	t.Parallel()
-	// parallel-candidate: pure path construction has no shared state.
-
-	stateDir := filepath.Join("/runtime", "features")
-	got := ParentOverlayPath(stateDir, "parent-1", "repo-a")
-	want := filepath.Join("/runtime", "overlays", "parent-1", "repo-a")
-	if got != want {
-		t.Fatalf("ParentOverlayPath = %q, want %q", got, want)
 	}
 }
 

@@ -38,7 +38,7 @@ func (o *Orchestrator) commitSingleShotOutcome(
 		return nil, fmt.Errorf("committing %s outcome: loading feature: %w", phase, err)
 	}
 
-	role, artifactDir, repoNames, err := o.singleShotCompletionContract(f, sessionID, phase)
+	role, artifactDir, err := o.singleShotCompletionContract(f, phase)
 	if err != nil {
 		return nil, err
 	}
@@ -48,7 +48,6 @@ func (o *Orchestrator) commitSingleShotOutcome(
 		f,
 		phase,
 		artifactDir,
-		repoNames...,
 	)
 	if err != nil {
 		return nil, fmt.Errorf("committing %s outcome: enforcing read-only repositories: %w", phase, err)
@@ -67,42 +66,19 @@ func (o *Orchestrator) commitSingleShotOutcome(
 	return violations, err
 }
 
-func (o *Orchestrator) singleShotCompletionContract(
-	f *feature.Feature,
-	sessionID string,
-	phase feature.Phase,
-) (agent.Role, string, []string, error) {
+func (o *Orchestrator) singleShotCompletionContract(f *feature.Feature, phase feature.Phase) (agent.Role, string, error) {
 	baseDir := o.stateDir()
 	if baseDir == "" {
-		return "", "", nil, fmt.Errorf("resolving %s completion contract: state directory is empty", phase)
+		return "", "", fmt.Errorf("resolving %s completion contract: state directory is empty", phase)
 	}
 	switch phase {
-	case feature.PhaseKnowledgeBase:
-		repoName := o.repoNameForKBSession(sessionID)
-		if repoName == "" {
-			return "", "", nil, fmt.Errorf("resolving knowledge base completion contract: repo name is missing from session %q", sessionID)
-		}
-		if f.IsChild() {
-			return agent.RoleKnowledgeBaseBuilder, feature.ChildKBWorkspaceDir(baseDir, f.ID, repoName), []string{repoName}, nil
-		}
-		return agent.RoleKnowledgeBaseBuilder, agent.KBStateDir(baseDir, repoName), []string{repoName}, nil
 	case feature.PhaseInquire, feature.PhaseResearch, feature.PhaseDesign:
 		role, ok := artifactPhaseRole(phase)
 		if !ok {
-			return "", "", nil, fmt.Errorf("resolving %s completion contract: role is not registered", phase)
+			return "", "", fmt.Errorf("resolving %s completion contract: role is not registered", phase)
 		}
-		dir := filepath.Join(agent.ActiveRunDir(baseDir, f), phase.DirName())
-		return role, dir, nil, nil
+		return role, filepath.Join(agent.ActiveRunDir(baseDir, f), phase.DirName()), nil
 	default:
-		return "", "", nil, fmt.Errorf("resolving completion contract: phase %s is not single-shot", phase)
+		return "", "", fmt.Errorf("resolving completion contract: phase %s is not single-shot", phase)
 	}
-}
-
-func (o *Orchestrator) repoNameForKBSession(sessionID string) string {
-	if o != nil && o.deps.Sessions != nil {
-		if sess := o.deps.Sessions.GetSession(sessionID); sess != nil && sess.RepoName() != "" {
-			return sess.RepoName()
-		}
-	}
-	return agent.RepoNameFromKBSession(sessionID)
 }

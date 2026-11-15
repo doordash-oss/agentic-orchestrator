@@ -1026,8 +1026,7 @@ func hasAnyEffortConfig(e config.EffortConfig) bool {
 		e.Planning != "" ||
 		e.Implementation != "" ||
 		e.Review != "" ||
-		e.Utilities != "" ||
-		e.KBBuild != ""
+		e.Utilities != ""
 }
 
 func mergeModelConfig(base, overlay config.ModelConfig) config.ModelConfig {

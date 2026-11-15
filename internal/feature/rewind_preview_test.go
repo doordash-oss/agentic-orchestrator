@@ -67,9 +67,9 @@ func TestRewindPreviewRejectsInvalidTarget(t *testing.T) {
 	f := newRewindableFeature(t, store, previewRepoName, true)
 	sealedRunDir := store.RunDir(f.ID, f.ActiveRun)
 
-	result := RewindPreviewForFeature(f, sealedRunDir, RewindRequest{TargetPhase: PhaseKnowledgeBase}, "")
+	result := RewindPreviewForFeature(f, sealedRunDir, RewindRequest{TargetPhase: PhasePublish}, "")
 	if result.Eligible {
-		t.Fatalf("eligible = true for KB target; want false")
+		t.Fatalf("eligible = true for publish target; want false")
 	}
 	if len(result.ValidationFindings) == 0 {
 		t.Fatal("validation_findings empty for invalid target")
@@ -204,7 +204,6 @@ func TestParsePhaseNameUsesSharedDirParser(t *testing.T) {
 		input string
 		want  Phase
 	}{
-		{name: "knowledge base alias", input: " KB ", want: PhaseKnowledgeBase},
 		{name: "final review alias", input: "final review", want: PhaseFinalReview},
 		{name: "review extra", input: "review", want: PhaseReview},
 		{name: "publish extra", input: "publish", want: PhasePublish},

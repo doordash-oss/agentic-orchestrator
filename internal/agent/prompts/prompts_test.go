@@ -46,12 +46,6 @@ var testSkillFixtures = map[string]SkillView{
 		Topics:      "UI, UX, frontend, design, components",
 		Path:        "/skills/frontend-design/SKILL.md",
 	},
-	"knowledge-reader": {
-		Name:        "knowledge-reader",
-		Description: "Skim a repo's knowledge-base index and read leaves on demand.",
-		Topics:      "knowledge base, KB, architecture, conventions",
-		Path:        "/skills/knowledge-reader/SKILL.md",
-	},
 	"guideline-reader": {
 		Name:        "guideline-reader",
 		Description: "Navigate the language-specific coding guidelines to follow best practices, idioms, and conventions when writing or reviewing code.",
@@ -103,15 +97,6 @@ type InquireUserInput struct {
 type ResearchFromQuestionsUserInput struct {
 	QuestionsPath string
 	Repos         []RepoView
-}
-
-type KBBuildUserInput struct {
-	RepoName       string
-	RepoPath       string
-	KBRootDir      string
-	KBIndexPath    string
-	ExistingKBPath string
-	LastCommit     string
 }
 
 type DesignUserInput struct {
@@ -283,7 +268,7 @@ func TestGoldenSnapshots(t *testing.T) {
 		{
 			// The Inquire user prompt stays limited to invocation inputs;
 			// RoleSpec system prompts own resource discovery.
-			name: "inquire_user_high_with_kb",
+			name: "inquire_user_high",
 			render: func() string {
 				in := InquireUserInput{
 					Name:         "Add OAuth login",
@@ -310,17 +295,6 @@ func TestGoldenSnapshots(t *testing.T) {
 					},
 				}
 				return MustRender(TemplateResearchFromQuestionsUser, in)
-			},
-		},
-		{
-			name: "kb_build_full",
-			render: func() string {
-				return MustRender(TemplateKBBuildUser, KBBuildUserInput{
-					RepoName:    "myrepo",
-					RepoPath:    "/repos/myrepo",
-					KBRootDir:   "/state/kb/myrepo",
-					KBIndexPath: "/state/kb/myrepo/index.md",
-				})
 			},
 		},
 		{
@@ -495,12 +469,8 @@ func TestGoldenSnapshots(t *testing.T) {
 					},
 					SkillPath: "/skills/implement/SKILL.md",
 					Preflight: PreflightInput{
-						KBInfos: []KBView{
-							{Name: "agentic", IndexPath: "/state/kb/agentic/index.md", RootDir: "/state/kb/agentic"},
-						},
 						Guidelines:    testGuidelines(),
 						Skills:        testSkills(feature.PhaseImplement),
-						HasKB:         true,
 						HasGuidelines: true,
 						HasSkills:     true,
 					},
@@ -518,13 +488,8 @@ func TestGoldenSnapshots(t *testing.T) {
 					},
 					SkillPath: "/skills/design/SKILL.md",
 					Preflight: PreflightInput{
-						KBInfos: []KBView{
-							{Name: "web", IndexPath: "/state/kb/web/index.md", RootDir: "/state/kb/web"},
-							{Name: "api", IndexPath: "/state/kb/api/index.md", RootDir: "/state/kb/api"},
-						},
 						Guidelines:    testGuidelines(),
 						Skills:        testSkills(feature.PhaseDesign),
-						HasKB:         true,
 						HasGuidelines: true,
 						HasSkills:     true,
 					},
@@ -744,18 +709,6 @@ func TestGoldenSnapshots(t *testing.T) {
 	}
 }
 
-func TestRoleSystemPromptSuppressesUsefulResourcesWhenEmpty(t *testing.T) {
-	got := MustRender(TemplateSystem, RoleSystemInput{
-		OutputRoots: []OutputRootView{
-			{Name: "phase_dir", Path: "/state/feat-x/inquire"},
-		},
-		SkillPath: "/skills/inquire/SKILL.md",
-	})
-	if strings.Contains(got, "# Useful Resources") {
-		t.Fatalf("system template rendered empty Useful Resources section:\n%s", got)
-	}
-}
-
 func TestRoleSystemPromptGatesSubagentClause(t *testing.T) {
 	const clause = "Sub-agents are available."
 	base := RoleSystemInput{
@@ -821,6 +774,8 @@ func TestLegacyPromptSurfacesAreRemoved(t *testing.T) {
 		filepath.Join("testdata", "skill_instruction.golden"),
 		filepath.Join("testdata", "preflight_kb_and_skills.golden"),
 		filepath.Join("testdata", "preflight_all_three.golden"),
+		filepath.Join("templates", "kb_build.user.tmpl"),
+		filepath.Join("testdata", "kb_build_full.golden"),
 	}
 	for _, path := range removedPaths {
 		if _, err := os.Stat(path); err == nil {

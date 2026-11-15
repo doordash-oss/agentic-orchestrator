@@ -97,7 +97,7 @@ func TestOutputFilesSectionHidesHarnessArtifacts(t *testing.T) {
 			t.Fatalf("%s Output Files section exposes harness-authored meta.yaml:\n%s", spec.Role, section)
 		}
 	}
-	for _, spec := range []roleSpec{knowledgeBaseBuilderRoleSpec, inquirerRoleSpec, researcherRoleSpec, designerRoleSpec} {
+	for _, spec := range []roleSpec{inquirerRoleSpec, researcherRoleSpec, designerRoleSpec} {
 		if section := renderOutputFilesSection(spec); !strings.Contains(section, "{phase_dir}/") {
 			t.Fatalf("%s generated section missing phase_dir path:\n%s", spec.Role, section)
 		}

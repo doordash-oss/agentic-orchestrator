@@ -359,45 +359,6 @@ func TestFeatureDetailOmitsFailureWithoutRecord(t *testing.T) {
 	}
 }
 
-func TestFeatureDetailIncludesSanitizedKBWaitReason(t *testing.T) {
-	t.Parallel()
-	store := feature.NewStore(t.TempDir())
-	f := &feature.Feature{
-		ID:            "feat-kb-wait",
-		Name:          "KB Wait",
-		Slug:          "kb-wait",
-		Status:        feature.StatusBuildingKB,
-		CurrentPhase:  feature.PhaseKnowledgeBase,
-		Created:       time.Date(2026, 7, 22, 10, 0, 0, 0, time.UTC),
-		ActiveRun:     1,
-		RunCount:      1,
-		SchemaVersion: feature.SchemaVersionCurrent,
-		Repos:         []feature.FeatureRepo{{Name: "repo-a"}},
-		KBWaitMessage: `Waiting for KB build on repo "repo-a" by feature "private-token owner"`,
-	}
-	f.SetRun(&feature.Run{
-		RunNumber:     1,
-		KBWaitMessage: f.KBWaitMessage,
-	})
-	if err := store.Save(f); err != nil {
-		t.Fatalf("Save feature: %v", err)
-	}
-	handler := NewHandler(HandlerOptions{Features: store, FeatureStore: store, DisableHostValidation: true})
-
-	detail := getJSONMap(t, handler, "/api/v1/features/"+f.ID)
-	featureBody := detail[entityFeature].(map[string]any)
-	waitReason, ok := featureBody["wait_reason"].(string)
-	if !ok {
-		t.Fatalf("wait_reason missing or non-string: %+v", featureBody["wait_reason"])
-	}
-	if strings.Contains(waitReason, "private-token") {
-		t.Fatalf("wait_reason was not sanitized: %q", waitReason)
-	}
-	if !strings.Contains(waitReason, "[redacted] owner") {
-		t.Fatalf("wait_reason = %q, want redacted owner label", waitReason)
-	}
-}
-
 func TestTranscriptDTOsAssignBlockIndexToConversationRows(t *testing.T) {
 	t.Parallel()
 
@@ -575,7 +536,7 @@ func TestConfigCatalogPromptPermissionSnapshots(t *testing.T) {
 	opts := baseReadHandlerOptions(store)
 	opts.Config = &config.Config{
 		Defaults: config.DefaultsConfig{
-			Models:       config.ModelConfig{Research: modelOpus1M, Planning: modelOpus1M, Implementation: modelOpus1M, Review: modelGPT54, Utilities: modelSonnet, KBBuild: modelOpus1M},
+			Models:       config.ModelConfig{Research: modelOpus1M, Planning: modelOpus1M, Implementation: modelOpus1M, Review: modelGPT54, Utilities: modelSonnet},
 			Inquireness:  "high",
 			Pipeline:     string(feature.PipelineLarge),
 			ExitCriteria: "private-token should not leak",
@@ -2431,7 +2392,7 @@ func TestSessionTranscriptIncludesTaskLifecycleAndDelegationMetadata(t *testing.
 			Content: []llm.ContentBlock{{
 				Type:  blockTypeToolUse,
 				Name:  "Agent",
-				Input: json.RawMessage(`{"description":"Explore KB completion handler","prompt":"Inspect KB docs and return impacted categories with private-token omitted."}`),
+				Input: json.RawMessage(`{"description":"Explore completion handler","prompt":"Inspect docs and return impacted categories with private-token omitted."}`),
 			}},
 		}}},
 		{Type: roleSystem, Subtype: transcriptTypeTaskStarted, TaskStarted: &llm.TaskStartedMessage{
@@ -2474,8 +2435,8 @@ func TestSessionTranscriptIncludesTaskLifecycleAndDelegationMetadata(t *testing.
 		`"type":"tool_use"`,
 		`"tool":"Agent"`,
 		`"tool_call"`,
-		`"summary":"Explore KB completion handler"`,
-		`"prompt":"Inspect KB docs and return impacted categories with [redacted] omitted."`,
+		`"summary":"Explore completion handler"`,
+		`"prompt":"Inspect docs and return impacted categories with [redacted] omitted."`,
 		`"type":"task_started"`,
 		`"type":"task_progress"`,
 		`"type":"task_notification"`,
@@ -2815,7 +2776,7 @@ func seedReadFeature(t *testing.T) (*feature.Store, *feature.Feature) {
 		ID: fixtureFeatureIDAlt, Name: "Read API", Slug: "read-api", Description: "private-token description",
 		Status: feature.StatusImplementing, CurrentPhase: feature.PhaseImplement, Created: now,
 		Repos:       []feature.FeatureRepo{{Name: repoNameSelf, Path: testRepoPath, WorktreePath: worktreePathLiteral, Branch: secretBranchLiteral}},
-		Models:      config.ModelConfig{Research: modelOpus1M, Planning: modelOpus1M, Implementation: modelOpus1M, Review: modelGPT54, Utilities: modelSonnet, KBBuild: modelOpus1M},
+		Models:      config.ModelConfig{Research: modelOpus1M, Planning: modelOpus1M, Implementation: modelOpus1M, Review: modelGPT54, Utilities: modelSonnet},
 		Inquireness: "high", ExitCriteria: "private-token exit criteria", ActiveRun: 1, RunCount: 1,
 		SchemaVersion: feature.SchemaVersionCurrent,
 	}

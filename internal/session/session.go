@@ -168,7 +168,7 @@ type Session struct {
 
 	// onToolAllowed is called when a tool use is auto-approved by the permission
 	// handler. It receives the tool name and raw JSON input. Used by the agent
-	// layer to track reads of KB/skill/guideline files.
+	// layer to track reads of skill/guideline files.
 	onToolAllowed func(toolName string, input json.RawMessage)
 
 	// onFileRead is called when a provider reports a concrete file read through

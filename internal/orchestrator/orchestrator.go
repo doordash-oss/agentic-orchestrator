@@ -84,7 +84,7 @@ type Hooks struct {
 
 // PhaseCompletionInput is a sum-type describing a phase completion. Exactly
 // one of the pointer result fields is non-nil for loop-driven phases; for
-// session-parser-driven phases (KB/Inquire/Research/Design) all pointer
+// session-parser-driven phases (Inquire/Research/Design) all pointer
 // fields are nil and the handler uses Success + ErrorDetail + FailureCode +
 // SessionID. FailureCode is an optional catalog code and defaults to
 // session_crashed.
@@ -166,11 +166,6 @@ const (
 	// emits a PhaseStarted event and fires OnPhaseStarted.
 	PhaseStarted phaseStartOutcome = iota
 
-	// PhaseSkipped — the phase was skipped in favor of advancing to a
-	// different phase. startPhase recursively dispatches to NextPhase and
-	// does NOT emit an event or fire a hook for the skipped phase.
-	PhaseSkipped
-
 	// PhaseNoOp — the dispatch was considered but no phase actually started
 	// AND there is no next phase to dispatch to. startPhase returns cleanly
 	// and does NOT emit an event or fire a hook. Used by startPublish when
@@ -179,11 +174,9 @@ const (
 )
 
 // phaseStartResult communicates whether a phase starter actually launched
-// work (PhaseStarted), should skip forward to another phase (PhaseSkipped →
-// NextPhase), or short-circuited with no work and no next phase (PhaseNoOp).
+// work (PhaseStarted) or short-circuited with no work (PhaseNoOp).
 type phaseStartResult struct {
-	Outcome   phaseStartOutcome
-	NextPhase feature.Phase // meaningful only when Outcome == PhaseSkipped
+	Outcome phaseStartOutcome
 }
 
 // Orchestrator coordinates feature lifecycle and external operations.
@@ -261,7 +254,6 @@ type Orchestrator struct {
 	runMultiRepoImplFn func(
 		f *feature.Feature,
 		planPath string,
-		kbInfos ...agent.KBInfo,
 	) (chan *agent.OrchestratorResult, error)
 
 	// runMultiRepoFinalReviewFn is a test seam over
@@ -271,7 +263,6 @@ type Orchestrator struct {
 	// end-of-feature FR pass can be exercised without booting real sessions.
 	runMultiRepoFinalReviewFn func(
 		f *feature.Feature,
-		kbInfos ...agent.KBInfo,
 	) (chan *agent.OrchestratorResult, error)
 
 	// runImplementationFn is a test seam over PhaseRunner.RunImplementation
@@ -280,7 +271,6 @@ type Orchestrator struct {
 	runImplementationFn func(
 		f *feature.Feature,
 		planPath string,
-		kbInfos ...agent.KBInfo,
 	) (chan *agent.LoopResult, error)
 
 	// worktreeFingerprintFn is a test seam for detecting whether a mounted
@@ -341,23 +331,21 @@ func New(deps Deps, hooks Hooks) *Orchestrator {
 	o.runMultiRepoImplFn = func(
 		f *feature.Feature,
 		planPath string,
-		kbInfos ...agent.KBInfo,
 	) (chan *agent.OrchestratorResult, error) {
 		if o.deps.PhaseRunner == nil {
 			return nil, errors.New("phase runner not configured")
 		}
 		return o.deps.PhaseRunner.RunMultiRepoImplementation(
-			f, planPath, kbInfos...,
+			f, planPath,
 		)
 	}
 	o.runMultiRepoFinalReviewFn = func(
 		f *feature.Feature,
-		kbInfos ...agent.KBInfo,
 	) (chan *agent.OrchestratorResult, error) {
 		if o.deps.PhaseRunner == nil {
 			return nil, errors.New("phase runner not configured")
 		}
-		return o.deps.PhaseRunner.RunMultiRepoFinalReview(f, kbInfos...)
+		return o.deps.PhaseRunner.RunMultiRepoFinalReview(f)
 	}
 	o.worktreeFingerprintFn = gitWorktreeFingerprint
 	return o
@@ -389,7 +377,6 @@ func (o *Orchestrator) SetPublishRepoFn(fn func(featureID, repoName string) (str
 func (o *Orchestrator) SetRunMultiRepoImplFn(fn func(
 	f *feature.Feature,
 	planPath string,
-	kbInfos ...agent.KBInfo,
 ) (chan *agent.OrchestratorResult, error)) {
 	o.runMultiRepoImplFn = fn
 }
@@ -400,7 +387,6 @@ func (o *Orchestrator) SetRunMultiRepoImplFn(fn func(
 // Test-reachable seam: e2e journeys install it.
 func (o *Orchestrator) SetRunMultiRepoFinalReviewFn(fn func(
 	f *feature.Feature,
-	kbInfos ...agent.KBInfo,
 ) (chan *agent.OrchestratorResult, error)) {
 	o.runMultiRepoFinalReviewFn = fn
 }
@@ -543,10 +529,9 @@ func (o *Orchestrator) startFeatureLocked(featureID string) error {
 	// updated by each StartXxx transition — so normally we route on it. But
 	// the zero value of feature.Phase is PhaseResearch (iota=0), which means
 	// a yaml with a missing `current_phase` field deserializes to PhaseResearch
-	// and would incorrectly skip earlier phases (KB/Inquire) for Large and
+	// and would incorrectly skip Inquire for Large and
 	// Moonshot pipelines. Disambiguate via StartedAt: every StartXxx transition
-	// sets it, and the startup interrupt sweep preserves it (unlike KBStatus,
-	// which InterruptAllRunning clears to force a KB rebuild). If StartedAt is
+	// sets it, and the startup interrupt sweep preserves it. If StartedAt is
 	// nil, no phase ever started, so CurrentPhase==0 must be the YAML zero
 	// value — route to the canonical first phase. If StartedAt is set, the
 	// feature was legitimately mid-Research when interrupted — honor CurrentPhase.
@@ -587,17 +572,11 @@ func (o *Orchestrator) startFeatureLocked(featureID string) error {
 // startPhase dispatches to the phase-specific starter. On PhaseStarted it
 // emits a PhaseStarted event, fires OnPhaseStarted, and returns (phase,
 // true, nil) — the requested phase that actually launched work. On
-// PhaseSkipped it recursively dispatches to NextPhase without emitting any
-// event for the skipped phase and returns whatever the recursive call
-// resolves to (actual started phase or no-op). On PhaseNoOp it returns
+// PhaseNoOp it returns
 // (0, false, nil) so callers can distinguish "nothing started" from an
 // error.
 //
-// Callers that also emit FeatureAdvanced MUST use the returned started
-// phase rather than the originally requested one; otherwise a skip chain
-// (e.g. KB fresh -> Inquire) causes FeatureAdvanced to carry the wrong phase.
-// Mismatched FeatureAdvanced signals are treated as the same class of contract
-// break as missing ones.
+// Callers that also emit FeatureAdvanced use the returned started phase.
 func (o *Orchestrator) startPhase(featureID string, phase feature.Phase) (feature.Phase, bool, error) {
 	// Admission is acquired before any phase starter dispatches work; a
 	// closed boundary refuses the launch. An existing reservation makes
@@ -610,8 +589,6 @@ func (o *Orchestrator) startPhase(featureID string, phase feature.Phase) (featur
 		err    error
 	)
 	switch phase {
-	case feature.PhaseKnowledgeBase:
-		result, err = o.startKB(featureID)
 	case feature.PhaseInquire:
 		result, err = o.startInquire(featureID)
 	case feature.PhaseResearch:
@@ -648,8 +625,6 @@ func (o *Orchestrator) startPhase(featureID string, phase feature.Phase) (featur
 			Phase:     phase,
 		})
 		return phase, true, nil
-	case PhaseSkipped:
-		return o.startPhase(featureID, result.NextPhase)
 	case PhaseNoOp:
 		o.admissionSettleIfQuiet(featureID)
 		return 0, false, nil
@@ -657,163 +632,6 @@ func (o *Orchestrator) startPhase(featureID string, phase feature.Phase) (featur
 		o.admissionSettleIfQuiet(featureID)
 		return 0, false, fmt.Errorf("unknown phase start outcome %d", result.Outcome)
 	}
-}
-
-// startKB orchestrates the KB phase: per-repo freshness check, conditional
-// skip, and per-repo fan-out with mixed-fresh handling.
-//
-// Idempotent for recovery resume: when the feature is already StatusBuildingKB
-// (a crashed KB session was recovered via RecoveryResume), StartKnowledgeBase
-// and InitKBStatus are skipped. The underlying
-// StatusBuildingKB → StatusBuildingKB self-transition is invalid
-// (feature/feature.go:488), and re-firing InitKBStatus would clobber per-repo
-// progress that completed before the crash. Matches the startImplement /
-// startReview idempotency pattern.
-//
-// Recovery bridge for the all-fresh skip: when a crashed KB session left the
-// feature in StatusBuildingKB but every repo's KB artifacts are now fresh,
-// CompleteKnowledgeBase is invoked before returning PhaseSkipped. Skipping
-// straight to PhaseInquire would otherwise trigger startInquire's
-// Lifecycle.StartInquire, and StatusBuildingKB → StatusInquiring is not a
-// valid transition (feature/feature.go:488 lists only Created/Failed/
-// Interrupted as successors of BuildingKB). CompleteKnowledgeBase moves
-// BuildingKB → Created, so StartInquire's subsequent Created → Inquiring
-// transition stays legal.
-func (o *Orchestrator) startKB(featureID string) (phaseStartResult, error) {
-	f, err := o.deps.Store.Load(featureID)
-	if err != nil {
-		return phaseStartResult{}, fmt.Errorf("loading feature: %w", err)
-	}
-
-	if len(f.Repos) == 0 {
-		if err := o.finalizeKBForSkip(f); err != nil {
-			return phaseStartResult{}, err
-		}
-		return phaseStartResult{Outcome: PhaseSkipped, NextPhase: feature.PhaseInquire}, nil
-	}
-
-	// Child features use disposable KB workspaces; ordinary features use the
-	// canonical KB. The KB dispatch logic is shared but the directory and
-	// freshness checks target the appropriate path.
-	isChild := f.IsChild()
-
-	// Check freshness for all repos.
-	freshness := make(map[string]bool, len(f.Repos))
-	activeKBRepos := o.activeKBSessionRepos(featureID)
-	allFresh := true
-	baseDir := o.stateDir()
-	for _, repo := range f.Repos {
-		if _, active := activeKBRepos[repo.Name]; active {
-			freshness[repo.Name] = false
-			allFresh = false
-			continue
-		}
-		isFresh := false
-		if baseDir != "" && !f.ForceKBRebuild {
-			var kbDir string
-			if isChild {
-				kbDir = feature.ChildKBWorkspaceDir(baseDir, featureID, repo.Name)
-			} else {
-				kbDir = agent.KBStateDir(baseDir, repo.Name)
-			}
-			if isChild {
-				repoPath := repo.Path
-				if repo.WorktreePath != "" {
-					repoPath = repo.WorktreePath
-				}
-				isFresh = agent.IsWorkspaceFresh(context.Background(), o.deps.CmdRunner, kbDir, repoPath)
-			} else {
-				isFresh = agent.IsKBFresh(context.Background(), o.deps.CmdRunner, kbDir, repo.Path)
-			}
-		}
-		freshness[repo.Name] = isFresh
-		if !isFresh {
-			allFresh = false
-		}
-	}
-
-	if allFresh {
-		if err := o.finalizeKBForSkip(f); err != nil {
-			return phaseStartResult{}, err
-		}
-		return phaseStartResult{Outcome: PhaseSkipped, NextPhase: feature.PhaseInquire}, nil
-	}
-
-	// Mixed case: transition, init tracking, fan out. Skip the transition and
-	// per-repo-status init when already in StatusBuildingKB (recovery resume).
-	if f.Status != feature.StatusBuildingKB {
-		if err := o.deps.Manager.StartPhase(featureID, feature.PhaseKnowledgeBase); err != nil {
-			return phaseStartResult{}, fmt.Errorf("start knowledge base: %w", err)
-		}
-		if err := o.deps.Manager.InitKBStatus(featureID); err != nil {
-			return phaseStartResult{}, fmt.Errorf("init KB status: %w", err)
-		}
-	}
-
-	if o.deps.PhaseRunner != nil {
-		for _, repo := range f.Repos {
-			if sessionID, active := activeKBRepos[repo.Name]; active {
-				o.superviseSingleShotPhaseSession(featureID, sessionID, feature.PhaseKnowledgeBase)
-				continue
-			}
-			if freshness[repo.Name] {
-				// Fresh repo in the mixed case: immediately mark completed in
-				// per-repo tracking.
-				_ = o.deps.Manager.MarkRepoKBCompleted(featureID, repo.Name)
-				continue
-			}
-			if baseDir != "" && !isChild {
-				kbDir := agent.KBStateDir(baseDir, repo.Name)
-				if err := agent.RecordReadOnlyRepoBaseline(context.Background(), o.deps.CmdRunner, f, kbDir, repo.Name); err != nil {
-					return phaseStartResult{}, fmt.Errorf("record KB read-only repo baseline for %s: %w", repo.Name, err)
-				}
-			}
-			var sessionID string
-			var err error
-			if isChild {
-				sessionID, err = o.deps.PhaseRunner.RunChildKnowledgeBaseForRepo(f, repo)
-			} else {
-				sessionID, err = o.deps.PhaseRunner.RunKnowledgeBaseForRepo(f, repo)
-			}
-			if err != nil {
-				if errors.Is(err, agent.ErrKBLocked) {
-					o.markKBWaiting(featureID, baseDir, repo.Name)
-					return phaseStartResult{Outcome: PhaseStarted}, nil
-				}
-				errMsg := fmt.Sprintf("run KB for repo %s: %v", repo.Name, err)
-				if markErr := o.markFailedWithEvent(featureID, failureRecordWithRepos(errcat.InfrastructureFailure, feature.PhaseKnowledgeBase, []string{repo.Name}, errMsg)); markErr != nil {
-					return phaseStartResult{}, fmt.Errorf("%s (also failed to mark feature failed: %w)", errMsg, markErr)
-				}
-				return phaseStartResult{}, errors.New(errMsg)
-			}
-			o.superviseSingleShotPhaseSession(featureID, sessionID, feature.PhaseKnowledgeBase)
-		}
-	}
-
-	// Started cleanly (or already in progress) — clear any stale wait message
-	// from a prior locked attempt.
-	o.clearKBWaitMessage(featureID)
-	return phaseStartResult{Outcome: PhaseStarted}, nil
-}
-
-func (o *Orchestrator) activeKBSessionRepos(featureID string) map[string]string {
-	active := make(map[string]string)
-	if o.deps.Sessions == nil {
-		return active
-	}
-	for _, s := range o.deps.Sessions.FeatureSessions(featureID) {
-		if s == nil || !s.IsActive() || s.Phase() != feature.PhaseKnowledgeBase {
-			continue
-		}
-		repoName := s.RepoName()
-		if repoName == "" {
-			repoName = agent.RepoNameFromKBSession(s.ID())
-		}
-		if repoName != "" {
-			active[repoName] = s.ID()
-		}
-	}
-	return active
 }
 
 func (o *Orchestrator) activePhaseSessionID(featureID string, phase feature.Phase) string {
@@ -827,110 +645,6 @@ func (o *Orchestrator) activePhaseSessionID(featureID string, phase feature.Phas
 		return s.ID()
 	}
 	return ""
-}
-
-// markKBWaiting records that the feature couldn't acquire the KB lock for the
-// given repo because another feature owns it. Sets KBWaitMessage so the
-// dashboard can render the wait state and the attach handler can explain why
-// no sessions are available. Best-effort: lookup failures fall back to a
-// generic message.
-func (o *Orchestrator) markKBWaiting(featureID, baseDir, repoName string) {
-	owner := ""
-	if baseDir != "" {
-		owner = agent.ReadKBLockOwner(agent.KBStateDir(baseDir, repoName))
-	}
-	ownerLabel := owner
-	if owner != "" {
-		if other, err := o.deps.Store.Load(owner); err == nil && other != nil && other.Name != "" {
-			ownerLabel = other.Name
-		}
-	}
-	msg := fmt.Sprintf("Waiting for KB build on repo %q", repoName)
-	if ownerLabel != "" {
-		msg = fmt.Sprintf("Waiting for KB build on repo %q by feature %q", repoName, ownerLabel)
-	}
-	_ = o.deps.Store.Modify(featureID, func(ff *feature.Feature) error {
-		ff.KBWaitMessage = msg
-		return nil
-	})
-}
-
-// clearKBWaitMessage drops any KB lock-wait note. Called once startKB has
-// successfully fanned out (or determined no work remains) so the dashboard
-// stops advertising a wait that no longer applies.
-func (o *Orchestrator) clearKBWaitMessage(featureID string) {
-	_ = o.deps.Store.Modify(featureID, func(ff *feature.Feature) error {
-		if ff.KBWaitMessage == "" {
-			return nil
-		}
-		ff.KBWaitMessage = ""
-		return nil
-	})
-}
-
-// wakeKBWaiters re-dispatches the KB phase for every feature currently parked
-// in StatusBuildingKB with a non-empty KBWaitMessage. Called from
-// onKBCompleted (success and failure paths) once the lock-holder's session
-// cleanup has released the kb.lock file. startKB's recovery-resume guard
-// makes the re-entry idempotent: features already past BuildingKB are
-// skipped, and repos whose KB completed during the previous attempt remain
-// marked completed.
-//
-// Routes through startPhase (not startKB directly) so that a PhaseSkipped
-// outcome — common when the lock holder built every repo the waiter needs,
-// leaving allFresh=true on the re-check — recurses into the next phase
-// (Inquire) instead of stranding the waiter in StatusCreated/PhaseKnowledgeBase
-// after finalizeKBForSkip's BuildingKB → Created transition.
-func (o *Orchestrator) wakeKBWaiters(skipFeatureID string) {
-	features, err := o.deps.Store.List()
-	if err != nil {
-		// PartialLoadError carries the features that DID load alongside the
-		// per-ID load warnings. Treat it as soft: a single malformed feature
-		// directory must not block legitimate waiters from being woken when
-		// the lock holder finishes.
-		var ple *feature.PartialLoadError
-		if !errors.As(err, &ple) {
-			return
-		}
-	}
-	for _, ff := range features {
-		if ff == nil || ff.ID == skipFeatureID {
-			continue
-		}
-		if ff.Status != feature.StatusBuildingKB || ff.KBWaitMessage == "" {
-			continue
-		}
-		if _, _, err := o.startPhase(ff.ID, feature.PhaseKnowledgeBase); err != nil {
-			// A wakeup failure for one waiter must not block other waiters
-			// or the completing feature's advance. Surface via the event
-			// stream so it's diagnosable instead of vanishing silently.
-			o.emitEvent(ports.Event{
-				Type:      ports.FeatureFailed,
-				FeatureID: ff.ID,
-				Message:   fmt.Sprintf("KB wakeup re-dispatch failed: %v", err),
-			})
-		}
-	}
-}
-
-// finalizeKBForSkip bridges a recovered StatusBuildingKB feature out of the KB
-// phase when startKB has decided to skip to Inquire (either because the feature
-// has no repos or because every repo is already fresh). StatusBuildingKB →
-// StatusInquiring is not listed in validTransitions (feature/feature.go:488),
-// so dispatching straight to startInquire would fail with
-// "invalid transition from building_kb to inquiring". CompleteKnowledgeBase
-// moves the feature from StatusBuildingKB to StatusCreated, which is the
-// bridge state that keeps startInquire's subsequent Created → Inquiring
-// transition legal. No-op when the feature is already in any non-BuildingKB
-// status (fresh features never entered BuildingKB).
-func (o *Orchestrator) finalizeKBForSkip(f *feature.Feature) error {
-	if f == nil || f.Status != feature.StatusBuildingKB {
-		return nil
-	}
-	if err := o.deps.Manager.Transition(f.ID, feature.StatusCreated); err != nil {
-		return fmt.Errorf("complete knowledge base: %w", err)
-	}
-	return nil
 }
 
 // runSingleShotArtifactPhase implements the shared shape of the single-shot
@@ -984,9 +698,8 @@ func (o *Orchestrator) startInquire(featureID string) (phaseStartResult, error) 
 			return phaseStartResult{}, fmt.Errorf("start inquire: %w", err)
 		}
 	}
-	kbInfos := o.computeKBInfos(f)
 	return o.runSingleShotArtifactPhase(featureID, f, feature.PhaseInquire, "inquire", nil, func() (string, error) {
-		sessionID, err := o.deps.PhaseRunner.RunInquire(f, kbInfos...)
+		sessionID, err := o.deps.PhaseRunner.RunInquire(f)
 		if err != nil {
 			return "", fmt.Errorf("run inquire: %w", err)
 		}
@@ -1013,7 +726,6 @@ func (o *Orchestrator) startResearch(featureID string) (phaseStartResult, error)
 			return phaseStartResult{}, fmt.Errorf("start research: %w", err)
 		}
 	}
-	kbInfos := o.computeKBInfos(f)
 	var questionsPath string
 	return o.runSingleShotArtifactPhase(featureID, f, feature.PhaseResearch, "research",
 		func() error {
@@ -1024,7 +736,7 @@ func (o *Orchestrator) startResearch(featureID string) (phaseStartResult, error)
 			return nil
 		},
 		func() (string, error) {
-			sessionID, err := o.deps.PhaseRunner.RunResearchFromQuestions(f, questionsPath, kbInfos...)
+			sessionID, err := o.deps.PhaseRunner.RunResearchFromQuestions(f, questionsPath)
 			if err != nil {
 				return "", fmt.Errorf("run research from questions: %w", err)
 			}
@@ -1065,9 +777,8 @@ func (o *Orchestrator) startDesign(featureID string) (phaseStartResult, error) {
 			}
 		}
 	}
-	kbInfos := o.computeKBInfos(f)
 	return o.runSingleShotArtifactPhase(featureID, f, feature.PhaseDesign, "design", nil, func() (string, error) {
-		sessionID, err := o.deps.PhaseRunner.RunDesign(f, researchPath, qaFilePaths, kbInfos...)
+		sessionID, err := o.deps.PhaseRunner.RunDesign(f, researchPath, qaFilePaths)
 		if err != nil {
 			return "", fmt.Errorf("run design: %w", err)
 		}
@@ -1105,12 +816,11 @@ func (o *Orchestrator) startPlan(featureID string) (phaseStartResult, error) {
 	}
 
 	qaFilePaths := o.collectQAFilePaths(f)
-	kbInfos := o.computeKBInfos(f)
 	if o.deps.PhaseRunner != nil {
 		if err := agent.RecordReadOnlyRepoBaseline(context.Background(), o.deps.CmdRunner, f, o.planReadOnlyGuardDir(f)); err != nil {
 			return phaseStartResult{}, fmt.Errorf("record plan read-only repo baseline: %w", err)
 		}
-		resultCh, err := o.deps.PhaseRunner.RunPlanningWithValidation(f, inputArtifactPath, qaFilePaths, kbInfos...)
+		resultCh, err := o.deps.PhaseRunner.RunPlanningWithValidation(f, inputArtifactPath, qaFilePaths)
 		if err != nil {
 			return phaseStartResult{}, fmt.Errorf("run planning: %w", err)
 		}
@@ -1170,12 +880,11 @@ func (o *Orchestrator) startRoadmapPhasePlan(featureID string, f *feature.Featur
 		}
 	}
 
-	kbInfos := o.computeKBInfos(f)
 	if o.deps.PhaseRunner != nil {
 		if err := agent.RecordReadOnlyRepoBaseline(context.Background(), o.deps.CmdRunner, f, o.planReadOnlyGuardDir(f)); err != nil {
 			return phaseStartResult{}, fmt.Errorf("record phase plan read-only repo baseline: %w", err)
 		}
-		resultCh, err := o.deps.PhaseRunner.RunPhasePlanning(f, roadmapPath, currentPhase, qaFilePaths, priorPhasePlanPaths, kbInfos...)
+		resultCh, err := o.deps.PhaseRunner.RunPhasePlanning(f, roadmapPath, currentPhase, qaFilePaths, priorPhasePlanPaths)
 		if err != nil {
 			return phaseStartResult{}, fmt.Errorf("run phase planning: %w", err)
 		}
@@ -1320,10 +1029,9 @@ func (o *Orchestrator) featureStartControl(featureID string) *sync.Mutex {
 // interruptFeature stops all sessions for a feature and clears pending help,
 // permission, and feature-scoped input gate state. Normal phase work and
 // post-publish rebase children transition the feature to StatusInterrupted.
-// Does NOT clear KBStatus — preserve per-repo KB tracking for resume.
 //
 // Ordering matters: the Interrupted transition is committed BEFORE sessions
-// are stopped so a racing SessionDoneMsg → onKBCompleted finds the feature
+// are stopped so a racing SessionDoneMsg completion handler finds the feature
 // already at StatusInterrupted and short-circuits its failure branch.
 // Otherwise the stopped session's last assistant text would surface
 // as failure_type=session_crash and beat FeatureInterrupted to emission.
@@ -1336,7 +1044,7 @@ func (o *Orchestrator) interruptFeature(featureID string) error {
 		// check.
 	default:
 		// Transition to interrupted FIRST so racing completion handlers
-		// (onKBCompleted, onPhaseCompletedDefault, …) observe the terminal
+		// (onPhaseCompletedDefault, …) observe the terminal
 		// state and skip their failure paths.
 		if err := o.deps.Manager.Transition(featureID, feature.StatusInterrupted); err != nil {
 			return fmt.Errorf("transition to interrupted: %w", err)
@@ -1350,9 +1058,6 @@ func (o *Orchestrator) interruptFeature(featureID string) error {
 		for _, s := range sessions {
 			_ = o.deps.Sessions.StopSession(s.ID())
 		}
-	}
-	if getErr == nil {
-		o.releaseKBLocksForFeature(f)
 	}
 
 	// Clear pending help, permission, and feature-scoped gate requests.
@@ -1395,11 +1100,10 @@ func isSettledFeatureStatus(status feature.Status) bool {
 }
 
 // InterruptAllRunning iterates all features; running ones are interrupted
-// (stopping sessions, clearing pending flags, transitioning to interrupted)
-// AND additionally have KBStatus cleared to match the startup sweep.
+// (stopping sessions, clearing pending flags, transitioning to interrupted).
 // Non-running features (Published, CodeReady) with an active rebase child
 // are interrupted at the feature level so
-// the dashboard keeps them in the active bucket. KBStatus is preserved for
+// the dashboard keeps them in the active bucket, for
 // every post-publish rebase child shape. CodeReady is the manual_publish=true shape
 // where a rebase child can be in flight while the feature waits for the user
 // to publish.
@@ -1444,16 +1148,6 @@ func (o *Orchestrator) InterruptAllRunning() error {
 		case f.Status.IsRunning():
 			if err := o.interruptFeature(f.ID); err != nil {
 				errs = append(errs, fmt.Errorf("interrupt %s: %w", f.ID, err))
-				continue
-			}
-			// Startup-sweep parity: clear KBStatus to force full rebuild on
-			// restart. interruptFeature alone preserves KBStatus for resume;
-			// the sweep layers on this additional reset.
-			if err := o.deps.Store.Modify(f.ID, func(ff *feature.Feature) error {
-				ff.KBStatus = nil
-				return nil
-			}); err != nil {
-				errs = append(errs, fmt.Errorf("clear KBStatus for %s: %w", f.ID, err))
 			}
 		}
 	}
@@ -1480,8 +1174,6 @@ func (o *Orchestrator) HandlePhaseCompletion(featureID string, input PhaseComple
 		return nil
 	}
 	switch input.Phase {
-	case feature.PhaseKnowledgeBase:
-		return o.onKBCompleted(featureID, input)
 	case feature.PhaseInquire:
 		return o.onArtifactPhaseCompleted(featureID, input, "inquire", func(id string) error { return o.deps.Manager.Transition(id, feature.StatusInquireReady) })
 	case feature.PhaseResearch:
@@ -1696,9 +1388,9 @@ func (o *Orchestrator) reviewIterate(featureID string, f *feature.Feature, d Rev
 // starts the target phase.
 //
 // `target` MUST be the effective target phase returned to the caller after
-// escalation. Escalation
-// (e.g. Medium-upgraded features escalating pre-plan rewinds to KB) was
-// resolved by the original RewindWithRequest call and persisted onto the new run.
+// escalation. Escalation (e.g. Medium-upgraded features restarting pre-plan
+// rewinds at the first phase) was resolved by the original RewindWithRequest
+// call and persisted onto the new run.
 //
 // Replaces the previously-incorrect HandleReviewDecision({Decision:"rewind"})
 // path, which redundantly called RewindWithRequest a second time and produced an
@@ -1761,13 +1453,6 @@ func (o *Orchestrator) proceedFromRewindReview(featureID string, target feature.
 		}
 	}
 
-	// Use the started phase returned by startPhase (not the requested
-	// target) for FeatureAdvanced. startPhase may chain through
-	// PhaseSkipped — e.g. a rewind target of PhaseKnowledgeBase on a
-	// feature whose KB is already fresh skips to PhaseInquire (startKB
-	// returns PhaseSkipped → PhaseInquire). Emitting FeatureAdvanced(target)
-	// in that case would broadcast the wrong phase to subscribers and break
-	// the phase-sequencing contract.
 	startedPhase, started, err := o.startPhase(featureID, target)
 	if err != nil {
 		return err
@@ -2158,7 +1843,7 @@ func (o *Orchestrator) Shutdown() error {
 // stopFeatureSessions stops every PTY session associated with the given
 // feature ID. Safe to call with nil Sessions port (no-op). Used by callers
 // that need to reset session state before cascading operations (delete,
-// restart, KB-failure propagation) without also triggering lifecycle
+// restart) without also triggering lifecycle
 // deletion.
 //
 // Keeping this policy in the orchestrator prevents client call sites from
@@ -2172,35 +1857,5 @@ func (o *Orchestrator) stopFeatureSessions(featureID string) {
 			continue
 		}
 		_ = o.deps.Sessions.StopSession(s.ID())
-	}
-}
-
-func (o *Orchestrator) releaseKBLocksForFeature(f *feature.Feature) {
-	if f == nil {
-		return
-	}
-	baseDir := o.stateDir()
-	if baseDir == "" {
-		return
-	}
-	released := false
-	for _, repo := range f.Repos {
-		if repo.Name == "" {
-			continue
-		}
-		kbDir := agent.KBStateDir(baseDir, repo.Name)
-		didRelease, err := agent.ReleaseKBLockIfOwned(kbDir, f.ID)
-		if err != nil {
-			o.emitEvent(ports.Event{
-				Type:      ports.FeatureFailed,
-				FeatureID: f.ID,
-				Message:   fmt.Sprintf("KB lock cleanup failed for repo %s: %v", repo.Name, err),
-			})
-			continue
-		}
-		released = released || didRelease
-	}
-	if released {
-		o.wakeKBWaiters(f.ID)
 	}
 }

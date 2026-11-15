@@ -625,20 +625,6 @@ func hasMarkdownHeading(body, heading string) bool {
 	return false
 }
 
-func validateKnowledgeBaseIndexArtifact(_ roleArtifactSpec, _ string, path string, _ *Outcome) ([]ProtocolViolation, error) {
-	info, err := os.Stat(path)
-	if err != nil {
-		if errors.Is(err, os.ErrNotExist) {
-			return []ProtocolViolation{{Artifact: "index.md", Reason: missingArtifactReason("index.md", filepath.Dir(path))}}, nil
-		}
-		return nil, fmt.Errorf("checking index.md: %w", err)
-	}
-	if info.IsDir() {
-		return []ProtocolViolation{{Artifact: "index.md", Reason: "index.md is a directory"}}, nil
-	}
-	return nil, nil
-}
-
 func newestPhaseMarkdownArtifact(dir string) string {
 	var bestPath string
 	var bestModTime int64

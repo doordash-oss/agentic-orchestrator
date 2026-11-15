@@ -2371,7 +2371,7 @@ type ActionImpactCategory struct {
 
 // ActionImpactPreview defines model for ActionImpactPreview.
 type ActionImpactPreview struct {
-	// Categories Fixed, always-complete impact breakdown for the kind. Absent categories are explicitly empty entries (an entry with an empty items array) rather than omitted, so the confirmation never implies hidden impact. child_discard uses sessions, worktrees, branches, knowledge; parent_cascade_delete uses children, sessions, worktrees, branches, history, knowledge.
+	// Categories Fixed, always-complete impact breakdown for the kind. Absent categories are explicitly empty entries (an entry with an empty items array) rather than omitted, so the confirmation never implies hidden impact. child_discard uses sessions, worktrees, branches; parent_cascade_delete uses children, sessions, worktrees, branches, history.
 	Categories []ActionImpactCategory  `json:"categories"`
 	Kind       ActionImpactPreviewKind `json:"kind"`
 
@@ -3108,7 +3108,6 @@ type FeatureDetail struct {
 
 	// Transaction Ordered per-repository transaction journal for multi-repository child-to-parent integration.
 	Transaction TransactionJournal `json:"transaction,omitempty"`
-	WaitReason  string             `json:"wait_reason,omitempty"`
 
 	// Warnings Canonical warning-class errors for this feature, such as effort-capability drift; absent when there is nothing to warn about.
 	Warnings []Error `json:"warnings,omitempty"`

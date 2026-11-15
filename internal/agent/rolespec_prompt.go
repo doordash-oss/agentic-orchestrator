@@ -27,7 +27,6 @@ type implementSystemPromptInput struct {
 	IterationDir   string
 	SkillsDir      string
 	GuidelinesDir  string
-	KBInfos        []KBInfo
 	AskingClause   string
 	CompletionTool string
 	Frontend       bool
@@ -40,7 +39,6 @@ type roleSystemPromptInput struct {
 	IterationDir   string
 	SkillsDir      string
 	GuidelinesDir  string
-	KBInfos        []KBInfo
 	AskingClause   string
 	CompletionTool string
 	// RequiredSkillNames lists utility skills the role must read and apply,
@@ -75,7 +73,6 @@ func buildImplementSystemPrompt(in implementSystemPromptInput) string {
 		IterationDir:            in.IterationDir,
 		SkillsDir:               in.SkillsDir,
 		GuidelinesDir:           in.GuidelinesDir,
-		KBInfos:                 in.KBInfos,
 		AskingClause:            in.AskingClause,
 		CompletionTool:          in.CompletionTool,
 		RequiredSkillNames:      requiredSkillNames,
@@ -111,7 +108,7 @@ func buildRoleSystemPrompt(in roleSystemPromptInput) string {
 		SkillPath:            skillPath,
 		RequiredSkills:       requiredSkills,
 		ArtifactPreflight:    artifactPreflightCommand(spec, in.IterationDir),
-		Preflight:            buildPreflightInput(spec.Phase, in.SkillsDir, in.KBInfos, in.GuidelinesDir, in.RequiredSkillNames...),
+		Preflight:            buildPreflightInput(spec.Phase, in.SkillsDir, in.GuidelinesDir, in.RequiredSkillNames...),
 		ReadOnlyOutsideRoots: spec.ReadOnlyOutsideRoots,
 		SubagentsAvailable:   !in.SuppressSubagents,
 		RetryOutcomeAllowed:  spec.IterationState,

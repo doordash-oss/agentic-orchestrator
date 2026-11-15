@@ -317,7 +317,7 @@ func rootPattern(root string) string {
 
 // rootGlobs returns every tool-path pattern that should match a mounted root.
 // OpenCode evaluates an edit against an inconsistent path form: cwd-relative
-// ("../../../knowledge-base/<repo>/**") when it can relativize, but a
+// ("../../../<root>/**") when it can relativize, but a
 // leading-slash-STRIPPED absolute path ("Users/x/.../repo/file") when its
 // git-worktree detection resolves to "/" — observed for both the implementation
 // worktree and out-of-cwd helper artifacts. An absolute-only ("/Users/...") glob

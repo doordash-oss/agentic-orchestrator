@@ -91,7 +91,6 @@ func TestOrchestrator_StartFeature_InterruptedFinalReview_ReDispatchesFR(t *test
 
 	o.SetRunMultiRepoFinalReviewFn(func(
 		ff *feature.Feature,
-		_ ...agent.KBInfo,
 	) (chan *agent.OrchestratorResult, error) {
 		ch := make(chan *agent.OrchestratorResult, 1)
 		ch <- &agent.OrchestratorResult{FinalStatus: "all_passed"}
@@ -128,7 +127,6 @@ func TestOrchestrator_StartFeature_FinalReviewDispatchIsAsyncAndIdempotent(t *te
 	dispatches := 0
 	o.SetRunMultiRepoFinalReviewFn(func(
 		ff *feature.Feature,
-		_ ...agent.KBInfo,
 	) (chan *agent.OrchestratorResult, error) {
 		dispatches++
 		return resultCh, nil
@@ -211,7 +209,6 @@ func TestOrchestrator_OnMultiReposPassed_MediumRunsDeferredFinalReview(t *testin
 	o := orchestrator.New(orchestrator.Deps{Manager: lc, Store: fs}, orchestrator.Hooks{})
 	o.SetRunMultiRepoFinalReviewFn(func(
 		ff *feature.Feature,
-		_ ...agent.KBInfo,
 	) (chan *agent.OrchestratorResult, error) {
 		if ff.EffectivePipeline() != feature.PipelineMedium {
 			t.Errorf("final review feature pipeline = %q, want %q", ff.EffectivePipeline(), feature.PipelineMedium)
@@ -399,7 +396,6 @@ func TestOrchestrator_FeatureFinalReview_3Repo_Approves_AllReposAdvanceAndPublis
 	// and per-repo auto-publish.
 	o.SetRunMultiRepoFinalReviewFn(func(
 		ff *feature.Feature,
-		_ ...agent.KBInfo,
 	) (chan *agent.OrchestratorResult, error) {
 		ch := make(chan *agent.OrchestratorResult, 1)
 		go func() {
@@ -507,7 +503,6 @@ func TestAdvanceAfterFinalReviewScrubsRootArtifactsBeforeCommitAll(t *testing.T)
 	}, orchestrator.Hooks{})
 	o.SetRunMultiRepoFinalReviewFn(func(
 		ff *feature.Feature,
-		_ ...agent.KBInfo,
 	) (chan *agent.OrchestratorResult, error) {
 		ch := make(chan *agent.OrchestratorResult, 1)
 		ch <- &agent.OrchestratorResult{FinalStatus: "all_passed"}
@@ -614,7 +609,6 @@ func TestAdvanceAfterFinalReviewRoadmapFinalScrubsRootArtifactsBeforeCommitAll(t
 	}, orchestrator.Hooks{})
 	o.SetRunMultiRepoFinalReviewFn(func(
 		ff *feature.Feature,
-		_ ...agent.KBInfo,
 	) (chan *agent.OrchestratorResult, error) {
 		writeCandidates()
 		ch := make(chan *agent.OrchestratorResult, 1)
@@ -672,7 +666,6 @@ func TestOrchestrator_FeatureFinalReview_3Repo_ChangesRequested_FixApproves(t *t
 	var iterations int
 	o.SetRunMultiRepoFinalReviewFn(func(
 		ff *feature.Feature,
-		_ ...agent.KBInfo,
 	) (chan *agent.OrchestratorResult, error) {
 		ch := make(chan *agent.OrchestratorResult, 1)
 		go func() {
@@ -760,7 +753,6 @@ func TestOrchestrator_FeatureFinalReview_FixerRepoEditsDoNotTripReadOnlyGuard(t 
 
 	o.SetRunMultiRepoFinalReviewFn(func(
 		ff *feature.Feature,
-		_ ...agent.KBInfo,
 	) (chan *agent.OrchestratorResult, error) {
 		if err := os.WriteFile(filepath.Join(repo, "README.md"), []byte("# Test\n\nFixed during final review.\n"), 0o644); err != nil {
 			t.Fatalf("write final review fix: %v", err)
@@ -817,7 +809,6 @@ func TestOrchestrator_FeatureFinalReview_Interrupted_DoesNotMarkFailed(t *testin
 	// emits when the user presses Stop and the FR session terminates early).
 	o.SetRunMultiRepoFinalReviewFn(func(
 		ff *feature.Feature,
-		_ ...agent.KBInfo,
 	) (chan *agent.OrchestratorResult, error) {
 		ch := make(chan *agent.OrchestratorResult, 1)
 		go func() {
@@ -877,7 +868,6 @@ func TestOrchestrator_FeatureFinalReview_FailedProtocolViolationPreserved(t *tes
 	o := orchestrator.New(orchestrator.Deps{Manager: lc, Store: fs}, orchestrator.Hooks{})
 	o.SetRunMultiRepoFinalReviewFn(func(
 		ff *feature.Feature,
-		_ ...agent.KBInfo,
 	) (chan *agent.OrchestratorResult, error) {
 		ch := make(chan *agent.OrchestratorResult, 1)
 		ch <- &agent.OrchestratorResult{
@@ -935,7 +925,7 @@ func TestOrchestrator_FeatureFinalReview_ResultAfterInterruptIsDiscarded(t *test
 			}
 			fs, lc := newStoredFeatureFixture(t, f)
 			o := orchestrator.New(orchestrator.Deps{Manager: lc, Store: fs}, orchestrator.Hooks{})
-			o.SetRunMultiRepoFinalReviewFn(func(ff *feature.Feature, _ ...agent.KBInfo) (chan *agent.OrchestratorResult, error) {
+			o.SetRunMultiRepoFinalReviewFn(func(ff *feature.Feature) (chan *agent.OrchestratorResult, error) {
 				ch := make(chan *agent.OrchestratorResult, 1)
 				go func() {
 					_ = fs.Modify(ff.ID, func(target *feature.Feature) error {
@@ -983,7 +973,7 @@ func TestOrchestrator_FeatureFinalReview_ProviderUnavailableFailsWithRetryRemedi
 	}
 	fs, lc := newStoredFeatureFixture(t, f)
 	o := orchestrator.New(orchestrator.Deps{Manager: lc, Store: fs}, orchestrator.Hooks{})
-	o.SetRunMultiRepoFinalReviewFn(func(ff *feature.Feature, _ ...agent.KBInfo) (chan *agent.OrchestratorResult, error) {
+	o.SetRunMultiRepoFinalReviewFn(func(ff *feature.Feature) (chan *agent.OrchestratorResult, error) {
 		ch := make(chan *agent.OrchestratorResult, 1)
 		ch <- &agent.OrchestratorResult{
 			FinalStatus:  "failed",

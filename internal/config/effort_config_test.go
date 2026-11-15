@@ -100,7 +100,6 @@ func TestEffortConfigNoCrossRoleLeakage(t *testing.T) {
 	cfg.Defaults.Effort = EffortConfig{
 		Inquiry:        "high",
 		Implementation: "low",
-		KBBuild:        "max",
 	}
 	if err := Save(path, cfg); err != nil {
 		t.Fatal(err)
@@ -114,9 +113,6 @@ func TestEffortConfigNoCrossRoleLeakage(t *testing.T) {
 	}
 	if loaded.Defaults.Effort.Implementation != "low" {
 		t.Errorf("Implementation: got %q, want %q", loaded.Defaults.Effort.Implementation, "low")
-	}
-	if loaded.Defaults.Effort.KBBuild != "max" {
-		t.Errorf("KBBuild: got %q, want %q", loaded.Defaults.Effort.KBBuild, "max")
 	}
 	if loaded.Defaults.Effort.Research != "" {
 		t.Errorf("Research should be empty, got %q", loaded.Defaults.Effort.Research)
@@ -142,7 +138,6 @@ func TestEffortConfigYAMLShape(t *testing.T) {
 			Implementation: "max",
 			Review:         "high",
 			Utilities:      "low",
-			KBBuild:        "medium",
 		},
 	}
 	data, err := yaml.Marshal(cfg)
@@ -155,7 +150,7 @@ func TestEffortConfigYAMLShape(t *testing.T) {
 	}
 	want := map[string]string{
 		"inquiry": "low", "research": "medium", "planning": "high",
-		"implementation": "max", "review": "high", "chat": "low", "kb_build": "medium",
+		"implementation": "max", "review": "high", "chat": "low",
 	}
 	for _, role := range Roles {
 		got := *role.Effort(&decoded.Effort)

@@ -33,6 +33,8 @@ const (
 	PhaseImplement
 	PhasePublish
 	PhaseReview
+	// PhaseKnowledgeBase is retired: no profile schedules it. It remains so
+	// records persisted by older versions still load and display.
 	PhaseKnowledgeBase
 	PhaseInquire
 	PhaseDesign
@@ -235,7 +237,7 @@ const (
 	StatusFailed
 	StatusInterrupted
 	StatusDone
-	StatusBuildingKB
+	_ // retired BuildingKB; loads as StatusInterrupted
 	StatusPlanNeedsReview
 	StatusInquiring
 	StatusInquireReady
@@ -282,8 +284,6 @@ func (s Status) String() string {
 		return "Failed"
 	case StatusInterrupted:
 		return "Interrupted"
-	case StatusBuildingKB:
-		return "BuildingKB"
 	case StatusPlanNeedsReview:
 		return "PlanNeedsReview"
 	case StatusInquiring:
@@ -315,7 +315,7 @@ func (s Status) String() string {
 
 // IsRunning returns true if this status represents an actively executing phase.
 func (s Status) IsRunning() bool {
-	return s == StatusResearching || s == StatusPlanning || s == StatusImplementing || s == StatusBuildingKB || s == StatusInquiring || s == StatusDesigning || s == StatusFinalReviewing || s == StatusSettingUpWorktrees
+	return s == StatusResearching || s == StatusPlanning || s == StatusImplementing || s == StatusInquiring || s == StatusDesigning || s == StatusFinalReviewing || s == StatusSettingUpWorktrees
 }
 
 // IsNeedsReview returns true if this status represents a pending artifact review.
@@ -365,7 +365,7 @@ func (s *Status) UnmarshalYAML(unmarshal func(interface{}) error) error {
 		"Failed":              StatusFailed,
 		"Interrupted":         StatusInterrupted,
 		"Done":                StatusDone,
-		"BuildingKB":          StatusBuildingKB,
+		"BuildingKB":          StatusInterrupted,
 		"PlanNeedsReview":     StatusPlanNeedsReview,
 		"Inquiring":           StatusInquiring,
 		"InquireReady":        StatusInquireReady,
@@ -595,7 +595,7 @@ type Feature struct {
 	MaxPlanIterations    int                 `yaml:"max_plan_iterations,omitempty"`
 	RiskLevel            RiskLevel           `yaml:"risk_level,omitempty"`
 	Pipeline             PipelineProfile     `yaml:"pipeline,omitempty"`
-	PipelineUpgradedFrom PipelineProfile     `yaml:"pipeline_upgraded_from,omitempty"` // original profile before UpgradePipeline; used to enforce KB restart on rewind
+	PipelineUpgradedFrom PipelineProfile     `yaml:"pipeline_upgraded_from,omitempty"` // original profile before UpgradePipeline; used to restart from the first phase on rewind
 	Checkpoints          Checkpoints         `yaml:"checkpoints,omitempty"`
 	LastAttachedRepo     string              `yaml:"last_attached_repo,omitempty"` // repo name for attach mode tab restoration
 	// InputNotifications overrides global notification behavior for this
@@ -683,9 +683,6 @@ type Feature struct {
 	// via Feature.AllReposPublished / Feature.TouchedRepos. Persisted on
 	// Run.RepoStates.
 	RepoStates                      map[string]*RepoState    `yaml:"-"`
-	KBWaitMessage                   string                   `yaml:"-"`
-	ForceKBRebuild                  bool                     `yaml:"-"`
-	KBStatus                        map[string]string        `yaml:"-"`
 	PhaseTimings                    map[string]time.Duration `yaml:"-"`
 	ActivePhaseStart                *time.Time               `yaml:"-"`
 	ActiveTimingKey                 string                   `yaml:"-"`
@@ -762,6 +759,10 @@ func (f *Feature) SetRun(r *Run) {
 	if r != nil {
 		f.syncRunToShadows()
 		f.reconcileTerminalRunFailure()
+		if f.CurrentPhase == PhaseKnowledgeBase {
+			f.accumulateActiveTime()
+			f.CurrentPhase = PhaseInquire
+		}
 	}
 }
 
@@ -789,9 +790,6 @@ func (f *Feature) syncShadowsToRun() {
 		f.RoadmapPhaseFrontendByPhase = r.RoadmapPhaseFrontendByPhase
 	}
 	r.RepoStates = f.RepoStates
-	r.KBWaitMessage = f.KBWaitMessage
-	r.ForceKBRebuild = f.ForceKBRebuild
-	r.KBStatus = f.KBStatus
 	r.PhaseTimings = f.PhaseTimings
 	r.ActivePhaseStart = f.ActivePhaseStart
 	r.ActiveTimingKey = f.ActiveTimingKey
@@ -826,9 +824,6 @@ func (f *Feature) syncRunToShadows() {
 	f.Artifacts = r.Artifacts
 	f.RoadmapPhaseFrontendByPhase = r.RoadmapPhaseFrontendByPhase
 	f.RepoStates = r.RepoStates
-	f.KBWaitMessage = r.KBWaitMessage
-	f.ForceKBRebuild = r.ForceKBRebuild
-	f.KBStatus = r.KBStatus
 	f.PhaseTimings = r.PhaseTimings
 	f.ActivePhaseStart = r.ActivePhaseStart
 	f.ActiveTimingKey = r.ActiveTimingKey
@@ -915,9 +910,8 @@ func failureRecordNamesFinalReview(rec *errcat.FailureRecord) bool {
 
 // validTransitions maps each status to the set of statuses it can transition to.
 var validTransitions = map[Status][]Status{
-	StatusCreated:             {StatusInquiring, StatusResearching, StatusBuildingKB, StatusPlanReady, StatusFailed},
+	StatusCreated:             {StatusInquiring, StatusResearching, StatusPlanReady, StatusFailed},
 	StatusResearching:         {StatusDesignReady, StatusPlanReady, StatusFailed, StatusInterrupted},
-	StatusBuildingKB:          {StatusCreated, StatusFailed, StatusInterrupted},
 	StatusInquiring:           {StatusInquireReady, StatusFailed, StatusInterrupted},
 	StatusInquireReady:        {StatusResearching, StatusFailed},
 	StatusDesignReady:         {StatusDesigning, StatusFailed},
@@ -932,8 +926,8 @@ var validTransitions = map[Status][]Status{
 	StatusCodeReady:           {StatusPublished, StatusDone, StatusFailed, StatusImplementReady, StatusInquiring},
 	StatusPublished:           {StatusDone, StatusFailed, StatusImplementReady, StatusInquiring, StatusPlanReady, StatusCodeReady},
 	StatusDone:                {},
-	StatusFailed:              {StatusCreated, StatusBuildingKB, StatusInquiring, StatusResearching, StatusDesigning, StatusImplementReady, StatusCodeReady},
-	StatusInterrupted:         {StatusBuildingKB, StatusInquiring, StatusResearching, StatusDesigning, StatusPlanning, StatusImplementing, StatusFinalReviewing, StatusFailed},
+	StatusFailed:              {StatusCreated, StatusInquiring, StatusResearching, StatusDesigning, StatusImplementReady, StatusCodeReady},
+	StatusInterrupted:         {StatusInquiring, StatusResearching, StatusDesigning, StatusPlanning, StatusImplementing, StatusFinalReviewing, StatusFailed},
 	StatusPlanNeedsReview:     {StatusPlanning, StatusImplementReady, StatusFailed},
 	StatusPromptNeedsReview:   {StatusInquiring, StatusFailed},
 	StatusInquiryNeedsReview:  {StatusResearching, StatusFailed},

@@ -121,7 +121,6 @@ func fakeRecoveryItems(specs ...itemSpec) []ports.RecoveryItem {
 type runMultiRepoCall struct {
 	Feature  *feature.Feature
 	PlanPath string
-	KBInfos  []agent.KBInfo
 }
 
 type fakeRunMultiRepoImpl struct {
@@ -143,18 +142,15 @@ type fakeRunMultiRepoImpl struct {
 func (s *fakeRunMultiRepoImpl) Fn() func(
 	f *feature.Feature,
 	planPath string,
-	kbInfos ...agent.KBInfo,
 ) (chan *agent.OrchestratorResult, error) {
 	return func(
 		f *feature.Feature,
 		planPath string,
-		kbInfos ...agent.KBInfo,
 	) (chan *agent.OrchestratorResult, error) {
 		s.mu.Lock()
 		s.Calls = append(s.Calls, runMultiRepoCall{
 			Feature:  f,
 			PlanPath: planPath,
-			KBInfos:  append([]agent.KBInfo(nil), kbInfos...),
 		})
 		s.mu.Unlock()
 		if s.ReturnErr != nil {
@@ -188,12 +184,10 @@ func (s *fakeRunMultiRepoImpl) numCalls() int {
 func noopRunMultiRepoImplFn() func(
 	f *feature.Feature,
 	planPath string,
-	kbInfos ...agent.KBInfo,
 ) (chan *agent.OrchestratorResult, error) {
 	return func(
 		f *feature.Feature,
 		planPath string,
-		kbInfos ...agent.KBInfo,
 	) (chan *agent.OrchestratorResult, error) {
 		return make(chan *agent.OrchestratorResult, 1), nil
 	}

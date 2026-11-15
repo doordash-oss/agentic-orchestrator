@@ -30,7 +30,7 @@ Own hygiene and pushability:
 
 When the implementer's changes in repo A depend on changes in repo B, a change in repo A that compiles and tests on its own but breaks repo B's build or contract is a Critical Cleanliness finding.
 
-Consult the relevant language guidelines and Knowledge Base before judging local hygiene conventions.
+Consult the relevant language guidelines and the repository's own instruction files before judging local hygiene conventions.
 
 At the Final gate, judge Cleanliness over the whole assembled feature and cumulative cross-repo diff. Cross-repo atomicity, stale artifacts, and publish/revert risk are naturally in scope across the full feature.
 

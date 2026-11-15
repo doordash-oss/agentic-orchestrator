@@ -57,7 +57,6 @@ func TestManagerStartPhasePersistsStatusAndTiming(t *testing.T) {
 		from  feature.Status
 		to    feature.Status
 	}{
-		{"knowledge base", feature.PhaseKnowledgeBase, feature.StatusCreated, feature.StatusBuildingKB},
 		{"inquire", feature.PhaseInquire, feature.StatusCreated, feature.StatusInquiring},
 		{"research", feature.PhaseResearch, feature.StatusCreated, feature.StatusResearching},
 		{"design", feature.PhaseDesign, feature.StatusDesignReady, feature.StatusDesigning},
@@ -102,7 +101,6 @@ func TestManagerTransitionAliasTargets(t *testing.T) {
 		from feature.Status
 		to   feature.Status
 	}{
-		{"complete knowledge base", feature.StatusBuildingKB, feature.StatusCreated},
 		{"complete inquire", feature.StatusInquiring, feature.StatusInquireReady},
 		{"complete research", feature.StatusResearching, feature.StatusDesignReady},
 		{"complete design", feature.StatusDesigning, feature.StatusPlanReady},
@@ -1152,20 +1150,9 @@ func TestManagerPhaseProgression(t *testing.T) {
 		t.Fatalf("create: %v", err)
 	}
 
-	// Initial phase should be KnowledgeBase
-	if f.CurrentPhase != feature.PhaseKnowledgeBase {
-		t.Errorf("initial phase = %v, want Knowledge Base", f.CurrentPhase)
+	if f.CurrentPhase != feature.PhaseInquire {
+		t.Errorf("initial phase = %v, want Inquire", f.CurrentPhase)
 	}
-
-	// StartPhaseKnowledgeBase + TransitionToCreated → ready for research
-	if err := mgr.StartPhase(f.ID, feature.PhaseKnowledgeBase); err != nil {
-		t.Fatalf("start KB: %v", err)
-	}
-	f, _ = mgr.Store.Load(f.ID)
-	if f.CurrentPhase != feature.PhaseKnowledgeBase {
-		t.Errorf("after StartPhaseKnowledgeBase: phase = %v, want Knowledge Base", f.CurrentPhase)
-	}
-	_ = mgr.Transition(f.ID, feature.StatusCreated)
 
 	// StartPhaseResearch should set CurrentPhase to Research
 	if err := mgr.StartPhase(f.ID, feature.PhaseResearch); err != nil {
@@ -1707,7 +1694,7 @@ func TestRewindWithRequest_StatusMapping(t *testing.T) {
 		wantStatus  feature.Status
 		wantPhase   feature.Phase
 	}{
-		{"rewind to inquire", feature.PhaseInquire, feature.StatusPromptNeedsReview, feature.PhaseKnowledgeBase},
+		{"rewind to inquire", feature.PhaseInquire, feature.StatusPromptNeedsReview, feature.PhaseInquire},
 		{"rewind to research", feature.PhaseResearch, feature.StatusInquiryNeedsReview, feature.PhaseInquire},
 		{"rewind to design", feature.PhaseDesign, feature.StatusResearchNeedsReview, feature.PhaseResearch},
 		{"rewind to plan", feature.PhasePlan, feature.StatusDesignNeedsReview, feature.PhaseDesign},
@@ -2097,7 +2084,7 @@ func TestRewindWithRequest_InvalidTargetFromCurrentState(t *testing.T) {
 		{
 			name:       "cannot rewind to Implement from StatusCreated",
 			status:     feature.StatusCreated,
-			phase:      feature.PhaseKnowledgeBase,
+			phase:      feature.PhaseInquire,
 			target:     feature.PhaseImplement,
 			wantErrSub: "cannot rewind",
 		},
@@ -2107,13 +2094,6 @@ func TestRewindWithRequest_InvalidTargetFromCurrentState(t *testing.T) {
 			phase:      feature.PhaseInquire,
 			target:     feature.PhasePlan,
 			wantErrSub: "cannot rewind",
-		},
-		{
-			name:       "cannot rewind to KB phase",
-			status:     feature.StatusImplementing,
-			phase:      feature.PhaseImplement,
-			target:     feature.PhaseKnowledgeBase,
-			wantErrSub: "cannot rewind to knowledge base",
 		},
 		{
 			name:       "cannot rewind to Design from StatusDesignReady",
@@ -2524,232 +2504,6 @@ func newMultiRepoFeature(t *testing.T, mgr *feature.Manager, repos []feature.Fea
 		t.Fatalf("save feature: %v", err)
 	}
 	return f
-}
-
-func TestInitKBStatus(t *testing.T) {
-	t.Parallel()
-	// parallel-candidate: per-test temp dirs and mocks isolate filesystem and collaborator state.
-	dir := t.TempDir()
-	store := feature.NewStore(dir)
-	mgr := &feature.Manager{Store: store, Config: &config.Config{}}
-
-	repos := []feature.FeatureRepo{
-		{Name: "repo-a", Path: "/tmp/a"},
-		{Name: "repo-b", Path: "/tmp/b"},
-		{Name: "repo-c", Path: "/tmp/c"},
-	}
-	f := newMultiRepoFeature(t, mgr, repos)
-
-	if err := mgr.InitKBStatus(f.ID); err != nil {
-		t.Fatalf("InitKBStatus: %v", err)
-	}
-
-	loaded, err := mgr.Store.Load(f.ID)
-	if err != nil {
-		t.Fatalf("load: %v", err)
-	}
-
-	if len(loaded.KBStatus) != 3 {
-		t.Fatalf("expected 3 KBStatus entries, got %d", len(loaded.KBStatus))
-	}
-	for _, repo := range repos {
-		status, ok := loaded.KBStatus[repo.Name]
-		if !ok {
-			t.Errorf("missing KBStatus entry for %q", repo.Name)
-			continue
-		}
-		if status != "pending" {
-			t.Errorf("KBStatus[%q] = %q, want %q", repo.Name, status, "pending")
-		}
-	}
-}
-
-func TestMarkRepoKBCompleted(t *testing.T) {
-	t.Parallel()
-	// parallel-candidate: per-test temp dirs and mocks isolate filesystem and collaborator state.
-	dir := t.TempDir()
-	store := feature.NewStore(dir)
-	mgr := &feature.Manager{Store: store, Config: &config.Config{}}
-
-	repos := []feature.FeatureRepo{
-		{Name: "repo-a", Path: "/tmp/a"},
-		{Name: "repo-b", Path: "/tmp/b"},
-	}
-	f := newMultiRepoFeature(t, mgr, repos)
-
-	// Initialize KB status first
-	if err := mgr.InitKBStatus(f.ID); err != nil {
-		t.Fatalf("InitKBStatus: %v", err)
-	}
-
-	t.Run("mark single repo completed", func(t *testing.T) {
-		if err := mgr.MarkRepoKBCompleted(f.ID, "repo-a"); err != nil {
-			t.Fatalf("MarkRepoKBCompleted: %v", err)
-		}
-		loaded, err := mgr.Store.Load(f.ID)
-		if err != nil {
-			t.Fatalf("load: %v", err)
-		}
-		if loaded.KBStatus["repo-a"] != "completed" {
-			t.Errorf("repo-a KBStatus = %q, want %q", loaded.KBStatus["repo-a"], "completed")
-		}
-		if loaded.KBStatus["repo-b"] != "pending" {
-			t.Errorf("repo-b KBStatus = %q, want %q (should be unchanged)", loaded.KBStatus["repo-b"], "pending")
-		}
-	})
-
-	t.Run("mark all repos completed", func(t *testing.T) {
-		if err := mgr.MarkRepoKBCompleted(f.ID, "repo-b"); err != nil {
-			t.Fatalf("MarkRepoKBCompleted: %v", err)
-		}
-		allDone, err := mgr.AllKBsCompleted(f.ID)
-		if err != nil {
-			t.Fatalf("AllKBsCompleted: %v", err)
-		}
-		if !allDone {
-			t.Error("expected AllKBsCompleted to return true after marking all repos completed")
-		}
-	})
-
-	t.Run("mark nonexistent repo does not panic", func(t *testing.T) {
-		if err := mgr.MarkRepoKBCompleted(f.ID, "nonexistent-repo"); err != nil {
-			t.Fatalf("MarkRepoKBCompleted for nonexistent repo: %v", err)
-		}
-		loaded, err := mgr.Store.Load(f.ID)
-		if err != nil {
-			t.Fatalf("load: %v", err)
-		}
-		if loaded.KBStatus["nonexistent-repo"] != "completed" {
-			t.Errorf("nonexistent-repo KBStatus = %q, want %q", loaded.KBStatus["nonexistent-repo"], "completed")
-		}
-	})
-}
-
-func TestMarkRepoKBFailed(t *testing.T) {
-	t.Parallel()
-	// parallel-candidate: per-test temp dirs and mocks isolate filesystem and collaborator state.
-	dir := t.TempDir()
-	store := feature.NewStore(dir)
-	mgr := &feature.Manager{Store: store, Config: &config.Config{}}
-
-	repos := []feature.FeatureRepo{
-		{Name: "repo-a", Path: "/tmp/a"},
-		{Name: "repo-b", Path: "/tmp/b"},
-	}
-	f := newMultiRepoFeature(t, mgr, repos)
-
-	if err := mgr.InitKBStatus(f.ID); err != nil {
-		t.Fatalf("InitKBStatus: %v", err)
-	}
-
-	if err := mgr.MarkRepoKBFailed(f.ID, "repo-a", "timeout exceeded"); err != nil {
-		t.Fatalf("MarkRepoKBFailed: %v", err)
-	}
-
-	loaded, err := mgr.Store.Load(f.ID)
-	if err != nil {
-		t.Fatalf("load: %v", err)
-	}
-	if loaded.KBStatus["repo-a"] != "failed: timeout exceeded" {
-		t.Errorf("repo-a KBStatus = %q, want %q", loaded.KBStatus["repo-a"], "failed: timeout exceeded")
-	}
-	if loaded.KBStatus["repo-b"] != "pending" {
-		t.Errorf("repo-b KBStatus = %q, want %q (should be unchanged)", loaded.KBStatus["repo-b"], "pending")
-	}
-}
-
-func TestAllKBsCompleted(t *testing.T) {
-	t.Parallel()
-	// parallel-candidate: per-test temp dirs and mocks isolate filesystem and collaborator state.
-	tests := []struct {
-		name     string
-		kbStatus map[string]string
-		want     bool
-	}{
-		{
-			name:     "nil map returns true (backward compat)",
-			kbStatus: nil,
-			want:     true,
-		},
-		{
-			name:     "empty map returns true (backward compat)",
-			kbStatus: map[string]string{},
-			want:     true,
-		},
-		{
-			name: "all completed returns true",
-			kbStatus: map[string]string{
-				"repo-a": "completed",
-				"repo-b": "completed",
-			},
-			want: true,
-		},
-		{
-			name: "mix of completed and pending returns false",
-			kbStatus: map[string]string{
-				"repo-a": "completed",
-				"repo-b": "pending",
-			},
-			want: false,
-		},
-		{
-			name: "any failed returns false",
-			kbStatus: map[string]string{
-				"repo-a": "completed",
-				"repo-b": "failed: some error",
-			},
-			want: false,
-		},
-		{
-			name: "any building returns false",
-			kbStatus: map[string]string{
-				"repo-a": "completed",
-				"repo-b": "building",
-			},
-			want: false,
-		},
-		{
-			name: "all pending returns false",
-			kbStatus: map[string]string{
-				"repo-a": "pending",
-				"repo-b": "pending",
-			},
-			want: false,
-		},
-		{
-			name: "single repo completed returns true",
-			kbStatus: map[string]string{
-				"repo-a": "completed",
-			},
-			want: true,
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			dir := t.TempDir()
-			store := feature.NewStore(dir)
-			mgr := &feature.Manager{Store: store, Config: &config.Config{}}
-
-			f := &feature.Feature{
-				ID:            feature.GenerateIDForTest(),
-				Name:          "AllKBs Test",
-				KBStatus:      tt.kbStatus,
-				SchemaVersion: feature.SchemaVersionCurrent,
-			}
-			if err := store.Save(f); err != nil {
-				t.Fatalf("save: %v", err)
-			}
-
-			got, err := mgr.AllKBsCompleted(f.ID)
-			if err != nil {
-				t.Fatalf("AllKBsCompleted: %v", err)
-			}
-			if got != tt.want {
-				t.Errorf("AllKBsCompleted() = %v, want %v", got, tt.want)
-			}
-		})
-	}
 }
 
 func TestSetRepoPublished(t *testing.T) {
@@ -3334,8 +3088,8 @@ func TestCreateMoonshotFeature(t *testing.T) {
 	if f.Pipeline != feature.PipelineMoonshot {
 		t.Errorf("Pipeline = %v, want moonshot", f.Pipeline)
 	}
-	if f.CurrentPhase != feature.PhaseKnowledgeBase {
-		t.Errorf("CurrentPhase = %v, want knowledge-base", f.CurrentPhase)
+	if f.CurrentPhase != feature.PhaseInquire {
+		t.Errorf("CurrentPhase = %v, want inquire", f.CurrentPhase)
 	}
 }
 
@@ -3351,8 +3105,8 @@ func TestCreateDefaultPipeline(t *testing.T) {
 	if f.Pipeline != feature.PipelineLarge {
 		t.Errorf("Pipeline = %v, want large", f.Pipeline)
 	}
-	if f.CurrentPhase != feature.PhaseKnowledgeBase {
-		t.Errorf("CurrentPhase = %v, want knowledge-base", f.CurrentPhase)
+	if f.CurrentPhase != feature.PhaseInquire {
+		t.Errorf("CurrentPhase = %v, want inquire", f.CurrentPhase)
 	}
 }
 
@@ -3626,13 +3380,13 @@ func TestUpgradeThenRewind_MediumToStandard(t *testing.T) {
 		t.Fatalf("UpgradePipeline: %v", err)
 	}
 
-	// Step 2: Rewind to Inquire — should redirect to KB Build
+	// Step 2: Rewind to Inquire — restarts the pipeline
 	_, effective, err := mgr.RewindWithRequest(f.ID, feature.RewindRequest{TargetPhase: feature.PhaseInquire})
 	if err != nil {
 		t.Fatalf("RewindWithRequest: %v", err)
 	}
-	if effective != feature.PhaseKnowledgeBase {
-		t.Errorf("effectiveTarget = %v, want PhaseKnowledgeBase", effective)
+	if effective != feature.PhaseInquire {
+		t.Errorf("effectiveTarget = %v, want PhaseInquire", effective)
 	}
 
 	got, _ := mgr.Store.Load(f.ID)
@@ -3646,11 +3400,11 @@ func TestUpgradeThenRewind_MediumToStandard(t *testing.T) {
 	if got.Status != feature.StatusCreated {
 		t.Errorf("Status = %v, want StatusCreated", got.Status)
 	}
-	if got.CurrentPhase != feature.PhaseKnowledgeBase {
-		t.Errorf("CurrentPhase = %v, want PhaseKnowledgeBase", got.CurrentPhase)
+	if got.CurrentPhase != feature.PhaseInquire {
+		t.Errorf("CurrentPhase = %v, want PhaseInquire", got.CurrentPhase)
 	}
 	if got.PipelineUpgradedFrom != "" {
-		t.Errorf("PipelineUpgradedFrom = %q, want empty (cleared by KB rewind)", got.PipelineUpgradedFrom)
+		t.Errorf("PipelineUpgradedFrom = %q, want empty (cleared by pipeline restart)", got.PipelineUpgradedFrom)
 	}
 }
 
@@ -3812,7 +3566,7 @@ func TestUpgradePipeline_CannotDowngrade(t *testing.T) {
 	}
 }
 
-func TestUpgradeThenRewind_MediumToStandard_ResearchGoesToKB(t *testing.T) {
+func TestUpgradeThenRewind_MediumToStandard_ResearchRestartsAtInquire(t *testing.T) {
 	t.Parallel()
 	// parallel-candidate: per-test temp dirs and mocks isolate filesystem and collaborator state.
 	skipShortFeatureRegression(t, "extended pipeline-upgrade rewind regression")
@@ -3844,13 +3598,13 @@ func TestUpgradeThenRewind_MediumToStandard_ResearchGoesToKB(t *testing.T) {
 		t.Errorf("PipelineUpgradedFrom = %q, want %q", got.PipelineUpgradedFrom, feature.PipelineMedium)
 	}
 
-	// Step 3: Rewind to Research — should escalate to KB
+	// Step 3: Rewind to Research — restarts the pipeline at Inquire
 	_, effective, err := mgr.RewindWithRequest(f.ID, feature.RewindRequest{TargetPhase: feature.PhaseResearch})
 	if err != nil {
 		t.Fatalf("RewindWithRequest: %v", err)
 	}
-	if effective != feature.PhaseKnowledgeBase {
-		t.Errorf("effectiveTarget = %v, want PhaseKnowledgeBase", effective)
+	if effective != feature.PhaseInquire {
+		t.Errorf("effectiveTarget = %v, want PhaseInquire", effective)
 	}
 
 	// Step 4: Verify final state
@@ -3861,8 +3615,8 @@ func TestUpgradeThenRewind_MediumToStandard_ResearchGoesToKB(t *testing.T) {
 	if got.Status != feature.StatusCreated {
 		t.Errorf("Status = %v, want StatusCreated", got.Status)
 	}
-	if got.CurrentPhase != feature.PhaseKnowledgeBase {
-		t.Errorf("CurrentPhase = %v, want PhaseKnowledgeBase", got.CurrentPhase)
+	if got.CurrentPhase != feature.PhaseInquire {
+		t.Errorf("CurrentPhase = %v, want PhaseInquire", got.CurrentPhase)
 	}
 	if got.PendingReviewPhase != nil {
 		t.Errorf("PendingReviewPhase = %v, want nil", got.PendingReviewPhase)
@@ -3871,11 +3625,11 @@ func TestUpgradeThenRewind_MediumToStandard_ResearchGoesToKB(t *testing.T) {
 		t.Errorf("IsRewind = true, want false")
 	}
 	if got.PipelineUpgradedFrom != "" {
-		t.Errorf("PipelineUpgradedFrom = %q, want empty (cleared after KB escalation)", got.PipelineUpgradedFrom)
+		t.Errorf("PipelineUpgradedFrom = %q, want empty (cleared by pipeline restart)", got.PipelineUpgradedFrom)
 	}
 }
 
-func TestUpgradeThenRewind_MediumToMoonshot_DesignGoesToKB(t *testing.T) {
+func TestUpgradeThenRewind_MediumToMoonshot_DesignRestartsAtInquire(t *testing.T) {
 	t.Parallel()
 	// parallel-candidate: per-test temp dirs and mocks isolate filesystem and collaborator state.
 	skipShortFeatureRegression(t, "extended pipeline-upgrade rewind regression")
@@ -3907,13 +3661,13 @@ func TestUpgradeThenRewind_MediumToMoonshot_DesignGoesToKB(t *testing.T) {
 		t.Errorf("PipelineUpgradedFrom = %q, want %q", got.PipelineUpgradedFrom, feature.PipelineMedium)
 	}
 
-	// Step 3: Rewind to Design — should escalate to KB
+	// Step 3: Rewind to Design — restarts the pipeline at Inquire
 	_, effective, err := mgr.RewindWithRequest(f.ID, feature.RewindRequest{TargetPhase: feature.PhaseDesign})
 	if err != nil {
 		t.Fatalf("RewindWithRequest: %v", err)
 	}
-	if effective != feature.PhaseKnowledgeBase {
-		t.Errorf("effectiveTarget = %v, want PhaseKnowledgeBase", effective)
+	if effective != feature.PhaseInquire {
+		t.Errorf("effectiveTarget = %v, want PhaseInquire", effective)
 	}
 
 	// Step 4: Verify final state
@@ -3924,8 +3678,8 @@ func TestUpgradeThenRewind_MediumToMoonshot_DesignGoesToKB(t *testing.T) {
 	if got.Status != feature.StatusCreated {
 		t.Errorf("Status = %v, want StatusCreated", got.Status)
 	}
-	if got.CurrentPhase != feature.PhaseKnowledgeBase {
-		t.Errorf("CurrentPhase = %v, want PhaseKnowledgeBase", got.CurrentPhase)
+	if got.CurrentPhase != feature.PhaseInquire {
+		t.Errorf("CurrentPhase = %v, want PhaseInquire", got.CurrentPhase)
 	}
 	if got.PendingReviewPhase != nil {
 		t.Errorf("PendingReviewPhase = %v, want nil", got.PendingReviewPhase)
@@ -3934,16 +3688,16 @@ func TestUpgradeThenRewind_MediumToMoonshot_DesignGoesToKB(t *testing.T) {
 		t.Errorf("IsRewind = true, want false")
 	}
 	if got.PipelineUpgradedFrom != "" {
-		t.Errorf("PipelineUpgradedFrom = %q, want empty (cleared after KB escalation)", got.PipelineUpgradedFrom)
+		t.Errorf("PipelineUpgradedFrom = %q, want empty (cleared by pipeline restart)", got.PipelineUpgradedFrom)
 	}
 }
 
-func TestUpgradeThenRewind_StandardToMoonshot_NoKBEscalation(t *testing.T) {
+func TestUpgradeThenRewind_StandardToMoonshot_NoRestart(t *testing.T) {
 	t.Parallel()
 	// parallel-candidate: per-test temp dirs and mocks isolate filesystem and collaborator state.
 	skipShortFeatureRegression(t, "extended pipeline-upgrade rewind regression")
 	mgr := newTestManager(t)
-	f, err := mgr.Create("upgrade-std-to-moonshot", "Test large upgrade no KB", []string{"test-repo"}, mgr.Config.Defaults.Models, "", "", nil)
+	f, err := mgr.Create("upgrade-std-to-moonshot", "Test large upgrade no restart", []string{"test-repo"}, mgr.Config.Defaults.Models, "", "", nil)
 	if err != nil {
 		t.Fatalf("Create: %v", err)
 	}
@@ -3970,16 +3724,16 @@ func TestUpgradeThenRewind_StandardToMoonshot_NoKBEscalation(t *testing.T) {
 		t.Errorf("PipelineUpgradedFrom = %q, want %q", got.PipelineUpgradedFrom, feature.PipelineLarge)
 	}
 
-	// Step 3: Rewind to Research — should NOT escalate to KB (origin was large, not medium)
+	// Step 3: Rewind to Research — no restart (origin was large, not medium)
 	_, effective, err := mgr.RewindWithRequest(f.ID, feature.RewindRequest{TargetPhase: feature.PhaseResearch})
 	if err != nil {
 		t.Fatalf("RewindWithRequest: %v", err)
 	}
 	if effective != feature.PhaseResearch {
-		t.Errorf("effectiveTarget = %v, want PhaseResearch (no KB escalation)", effective)
+		t.Errorf("effectiveTarget = %v, want PhaseResearch (no restart)", effective)
 	}
 
-	// Step 4: Verify final state — no KB escalation path
+	// Step 4: Verify final state — no restart path
 	got, _ = mgr.Store.Load(f.ID)
 	if got.Pipeline != feature.PipelineMoonshot {
 		t.Errorf("Pipeline = %q, want %q (unchanged)", got.Pipeline, feature.PipelineMoonshot)

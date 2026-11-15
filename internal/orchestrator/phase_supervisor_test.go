@@ -183,8 +183,8 @@ func TestPhaseSupervisorSingleShotFailsWhenSessionExitsWithoutResult(t *testing.
 func TestPhaseSupervisorSingleShotReportsTerminalOutcomeViolation(t *testing.T) {
 	sink := newRecordingPhaseCompletionSink()
 	sm := mocks.NewMockSessionManager()
-	sess := mocks.NewMockSessionView("feat-kbv2-my-service-0123456789ab", "feat")
-	sess.PhaseVal = feature.PhaseKnowledgeBase
+	sess := mocks.NewMockSessionView("feat-research", "feat")
+	sess.PhaseVal = feature.PhaseResearch
 	sess.LogFilePathVal = filepath.Join(t.TempDir(), "output.txt")
 	sess.CostVal = &llm.ResultMessage{Subtype: "success", StopReason: "end_turn"}
 	sm.GetSessionFn = func(string) ports.SessionView { return sess }
@@ -193,7 +193,7 @@ func TestPhaseSupervisorSingleShotReportsTerminalOutcomeViolation(t *testing.T) 
 		Completion: sink,
 		Sessions:   sm,
 	})
-	supervisor.superviseSingleShotSession("feat", sess.ID(), feature.PhaseKnowledgeBase)
+	supervisor.superviseSingleShotSession("feat", sess.ID(), feature.PhaseResearch)
 
 	// The first two clean turns receive bounded correction nudges. The third
 	// missing outcome is terminal and must be reported as a protocol failure.
@@ -205,8 +205,8 @@ func TestPhaseSupervisorSingleShotReportsTerminalOutcomeViolation(t *testing.T) 
 	if call.input.FailureCode != errcat.ProtocolViolation {
 		t.Errorf("FailureCode = %q, want %q", call.input.FailureCode, errcat.ProtocolViolation)
 	}
-	if !strings.Contains(call.input.ErrorDetail, string(agent.RoleKnowledgeBaseBuilder)) {
-		t.Errorf("ErrorDetail = %q, want knowledge base role", call.input.ErrorDetail)
+	if !strings.Contains(call.input.ErrorDetail, string(agent.RoleResearcher)) {
+		t.Errorf("ErrorDetail = %q, want researcher role", call.input.ErrorDetail)
 	}
 	if want := filepath.Dir(sess.LogFilePathVal); !strings.Contains(call.input.ErrorDetail, want) {
 		t.Errorf("ErrorDetail = %q, want artifact dir %q", call.input.ErrorDetail, want)

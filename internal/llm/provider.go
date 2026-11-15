@@ -279,7 +279,7 @@ type CommandBuildOpts struct {
 	// ReadRoots lists the directories a provider may read without per-call
 	// mediation, mirroring the read mounts Agentico granted (feature state, work
 	// dir, and additional read roots such as skills, guidelines, worktrees,
-	// knowledge base, images, and attachments). Empty means the provider applies
+	// images, and attachments). Empty means the provider applies
 	// its default read scope; providers that do not consume it leave their
 	// behavior unchanged.
 	ReadRoots []string
@@ -464,6 +464,5 @@ const (
 	PhaseImplementation  PhaseRole = "implementation"
 	PhaseReview          PhaseRole = "review"
 	PhaseChat            PhaseRole = "chat"
-	PhaseKBBuild         PhaseRole = "kb_build"
 	PhaseAutomaticReview PhaseRole = "automatic_review"
 )

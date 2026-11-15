@@ -240,7 +240,6 @@ type ModelConfigPatch struct {
 	Implementation  string  `json:"implementation,omitempty"`
 	Review          string  `json:"review,omitempty"`
 	Utilities       string  `json:"utilities,omitempty"`
-	KBBuild         string  `json:"kb_build,omitempty"`
 	AutomaticReview *string `json:"automatic_review,omitempty"`
 }
 
@@ -269,9 +268,6 @@ func ApplyModelConfigPatch(base config.ModelConfig, patch ModelConfigPatch) conf
 	}
 	if patch.Utilities != "" {
 		base.Utilities = patch.Utilities
-	}
-	if patch.KBBuild != "" {
-		base.KBBuild = patch.KBBuild
 	}
 	if patch.AutomaticReview != nil {
 		base.AutomaticReview = *patch.AutomaticReview
@@ -797,7 +793,6 @@ func (h *apiHandler) validateRequestedModels(w http.ResponseWriter, models confi
 		{"implementation", models.Implementation},
 		{"review", models.Review},
 		{"utilities", models.Utilities},
-		{"kb_build", models.KBBuild},
 	} {
 		if strings.TrimSpace(candidate.model) == "" {
 			continue
@@ -1265,7 +1260,6 @@ func validateEffortConfig(w http.ResponseWriter, effort config.EffortConfig, mod
 		{effort.Implementation, models.Implementation, "implementation"},
 		{effort.Review, models.Review, "review"},
 		{effort.Utilities, models.Utilities, "utilities"},
-		{effort.KBBuild, models.KBBuild, "kb_build"},
 	}
 	for _, r := range roles {
 		if r.val == "" {
@@ -1333,7 +1327,7 @@ func validateRepoName(w http.ResponseWriter, repo string, required bool) bool {
 
 func validatePhaseName(w http.ResponseWriter, phase string) bool {
 	switch strings.ToLower(strings.TrimSpace(phase)) {
-	case "knowledge-base", "knowledgebase", targetPhaseInquire, "research", "design", targetPhasePlan, targetPhaseImplement, "review", "final-review", string(FeatureActionPublish):
+	case targetPhaseInquire, "research", "design", targetPhasePlan, targetPhaseImplement, "review", "final-review", string(FeatureActionPublish):
 		return true
 	default:
 		writeAPIError(w, http.StatusBadRequest, errcat.BadRequest, errcat.WithDiagnostics("target_phase is invalid"))

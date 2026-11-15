@@ -7,16 +7,12 @@ A feature is Agentic Orchestrator’s durable unit of work. It owns isolated git
 | Profile | Phase sequence | Intended depth |
 |---------|----------------|----------------|
 | **Medium** | Roadmap and phase planning → Implement → Final Review → Publish | Small, well-understood work |
-| **Large** | KB Build → Inquire → Research → Design → roadmap loop → Final Review → Publish | Most complex features |
+| **Large** | Inquire → Research → Design → roadmap loop → Final Review → Publish | Most complex features |
 | **Moonshot** | Same sequence as Large, with higher effort and per-iteration implementation review | High-risk or ambiguous work |
 
 The Electron creation wizard exposes a pipeline-profile picker (Medium / Large / Moonshot) and a Review step for per-feature model, checkpoint, risk, exit-criteria, and inquireness editors. Defaults still come from `config.yaml`, but every value can be overridden per feature before creation.
 
 ## Phases
-
-### KB Build
-
-Builds a per-repository knowledge base covering architecture, conventions, API surface, dependencies, and verification. A current knowledge base can be reused.
 
 ### Inquire
 
@@ -54,7 +50,7 @@ Commits and prepares publishable branches and, when configured, creates pull req
 The main path is:
 
 ```text
-Created → BuildingKB → Inquiring → Researching → Designing → Planning
+Created → Inquiring → Researching → Designing → Planning
     → Implementing → ReviewPassed → CodeReady → Published → Done
 ```
 
@@ -63,7 +59,6 @@ Frequently seen states include:
 | State | Meaning |
 |-------|---------|
 | `Created` | Durable setup is complete or in progress; orchestration has not started |
-| `BuildingKB` | Knowledge-base construction is running |
 | `Inquiring` | Inquiry is running |
 | `InquireReady` | Inquiry completed and the next phase is eligible |
 | `Researching` | Research is running |

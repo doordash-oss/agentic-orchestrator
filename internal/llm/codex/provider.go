@@ -17,7 +17,9 @@ package codex
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"sort"
@@ -419,6 +421,41 @@ func (p *Provider) reconcileAgenticAgents(codexHome string) error {
 		def := defs[name]
 		if err := writeAgentTOMLIfChanged(agentsDir, name, def); err != nil {
 			return fmt.Errorf("writing agent TOML for %s: %w", name, err)
+		}
+	}
+	return removeRetiredAgentTOMLs(agentsDir, defs)
+}
+
+// retiredAgents names agents earlier binaries wrote and this binary no longer
+// ships.
+var retiredAgents = []string{
+	"api-surface-researcher",
+	"architecture-researcher",
+	"conventions-researcher",
+	"dependencies-researcher",
+	"verification-researcher",
+}
+
+// removeRetiredAgentTOMLs deletes a retired agent's TOML only when it still
+// carries the header Agentico generated, so user-authored files survive.
+func removeRetiredAgentTOMLs(agentsDir string, defs map[string]agentdef.AgentDef) error {
+	for _, name := range retiredAgents {
+		if _, shipped := defs[name]; shipped {
+			continue
+		}
+		path := filepath.Join(agentsDir, name+".toml")
+		content, err := os.ReadFile(path)
+		if errors.Is(err, fs.ErrNotExist) {
+			continue
+		}
+		if err != nil {
+			return fmt.Errorf("reading retired agent TOML %s: %w", name, err)
+		}
+		if !strings.HasPrefix(string(content), fmt.Sprintf("name = %q\n", name)) {
+			continue
+		}
+		if err := os.Remove(path); err != nil && !errors.Is(err, fs.ErrNotExist) {
+			return fmt.Errorf("removing retired agent TOML %s: %w", name, err)
 		}
 	}
 	return nil

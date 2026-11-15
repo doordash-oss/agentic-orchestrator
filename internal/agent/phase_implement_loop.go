@@ -143,7 +143,6 @@ func RunPhaseImplementLoop(cfg OrchestratorConfig, sm ports.SessionManager) (*Ph
 		StateDir:                   stateDir,
 		RunDir:                     runDir,
 		AdditionalDirs:             additionalDirsExcludingStateDir(workspace, stateDir),
-		KBInfos:                    cfg.KBInfos,
 		PhaseType:                  cfg.Feature.RoadmapPhaseType,
 		RoadmapPath:                cfg.Feature.Artifacts["roadmap"],
 		DangerouslySkipPermissions: cfg.DangerouslySkipPermissions,

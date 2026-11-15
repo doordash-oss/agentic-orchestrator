@@ -43,12 +43,9 @@ Path:
 
 The resources below are available for this assignment. Skim each catalog so you know what exists, and open specific leaf files only when a concrete question comes up during the work.
 
-## Knowledge Base
+## Repository Instructions
 
-The knowledge base captures architecture, conventions, dependencies, API surface, and verification approaches for each repository involved in this feature. Browse a repo's index to see the category map; open category leaves on demand when a concrete question comes up.
-
-- **web** — index: `/state/kb/web/index.md` — root: `/state/kb/web`
-- **api** — index: `/state/kb/api/index.md` — root: `/state/kb/api`
+A target repository's own instruction files for coding agents (such as `AGENTS.md` or `CLAUDE.md`, at its root and in the directories your work touches) state its conventions and how to verify changes. Read the ones that apply before relying on assumptions about that repository.
 
 ## Guidelines
 
@@ -65,7 +62,6 @@ In addition to the skill(s) already loaded in your system instructions, the foll
 |-------|-------------|--------|------|
 | frontend-design | Create distinctive, production-grade frontend interfaces with high design quality. | UI, UX, frontend, design, components | /skills/frontend-design/SKILL.md |
 | guideline-reader | Navigate the language-specific coding guidelines to follow best practices, idioms, and conventions when writing or reviewing code. | guidelines, coding standards, best practices, idioms, conventions, error handling, concurrency, naming, testing, style | /skills/guideline-reader/SKILL.md |
-| knowledge-reader | Skim a repo's knowledge-base index and read leaves on demand. | knowledge base, KB, architecture, conventions | /skills/knowledge-reader/SKILL.md |
 
 
 ## Asking Questions

@@ -23,7 +23,7 @@ Own only intrinsic code quality:
 - code structure that is understandable and maintainable
 - tests as code quality when their structure obscures behavior
 
-Consult the relevant language guidelines and Knowledge Base before judging local conventions.
+Consult the relevant language guidelines and the repository's own instruction files before judging local conventions.
 
 At the Final gate, judge Craft over the whole assembled feature and cumulative cross-repo diff. Do not limit review to a single implementation iteration.
 

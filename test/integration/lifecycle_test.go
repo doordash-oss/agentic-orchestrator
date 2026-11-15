@@ -75,8 +75,8 @@ func TestFeatureLifecycleStateMachine(t *testing.T) {
 	if f.Status != feature.StatusCreated {
 		t.Errorf("expected StatusCreated, got %s", f.Status)
 	}
-	if f.CurrentPhase != feature.PhaseKnowledgeBase {
-		t.Errorf("expected PhaseKnowledgeBase, got %s", f.CurrentPhase)
+	if f.CurrentPhase != feature.PhaseInquire {
+		t.Errorf("expected PhaseInquire, got %s", f.CurrentPhase)
 	}
 
 	// Verify persistence
@@ -86,27 +86,6 @@ func TestFeatureLifecycleStateMachine(t *testing.T) {
 	}
 	if loaded.Name != f.Name {
 		t.Errorf("expected name %q, got %q", f.Name, loaded.Name)
-	}
-
-	// Step 2: Build knowledge base
-	if err := fm.StartPhase(f.ID, feature.PhaseKnowledgeBase); err != nil {
-		t.Fatalf("StartKnowledgeBase: %v", err)
-	}
-	f, _ = fm.Store.Load(f.ID)
-	if f.Status != feature.StatusBuildingKB {
-		t.Errorf("expected StatusBuildingKB, got %s", f.Status)
-	}
-	if f.CurrentPhase != feature.PhaseKnowledgeBase {
-		t.Errorf("expected PhaseKnowledgeBase, got %s", f.CurrentPhase)
-	}
-
-	// Step 2b: Complete KB → back to Created
-	if err := fm.Transition(f.ID, feature.StatusCreated); err != nil {
-		t.Fatalf("CompleteKnowledgeBase: %v", err)
-	}
-	f, _ = fm.Store.Load(f.ID)
-	if f.Status != feature.StatusCreated {
-		t.Errorf("expected StatusCreated after KB, got %s", f.Status)
 	}
 
 	// Step 3: Start research

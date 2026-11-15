@@ -188,12 +188,6 @@ type Run struct {
 	// feature leaves Failed. It only means something while Status is Failed.
 	AutoResume *AutoResume `yaml:"auto_resume,omitempty"`
 
-	// KB transient flags (moved from Feature — actual KB data lives in a
-	// sibling knowledge-base/ directory outside the feature dir, untouched).
-	KBWaitMessage  string            `yaml:"kb_wait_message,omitempty"`
-	ForceKBRebuild bool              `yaml:"force_kb_rebuild,omitempty"`
-	KBStatus       map[string]string `yaml:"kb_status,omitempty"`
-
 	// Sandbox is set once, the first time this run launches a sandboxed
 	// review validator while the OS sandbox is unavailable (e.g. nested macOS
 	// sandbox-exec), so the run record shows it ran unconfined. Absent

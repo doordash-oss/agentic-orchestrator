@@ -126,16 +126,6 @@ func TestDiscardActionCarriesStructuredImpactPreview(t *testing.T) {
 	if err := store.Save(child); err != nil {
 		t.Fatalf("Save(child) error = %v", err)
 	}
-	// Seed the durable workspace state the discard preview uses as evidence
-	// that a temporary knowledge workspace actually exists for this repo.
-	for _, repo := range child.Repos {
-		workspaceDir := feature.ChildKBWorkspaceDir(store.BaseDir, child.ID, repo.Name)
-		if err := feature.SaveWorkspaceState(workspaceDir, &feature.ChildKBWorkspaceState{
-			Source: feature.WorkspaceSourceCanonical,
-		}); err != nil {
-			t.Fatalf("SaveWorkspaceState(%s) error = %v", repo.Name, err)
-		}
-	}
 	opts := baseReadHandlerOptions(store)
 	opts.Sessions = fakeSessionManager{views: []ports.SessionView{&fakeSessionView{
 		MockSessionView: &mocks.MockSessionView{
@@ -164,11 +154,10 @@ func TestDiscardActionCarriesStructuredImpactPreview(t *testing.T) {
 	if subject["id"] != child.ID || subject["name"] != "Rework auth" {
 		t.Fatalf("preview subject = %+v, want child %s Rework auth", subject, child.ID)
 	}
-	impactCategoryKeys(t, preview, []string{"sessions", "worktrees", "branches", "knowledge"})
+	impactCategoryKeys(t, preview, []string{"sessions", "worktrees", "branches"})
 	itemsContain(t, impactCategoryItems(t, preview, "sessions"), "Implement phase-1", "sess-implement-1")
 	itemsContain(t, impactCategoryItems(t, preview, "worktrees"), "/worktrees/"+child.ID, repoNameSelf)
 	itemsContain(t, impactCategoryItems(t, preview, "branches"), "feature/rework-auth", repoNameSelf)
-	itemsContain(t, impactCategoryItems(t, preview, "knowledge"), "knowledge", repoNameSelf)
 	previewRetained(t, preview, []string{impactRetainedReviewConfig, impactRetainedDiscardHistory})
 
 	for _, raw := range body["actions"].([]any) {
@@ -270,7 +259,7 @@ func TestParentDeleteCarriesCascadeImpactPreview(t *testing.T) {
 	if subject["id"] != parent.ID || subject["name"] != parent.Name {
 		t.Fatalf("preview subject = %+v, want parent %s %s", subject, parent.ID, parent.Name)
 	}
-	impactCategoryKeys(t, preview, []string{"children", "sessions", "worktrees", "branches", "history", "knowledge"})
+	impactCategoryKeys(t, preview, []string{"children", "sessions", "worktrees", "branches", "history"})
 
 	children := impactCategoryItems(t, preview, "children")
 	itemsContain(t, children, "Active refactor", "Completed refactor")
@@ -283,54 +272,7 @@ func TestParentDeleteCarriesCascadeImpactPreview(t *testing.T) {
 	itemsContain(t, branches, "feature/active-refactor", "feature/completed-refactor")
 	itemsContain(t, impactCategoryItems(t, preview, "history"), "Closed — Completed Completed refactor")
 
-	// Without durable knowledge state the knowledge category renders
-	// explicitly empty: no overlay was ever promoted for this relationship.
-	if knowledge := impactCategoryItems(t, preview, "knowledge"); len(knowledge) != 0 {
-		t.Fatalf("preview knowledge = %v, want empty (no overlay provenance, no workspace state)", knowledge)
-	}
 	previewRetained(t, preview, nil)
-
-	// Once an overlay was genuinely promoted (provenance durable) and the
-	// active child's workspace was seeded (workspace state durable), the
-	// knowledge category enumerates both resources.
-	if err := feature.SaveOverlayProvenance(feature.ParentOverlayPath(store.BaseDir, parent.ID, repoNameSelf), &feature.OverlayProvenance{
-		CanonicalCommit: "cafebabe", ParentHEAD: "deadbeef", Generation: 1,
-	}); err != nil {
-		t.Fatalf("SaveOverlayProvenance error = %v", err)
-	}
-	workspaceDir := feature.ChildKBWorkspaceDir(store.BaseDir, active.ID, repoNameSelf)
-	if err := feature.SaveWorkspaceState(workspaceDir, &feature.ChildKBWorkspaceState{
-		Source: feature.WorkspaceSourceCanonical,
-	}); err != nil {
-		t.Fatalf("SaveWorkspaceState error = %v", err)
-	}
-
-	body = getJSONMap(t, handler, "/api/v1/features/"+parent.ID)[entityFeature].(map[string]any)
-	preview = actionJSONByID(t, body, string(FeatureActionDelete))["impact_preview"].(map[string]any)
-	knowledge := impactCategoryItems(t, preview, "knowledge")
-	itemsContain(t, knowledge, "knowledge overlay", repoNameSelf)
-	itemsContain(t, knowledge, "temporary knowledge workspace", active.ID, repoNameSelf)
-}
-
-// TestCascadeKnowledgeImpactEmptyForMediumOnlyRelationship pins that a
-// Medium-pipeline child (no knowledge-base phase, never promoted an overlay)
-// leaves the cascade knowledge category explicitly empty rather than naming
-// overlays that cannot exist.
-func TestCascadeKnowledgeImpactEmptyForMediumOnlyRelationship(t *testing.T) {
-	t.Parallel()
-	store, parent := seedReadFeature(t)
-	child := seedReadChildFeature(t, store, parent.ID, feature.StatusImplementing, feature.SetupStatusDone, "")
-	child.Pipeline = feature.PipelineMedium
-	if err := store.Save(child); err != nil {
-		t.Fatalf("Save(child) error = %v", err)
-	}
-	handler := NewHandler(baseReadHandlerOptions(store))
-
-	body := getJSONMap(t, handler, "/api/v1/features/"+parent.ID)[entityFeature].(map[string]any)
-	preview := actionJSONByID(t, body, string(FeatureActionDelete))["impact_preview"].(map[string]any)
-	if knowledge := impactCategoryItems(t, preview, "knowledge"); len(knowledge) != 0 {
-		t.Fatalf("medium-only relationship knowledge = %v, want explicitly empty", knowledge)
-	}
 }
 
 // TestSingleFeatureDeleteCarriesNoImpactPreview pins that an ordinary

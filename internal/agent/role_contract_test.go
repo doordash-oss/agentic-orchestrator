@@ -43,7 +43,6 @@ var allRoles = []Role{
 	roleImplementationReviewCleanliness,
 	roleImplementationReviewQA,
 	roleImplementationReviewDesign,
-	RoleKnowledgeBaseBuilder,
 	RoleInquirer,
 	RoleResearcher,
 	RoleDesigner,
@@ -55,7 +54,6 @@ func TestRoleContractsResolveArtifactPaths(t *testing.T) {
 	implementIter := filepath.Join(base, "phase-01", "implement", "iteration-02")
 	roadmapAttempt := filepath.Join(base, "roadmap", "attempt-02")
 	phasePlanAttempt := filepath.Join(base, "phase-02", "plan", "attempt-03")
-	kbDir := filepath.Join(base, "knowledge-base", "agentic")
 	inquireDir := filepath.Join(base, "runs", "run-001", "inquire")
 	researchDir := filepath.Join(base, "runs", "run-001", "research")
 	designDir := filepath.Join(base, "runs", "run-001", "design")
@@ -90,7 +88,6 @@ func TestRoleContractsResolveArtifactPaths(t *testing.T) {
 		{feature.PhasePlan, rolePlanRoadmapReviser, roadmapAttempt, roadmapPaths},
 		{feature.PhasePlan, RolePlanPhasePlanner, phasePlanAttempt, phasePlanPaths},
 		{feature.PhasePlan, rolePlanPhaseReviser, phasePlanAttempt, phasePlanPaths},
-		{feature.PhaseKnowledgeBase, RoleKnowledgeBaseBuilder, kbDir, map[string]string{"knowledge_base_index": filepath.Join(kbDir, "index.md")}},
 		{feature.PhaseInquire, RoleInquirer, inquireDir, map[string]string{"phase_markdown_artifact": inquireDir}},
 		{feature.PhaseResearch, RoleResearcher, researchDir, map[string]string{"phase_markdown_artifact": researchDir}},
 		{feature.PhaseDesign, RoleDesigner, designDir, map[string]string{"phase_markdown_artifact": designDir}},
@@ -296,7 +293,6 @@ func TestRoleOutputRootsArePinned(t *testing.T) {
 		rolePlanRoadmapReviser:                        planRoots,
 		RolePlanPhasePlanner:                          planRoots,
 		rolePlanPhaseReviser:                          planRoots,
-		RoleKnowledgeBaseBuilder:                      {"phase_dir=" + iter},
 		RoleInquirer:                                  {"phase_dir=" + iter},
 		RoleResearcher:                                {"phase_dir=" + iter},
 		RoleDesigner:                                  {"phase_dir=" + iter},

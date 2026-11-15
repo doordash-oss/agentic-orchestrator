@@ -63,14 +63,14 @@ func TestPipelineProfilePhaseProgression(t *testing.T) {
 		{
 			name:       "large",
 			profile:    PipelineLarge,
-			wantPhases: []Phase{PhaseKnowledgeBase, PhaseInquire, PhaseResearch, PhaseDesign, PhasePlan, PhaseImplement, PhaseReview, PhasePublish},
+			wantPhases: []Phase{PhaseInquire, PhaseResearch, PhaseDesign, PhasePlan, PhaseImplement, PhaseReview, PhasePublish},
 			hasPhase:   PhaseResearch,
 			wantHas:    true,
 		},
 		{
 			name:       "moonshot",
 			profile:    PipelineMoonshot,
-			wantPhases: []Phase{PhaseKnowledgeBase, PhaseInquire, PhaseResearch, PhaseDesign, PhasePlan, PhaseImplement, PhaseReview, PhasePublish},
+			wantPhases: []Phase{PhaseInquire, PhaseResearch, PhaseDesign, PhasePlan, PhaseImplement, PhaseReview, PhasePublish},
 			hasPhase:   PhaseResearch,
 			wantHas:    true,
 		},

@@ -58,8 +58,6 @@ type OrchestratorConfig struct {
 	MaxConsecFails       int
 	MaxConsecNoProgress  int
 
-	KBInfos []KBInfo
-
 	// RunImplementFn, when set, overrides the default RunImplementationLoop
 	// call. This allows tests to capture the ImplementConfig without running
 	// real sessions.

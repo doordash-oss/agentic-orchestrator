@@ -23,23 +23,23 @@ import (
 // TestEditPermission_EmitsCwdRelativeGlob guards the regression where a writable
 // root outside the session cwd was expressed only as an absolute glob. OpenCode
 // evaluates the edit surface against the tool-supplied path relative to cwd
-// (e.g. "../../../knowledge-base/<repo>/..."), so an absolute-only glob never
+// (e.g. "../../../features/<id>/..."), so an absolute-only glob never
 // matched and every external edit fell through to the catch-all deny. The root
 // must therefore also appear as a cwd-relative glob.
 func TestEditPermission_EmitsCwdRelativeGlob(t *testing.T) {
-	// Mirrors the KB phase: cwd is the repo worktree; the writable KB root is a
+	// cwd is the repo worktree; the writable root is a
 	// sibling tree three levels up.
 	workDir := "/Users/x/.agentic-workflow/worktrees/feature/repo"
-	kbRoot := "/Users/x/.agentic-workflow/knowledge-base/repo"
+	writableRoot := "/Users/x/.agentic-workflow/features/feat-1"
 
-	got := editPermission("allow", workDir, []string{kbRoot})
+	got := editPermission("allow", workDir, []string{writableRoot})
 	patterns, ok := got.(map[string]string)
 	if !ok {
 		t.Fatalf("editPermission returned %T, want map[string]string", got)
 	}
 
-	absGlob := "/Users/x/.agentic-workflow/knowledge-base/repo/**"
-	relGlob := "../../../knowledge-base/repo/**"
+	absGlob := "/Users/x/.agentic-workflow/features/feat-1/**"
+	relGlob := "../../../features/feat-1/**"
 
 	if patterns[catchAllPattern] != "deny" {
 		t.Errorf("catch-all = %q, want deny", patterns[catchAllPattern])
@@ -92,9 +92,9 @@ func TestEditPermission_EmitsExactFileRoot(t *testing.T) {
 // edits to mounted roots.
 func TestPermissionConfig_EditIsPatternMapForWritableRoots(t *testing.T) {
 	workDir := "/Users/x/.agentic-workflow/worktrees/feature/repo"
-	kbRoot := "/Users/x/.agentic-workflow/knowledge-base/repo"
+	writableRoot := "/Users/x/.agentic-workflow/features/feat-1"
 
-	perm := permissionConfig(false, workDir, []string{kbRoot}, []string{workDir})
+	perm := permissionConfig(false, workDir, []string{writableRoot}, []string{workDir})
 
 	if _, ok := perm[permKeyEdit].(map[string]string); !ok {
 		t.Errorf("perm[%q] = %#v, want path-pattern map", permKeyEdit, perm[permKeyEdit])
@@ -137,7 +137,7 @@ func TestRootGlobs_EmitsLeadingSlashStrippedAbsoluteForm(t *testing.T) {
 func TestRootGlobs_EmitsSymlinkResolvedAbsoluteForm(t *testing.T) {
 	base := t.TempDir()
 	realDir := filepath.Join(base, "real")
-	if err := os.MkdirAll(filepath.Join(realDir, "kb"), 0o755); err != nil {
+	if err := os.MkdirAll(filepath.Join(realDir, "skills"), 0o755); err != nil {
 		t.Fatal(err)
 	}
 	link := filepath.Join(base, "link")
@@ -145,15 +145,15 @@ func TestRootGlobs_EmitsSymlinkResolvedAbsoluteForm(t *testing.T) {
 		t.Skipf("symlinks unavailable on this platform: %v", err)
 	}
 
-	root := filepath.Join(link, "kb")
+	root := filepath.Join(link, "skills")
 	got := rootGlobs("", root)
 
 	// t.TempDir() itself can traverse a symlink (e.g. macOS's own /var ->
 	// /private/var), so the expected resolved form must go through
-	// EvalSymlinks too rather than assuming real/kb is already canonical.
-	resolvedRoot, err := filepath.EvalSymlinks(filepath.Join(realDir, "kb"))
+	// EvalSymlinks too rather than assuming real/skills is already canonical.
+	resolvedRoot, err := filepath.EvalSymlinks(filepath.Join(realDir, "skills"))
 	if err != nil {
-		t.Fatalf("EvalSymlinks(%q): %v", filepath.Join(realDir, "kb"), err)
+		t.Fatalf("EvalSymlinks(%q): %v", filepath.Join(realDir, "skills"), err)
 	}
 	wantAbs := resolvedRoot
 	wantAbsGlob := resolvedRoot + "/**"

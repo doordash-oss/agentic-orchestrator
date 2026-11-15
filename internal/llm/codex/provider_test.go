@@ -527,6 +527,35 @@ func TestProviderPrepareRealHome_PartialFailureThenRetrySucceeds(t *testing.T) {
 	assertAgentTOMLs(t, codexHome)
 }
 
+func TestProviderReconcileAgenticAgents_RemovesRetiredGeneratedAgents(t *testing.T) {
+	p := &Provider{}
+	codexHome := filepath.Join(t.TempDir(), "codex-home")
+	agentsDir := filepath.Join(codexHome, "agents")
+	if err := os.MkdirAll(agentsDir, 0o755); err != nil {
+		t.Fatalf("MkdirAll(%s): %v", agentsDir, err)
+	}
+	generated := filepath.Join(agentsDir, "verification-researcher.toml")
+	if err := os.WriteFile(generated, []byte(agentTOMLContent("verification-researcher", agentdef.AgentDef{Description: "d", Prompt: "p"})), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	userAuthored := filepath.Join(agentsDir, "conventions-researcher.toml")
+	userContent := "# mine\nname = \"conventions-researcher\"\n"
+	if err := os.WriteFile(userAuthored, []byte(userContent), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := p.reconcileAgenticAgents(codexHome); err != nil {
+		t.Fatalf("reconcileAgenticAgents() error: %v", err)
+	}
+
+	if _, err := os.Stat(generated); !os.IsNotExist(err) {
+		t.Fatalf("retired generated agent should be removed, stat err = %v", err)
+	}
+	if data, err := os.ReadFile(userAuthored); err != nil || string(data) != userContent {
+		t.Fatalf("user-authored agent changed: data=%q err=%v", data, err)
+	}
+}
+
 func TestProviderBuildCommand_UnwritableResolvedHomeFailsFast(t *testing.T) {
 	p := &Provider{}
 	blockingFile := filepath.Join(t.TempDir(), "not-a-directory")

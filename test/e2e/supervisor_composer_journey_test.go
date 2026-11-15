@@ -329,7 +329,7 @@ func TestSupervisorResetKeepsRunningFeature(t *testing.T) {
 	cfg, err := json.Marshal(map[string]any{
 		"models": map[string]string{
 			"inquiry": h.model, "research": h.model, "planning": h.model,
-			"implementation": h.model, "review": h.model, "utilities": h.model, "kb_build": h.model,
+			"implementation": h.model, "review": h.model, "utilities": h.model,
 		},
 		"inquireness": "high",
 	})

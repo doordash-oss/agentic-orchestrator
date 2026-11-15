@@ -15,8 +15,6 @@
 package agent
 
 import (
-	"context"
-	"errors"
 	"fmt"
 	"log"
 	"os"
@@ -135,8 +133,6 @@ func (pr *PhaseRunner) defaultModelForRole(role llm.PhaseRole) string {
 		return defaults.Review
 	case llm.PhaseChat:
 		return defaults.Utilities
-	case llm.PhaseKBBuild:
-		return defaults.KBBuild
 	default:
 		return ""
 	}
@@ -263,7 +259,6 @@ type interactivePhaseConfig struct {
 	ModelRole       llm.PhaseRole
 	AgentNames      []string
 	GuidelinesDir   string
-	KBInfos         []KBInfo
 }
 
 // runInteractivePhase contains the shared boilerplate for launching an async
@@ -282,7 +277,6 @@ func (pr *PhaseRunner) runInteractivePhase(f *feature.Feature, cfg interactivePh
 		IterationDir:   artifactDir,
 		SkillsDir:      pr.SkillsDir,
 		GuidelinesDir:  cfg.GuidelinesDir,
-		KBInfos:        cfg.KBInfos,
 		AskingClause:   pr.askingQuestionsClauseForModel(phaseModel),
 		CompletionTool: pr.completionToolForModel(phaseModel),
 	})
@@ -350,8 +344,8 @@ func (pr *PhaseRunner) runInteractivePhase(f *feature.Feature, cfg interactivePh
 	}
 	pr.Observer.SessionStarted(sessionCtx, cfg.Phase.String(), sessionID, providerName, phaseModel, "", string(effectiveEffort), string(effortSource))
 
-	// Track reads of KB/skill/guideline files for observability.
-	pr.installContextReadTracker(sess, sessionCtx, cfg.Phase.String(), sessionID, pr.StateDir)
+	// Track reads of skill/guideline files for observability.
+	pr.installContextReadTracker(sess, sessionCtx, cfg.Phase.String(), sessionID)
 	pr.installSubagentProgressTracker(sess, sessionCtx, cfg.Phase.String(), sessionID)
 
 	sessionStart := time.Now()
@@ -378,7 +372,7 @@ func (pr *PhaseRunner) runInteractivePhase(f *feature.Feature, cfg interactivePh
 
 // RunInquire starts an inquire session for a feature.
 // Returns the session ID. The session runs asynchronously.
-func (pr *PhaseRunner) RunInquire(f *feature.Feature, kbInfos ...KBInfo) (string, error) {
+func (pr *PhaseRunner) RunInquire(f *feature.Feature) (string, error) {
 	inquiryModel := f.Models.Inquiry
 	if inquiryModel == "" {
 		inquiryModel = f.Models.Research
@@ -393,13 +387,12 @@ func (pr *PhaseRunner) RunInquire(f *feature.Feature, kbInfos ...KBInfo) (string
 		ConfiguredModel: inquiryModel,
 		ModelRole:       llm.PhaseInquiry,
 		AgentNames:      []string{},
-		KBInfos:         kbInfos,
 	})
 }
 
 // RunResearchFromQuestions starts a research session using questions from the Inquire phase.
 // Returns the session ID. The session runs asynchronously.
-func (pr *PhaseRunner) RunResearchFromQuestions(f *feature.Feature, questionsPath string, kbInfos ...KBInfo) (string, error) {
+func (pr *PhaseRunner) RunResearchFromQuestions(f *feature.Feature, questionsPath string) (string, error) {
 	return pr.runInteractivePhase(f, interactivePhaseConfig{
 		Prompt:          buildResearchFromQuestionsPrompt(f, questionsPath),
 		Spec:            researcherRoleSpec,
@@ -410,7 +403,6 @@ func (pr *PhaseRunner) RunResearchFromQuestions(f *feature.Feature, questionsPat
 		ConfiguredModel: f.Models.Research,
 		ModelRole:       llm.PhaseResearch,
 		AgentNames:      explorationAgentNames(),
-		KBInfos:         kbInfos,
 	})
 }
 
@@ -429,7 +421,7 @@ func explorationAgentNames() []string {
 // session ID. The session runs asynchronously. The on-disk artifact
 // subdirectory remains "design" so legacy run state stays readable in
 // place; the session identity, skill, and prompt template are Design-facing.
-func (pr *PhaseRunner) RunDesign(f *feature.Feature, researchOutput string, qaFilePaths []string, kbInfos ...KBInfo) (string, error) {
+func (pr *PhaseRunner) RunDesign(f *feature.Feature, researchOutput string, qaFilePaths []string) (string, error) {
 	return pr.runInteractivePhase(f, interactivePhaseConfig{
 		Prompt:          buildDesignPrompt(f, researchOutput, qaFilePaths),
 		Spec:            designerRoleSpec,
@@ -441,267 +433,14 @@ func (pr *PhaseRunner) RunDesign(f *feature.Feature, researchOutput string, qaFi
 		ModelRole:       llm.PhasePlanning,
 		AgentNames:      []string{},
 		GuidelinesDir:   pr.GuidelinesDir,
-		KBInfos:         kbInfos,
 	})
-}
-
-// RunKnowledgeBaseForRepo starts a KB build for a single repo within a feature.
-// Returns (sessionID, error). Returns ("", nil) if KB is already fresh.
-func (pr *PhaseRunner) RunKnowledgeBaseForRepo(f *feature.Feature, repo feature.FeatureRepo) (string, error) {
-	kbDir := KBStateDir(pr.StateDir, repo.Name)
-	return pr.runKBSession(f, repo, kbDir)
-}
-
-// RunChildKnowledgeBaseForRepo starts a KB build for a child's disposable
-// workspace. The workspace is seeded from the parent overlay or canonical KB
-// before the build begins. Uses the child's workspace lock (disjoint from the
-// canonical KB lock) so ordinary feature KB builds never wait on child state.
-func (pr *PhaseRunner) RunChildKnowledgeBaseForRepo(f *feature.Feature, repo feature.FeatureRepo) (string, error) {
-	paths := ResolveChildKBPaths(pr.StateDir, f, repo)
-	kbDir := paths.WorkspaceDir
-
-	// Seed the workspace if it hasn't been seeded yet.
-	if state, _ := feature.LoadWorkspaceState(kbDir); state == nil {
-		if err := SeedChildKBWorkspace(context.Background(), pr.CommandRunner, paths); err != nil {
-			return "", fmt.Errorf("seeding child KB workspace for %s: %w", repo.Name, err)
-		}
-	}
-
-	_ = os.MkdirAll(kbDir, 0o755)
-	for _, cat := range kbStandardCategories {
-		_ = os.MkdirAll(filepath.Join(kbDir, cat), 0o755)
-	}
-
-	// Skip rebuild if the workspace KB is already up-to-date with the child HEAD.
-	if IsWorkspaceFresh(context.Background(), pr.CommandRunner, kbDir, func() string {
-		rp := repo.Path
-		if repo.WorktreePath != "" {
-			rp = repo.WorktreePath
-		}
-		return rp
-	}()) {
-		return "", nil
-	}
-
-	return pr.runKBSession(f, repo, kbDir)
-}
-
-// runKBSession is the shared KB session builder for both canonical and child
-// workspace builds. The kbDir parameter controls where KB files, the lock,
-// and the completion marker live. For canonical builds, kbDir is
-// KBStateDir(stateDir, repoName); for child builds, it is the disposable
-// workspace directory.
-func (pr *PhaseRunner) runKBSession(f *feature.Feature, repo feature.FeatureRepo, kbDir string) (string, error) {
-	// Resolve effective repo path: prefer worktree, fall back to original path.
-	repoPath := repo.Path
-	if repo.WorktreePath != "" {
-		repoPath = repo.WorktreePath
-	}
-
-	_ = os.MkdirAll(kbDir, 0o755)
-
-	// Pre-create standard KB category subdirectories so the agent doesn't
-	// need Bash mkdir (which would trigger a permission prompt).
-	for _, cat := range kbStandardCategories {
-		_ = os.MkdirAll(filepath.Join(kbDir, cat), 0o755)
-	}
-
-	// Skip rebuild if KB is already up-to-date with HEAD
-	if IsKBFresh(context.Background(), pr.CommandRunner, kbDir, repoPath) {
-		return "", nil
-	}
-
-	var ownerStatus featureStatusFunc
-	if pr.FeatureStore != nil {
-		ownerStatus = pr.kbLockOwnerStatus
-	}
-	locked, err := acquireKBLockWithStatus(kbDir, f.ID, ownerStatus)
-	if err != nil {
-		return "", fmt.Errorf("acquiring KB lock for %s: %w", repo.Name, err)
-	}
-	if !locked {
-		return "", fmt.Errorf("%w for repo %s", ErrKBLocked, repo.Name)
-	}
-
-	// Re-check after acquiring the lock in case another process refreshed the KB
-	// immediately before we obtained ownership.
-	if IsKBFresh(context.Background(), pr.CommandRunner, kbDir, repoPath) {
-		_ = releaseKBLock(kbDir, f.ID)
-		return "", nil
-	}
-	removeCompletionReceipt(kbDir)
-
-	// Determine full vs incremental build
-	var existingKBPath, lastCommit string
-	state, _ := LoadKBState(kbDir)
-	if state != nil && state.HeadCommit != "" {
-		kbPath := KBPath(kbDir)
-		if _, err := os.Stat(kbPath); err == nil {
-			existingKBPath = kbPath
-			lastCommit = state.HeadCommit
-		}
-	} else {
-		// Child workspaces store ChildKBWorkspaceState (not KBState) in
-		// state.json. LoadKBState parses it into a non-nil KBState with
-		// an empty HeadCommit because the JSON field names differ. Check
-		// the child workspace state to determine incremental mode from
-		// the seed provenance. A workspace seeded from a valid overlay
-		// or canonical baseline already contains a KB built through a
-		// known commit; only the delta from that commit to the child
-		// HEAD needs analysis.
-		wsState, _ := feature.LoadWorkspaceState(kbDir)
-		if wsState != nil && wsState.Source != feature.WorkspaceSourceFull {
-			kbPath := KBPath(kbDir)
-			if _, err := os.Stat(kbPath); err == nil {
-				existingKBPath = kbPath
-				if wsState.AnalyzedCommit != "" {
-					lastCommit = wsState.AnalyzedCommit
-				} else if wsState.Source == feature.WorkspaceSourceOverlay {
-					lastCommit = wsState.ParentHEAD
-				} else if wsState.Source == feature.WorkspaceSourceCanonical {
-					lastCommit = wsState.CanonicalCommit
-				}
-			}
-		}
-	}
-
-	prompt := buildKBPrompt(repo.Name, repoPath, kbDir, existingKBPath, lastCommit)
-
-	kbModel := pr.modelForRole(f.Models.KBBuild, llm.PhaseKBBuild)
-	kbEffectiveEffort, kbEffortSource := pr.resolveEffortForRole(f, llm.PhaseKBBuild, kbModel)
-
-	systemPrompt := buildRoleSystemPrompt(roleSystemPromptInput{
-		Spec:           knowledgeBaseBuilderRoleSpec,
-		IterationDir:   kbDir,
-		SkillsDir:      pr.SkillsDir,
-		GuidelinesDir:  pr.GuidelinesDir,
-		AskingClause:   pr.askingQuestionsClauseForModel(kbModel),
-		CompletionTool: pr.completionToolForModel(kbModel),
-	})
-	sessionID := buildKBSessionID(f.ID, repo.Name)
-
-	featureCtx := observe.SpanContextForFeature(f.ID, f.TraceID, f.Name, f.FeatureSpanID).WithRun(f.ActiveRun)
-	phaseCtx := featureCtx.Child()
-	pr.Observer.PhaseStarted(phaseCtx, feature.PhaseKnowledgeBase.String())
-
-	workDir := repoPath
-
-	pidDir := filepath.Join(pr.StateDir, f.ID)
-	logPath := filepath.Join(kbDir, "output.txt")
-	kbEffortLevel := f.EffectivePipeline().EffortLevel()
-	if kbEffectiveEffort != "" {
-		kbEffortLevel = kbEffectiveEffort
-	}
-	cmd, env, sessOpts, err := pr.BuildSession(BuildSessionOpts{
-		FeatureID:           f.ID,
-		AutomaticReviewMode: feature.NormalizeAutomaticReviewMode(f.AutomaticReviewMode),
-		Model:               kbModel,
-		Prompt:              prompt,
-		SystemPrompt:        systemPrompt,
-		// kbDir is a sibling of pr.StateDir (under knowledge-base/<repo>), so it
-		// must be mounted explicitly. The global feature-state root is not KB
-		// context and must not be exposed to this agent.
-		AdditionalDirs:     []string{kbDir},
-		AgentNames:         knowledgeBaseAgentNames(),
-		PIDDir:             pidDir,
-		PermHandler:        permHandlerFor(pr.DangerouslySkipPermissions, pr.PermissionCache, repo.Name),
-		RepoName:           repo.Name,
-		WorkDir:            workDir,
-		EffortLevel:        kbEffortLevel,
-		Phase:              feature.PhaseKnowledgeBase,
-		CompletionProtocol: true,
-		LogPath:            logPath,
-	})
-	if err != nil {
-		return "", fmt.Errorf("building KB session: %w", err)
-	}
-	if sessOpts == nil {
-		sessOpts = &ports.SessionOpts{}
-	}
-	if kbEffectiveEffort != "" {
-		sessOpts.EffectiveEffort = kbEffectiveEffort
-		sessOpts.EffortSource = kbEffortSource
-	}
-	sessOpts.RunNumber = f.ActiveRun
-	if sessOpts.LogPath == "" {
-		sessOpts.LogPath = logPath
-	}
-	writeDebugPrompts(kbDir, sessOpts.DebugSystemPrompt, prompt)
-
-	sess, err := pr.SessionManager.StartSession(sessionID, f.ID, feature.PhaseKnowledgeBase, cmd, workDir, env, sessOpts)
-	if err != nil {
-		_ = releaseKBLock(kbDir, f.ID)
-		return "", fmt.Errorf("starting KB session: %w", err)
-	}
-
-	sessionCtx := phaseCtx.Child()
-	pr.Observer.SessionStarted(sessionCtx, feature.PhaseKnowledgeBase.String(), sessionID, sessOpts.ProviderName, kbModel, repo.Name, string(kbEffectiveEffort), string(kbEffortSource))
-	pr.installContextReadTracker(sess, sessionCtx, feature.PhaseKnowledgeBase.String(), sessionID, pr.StateDir)
-	pr.installSubagentProgressTracker(sess, sessionCtx, feature.PhaseKnowledgeBase.String(), sessionID)
-	sessionStart := time.Now()
-	sess.AddCleanupFunc(func() {
-		cost := extractSessionCost(sess)
-		_ = accumulateSessionCostToFeatureKey(pr.FeatureStore, f.ID, feature.PhaseKnowledgeBase.DirName(), cost, sessionCostMetadata{
-			SessionID:     sessionID,
-			ObserverPhase: feature.PhaseKnowledgeBase.String(),
-			RepoName:      repo.Name,
-		})
-		pr.Observer.SessionEnded(sessionCtx, feature.PhaseKnowledgeBase.String(), sessionID, repo.Name, toSessionUsage(cost, sess), time.Since(sessionStart), sessionErrFromStatus(sess))
-	})
-
-	// Register cleanup to release lock when session ends.
-	// KB state is only saved on confirmed success (see handlePhaseCompleted).
-	featureID := f.ID
-	sess.AddCleanupFunc(func() {
-		_ = releaseKBLock(kbDir, featureID)
-	})
-
-	// Fallback for custom SessionManager implementations that do not honor
-	// SessionOpts.LogPath. The production manager opens it before Start().
-	if sess.LogFilePath() == "" {
-		logFile, err := os.Create(logPath)
-		if err == nil {
-			sess.SetLogFile(logFile)
-		}
-	}
-
-	return sessionID, nil
-}
-
-func (pr *PhaseRunner) kbLockOwnerStatus(featureID string) (int, bool) {
-	if pr == nil || pr.FeatureStore == nil {
-		return int(feature.StatusBuildingKB), true
-	}
-	owner, err := pr.FeatureStore.Load(featureID)
-	if err != nil {
-		if errors.Is(err, os.ErrNotExist) {
-			return 0, false
-		}
-		return int(feature.StatusBuildingKB), true
-	}
-	if owner == nil {
-		return 0, false
-	}
-	return int(owner.Status), true
-}
-
-// knowledgeBaseAgentNames returns the subagents allowed in Knowledge Base sessions.
-func knowledgeBaseAgentNames() []string {
-	return []string{
-		"codebase-locator",
-		"architecture-researcher",
-		"conventions-researcher",
-		"api-surface-researcher",
-		"dependencies-researcher",
-		"verification-researcher",
-	}
 }
 
 // RunPlanningWithValidation starts the planning loop with validation gate.
 // This runs asynchronously and returns a channel that receives the result.
 // qaFilePaths are paths to Q&A files from earlier phases (inquire, research, design).
-func (pr *PhaseRunner) RunPlanningWithValidation(f *feature.Feature, researchArtifactPath string, qaFilePaths []string, kbInfos ...KBInfo) (chan *PlanLoopResult, error) {
-	cfg := pr.planLoopConfig(f, f.MaxPlanIterations, qaFilePaths, kbInfos)
+func (pr *PhaseRunner) RunPlanningWithValidation(f *feature.Feature, researchArtifactPath string, qaFilePaths []string) (chan *PlanLoopResult, error) {
+	cfg := pr.planLoopConfig(f, f.MaxPlanIterations, qaFilePaths)
 	cfg.ResearchArtifactPath = researchArtifactPath
 	return pr.startPlanningLoop(cfg, roadmapPlanKind()), nil
 }
@@ -709,7 +448,7 @@ func (pr *PhaseRunner) RunPlanningWithValidation(f *feature.Feature, researchArt
 // RunPhasePlanning runs per-phase plan creation + critic loop.
 // qaFilePaths are paths to Q&A files from earlier phases (inquire, research, design).
 // priorPhasePlanPaths are approved plan paths from completed phases (phase-01, phase-02, etc.).
-func (pr *PhaseRunner) RunPhasePlanning(f *feature.Feature, roadmapPath string, phase RoadmapPhase, qaFilePaths []string, priorPhasePlanPaths []string, kbInfos ...KBInfo) (chan *PlanLoopResult, error) {
+func (pr *PhaseRunner) RunPhasePlanning(f *feature.Feature, roadmapPath string, phase RoadmapPhase, qaFilePaths []string, priorPhasePlanPaths []string) (chan *PlanLoopResult, error) {
 	maxAttempts := 10
 	if pr.Config != nil && pr.Config.Defaults.MaxPhasePlanIterations > 0 {
 		maxAttempts = pr.Config.Defaults.MaxPhasePlanIterations
@@ -718,13 +457,13 @@ func (pr *PhaseRunner) RunPhasePlanning(f *feature.Feature, roadmapPath string, 
 	if f.MaxPlanIterations > maxAttempts {
 		maxAttempts = f.MaxPlanIterations
 	}
-	cfg := pr.planLoopConfig(f, maxAttempts, qaFilePaths, kbInfos)
+	cfg := pr.planLoopConfig(f, maxAttempts, qaFilePaths)
 	return pr.startPlanningLoop(cfg, phasePlanKind(roadmapPath, phase, priorPhasePlanPaths)), nil
 }
 
 // planLoopConfig builds the planning-loop configuration shared by roadmap and
 // phase planning.
-func (pr *PhaseRunner) planLoopConfig(f *feature.Feature, maxAttempts int, qaFilePaths []string, kbInfos []KBInfo) planLoopConfig {
+func (pr *PhaseRunner) planLoopConfig(f *feature.Feature, maxAttempts int, qaFilePaths []string) planLoopConfig {
 	// Planning runs in the feature worktree (same as implementation), so plan
 	// validators see prior-phase symbols rather than the base repo clone.
 	workDir, additionalDirs := resolveUnifiedWorkDir(f, pr.StateDir)
@@ -750,7 +489,6 @@ func (pr *PhaseRunner) planLoopConfig(f *feature.Feature, maxAttempts int, qaFil
 		PlanningResearchArtifactPath: f.ResearchArtifactPath(),
 		DesignArtifactPath:           f.DesignArtifactPath(),
 		QAFilePaths:                  qaFilePaths,
-		KBInfos:                      kbInfos,
 		WorkDir:                      workDir,
 		AdditionalDirs:               additionalDirs,
 		MaxAttempts:                  maxAttempts,
@@ -806,9 +544,8 @@ func startLoop[R any](loop func() (*R, error), failed func(lastError string) *R)
 func (pr *PhaseRunner) RunMultiRepoImplementation(
 	f *feature.Feature,
 	planPath string,
-	kbInfos ...KBInfo,
 ) (chan *OrchestratorResult, error) {
-	cfg := pr.multiRepoOrchestratorConfig(f, llm.PhaseImplementation, kbInfos)
+	cfg := pr.multiRepoOrchestratorConfig(f, llm.PhaseImplementation)
 	cfg.PlanPath = planPath
 	cfg.PhaseExitGate = pr.phaseExitGate(f)
 	cfg.RunImplementFn = pr.RunImplementFn
@@ -827,9 +564,8 @@ func (pr *PhaseRunner) RunMultiRepoImplementation(
 // plan and "" for planPath.
 func (pr *PhaseRunner) RunMultiRepoFinalReview(
 	f *feature.Feature,
-	kbInfos ...KBInfo,
 ) (chan *OrchestratorResult, error) {
-	cfg := pr.multiRepoOrchestratorConfig(f, llm.PhaseReview, kbInfos)
+	cfg := pr.multiRepoOrchestratorConfig(f, llm.PhaseReview)
 	return startLoop(func() (*OrchestratorResult, error) {
 		return RunMultiRepoFinalReview(cfg, pr.SessionManager)
 	}, failedOrchestratorResult), nil
@@ -843,7 +579,7 @@ func failedOrchestratorResult(lastError string) *OrchestratorResult {
 // multi-repo implementation and final-review passes. EffectiveEffort and
 // EffortSource carry the effort of passRole, the role that drives the pass:
 // implementation for the implementation pass, review for the final review.
-func (pr *PhaseRunner) multiRepoOrchestratorConfig(f *feature.Feature, passRole llm.PhaseRole, kbInfos []KBInfo) OrchestratorConfig {
+func (pr *PhaseRunner) multiRepoOrchestratorConfig(f *feature.Feature, passRole llm.PhaseRole) OrchestratorConfig {
 	maxIter, maxFails, maxNoProg := pr.resolveLoopLimits(f)
 	model := pr.modelForRole(f.Models.Implementation, llm.PhaseImplementation)
 	reviewModel := pr.modelForRole(f.Models.Review, llm.PhaseReview)
@@ -864,7 +600,6 @@ func (pr *PhaseRunner) multiRepoOrchestratorConfig(f *feature.Feature, passRole 
 		MaxIterations:              maxIter,
 		MaxConsecFails:             maxFails,
 		MaxConsecNoProgress:        maxNoProg,
-		KBInfos:                    kbInfos,
 		DangerouslySkipPermissions: pr.DangerouslySkipPermissions,
 		PermissionCache:            pr.PermissionCache,
 		CommandRunner:              pr.CommandRunner,
@@ -1277,7 +1012,7 @@ func appendUniqueRoots(roots []string, additions ...string) []string {
 
 // BuildSession creates CLI command args, env vars, and session opts by
 // routing through the provider registry. This is the primary entry point
-// for all session creation (research, KB, implementation, review, planning).
+// for all session creation (research, implementation, review, planning).
 //
 // If BuildSessionFn is set (test injection), it is used directly
 // and no protocol is set.
@@ -1330,7 +1065,7 @@ func (pr *PhaseRunner) BuildSession(opts BuildSessionOpts) (cmd []string, env []
 
 	// Read roots are everything a provider may read without per-call mediation:
 	// the working directory and every additional mounted dir (active-run state,
-	// skills, guidelines, worktrees, knowledge base, images, attachments). The
+	// skills, guidelines, worktrees, images, attachments). The
 	// global state root is provider bookkeeping, not agent context.
 	readRoots := appendUniqueRoots(nil, opts.AdditionalDirs...)
 	readRoots = appendUniqueRoots(readRoots, opts.WorkDir)

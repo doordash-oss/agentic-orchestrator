@@ -236,8 +236,8 @@ func validateProviderSelection(stderr io.Writer, enabled []string) ([]string, bo
 // canonicalizeStateDir resolves stateDir to its real, symlink-free path,
 // creating it first if necessary. macOS routes common runtime parents through
 // symlinks (e.g. /var -> /private/var, /tmp -> /private/tmp), and every path
-// Agentico later derives from stateDir — worktrees, the knowledge-base tree,
-// skills/guidelines mounts — gets handed to providers as a workdir or a
+// Agentico later derives from stateDir — worktrees, skills/guidelines
+// mounts — gets handed to providers as a workdir or a
 // writable/read root. OpenCode in particular matches a tool call's path
 // against permission globs inconsistently, sometimes against the raw cwd and
 // sometimes against a symlink-resolved worktree root (upstream opencode#14473,

@@ -26,13 +26,13 @@ import (
 
 func TestCommitPhaseOutcome_ValidatesArtifactsThenWritesHarnessReceipt(t *testing.T) {
 	artifactDir := t.TempDir()
-	if err := os.WriteFile(filepath.Join(artifactDir, "index.md"), []byte("# Knowledge Base\n"), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(artifactDir, "research.md"), []byte("# Research\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 
 	outcome, receipt, violations, err := CommitPhaseOutcome(CompletionCommitInput{
-		Phase:       feature.PhaseKnowledgeBase,
-		Role:        RoleKnowledgeBaseBuilder,
+		Phase:       feature.PhaseResearch,
+		Role:        RoleResearcher,
 		ArtifactDir: artifactDir,
 		SessionID:   "root-session-1",
 		Intent: llm.CompletionIntent{
@@ -107,13 +107,13 @@ func TestReadCompletionReceiptRejectsAgentAuthoredPlainFile(t *testing.T) {
 
 func TestHasCommittedPhaseOutcomeRevalidatesContractAndIdentity(t *testing.T) {
 	dir := t.TempDir()
-	indexPath := filepath.Join(dir, "index.md")
-	if err := os.WriteFile(indexPath, []byte("# Knowledge Base\n"), 0o644); err != nil {
+	indexPath := filepath.Join(dir, "research.md")
+	if err := os.WriteFile(indexPath, []byte("# Research\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	_, _, violations, err := CommitPhaseOutcome(CompletionCommitInput{
-		Phase:       feature.PhaseKnowledgeBase,
-		Role:        RoleKnowledgeBaseBuilder,
+		Phase:       feature.PhaseResearch,
+		Role:        RoleResearcher,
 		ArtifactDir: dir,
 		SessionID:   "root-session",
 		Intent:      llm.CompletionIntent{Found: true, Status: llm.CompletionIntentSuccess},
@@ -121,16 +121,16 @@ func TestHasCommittedPhaseOutcomeRevalidatesContractAndIdentity(t *testing.T) {
 	if err != nil || len(violations) != 0 {
 		t.Fatalf("CommitPhaseOutcome() err=%v violations=%+v", err, violations)
 	}
-	if !hasCommittedPhaseOutcome(dir, feature.PhaseKnowledgeBase, RoleKnowledgeBaseBuilder) {
+	if !hasCommittedPhaseOutcome(dir, feature.PhaseResearch, RoleResearcher) {
 		t.Fatal("valid committed outcome was not reusable")
 	}
-	if hasCommittedPhaseOutcome(dir, feature.PhaseResearch, RoleResearcher) {
+	if hasCommittedPhaseOutcome(dir, feature.PhaseDesign, RoleDesigner) {
 		t.Fatal("receipt was reusable for a different phase and role")
 	}
 	if err := os.Remove(indexPath); err != nil {
 		t.Fatal(err)
 	}
-	if hasCommittedPhaseOutcome(dir, feature.PhaseKnowledgeBase, RoleKnowledgeBaseBuilder) {
+	if hasCommittedPhaseOutcome(dir, feature.PhaseResearch, RoleResearcher) {
 		t.Fatal("receipt remained reusable after its required artifact was removed")
 	}
 }
@@ -140,8 +140,8 @@ func TestCommitPhaseOutcome_InvalidIntentClearsPriorReceipt(t *testing.T) {
 	writeTestCompletionReceipt(t, dir)
 
 	_, _, violations, err := CommitPhaseOutcome(CompletionCommitInput{
-		Phase:       feature.PhaseKnowledgeBase,
-		Role:        RoleKnowledgeBaseBuilder,
+		Phase:       feature.PhaseResearch,
+		Role:        RoleResearcher,
 		ArtifactDir: dir,
 		SessionID:   "root-session-2",
 		Intent:      llm.CompletionIntent{},

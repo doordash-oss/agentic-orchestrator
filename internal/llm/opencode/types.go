@@ -73,7 +73,7 @@ type ClientInfo struct {
 // Agentico hosts the client filesystem surface (fs/read_text_file,
 // fs/write_text_file) because OpenCode delegates I/O for paths outside its
 // session workspace to the client; without it, an out-of-workspace artifact
-// write (knowledge-base graph, feature-state artifact) would fail closed. The
+// write (such as a feature-state artifact) would fail closed. The
 // terminal surface stays unhosted, so terminal/* requests still fail closed.
 type clientCapabilities struct {
 	FS fsCapability `json:"fs"`

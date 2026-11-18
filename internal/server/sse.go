@@ -20,6 +20,7 @@ import (
 	"net/http"
 	"sort"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
 
@@ -361,6 +362,7 @@ func (h *apiHandler) handleEvents(w http.ResponseWriter, r *http.Request) {
 	}
 
 	after, epoch, hasCursor := eventCursor(r)
+	filter := newEventFilter(r)
 	ch, replay, reset := h.broker.subscribeAfter(after, epoch)
 	defer h.broker.unsubscribe(ch)
 
@@ -383,6 +385,9 @@ func (h *apiHandler) handleEvents(w http.ResponseWriter, r *http.Request) {
 		flusher.Flush()
 	default:
 		for _, evt := range replay {
+			if !filter.match(evt) {
+				continue
+			}
 			if err := writeSSEFrame(w, evt.Kind, evt.ID, true, evt); err != nil {
 				return
 			}
@@ -398,10 +403,12 @@ func (h *apiHandler) handleEvents(w http.ResponseWriter, r *http.Request) {
 		case <-r.Context().Done():
 			return
 		case evt := <-ch:
-			if err := writeSSEFrame(w, evt.Kind, evt.ID, true, evt); err != nil {
-				return
+			if filter.match(evt) {
+				if err := writeSSEFrame(w, evt.Kind, evt.ID, true, evt); err != nil {
+					return
+				}
+				flusher.Flush()
 			}
-			flusher.Flush()
 			h.broker.flushSubscriber(ch)
 		case now := <-ticker.C:
 			h.broker.flushSubscriber(ch)
@@ -422,6 +429,44 @@ func (h *apiHandler) handleEvents(w http.ResponseWriter, r *http.Request) {
 			flusher.Flush()
 		}
 	}
+}
+
+// eventFilter narrows /api/v1/events to one feature and/or a set of kinds.
+// Control frames always pass so cursors and resyncs keep working.
+type eventFilter struct {
+	featureID string
+	kinds     map[string]bool
+}
+
+func newEventFilter(r *http.Request) eventFilter {
+	q := r.URL.Query()
+	f := eventFilter{featureID: q.Get("feature_id")}
+	for _, raw := range q["kind"] {
+		for _, kind := range strings.Split(raw, ",") {
+			if kind = strings.TrimSpace(kind); kind != "" {
+				if f.kinds == nil {
+					f.kinds = map[string]bool{}
+				}
+				f.kinds[kind] = true
+			}
+		}
+	}
+	return f
+}
+
+func (f eventFilter) match(evt SSEEvent) bool {
+	switch evt.Kind {
+	case sseEventConnected, sseEventStreamReset, sseEventHeartbeat:
+		return true
+	}
+	if f.kinds != nil && !f.kinds[evt.Kind] {
+		return false
+	}
+	if f.featureID == "" {
+		return true
+	}
+	res := evt.Resource
+	return res.FeatureID == f.featureID || res.ParentID == f.featureID || res.ChildID == f.featureID
 }
 
 func eventCursor(r *http.Request) (after uint64, epoch string, hasCursor bool) {

@@ -268,6 +268,43 @@ func TestEventsResumeAfterRecentSeqReplaysMissedEvents(t *testing.T) {
 	}
 }
 
+// TestEventsFilterByFeatureAndKind follows one feature without the
+// supervisor session's output activity, on replay and live.
+func TestEventsFilterByFeatureAndKind(t *testing.T) {
+	t.Parallel()
+
+	h := newAPIHandler(HandlerOptions{DisableHostValidation: true})
+	srv := httptest.NewServer(h)
+	defer srv.Close()
+	watched := Resource{Type: entityFeature, FeatureID: "F-watched"}
+	h.broker.publish(SSEEvent{Kind: sseEventSessionOutputActivity, Resource: Resource{Type: resourceTypeSession, ID: "sup", FeatureID: "__supervisor__"}})
+	h.broker.publish(SSEEvent{Kind: sseEventLifecycleUpdated, Resource: Resource{Type: entityFeature, FeatureID: "F-other"}})
+	h.broker.publish(SSEEvent{Kind: sseEventLifecycleUpdated, Resource: watched})
+	h.broker.publish(SSEEvent{Kind: sseEventSessionOutputActivity, Resource: Resource{Type: resourceTypeSession, ID: "s", FeatureID: "F-watched"}})
+
+	req, err := http.NewRequestWithContext(context.Background(), http.MethodGet,
+		srv.URL+"/api/v1/events?after=0&feature_id=F-watched&kind=lifecycle.updated,prompt.updated&kind=session.updated&heartbeat_ms=5000", nil)
+	if err != nil {
+		t.Fatalf("build request: %v", err)
+	}
+	resp, err := srv.Client().Do(req)
+	if err != nil {
+		t.Fatalf("connect: %v", err)
+	}
+	defer resp.Body.Close()
+	reader := bufio.NewReader(resp.Body)
+
+	if block := nextSSEBlock(t, reader); !strings.HasPrefix(block, "id: 3\nevent: "+sseEventLifecycleUpdated) {
+		t.Fatalf("replayed block = %q, want only the watched feature's lifecycle event (seq 3)", block)
+	}
+	h.broker.publish(SSEEvent{Kind: sseEventSessionOutputActivity, Resource: Resource{Type: resourceTypeSession, ID: "sup-2", FeatureID: "__supervisor__"}})
+	h.broker.publish(SSEEvent{Kind: sseEventSessionUpdated, Resource: Resource{Type: resourceTypeSession, ID: "s", FeatureID: "F-other"}})
+	h.broker.publish(SSEEvent{Kind: sseEventLifecycleUpdated, Resource: Resource{Type: resourceTypeRelationship, ParentID: "F-parent", ChildID: "F-watched"}})
+	if block := nextSSEBlock(t, reader); !strings.HasPrefix(block, "id: 7\nevent: "+sseEventLifecycleUpdated) {
+		t.Fatalf("live block = %q, want the watched feature's relationship event (seq 7)", block)
+	}
+}
+
 func nextSSEBlock(t *testing.T, r *bufio.Reader) string {
 	t.Helper()
 	var lines []string

@@ -1157,7 +1157,7 @@ export interface paths {
         };
         /**
          * Stream ordered runtime events as SSE.
-         * @description Emits envelope JSON under SSE `data:` lines. Every non-control event includes a monotonic `seq`, `epoch`, resource identity, and resource version. Clients resume with `Last-Event-ID` or `after` (for example a snapshot's `meta.as_of_seq`): retained events after the cursor replay in order. The server retains the most recent 4096 events; a cursor older than that window, beyond the head, or paired with an `epoch` that no longer matches yields one `stream.reset` with `snapshot_required`. A cursor without `epoch` is read in the current epoch, so pass the `epoch` from a previously received event to have a server restart detected. With no cursor the stream starts with `connected`.
+         * @description Emits envelope JSON under SSE `data:` lines. Every non-control event includes a monotonic `seq`, `epoch`, resource identity, and resource version. Clients resume with `Last-Event-ID` or `after` (for example a snapshot's `meta.as_of_seq`): retained events after the cursor replay in order. The server retains the most recent 4096 events; a cursor older than that window, beyond the head, or paired with an `epoch` that no longer matches yields one `stream.reset` with `snapshot_required`. A cursor without `epoch` is read in the current epoch, so pass the `epoch` from a previously received event to have a server restart detected. With no cursor the stream starts with `connected`. `feature_id` and `kind` narrow the stream; `connected`, `stream.reset` and `heartbeat` always pass, and `seq` keeps counting every event, so a filtered cursor resumes like an unfiltered one.
          */
         get: operations["streamEvents"];
         put?: never;
@@ -5383,6 +5383,10 @@ export interface operations {
                 after?: number;
                 epoch?: string;
                 heartbeat_ms?: number;
+                /** @description Only events whose resource names this feature as `feature_id`, `parent_id` or `child_id`. */
+                feature_id?: string;
+                /** @description Only events of these kinds, comma-separated or repeated, for example `lifecycle.updated,prompt.updated,permission.updated`. */
+                kind?: string[];
             };
             header?: never;
             path?: never;

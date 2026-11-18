@@ -5417,6 +5417,12 @@ type StreamEventsParams struct {
 	After       uint64 `form:"after,omitempty" json:"after,omitempty"`
 	Epoch       string `form:"epoch,omitempty" json:"epoch,omitempty"`
 	HeartbeatMs int    `form:"heartbeat_ms,omitempty" json:"heartbeat_ms,omitempty"`
+
+	// FeatureID Only events whose resource names this feature as `feature_id`, `parent_id` or `child_id`.
+	FeatureID string `form:"feature_id,omitempty" json:"feature_id,omitempty"`
+
+	// Kind Only events of these kinds, comma-separated or repeated, for example `lifecycle.updated,prompt.updated,permission.updated`.
+	Kind []string `form:"kind,omitempty" json:"kind,omitempty"`
 }
 
 // CreateFeatureParams defines parameters for CreateFeature.

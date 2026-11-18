@@ -335,5 +335,10 @@ Stream paths (/api/v1/events, /api/v1/supervisor/events,
 data payload, skip heartbeats, and exit 0 when the timeout elapses or the
 server closes the stream. Each line is written as soon as its event arrives,
 also when stdout is a pipe or a file.
+
+/api/v1/events accepts feature_id=<id> and kind=<kind>[,<kind>...] to follow
+one feature or a set of event kinds, for example:
+
+  agentico api --timeout 30m GET '/api/v1/events?feature_id=<id>&kind=lifecycle.updated,prompt.updated,permission.updated,session.updated'
 `, agent.RuntimeDirEnv)
 }

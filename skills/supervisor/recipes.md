@@ -106,8 +106,9 @@ Report what needs the user (open questions, gates, permission requests, failures
    `"$AGENTICO_BIN" api GET /api/v1/features`
 2. Watch for a bounded window, starting after that sequence:
    `"$AGENTICO_BIN" api --timeout 120s --after 1520 GET /api/v1/events`
-   The call exits 0 when the window ends; no output beyond `connected` means nothing changed. To follow one feature, add `feature_id` instead of piping into `grep`; it also drops your own session's activity:
-   `"$AGENTICO_BIN" api --timeout 120s --after 1520 GET '/api/v1/events?feature_id={feature_id}'`
+   The call exits 0 when the window ends; no output beyond `connected` means nothing changed. To follow one feature, filter on the server with `--feature` and `--kind`:
+   `"$AGENTICO_BIN" api --timeout 120s --after 1520 --feature {feature_id} --kind lifecycle.updated,session.updated,prompt.updated,permission.updated,config.updated GET /api/v1/events`
+   Run that exact command on its own, also when a background monitor runs it. Never pipe the stream into another command such as `grep`: a filter later in the pipe can hold an event back until the next one arrives, so a lone question goes unseen, and a pipe makes the command wait for approval.
 3. For each `lifecycle.updated` or `session.updated` line, re-read the resource it names (for example `"$AGENTICO_BIN" api GET /api/v1/features/{feature_id}`) and report the change in one line. On `stream.reset`, go back to step 1.
 4. To keep watching, run another window with `--after` set to the last `seq` you saw. Stop when the user's condition is met or the user says stop, and tell the user each time something changed. Keep windows to a few minutes so you can report between them, and never fill the gap with `sleep`.
 

@@ -49,3 +49,4 @@ A Bash command that is exactly one bare helper call runs without asking the user
   - a line break as `\n` inside the JSON string, never a real newline
 - The helper rejects a body on `GET` and a body that is not valid JSON before sending anything.
 - Stream paths need `--timeout`; put flags before the method: `"$AGENTICO_BIN" api --timeout 60s GET /api/v1/events`.
+- Filter the events stream with the helper's `--feature` and `--kind` flags, never with a pipe: a filter after the helper can hold the last event back until another arrives.

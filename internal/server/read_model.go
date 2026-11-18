@@ -1209,7 +1209,7 @@ func (h *apiHandler) handleFeatureConfig(w http.ResponseWriter, r *http.Request,
 	defaults := FeatureConfig{
 		Models:             cfg.Defaults.Models,
 		Inquireness:        FeatureConfigInquireness(cfg.Defaults.Inquireness),
-		Checkpoints:        checkpointsDTO(featureCheckpoints(cfg.Defaults.Checkpoints)),
+		Checkpoints:        checkpointsDTO(feature.CheckpointsFromConfig(cfg.Defaults.Checkpoints)),
 		Pipeline:           cfg.Defaults.Pipeline,
 		InputNotifications: FeatureConfigInputNotifications(feature.InputNotificationsModeForMuted(cfg.Notifications.MuteFeatureInput)),
 	}
@@ -1453,18 +1453,6 @@ func providerNames(reg *llm.Registry) []string {
 		out = append(out, provider.Name())
 	}
 	return out
-}
-
-func featureCheckpoints(c config.Checkpoints) feature.Checkpoints {
-	return feature.Checkpoints{
-		InquiryReview:   c.InquiryReview,
-		ResearchReview:  c.ResearchReview,
-		DesignReview:    c.DesignReview,
-		RoadmapReview:   c.RoadmapReview,
-		PhasePlanReview: c.PhasePlanReview,
-		ManualPublish:   c.ManualPublish,
-		DraftPublish:    c.DraftPublish,
-	}
 }
 
 func publishabilityByRepo(f *feature.Feature) map[string]bool {

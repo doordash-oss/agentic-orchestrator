@@ -2759,9 +2759,11 @@ type Cost struct {
 
 // CreateFeatureMutationRequest defines model for CreateFeatureMutationRequest.
 type CreateFeatureMutationRequest struct {
-	AttachmentUploads []string                                `json:"attachment_uploads,omitempty"`
-	Attachments       []string                                `json:"attachments,omitempty"`
-	Checkpoints       Checkpoints                             `json:"checkpoints,omitempty"`
+	AttachmentUploads []string `json:"attachment_uploads,omitempty"`
+	Attachments       []string `json:"attachments,omitempty"`
+
+	// Checkpoints Review gates for the new feature. When omitted, the server applies the configured default checkpoints for the selected pipeline. An explicit object, including one with every gate false, is used as given. Gates the pipeline does not support are always off.
+	Checkpoints       *Checkpoints                            `json:"checkpoints,omitempty"`
 	Description       string                                  `json:"description,omitempty"`
 	ExitCriteria      string                                  `json:"exit_criteria,omitempty"`
 	IdempotencyKey    string                                  `json:"idempotency_key,omitempty"`

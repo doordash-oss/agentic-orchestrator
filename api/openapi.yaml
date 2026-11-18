@@ -4372,7 +4372,14 @@ components:
           items:
             $ref: "#/components/schemas/RepositorySource"
         checkpoints:
-          $ref: "#/components/schemas/Checkpoints"
+          description: >-
+            Review gates for the new feature. When omitted, the server applies
+            the configured default checkpoints for the selected pipeline. An
+            explicit object, including one with every gate false, is used as
+            given. Gates the pipeline does not support are always off.
+          x-go-type-skip-optional-pointer: false
+          allOf:
+            - $ref: "#/components/schemas/Checkpoints"
         risk_level:
           type: string
           enum: [low, medium, high]

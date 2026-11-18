@@ -1145,7 +1145,7 @@ func TestServerMutationTargetCreateFeaturePersistsSelectedRESTOptions(t *testing
 		UseCurrentBranchPerRepo: map[string]bool{testRepoAName: true},
 		RiskLevel:               feature.RiskHigh,
 		Pipeline:                feature.PipelineMedium,
-		Checkpoints: feature.Checkpoints{
+		Checkpoints: &feature.Checkpoints{
 			InquiryReview:   true,
 			RoadmapReview:   true,
 			PhasePlanReview: true,

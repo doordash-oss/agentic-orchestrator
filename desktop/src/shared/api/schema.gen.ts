@@ -2155,6 +2155,7 @@ export interface components {
             attachment_uploads?: string[];
             use_current_branch?: boolean;
             repository_sources?: components["schemas"]["RepositorySource"][];
+            /** @description Review gates for the new feature. When omitted, the server applies the configured default checkpoints for the selected pipeline. An explicit object, including one with every gate false, is used as given. Gates the pipeline does not support are always off. */
             checkpoints?: components["schemas"]["Checkpoints"];
             /** @enum {string} */
             risk_level?: "low" | "medium" | "high";

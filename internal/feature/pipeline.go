@@ -240,6 +240,19 @@ func ParsePipelineProfile(s string) (PipelineProfile, error) {
 	}
 }
 
+// CheckpointsFromConfig converts config.Checkpoints to feature.Checkpoints.
+func CheckpointsFromConfig(c config.Checkpoints) Checkpoints {
+	return Checkpoints{
+		InquiryReview:   c.InquiryReview,
+		ResearchReview:  c.ResearchReview,
+		DesignReview:    c.DesignReview,
+		RoadmapReview:   c.RoadmapReview,
+		PhasePlanReview: c.PhasePlanReview,
+		ManualPublish:   c.ManualPublish,
+		DraftPublish:    c.DraftPublish,
+	}
+}
+
 // FeatureCheckpointsToConfig converts feature.Checkpoints to config.Checkpoints.
 func FeatureCheckpointsToConfig(fc Checkpoints) config.Checkpoints {
 	return config.Checkpoints{

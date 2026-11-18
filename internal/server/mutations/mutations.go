@@ -125,7 +125,11 @@ func (t *mutationTarget) CreateFeature(req serverruntime.CreateFeatureRequest) (
 	effort := cfg.Defaults.Effort
 	effort = config.OverlayEffortConfig(effort, req.Effort)
 	pipeline := effectiveCreatePipeline(req.Pipeline, cfg)
-	checkpoints := pipeline.ProjectGates(req.Checkpoints, true).Checkpoints
+	requested := feature.CheckpointsFromConfig(cfg.Defaults.Checkpoints)
+	if req.Checkpoints != nil {
+		requested = *req.Checkpoints
+	}
+	checkpoints := pipeline.ProjectGates(requested, true).Checkpoints
 	sourceExpectations, err := createSourceExpectations(req.RepositorySources)
 	if err != nil {
 		return serverruntime.CreateFeatureResponse{}, err

@@ -1046,202 +1046,6 @@ func TestRunResearch_SkillReadInstruction(t *testing.T) {
 	}
 }
 
-func TestRunKnowledgeBaseForRepo_SkillReadInstruction(t *testing.T) {
-	if testing.Short() {
-		t.Skip("skipping integration test in short mode")
-	}
-
-	tmpDir := t.TempDir()
-	workDir := filepath.Join(tmpDir, "work")
-	stateDir := filepath.Join(tmpDir, "state")
-	scriptsDir := filepath.Join(tmpDir, "scripts")
-	skillsDir := filepath.Join(tmpDir, "skills")
-	for _, d := range []string{workDir, stateDir, scriptsDir, skillsDir} {
-		os.MkdirAll(d, 0o755)
-	}
-
-	script := testutil.WriteScript(t, scriptsDir, "phase.sh",
-		"read -r _line\n"+testutil.JSONLInit+"\n"+testutil.JSONLSuccess+"\n")
-
-	var mu sync.Mutex
-	var capturedOpts []BuildSessionOpts
-	buildSessionFn := func(opts BuildSessionOpts) ([]string, []string, *session.SessionOpts, error) {
-		mu.Lock()
-		capturedOpts = append(capturedOpts, opts)
-		mu.Unlock()
-		return []string{"bash", script}, nil, &session.SessionOpts{PIDDir: opts.PIDDir, Protocol: testSessionProtocol(opts.Prompt)}, nil
-	}
-
-	eventCh := make(chan any, 100)
-	sm := session.NewManager(eventCh)
-	defer sm.Shutdown()
-
-	store := feature.NewStore(stateDir)
-	pr := &PhaseRunner{
-		SessionManager: sm,
-		FeatureStore:   store,
-		StateDir:       stateDir,
-		SkillsDir:      skillsDir,
-		BuildSessionFn: buildSessionFn,
-	}
-
-	repo := feature.FeatureRepo{Name: "test-repo", Path: workDir}
-	f := &feature.Feature{
-		ID:          "test-kb-skill",
-		Name:        "Test KB",
-		Description: "test kb skill read",
-		Repos:       []feature.FeatureRepo{repo},
-		Models:      config.ModelConfig{},
-	}
-
-	sessionID, err := pr.RunKnowledgeBaseForRepo(f, repo)
-	if err != nil {
-		t.Fatalf("RunKnowledgeBaseForRepo error: %v", err)
-	}
-	if sessionID == "" {
-		t.Fatal("expected non-empty session ID")
-	}
-
-	// Wait for session to complete
-	sess := sm.GetSession(sessionID)
-	if sess == nil {
-		t.Fatal("session not found")
-	}
-	select {
-	case <-sess.Done():
-	case <-time.After(5 * time.Second):
-		t.Fatal("session did not complete in time")
-	}
-
-	mu.Lock()
-	defer mu.Unlock()
-	if len(capturedOpts) == 0 {
-		t.Fatal("buildSessionFn never called")
-	}
-	cap := capturedOpts[0]
-
-	if !strings.Contains(cap.SystemPrompt, "## Output Roots") {
-		t.Error("systemPrompt missing RoleSpec output roots")
-	}
-	expectedSkillPath := filepath.Join(skillsDir, "build-knowledge-base", "SKILL.md")
-	if !strings.Contains(cap.SystemPrompt, expectedSkillPath) {
-		t.Errorf("systemPrompt missing skill-read instruction, expected path %q in system prompt:\n%s", expectedSkillPath, cap.SystemPrompt)
-	}
-	if strings.Contains(cap.Prompt, expectedSkillPath) {
-		t.Errorf("prompt contains RoleSpec-owned skill-read instruction %q:\n%s", expectedSkillPath, cap.Prompt)
-	}
-	if strings.Contains(cap.Prompt, "# Useful Resources") {
-		t.Errorf("prompt contains RoleSpec-owned Useful Resources section:\n%s", cap.Prompt)
-	}
-}
-
-func TestRunKnowledgeBaseForRepo_RemovesPriorCompletionReceiptBeforeSession(t *testing.T) {
-	tmpDir := t.TempDir()
-	workDir := filepath.Join(tmpDir, "work")
-	stateDir := filepath.Join(tmpDir, "state")
-	for _, d := range []string{workDir, stateDir} {
-		if err := os.MkdirAll(d, 0o755); err != nil {
-			t.Fatalf("MkdirAll(%s): %v", d, err)
-		}
-	}
-
-	repo := feature.FeatureRepo{Name: "test-repo", Path: workDir}
-	f := &feature.Feature{
-		ID:     "test-prior-kb-receipt",
-		Name:   "Test KB",
-		Repos:  []feature.FeatureRepo{repo},
-		Models: config.ModelConfig{},
-	}
-	kbDir := KBStateDir(stateDir, repo.Name)
-	if err := os.MkdirAll(kbDir, 0o755); err != nil {
-		t.Fatalf("MkdirAll(%s): %v", kbDir, err)
-	}
-	if err := os.WriteFile(KBPath(kbDir), []byte("# stale kb\n"), 0o644); err != nil {
-		t.Fatalf("WriteFile(index.md): %v", err)
-	}
-	writeTestCompletionReceipt(t, kbDir)
-
-	var buildCalled bool
-	var receiptPresentAtBuild bool
-	pr := NewPhaseRunner(nil, nil, stateDir)
-	pr.BuildSessionFn = func(opts BuildSessionOpts) ([]string, []string, *session.SessionOpts, error) {
-		buildCalled = true
-		_, receiptErr := readCompletionReceipt(kbDir)
-		receiptPresentAtBuild = receiptErr == nil
-		return nil, nil, nil, fmt.Errorf("test: stopping after capture")
-	}
-
-	_, err := pr.RunKnowledgeBaseForRepo(f, repo)
-	if err == nil {
-		t.Fatal("RunKnowledgeBaseForRepo error = nil, want injected BuildSession error")
-	}
-	if !buildCalled {
-		t.Fatal("BuildSessionFn was not called")
-	}
-	if receiptPresentAtBuild {
-		t.Fatal("BuildSessionFn observed the prior completion receipt")
-	}
-	if _, err := os.Stat(filepath.Join(kbDir, PhaseCompleteFile)); !os.IsNotExist(err) {
-		t.Fatalf("prior completion receipt still exists after RunKnowledgeBaseForRepo: %v", err)
-	}
-}
-
-func TestRunKnowledgeBaseForRepo_PassesLogPathBeforeSessionStart(t *testing.T) {
-	tmpDir := t.TempDir()
-	stateDir := filepath.Join(tmpDir, "state")
-	repoDir := filepath.Join(tmpDir, "repo")
-	if err := os.MkdirAll(repoDir, 0o755); err != nil {
-		t.Fatalf("mkdir repo: %v", err)
-	}
-
-	sm := mocks.NewMockSessionManager()
-	cmd := mocks.NewMockCommandRunner()
-	cmd.RunFn = func(ctx context.Context, name string, args []string, opts ports.CommandOpts) ([]byte, error) {
-		return []byte("deadbeef\n"), nil
-	}
-
-	var capturedLogPath string
-	var startSessionLogPath string
-	sm.StartSessionFn = func(id, featureID string, phase feature.Phase, command []string, workdir string, env []string, opts ...*session.SessionOpts) (ports.SessionHandle, error) {
-		if len(opts) > 0 && opts[0] != nil {
-			startSessionLogPath = opts[0].LogPath
-		}
-		started := session.NewSession(id, featureID, phase)
-		started.SetProtocolForTest(testSessionProtocol(""))
-		return started, nil
-	}
-	pr := &PhaseRunner{
-		SessionManager: sm,
-		StateDir:       stateDir,
-		CommandRunner:  cmd,
-		BuildSessionFn: func(opts BuildSessionOpts) ([]string, []string, *session.SessionOpts, error) {
-			capturedLogPath = opts.LogPath
-			return []string{"true"}, nil, &session.SessionOpts{Protocol: testSessionProtocol(opts.Prompt)}, nil
-		},
-	}
-
-	f := &feature.Feature{
-		ID:     "feat-kb-log",
-		Repos:  []feature.FeatureRepo{{Name: "repo-a", Path: repoDir}},
-		Models: config.ModelConfig{},
-	}
-
-	if _, err := pr.RunKnowledgeBaseForRepo(f, f.Repos[0]); err != nil {
-		t.Fatalf("RunKnowledgeBaseForRepo: %v", err)
-	}
-
-	want := filepath.Join(KBStateDir(stateDir, "repo-a"), "output.txt")
-	if capturedLogPath != want {
-		t.Fatalf("BuildSession LogPath = %q, want %q", capturedLogPath, want)
-	}
-	if len(sm.StartSessionCalls) != 1 {
-		t.Fatalf("StartSession calls = %d, want 1", len(sm.StartSessionCalls))
-	}
-	if got := startSessionLogPath; got != want {
-		t.Fatalf("StartSession SessionOpts.LogPath = %q, want %q", got, want)
-	}
-}
-
 func newRegistryWithProviders() *llm.Registry {
 	reg := llm.NewRegistry()
 	claudeProvider := claude.NewProvider("")
@@ -1343,8 +1147,8 @@ func TestBuildSessionForwardsProviderBoundaries(t *testing.T) {
 	workDir := filepath.Join(dir, "repo")
 	skillsDir := filepath.Join(dir, "skills")
 	guidelinesDir := filepath.Join(dir, "guidelines")
-	kbDir := filepath.Join(dir, "knowledge-base", "repo")
-	for _, d := range []string{stateDir, workDir, skillsDir, guidelinesDir, kbDir} {
+	contextDir := filepath.Join(dir, "context", "repo")
+	for _, d := range []string{stateDir, workDir, skillsDir, guidelinesDir, contextDir} {
 		if err := os.MkdirAll(d, 0o755); err != nil {
 			t.Fatalf("mkdir %s: %v", d, err)
 		}
@@ -1359,7 +1163,7 @@ func TestBuildSessionForwardsProviderBoundaries(t *testing.T) {
 		Model:              "model-a[1M]",
 		Prompt:             "rendered prompt",
 		SystemPrompt:       "system prompt",
-		AdditionalDirs:     []string{kbDir},
+		AdditionalDirs:     []string{contextDir},
 		WorkDir:            workDir,
 		CompletionProtocol: true,
 		ResumeSessionID:    "session-prior",
@@ -1368,12 +1172,12 @@ func TestBuildSessionForwardsProviderBoundaries(t *testing.T) {
 		t.Fatalf("BuildSession() error: %v", err)
 	}
 
-	for _, want := range []string{kbDir, skillsDir, guidelinesDir, workDir} {
+	for _, want := range []string{contextDir, skillsDir, guidelinesDir, workDir} {
 		if !slices.Contains(provider.buildOpts.ReadRoots, want) {
 			t.Fatalf("ReadRoots = %v, missing %q", provider.buildOpts.ReadRoots, want)
 		}
 	}
-	for _, want := range []string{kbDir, workDir} {
+	for _, want := range []string{contextDir, workDir} {
 		if !slices.Contains(provider.buildOpts.WritableRoots, want) {
 			t.Fatalf("WritableRoots = %v, missing %q", provider.buildOpts.WritableRoots, want)
 		}
@@ -1529,7 +1333,6 @@ func TestBuildSession_PinsPermissionModeForGrillingPhases(t *testing.T) {
 		{name: "research does not pin", phase: feature.PhaseResearch, wantHasFlag: false},
 		{name: "implement does not pin", phase: feature.PhaseImplement, wantHasFlag: false},
 		{name: "review does not pin", phase: feature.PhaseReview, wantHasFlag: false},
-		{name: "knowledge base does not pin", phase: feature.PhaseKnowledgeBase, wantHasFlag: false},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
@@ -2097,38 +1900,6 @@ func TestNoLegacyBuilderCallersInAgentLayer(t *testing.T) {
 	}
 }
 
-func TestRunKnowledgeBaseForRepo_PassesKBTracerAgentNames(t *testing.T) {
-	dir := t.TempDir()
-	eventCh := make(chan any, 10)
-	sm := session.NewManager(eventCh)
-	store := feature.NewStore(dir)
-	pr := NewPhaseRunner(sm, store, dir)
-
-	var captured BuildSessionOpts
-	pr.BuildSessionFn = func(opts BuildSessionOpts) ([]string, []string, *session.SessionOpts, error) {
-		captured = opts
-		return nil, nil, nil, fmt.Errorf("test: stopping after capture")
-	}
-
-	f := &feature.Feature{
-		ID: "test-kb-agent-names",
-		Models: config.ModelConfig{
-			KBBuild: "custom-kb-model",
-		},
-		Repos: []feature.FeatureRepo{
-			{Name: "testrepo", Path: dir},
-		},
-	}
-
-	_, err := pr.RunKnowledgeBaseForRepo(f, f.Repos[0])
-	if err == nil {
-		t.Fatal("expected error from mock BuildSession")
-	}
-	if !reflect.DeepEqual(captured.AgentNames, knowledgeBaseAgentNames()) {
-		t.Fatalf("captured AgentNames = %v, want %v", captured.AgentNames, knowledgeBaseAgentNames())
-	}
-}
-
 func TestRunResearchFromQuestions_PassesResearchTracerAgentNames(t *testing.T) {
 	dir := t.TempDir()
 	eventCh := make(chan any, 10)
@@ -2218,51 +1989,11 @@ func TestInteractiveNonResearchPhases_PassExplicitEmptyAgentNames(t *testing.T) 
 	}
 }
 
-func TestKBBuild_UsesModelFromConfig(t *testing.T) {
-	dir := t.TempDir()
-	eventCh := make(chan any, 10)
-	sm := session.NewManager(eventCh)
-	store := feature.NewStore(dir)
-	pr := NewPhaseRunner(sm, store, dir)
-
-	var capturedModel string
-	pr.BuildSessionFn = func(opts BuildSessionOpts) ([]string, []string, *session.SessionOpts, error) {
-		capturedModel = opts.Model
-		return nil, nil, nil, fmt.Errorf("test: stopping after capture")
-	}
-
-	f := &feature.Feature{
-		ID: "test-kb",
-		Models: config.ModelConfig{
-			KBBuild: "custom-kb-model",
-		},
-		Repos: []feature.FeatureRepo{
-			{Name: "testrepo", Path: dir},
-		},
-	}
-
-	// The function will error from our mock, but we can check the captured model
-	_, err := pr.RunKnowledgeBaseForRepo(f, f.Repos[0])
-	if err == nil {
-		t.Fatal("expected error from mock BuildSession")
-	}
-	if capturedModel != "custom-kb-model" {
-		t.Errorf("expected model 'custom-kb-model', got %q", capturedModel)
-	}
-}
-
 func TestPhaseWiring_AgentNamesTracerBullet(t *testing.T) {
 	tests := []struct {
 		name      string
 		callPhase func(pr *PhaseRunner, f *feature.Feature, tmpDir string) error
 	}{
-		{
-			name: "knowledge base",
-			callPhase: func(pr *PhaseRunner, f *feature.Feature, _ string) error {
-				_, err := pr.RunKnowledgeBaseForRepo(f, f.Repos[0])
-				return err
-			},
-		},
 		{
 			name: "research from questions",
 			callPhase: func(pr *PhaseRunner, f *feature.Feature, tmpDir string) error {
@@ -2309,7 +2040,6 @@ func TestPhaseWiring_AgentNamesTracerBullet(t *testing.T) {
 				},
 				Models: config.ModelConfig{
 					Research: "test-model",
-					KBBuild:  "test-model",
 				},
 			}
 
@@ -2477,41 +2207,6 @@ func stubProviderCLIs(t *testing.T, names ...string) {
 	t.Setenv("PATH", binDir+string(os.PathListSeparator)+os.Getenv("PATH"))
 }
 
-func TestKBBuild_FallsBackToRecommendedDefault(t *testing.T) {
-	stubProviderCLIs(t, "claude", "codex")
-	dir := t.TempDir()
-	eventCh := make(chan any, 10)
-	sm := session.NewManager(eventCh)
-	store := feature.NewStore(dir)
-	pr := NewPhaseRunner(sm, store, dir)
-	pr.Registry = newRegistryWithProviders()
-	pr.Registry.SetModelRecommendations(map[string][]string{"kb_build": {"claude:sonnet[200K]"}})
-
-	var capturedModel string
-	pr.BuildSessionFn = func(opts BuildSessionOpts) ([]string, []string, *session.SessionOpts, error) {
-		capturedModel = opts.Model
-		return nil, nil, nil, fmt.Errorf("test: stopping after capture")
-	}
-
-	f := &feature.Feature{
-		ID:     "test-kb-fallback",
-		Models: config.ModelConfig{}, // KBBuild is empty
-		Repos: []feature.FeatureRepo{
-			{Name: "testrepo", Path: dir},
-		},
-	}
-
-	_, err := pr.RunKnowledgeBaseForRepo(f, f.Repos[0])
-	if err == nil {
-		t.Fatal("expected error from mock BuildSession")
-	}
-	if capturedModel != "claude:sonnet[200K]" {
-		t.Errorf("expected fallback model 'claude:sonnet[200K]', got %q", capturedModel)
-	}
-}
-
-// findArgValue returns the value following the given flag in cmd args.
-// Returns "" if the flag is not found.
 func findArgValue(cmd []string, flag string) string {
 	for i, arg := range cmd {
 		if arg == flag && i+1 < len(cmd) {

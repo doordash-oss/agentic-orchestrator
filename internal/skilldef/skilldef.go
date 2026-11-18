@@ -222,6 +222,9 @@ func ReconcileSkills(skillsDir string) error {
 var retiredSkills = []string{
 	// chat was replaced by the supervisor skill.
 	"chat",
+	// The Knowledge Base phase was removed.
+	"build-knowledge-base",
+	"knowledge-reader",
 }
 
 // removeRetiredSkills deletes each retired skill's top-level directory under

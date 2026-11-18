@@ -1,0 +1,13 @@
+## Acceptance Authority
+
+Later approved decisions override the design's acceptance criteria: the roadmap's out-of-scope list, the user's recorded answers, and the Final Review decisions file. Where one of them conflicts with an acceptance criterion, judge against the later decision. Do not raise again a finding the decisions file records as accepted as is.
+
+Final Review decisions: /state/feat-x/run-1/review/review-decisions.md
+
+## Round Scope: Confirmation
+
+This round narrows the scope above. You approved in iteration 1 (/state/feat-x/run-1/review/iteration-01/qa/review-feedback.md), and fixes landed after that approval. Confirm it once against the cumulative fix delta.
+
+- Fix delta: the changes the fix rounds made after iteration 1
+
+Your approval stands unless the delta introduced a problem on your axis; request changes only for such a regression. Rerun the checks you ran for that approval on the current commit.

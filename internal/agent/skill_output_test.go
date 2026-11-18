@@ -97,47 +97,9 @@ func TestOutputFilesSectionHidesHarnessArtifacts(t *testing.T) {
 			t.Fatalf("%s Output Files section exposes harness-authored meta.yaml:\n%s", spec.Role, section)
 		}
 	}
-	for _, spec := range []roleSpec{knowledgeBaseBuilderRoleSpec, inquirerRoleSpec, researcherRoleSpec, designerRoleSpec} {
+	for _, spec := range []roleSpec{inquirerRoleSpec, researcherRoleSpec, designerRoleSpec} {
 		if section := renderOutputFilesSection(spec); !strings.Contains(section, "{phase_dir}/") {
 			t.Fatalf("%s generated section missing phase_dir path:\n%s", spec.Role, section)
-		}
-	}
-}
-
-func TestImplementSkillDiscoversTestingContractDirectly(t *testing.T) {
-	path := repoRootPath(t, "skills", "implement", "SKILL.md")
-	data, err := os.ReadFile(path)
-	if err != nil {
-		t.Fatalf("reading %s: %v", path, err)
-	}
-	content := string(data)
-	for _, want := range []string{
-		"{phase_dir}/../testing-contract.yaml",
-		"owner: agent",
-		"Never create or edit `verification-report.yaml`",
-	} {
-		if !strings.Contains(content, want) {
-			t.Fatalf("skills/implement/SKILL.md missing %q", want)
-		}
-	}
-}
-
-func TestImplementSkillDocumentsEvidenceFiles(t *testing.T) {
-	path := repoRootPath(t, "skills", "implement", "SKILL.md")
-	data, err := os.ReadFile(path)
-	if err != nil {
-		t.Fatalf("reading %s: %v", path, err)
-	}
-	content := string(data)
-	for _, want := range []string{
-		"`screenshots/`",
-		"`behaviors/`",
-		"expected_evidence.path",
-		"Never create or edit `verification-report.yaml`",
-		"Never create placeholder evidence",
-	} {
-		if !strings.Contains(content, want) {
-			t.Fatalf("skills/implement/SKILL.md missing evidence-file guidance %q", want)
 		}
 	}
 }
@@ -151,7 +113,7 @@ func TestImplementSkillReadsPhaseProgressOnResume(t *testing.T) {
 	content := string(data)
 	for _, want := range []string{
 		"{phase_dir}/progress.md",
-		"### Where I stopped",
+		"resume from where it left off",
 	} {
 		if !strings.Contains(content, want) {
 			t.Fatalf("skills/implement/SKILL.md missing resume instruction %q", want)

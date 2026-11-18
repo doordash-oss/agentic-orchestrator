@@ -24,7 +24,6 @@ import type {
   RunTextContent,
   SessionSummary,
   TranscriptMessage,
-  VerificationItemView,
 } from '../../../shared/ipc';
 import { parseIpcError } from '../wizard/ipcError';
 import type { CanonicalError } from '../../../shared/api/parse';
@@ -35,19 +34,8 @@ import {
   reviewStatusSymbol,
   reviewStatusTone,
 } from './reviewModel';
-import {
-  isVerifyingPhase,
-  verificationCounts,
-  verificationSymbol,
-  verificationTone,
-  type VerificationTone,
-} from './verificationModel';
 import { stripUnsafeAnsi } from './timelineModel';
-import {
-  buildConversation,
-  type BuildConversationOptions,
-  type ConversationItem,
-} from './transcript/conversation';
+import { buildConversation, type BuildConversationOptions } from './transcript/conversation';
 import { ConversationTranscript } from './transcript/ConversationTranscript';
 import { HistoricalTimeline } from './RunTimeline';
 import { useCohortTranscripts } from './useCohortTranscripts';
@@ -89,12 +77,7 @@ interface CurrentRunInspectionProps {
   currentRoadmapPhase?: number;
   /** Implement-loop iteration within the current roadmap phase. */
   currentIteration?: number;
-  /** Mid-flight status from the server ("implementing" | "reviewing" | "verifying"). */
-  phaseStatus?: string;
   reviewGate: ReviewGateView;
-  /** Ordered per-command harness verification state during "verifying". */
-  verificationItems?: VerificationItemView[];
-  waitReason?: string;
   /** Only open live SSE while the run is actually streaming. */
   shouldStream?: boolean;
   /** Opens the conversation overlay for a newly routed attention item. */
@@ -117,8 +100,6 @@ interface CurrentRunInspectionProps {
    * logs, with their open-file overlay). Defaults to 'live'.
    */
   mode?: 'live' | 'files';
-  /** Files mode only: opens the testing-contract waiver dialog from the artifacts column. */
-  onWaiveTestingContract?(): void;
   /**
    * Host node for the restyled full-screen expand icon, supplied by the
    * stage-bar row's trailing side. Falls back to rendering inline above the
@@ -276,7 +257,6 @@ function FilesSurface({
   contentError,
   onOpen,
   onRefresh,
-  onWaiveTestingContract,
 }: {
   artifacts: RunArtifactsListResult['artifacts'];
   logs: RunLogView[];
@@ -286,7 +266,6 @@ function FilesSurface({
   onOpen(kind: 'artifact' | 'log', id: string, size?: number, label?: string): void;
   /** Re-invokes the run-resource refresh that carries the log listing. */
   onRefresh(): void;
-  onWaiveTestingContract?(): void;
 }): React.ReactElement {
   const channels = logs.length === 0 ? [] : groupLogsByChannel(logs);
   return (
@@ -312,15 +291,6 @@ function FilesSurface({
           <h4 className="current-inspection__files-heading">
             <span>Run artifacts</span>
             <span className="current-inspection__resource-count">{artifacts.length}</span>
-            {onWaiveTestingContract === undefined ? null : (
-              <button
-                type="button"
-                className="attention-button current-inspection__files-action"
-                onClick={onWaiveTestingContract}
-              >
-                Waive contract items
-              </button>
-            )}
           </h4>
           {artifacts.length === 0 ? (
             <p className="setup-step__empty">No current-run artifacts yet.</p>
@@ -468,10 +438,7 @@ export function CurrentRunInspection({
   currentPhase,
   currentRoadmapPhase,
   currentIteration,
-  phaseStatus,
   reviewGate,
-  verificationItems,
-  waitReason,
   shouldStream = true,
   attentionRequestId,
   attentionFooter,
@@ -482,7 +449,6 @@ export function CurrentRunInspection({
   onSessionSettled,
   presentation = 'regular',
   mode = 'live',
-  onWaiveTestingContract,
   expandHost = null,
   controlsHost = null,
 }: CurrentRunInspectionProps): React.ReactElement {
@@ -536,76 +502,6 @@ export function CurrentRunInspection({
     presentedCohort.length === 0 &&
     attentionFooter === undefined &&
     attentionTurn === undefined;
-  // The review gate wins over a stale "verifying" marker: while an axis review
-  // is active there is no harness contract running to display.
-  const verifying = isVerifyingPhase(phaseStatus, verificationItems) && !reviewGate.reviewingGate;
-
-  // Verification results as events in the stream: the first observation
-  // (hydration, reload, or the static record presentation) renders one
-  // current-state summary tick; every check-state transition witnessed
-  // after that appends its own tick, in arrival order at the stream's
-  // current end. No invented positions or times.
-  const [verificationTicks, setVerificationTicks] = useState<ConversationItem[]>([]);
-  const observedVerificationRef = useRef<Map<string, string> | null>(null);
-  const verificationTickSeqRef = useRef(0);
-  // Ticks belong to the phase run that produced them: once the feature moves
-  // to another phase (or roadmap phase), the previous checks are history the
-  // Files surface owns, not events in the new phase's stream.
-  const verificationScope = `${featureId}:${runNumber}:${currentPhase}:${currentRoadmapPhase ?? ''}`;
-  const verificationScopeRef = useRef(verificationScope);
-  useEffect(() => {
-    if (verificationScopeRef.current === verificationScope) return;
-    verificationScopeRef.current = verificationScope;
-    observedVerificationRef.current = null;
-    setVerificationTicks([]);
-  }, [verificationScope]);
-  useEffect(() => {
-    if (verificationItems === undefined) return;
-    const observed = observedVerificationRef.current;
-    if (observed === null) {
-      const counts = verificationCounts(verificationItems);
-      const passed = counts.done - counts.failed;
-      const aggregateTone: VerificationTone =
-        counts.failed > 0
-          ? 'failed'
-          : counts.done < counts.total
-            ? 'running'
-            : counts.total > 0
-              ? 'passed'
-              : 'neutral';
-      verificationTickSeqRef.current += 1;
-      setVerificationTicks([
-        {
-          kind: 'verification-tick',
-          key: `verify-summary-${verificationTickSeqRef.current}`,
-          name: `Verification: ${passed} of ${counts.total} checks passing`,
-          tone: aggregateTone,
-          symbol: verificationSymbol(aggregateTone),
-        },
-      ]);
-      observedVerificationRef.current = new Map(
-        verificationItems.map((item) => [item.name, item.state]),
-      );
-      return;
-    }
-    const transitions = verificationItems.filter((item) => observed.get(item.name) !== item.state);
-    if (transitions.length === 0) return;
-    const newTicks: ConversationItem[] = transitions.map((item) => {
-      verificationTickSeqRef.current += 1;
-      return {
-        kind: 'verification-tick',
-        key: `verify-tick-${verificationTickSeqRef.current}`,
-        name: item.name,
-        tone: verificationTone(item.state),
-        symbol: verificationSymbol(item.state),
-      };
-    });
-    setVerificationTicks((current) => [...current, ...newTicks]);
-    observedVerificationRef.current = new Map(
-      verificationItems.map((item) => [item.name, item.state]),
-    );
-  }, [verificationItems]);
-
   const closeFullscreen = useCallback(() => {
     setFullscreen(false);
     onAttentionPreviewClose?.();
@@ -753,9 +649,6 @@ export function CurrentRunInspection({
       onRefresh={() => {
         void refresh();
       }}
-      {...(mode === 'files' && onWaiveTestingContract !== undefined
-        ? { onWaiveTestingContract }
-        : {})}
     />
   );
 
@@ -830,9 +723,7 @@ export function CurrentRunInspection({
           view={view}
           selectedId={live.selectedId}
           selectSession={live.selectSession}
-          waitReason={waitReason}
           attentionTurn={attentionTurn}
-          verificationTicks={verificationTicks}
         />
       )}
     </>
@@ -864,7 +755,7 @@ export function CurrentRunInspection({
       ) : (
         <div className="current-inspection__preview">
           {liveTranscript}
-          {preview !== null && !verifying ? (
+          {preview !== null ? (
             <p className="current-inspection__activity">{preview.activity}</p>
           ) : null}
           {attentionFooter !== undefined && !fullscreen ? (
@@ -892,11 +783,8 @@ export function CurrentRunInspection({
           selectedId={live.selectedId}
           selectSession={live.selectSession}
           preview={preview}
-          waitReason={waitReason}
           attentionFooter={attentionFooter}
           attentionTurn={attentionTurn}
-          verifying={verifying}
-          verificationTicks={verificationTicks}
           showFiles={presentation === 'record'}
           filesSurface={filesSurface}
         />
@@ -1096,31 +984,18 @@ function TranscriptStage({
   view,
   selectedId,
   selectSession,
-  waitReason,
   attentionTurn,
-  verificationTicks,
 }: {
   stage: TranscriptStageModel;
   view: PreviewView;
   selectedId: string | null;
   selectSession(id: string): void;
-  waitReason?: string;
   attentionTurn?: ReactNode;
-  /** Verification tick events, appended at the stream's current end. */
-  verificationTicks?: ConversationItem[];
 }): React.ReactElement {
-  const emptyState =
-    stage.cohort.length === 0 && waitReason !== undefined && waitReason.trim() !== '' ? (
-      <p className="setup-step__empty">{waitReason}</p>
-    ) : (
-      <p className="setup-step__empty">Waiting for the agent to respond…</p>
-    );
+  const emptyState = <p className="setup-step__empty">Waiting for the agent to respond…</p>;
 
   const withRoster = stage.cohort.length > 1;
-  const items =
-    verificationTicks !== undefined && verificationTicks.length > 0
-      ? [...stage.items, ...verificationTicks]
-      : stage.items;
+  const items = stage.items;
   return (
     <div className={withRoster ? 'live-preview live-preview--cohort' : 'live-preview'}>
       {withRoster ? (
@@ -1268,11 +1143,8 @@ function LivePreviewOverlay({
   selectedId,
   selectSession,
   preview,
-  waitReason,
   attentionFooter,
   attentionTurn,
-  verifying,
-  verificationTicks,
   showFiles = false,
   filesSurface,
 }: {
@@ -1283,11 +1155,8 @@ function LivePreviewOverlay({
   selectedId: string | null;
   selectSession(id: string): void;
   preview: LivePreviewView | null;
-  waitReason?: string;
   attentionFooter?: ReactNode;
   attentionTurn?: ReactNode;
-  verifying: boolean;
-  verificationTicks?: ConversationItem[];
   showFiles?: boolean;
   filesSurface?: ReactNode;
 }): React.ReactElement {
@@ -1337,14 +1206,12 @@ function LivePreviewOverlay({
             view={view}
             selectedId={selectedId}
             selectSession={selectSession}
-            waitReason={waitReason}
             attentionTurn={attentionTurn}
-            verificationTicks={verificationTicks}
           />
         )}
         {preview !== null || attentionFooter !== undefined ? (
           <footer className="live-preview__overlay-footer">
-            {preview !== null && !verifying ? (
+            {preview !== null ? (
               <div className="live-preview__overlay-status">
                 <p className="current-inspection__activity">{preview.activity}</p>
               </div>

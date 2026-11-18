@@ -26,10 +26,7 @@ func TestImplementSystemPromptFromRoleSpec(t *testing.T) {
 		IterationDir:  "/state/feat-x/run-001/phase-01/implement/iteration-02",
 		SkillsDir:     "/skills",
 		GuidelinesDir: "/guidelines",
-		KBInfos: []KBInfo{
-			{Name: "agentic", IndexPath: "/kb/agentic/index.md", RootDir: "/kb/agentic"},
-		},
-		AskingClause: "## Asking Questions\n\nAsk one question at a time.",
+		AskingClause:  "## Asking Questions\n\nAsk one question at a time.",
 	})
 
 	for _, want := range []string{
@@ -41,9 +38,8 @@ func TestImplementSystemPromptFromRoleSpec(t *testing.T) {
 		"/skills/implement/SKILL.md",
 		"Read the SKILL.md file completely before taking any other action.",
 		"# Useful Resources",
-		"/kb/agentic/index.md",
+		"## Repository Instructions",
 		"/guidelines/go/index.md",
-		"/skills/knowledge-reader/SKILL.md",
 		"Ask one question at a time.",
 	} {
 		if !strings.Contains(got, want) {
@@ -51,9 +47,7 @@ func TestImplementSystemPromptFromRoleSpec(t *testing.T) {
 		}
 	}
 	for _, oldSystemDetail := range []string{
-		"Write `verification-report.yaml` at the path your user prompt names",
 		"Write `progress.md` at the path your user prompt names",
-		"Need-user-input gate",
 	} {
 		if strings.Contains(got, oldSystemDetail) {
 			t.Fatalf("buildImplementSystemPrompt() still contains old implement-only system detail %q:\n%s", oldSystemDetail, got)
@@ -101,14 +95,14 @@ func TestImplementSystemPromptKeepsFrontendDesignOptionalForNonFrontendPhase(t *
 
 func TestRoleSystemPromptIncludesArtifactPreflightCommand(t *testing.T) {
 	got := buildRoleSystemPrompt(roleSystemPromptInput{
-		Spec:         finalReviewFixerRoleSpec,
-		IterationDir: "/state/feat-x/runs/run-001/review/iteration-03",
+		Spec:         researcherRoleSpec,
+		IterationDir: "/state/feat-x/runs/run-001/research",
 		SkillsDir:    "/skills",
 	})
 	for _, want := range []string{
 		"## Artifact Preflight",
 		"`AGENTICO_BIN` is set to the current Agentico executable",
-		`"$AGENTICO_BIN" validate-artifacts --phase review --role final_review_fixer --dir "/state/feat-x/runs/run-001/review/iteration-03"`,
+		`"$AGENTICO_BIN" validate-artifacts --phase research --role researcher --dir "/state/feat-x/runs/run-001/research"`,
 		"run it before emitting the outcome tag",
 	} {
 		if !strings.Contains(got, want) {
@@ -117,10 +111,23 @@ func TestRoleSystemPromptIncludesArtifactPreflightCommand(t *testing.T) {
 	}
 }
 
+func TestRoleSystemPromptOmitsPreflightWithoutValidatedArtifacts(t *testing.T) {
+	for _, spec := range []roleSpec{implementRoleSpec, finalReviewFixerRoleSpec} {
+		got := buildRoleSystemPrompt(roleSystemPromptInput{
+			Spec:         spec,
+			IterationDir: "/state/feat-x/run-001/iteration-02",
+			SkillsDir:    "/skills",
+		})
+		if strings.Contains(got, "## Artifact Preflight") || strings.Contains(got, "validate-artifacts") {
+			t.Fatalf("%s prompt has an artifact preflight with nothing to validate:\n%s", spec.Role, got)
+		}
+	}
+}
+
 // TestRoleSystemPromptAdvertisesOnlyValidOutcomeVerbs pins the root cause of
 // a live failure: a final-review validator was shown the retry outcome by the
 // shared completion clause, emitted it, and the harness rejected it at commit
-// time. Only roles whose contract carries iteration state may see retry.
+// time. Only roles that allow another pass may see retry.
 func TestRoleSystemPromptAdvertisesOnlyValidOutcomeVerbs(t *testing.T) {
 	implementPrompt := buildRoleSystemPrompt(roleSystemPromptInput{
 		Spec:         implementRoleSpec,
@@ -165,10 +172,7 @@ func TestBuildSingleShotSystemPromptFromRoleSpec(t *testing.T) {
 		IterationDir:  "/state/feat-x/runs/run-001/design",
 		SkillsDir:     "/skills",
 		GuidelinesDir: "/guidelines",
-		KBInfos: []KBInfo{
-			{Name: "agentic", IndexPath: "/kb/agentic/index.md", RootDir: "/kb/agentic"},
-		},
-		AskingClause: "## Asking Questions\n\nUse numbered alternatives.",
+		AskingClause:  "## Asking Questions\n\nUse numbered alternatives.",
 	})
 
 	for _, want := range []string{
@@ -176,7 +180,7 @@ func TestBuildSingleShotSystemPromptFromRoleSpec(t *testing.T) {
 		"<agentico-outcome>",
 		"/skills/design/SKILL.md",
 		"# Useful Resources",
-		"/kb/agentic/index.md",
+		"## Repository Instructions",
 		"/guidelines/go/index.md",
 		"/skills/guideline-reader/SKILL.md",
 		"Use numbered alternatives.",
@@ -227,10 +231,7 @@ func TestBuildPlanningSystemPromptFromRoleSpec(t *testing.T) {
 		IterationDir:  "/state/feat/run-001/phase-02/plan/attempt-03",
 		SkillsDir:     "/skills",
 		GuidelinesDir: "/guidelines",
-		KBInfos: []KBInfo{
-			{Name: "agentic", IndexPath: "/kb/agentic/index.md", RootDir: "/kb/agentic"},
-		},
-		AskingClause: "## Asking Questions\n\nAsk one question at a time.",
+		AskingClause:  "## Asking Questions\n\nAsk one question at a time.",
 	})
 
 	for _, want := range []string{
@@ -251,7 +252,7 @@ func TestBuildPlanningSystemPromptFromRoleSpec(t *testing.T) {
 func TestReadOnlyOutsideRootsRoleSpecs(t *testing.T) {
 	// Document-only planning roles and bounded implementation-review axes must
 	// refuse source writes outside their declared output roots. Implementer,
-	// validators, KB-builder, and InteractivePTY all have
+	// validators, and InteractivePTY all have
 	// legitimate non-document writes.
 	readOnly := []struct {
 		name string
@@ -302,7 +303,6 @@ func TestReadOnlyOutsideRootsRoleSpecs(t *testing.T) {
 		{"implementer", implementRoleSpec},
 		{"final review fixer", finalReviewFixerRoleSpec},
 		{"researcher", researcherRoleSpec},
-		{"knowledge base builder", knowledgeBaseBuilderRoleSpec},
 	}
 	for _, tt := range writeAllowed {
 		t.Run(tt.name+"_flag_unset", func(t *testing.T) {

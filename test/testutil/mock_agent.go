@@ -65,296 +65,46 @@ func JSONLError(errMsg string) string {
 	return fmt.Sprintf(`echo '{"type":"result","subtype":"error","error":"%s"}'`, escaped)
 }
 
-func rewriteExistingReportRowsPassed(dirExpr, summary string) string {
-	return fmt.Sprintf(`awk -v dir="%s" -v summary=%q '
-    /^[[:space:]]*-[[:space:]]*item_id:/ { mode = "" }
-    /^[[:space:]]*mode:[[:space:]]*/ { mode = tolower($2) }
-    function write_artifact(indent, root, file, body, path) {
-      system("mkdir -p \"" dir "/" root "\"")
-      path = dir "/" root "/" file
-      print body > path
-      close(path)
-      print indent "evidence:"
-      print indent "    summary: " summary
-      print indent "    primary: " root "/" file
-    }
-    /^[[:space:]]*status:[[:space:]]*not_run[[:space:]]*$/ {
-      indent = substr($0, 1, index($0, "status") - 1)
-      print indent "status: passed"
-      if (mode == "visual") {
-        write_artifact(indent, "screenshots", "mock-visual-artifact.txt", "mock visual artifact")
-        next
-      }
-      if (mode == "behavioral") {
-        write_artifact(indent, "behaviors", "mock-behavioral-artifact.txt", "mock behavioral artifact")
-        next
-      }
-      print indent "evidence:"
-      print indent "    exit_code: 0"
-      print indent "    summary: " summary
-      next
-    }
-    { print }
-  ' "%s/verification-report.yaml" > "%s/verification-report.yaml.tmp" && mv "%s/verification-report.yaml.tmp" "%s/verification-report.yaml"`, dirExpr, summary, dirExpr, dirExpr, dirExpr, dirExpr)
-}
-
-// WriteImplementSuccessArtifacts returns a shell snippet that writes the two
-// artifacts a passing implement iteration must produce, in the order the
-// harness expects:
-//
-//  1. verification-report.yaml in the latest iteration-* dir under
-//     artifactDir/<repoSubdir?>. If the harness pre-seeded a report from a
-//     testing contract, preserve the contract metadata and mark any not_run
-//     rows passed with structured mock evidence. If no report exists, write a
-//     no-check report sufficient for mock agents where the contract is empty.
-//  2. progress.md in artifactDir (the same path the harness configures —
-//     iter-relative wouldn't be picked up by ParseProgressMd) with the four
-//     mandatory sections and `## Iteration State: SUCCESS`.
-//
-// Use this in mock agents that should drive the implement loop to a
-// review_passed outcome. The progress.md is a minimal valid skeleton; tests
-// that need to exercise specific deferral/handoff behaviour should write
-// their own progress.md instead.
-func WriteImplementSuccessArtifacts(artifactDir string) string {
-	return writeImplArtifacts(artifactDir, "SUCCESS", "")
-}
-
-// WriteImplementRetryArtifacts returns a shell snippet for a RETRY iteration:
-// same structure as success, but `## Iteration State: RETRY`. The harness
-// loops back to a fresh implement iteration without invoking the review
-// gate.
-func WriteImplementRetryArtifacts(artifactDir string) string {
-	return writeImplArtifacts(artifactDir, "RETRY", "")
-}
-
-// WriteImplementMalformedProgress returns a shell snippet that writes a
-// malformed progress.md while keeping verification-report.yaml parseable. Use
-// it to exercise the "artifact present but contract-invalid" branch.
-func WriteImplementMalformedProgress(artifactDir string) string {
+// WriteImplementNotes returns a shell snippet that creates the latest
+// iteration-* dir under artifactDir and writes free-form progress notes in
+// artifactDir (the path the harness configures). The iteration's result comes
+// from the outcome the mock emits, not from these notes.
+func WriteImplementNotes(artifactDir string) string {
 	return fmt.Sprintf(`for _d in "%s"/iteration-*; do :; done
 mkdir -p "$_d"
-cat > "%s/progress.md" <<PROGRESS_EOF
-# Iteration Progress
-
-## Iteration Handoff
-
-### Completed this iteration
-- malformed progress
-
-## Verification Report
-
-- **Path**: $_d/verification-report.yaml
-- **Summary**: 0 passed, 0 failed, 0 blocked, 0 not_run
-PROGRESS_EOF
-if [ ! -f "$_d/verification-report.yaml" ]; then
-  printf 'version: 1\nrequired_checks: []\n' > "$_d/verification-report.yaml"
-fi`, artifactDir, artifactDir)
+cat > "%s/progress.md" <<'PROGRESS_EOF'
+Did the mock work; nothing is left.
+PROGRESS_EOF`, artifactDir, artifactDir)
 }
 
-// WriteMultiRepoImplementSuccess returns a shell snippet that writes the
-// minimal valid implement-iteration handoff (progress.md and
-// verification-report.yaml) for every fresh
-// `<repo>/iteration-*` directory under artifactBase. Each repo's progress.md
-// lives at artifactBase/<repo>/progress.md (the harness reads it from the
-// per-repo ArtifactDir); the verification report lives inside each iteration
-// directory.
+// WriteMultiRepoImplementNotes returns a shell snippet that writes progress
+// notes for every fresh `<repo>/iteration-*` directory under artifactBase, at
+// artifactBase/<repo>/progress.md (the per-repo ArtifactDir).
 //
 // Use this in multi-repo orchestrator tests where one mock agent script
 // services every repo.
-func WriteMultiRepoImplementSuccess(artifactBase string) string {
+func WriteMultiRepoImplementNotes(artifactBase string) string {
 	return fmt.Sprintf(`for d in "%s"/*/iteration-*; do
   _repo_dir=$(dirname "$d")
-  cat > "$_repo_dir/progress.md" <<PROGRESS_EOF
-# Iteration Progress
-
-## Iteration Handoff
-
-### Completed this iteration
-- mock work
-
-### Remaining from the plan
-
-### Where I stopped
-
-
-### Gotchas / blockers / in-flight decisions
-
-## Deferrals
-
-%syaml
-deferrals: []
-closed_deferrals: []
-%s
-
-## Verification Report
-
-- **Path**: $d/verification-report.yaml
-- **Summary**: 0 passed, 0 failed, 0 blocked, 0 not_run
-
-## Iteration State
-
-SUCCESS
-PROGRESS_EOF
-  if [ -f "$d/verification-report.yaml" ]; then
-    %s
-  else
-    printf 'version: 1\nrequired_checks: []\n' > "$d/verification-report.yaml"
-  fi
-done`, artifactBase, "~~~", "~~~", rewriteExistingReportRowsPassed("$d", "mock agent reported success for this contract check"))
+  echo 'Did the mock work; nothing is left.' > "$_repo_dir/progress.md"
+done`, artifactBase)
 }
 
-// WriteImplementHandoffFiles writes the minimal valid progress.md +
-// verification-report.yaml pair directly via os.WriteFile (no shell). Use
-// from Go test setup paths that don't drive a mock agent script — for
-// example, when seeding a resume scenario whose harness receipt already
-// exists but the agent never runs.
-//
-// progressDir is where progress.md lives (typically the implement loop's
-// ArtifactDir). iterDir is the per-iteration dir where
-// verification-report.yaml lives. state must be "SUCCESS" or "RETRY".
-func WriteImplementHandoffFiles(t *testing.T, progressDir, iterDir, state string) {
+// WriteImplementHandoffFiles writes progress notes into progressDir
+// (typically the implement loop's ArtifactDir) and creates iterDir, directly
+// via os.WriteFile (no shell). Use from Go test setup paths that don't drive a
+// mock agent script — for example, when seeding a resume scenario whose
+// harness receipt already exists but the agent never runs.
+func WriteImplementHandoffFiles(t *testing.T, progressDir, iterDir string) {
 	t.Helper()
-	if err := os.MkdirAll(progressDir, 0o755); err != nil {
-		t.Fatalf("mkdir progress dir: %v", err)
+	for _, dir := range []string{progressDir, iterDir} {
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			t.Fatalf("mkdir %s: %v", dir, err)
+		}
 	}
-	if err := os.MkdirAll(iterDir, 0o755); err != nil {
-		t.Fatalf("mkdir iter dir: %v", err)
-	}
-	progress := fmt.Sprintf(`# Iteration Progress
-
-## Iteration Handoff
-
-### Completed this iteration
-- mock work
-
-### Remaining from the plan
-
-### Where I stopped
-
-
-### Gotchas / blockers / in-flight decisions
-
-## Deferrals
-
-`+"```yaml"+`
-deferrals: []
-closed_deferrals: []
-`+"```"+`
-
-## Verification Report
-
-- **Path**: %s/verification-report.yaml
-- **Summary**: 0 passed, 0 failed, 0 blocked, 0 not_run
-
-## Iteration State
-
-%s
-`, iterDir, state)
-	if err := os.WriteFile(filepath.Join(progressDir, "progress.md"), []byte(progress), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(progressDir, "progress.md"), []byte("Did the mock work; nothing is left.\n"), 0o644); err != nil {
 		t.Fatalf("write progress.md: %v", err)
 	}
-	report := "version: 1\nrequired_checks: []\n"
-	if err := os.WriteFile(filepath.Join(iterDir, "verification-report.yaml"), []byte(report), 0o644); err != nil {
-		t.Fatalf("write verification-report.yaml: %v", err)
-	}
-}
-
-// WriteImplementProgressMd returns a shell snippet that writes only the
-// minimal valid progress.md for the latest iteration (alongside whatever
-// verification-report.yaml the test writes itself). Use this for tests
-// that exercise specific verification-report content (e.g. invalid reports,
-// missing checks) but still need a valid handoff so the parser passes.
-func WriteImplementProgressMd(artifactDir, state string) string {
-	return fmt.Sprintf(`for _d in "%s"/iteration-*; do :; done
-mkdir -p "$_d"
-cat > "%s/progress.md" <<PROGRESS_EOF
-# Iteration Progress
-
-## Iteration Handoff
-
-### Completed this iteration
-- mock work
-
-### Remaining from the plan
-
-### Where I stopped
-
-
-### Gotchas / blockers / in-flight decisions
-
-## Deferrals
-
-%syaml
-deferrals: []
-closed_deferrals: []
-%s
-
-## Verification Report
-
-- **Path**: $_d/verification-report.yaml
-- **Summary**: 0 passed, 0 failed, 0 blocked, 0 not_run
-
-## Iteration State
-
-%s
-PROGRESS_EOF`, artifactDir, artifactDir, "~~~", "~~~", state)
-}
-
-func writeImplArtifacts(artifactDir, state, stateNote string) string {
-	verifBody := "version: 1\nrequired_checks: []\n"
-	// Build progress.md inline with shell-side variable interpolation
-	// for the iteration dir path. We use a non-quoted heredoc so $_d
-	// expands; tilde fences around the YAML block avoid shell command
-	// substitution while still satisfying the progress parser.
-	//
-	// Important: verification-report.yaml is written ONLY if it doesn't
-	// already exist on disk. The harness pre-seeds a contract-backed stub
-	// when a testing contract is bound (BuildContractVerificationReportStub),
-	// and tests that assert against that v2 report would lose it if the
-	// helper overwrote with the v1 minimal placeholder. Tests that DO
-	// want a custom report should write it before this helper runs.
-	return fmt.Sprintf(`for _d in "%s"/iteration-*; do :; done
-mkdir -p "$_d"
-cat > "%s/progress.md" <<PROGRESS_EOF
-# Iteration Progress
-
-## Iteration Handoff
-
-### Completed this iteration
-- mock work
-
-### Remaining from the plan
-
-### Where I stopped
-
-
-### Gotchas / blockers / in-flight decisions
-
-## Deferrals
-
-%syaml
-deferrals: []
-closed_deferrals: []
-%s
-
-## Verification Report
-
-- **Path**: $_d/verification-report.yaml
-- **Summary**: 0 passed, 0 failed, 0 blocked, 0 not_run
-- **Notes**: mock agent
-
-## Iteration State
-
-%s
-%s
-PROGRESS_EOF
-if [ -f "$_d/verification-report.yaml" ]; then
-  %s
-else
-cat > "$_d/verification-report.yaml" <<'VR_EOF'
-%s
-VR_EOF
-fi`, artifactDir, artifactDir, "~~~", "~~~", state, stateNote, rewriteExistingReportRowsPassed("$_d", "mock agent reported success for this contract check"), verifBody)
 }
 
 // WritePhasePlanSuccessArtifacts returns a shell snippet that writes the
@@ -414,22 +164,13 @@ func WriteReviewChangesRequested(artifactDir, findings string) string {
 // WriteFinalReviewApproved writes APPROVED review feedback for the latest
 // Final Review iteration.
 func WriteFinalReviewApproved(artifactDir string) string {
-	return MarkLatestVerificationReportPassed(artifactDir) + "\n" + WriteReviewApproved(artifactDir)
+	return WriteReviewApproved(artifactDir)
 }
 
 // WriteFinalReviewChangesRequested writes CHANGES_REQUESTED review feedback
 // for the latest Final Review iteration.
 func WriteFinalReviewChangesRequested(artifactDir, findings string) string {
 	return WriteReviewChangesRequested(artifactDir, findings)
-}
-
-// MarkLatestVerificationReportPassed rewrites not_run rows in the latest
-// iteration's verification report to passed with structured command evidence.
-func MarkLatestVerificationReportPassed(artifactDir string) string {
-	return fmt.Sprintf(`for _d in "%s"/iteration-*; do :; done
-if [ -f "$_d/verification-report.yaml" ]; then
-  %s
-fi`, artifactDir, rewriteExistingReportRowsPassed("$_d", "mock final review reported success for this contract check"))
 }
 
 // WriteReviewFeedback writes the supplied structured body verbatim into the

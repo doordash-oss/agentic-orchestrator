@@ -162,12 +162,6 @@ func TestOpenAPIDeclaresHardeningSchemas(t *testing.T) {
 	assertSchemaProperties(t, spec, "ResponseMeta", "revision", "generated_at", "as_of_seq")
 	assertSchemaProperties(t, spec, "SSEEvent", "seq", "epoch", "kind", "resource", "resource_version", "snapshot_required")
 	assertSchemaProperties(t, spec, "Resource", "type", "id", "feature_id", "phase")
-	assertSchemaProperties(t, spec, "NeedUserInputGate", "verification")
-	assertSchemaProperties(t, spec, "NeedUserInputVerification", "blockers", "allowed_actions")
-	assertSchemaProperties(
-		t, spec, "NeedUserInputVerificationBlocker",
-		"item_id", "name", "repo_name", "command", "reason", "capabilities", "remediation",
-	)
 	// The canonical error envelope: ErrorResponse wraps the catalog-rendered
 	// Error, which carries the stable code, severity class, and authored
 	// title/summary plus optional typed context and raw diagnostics.
@@ -667,7 +661,6 @@ func documentedServerRoutes() []documentedRoute {
 		{method: httpMethodPost, path: apiPathFeatures, mutation: true},
 		{method: httpMethodGet, path: "/api/v1/features/{feature_id}"},
 		{method: httpMethodGet, path: "/api/v1/features/{feature_id}/config"},
-		{method: httpMethodGet, path: "/api/v1/features/{feature_id}/testing-contract"},
 		{method: httpMethodPost, path: "/api/v1/features/{feature_id}/config", mutation: true},
 		{method: httpMethodGet, path: "/api/v1/features/{feature_id}/live-preview"},
 		{method: httpMethodGet, path: "/api/v1/features/{feature_id}/reviews"},

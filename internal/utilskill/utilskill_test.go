@@ -48,46 +48,41 @@ func TestForPhaseReturnsCorrectSkills(t *testing.T) {
 		want  []string
 	}{
 		{
-			name:  "design includes frontend-design, guideline-reader, and knowledge-reader",
+			name:  "design includes frontend-design and guideline-reader",
 			phase: feature.PhaseDesign,
-			want:  []string{"frontend-design", "guideline-reader", "knowledge-reader"},
+			want:  []string{"frontend-design", "guideline-reader"},
 		},
 		{
-			name:  "plan includes frontend-design, guideline-reader, and knowledge-reader",
+			name:  "plan includes frontend-design and guideline-reader",
 			phase: feature.PhasePlan,
-			want:  []string{"frontend-design", "guideline-reader", "knowledge-reader"},
+			want:  []string{"frontend-design", "guideline-reader"},
 		},
 		{
-			name:  "implement includes frontend-design, guideline-reader, and knowledge-reader",
+			name:  "implement includes frontend-design and guideline-reader",
 			phase: feature.PhaseImplement,
-			want:  []string{"frontend-design", "guideline-reader", "knowledge-reader"},
+			want:  []string{"frontend-design", "guideline-reader"},
 		},
 		{
-			name:  "review includes frontend-design, guideline-reader, and knowledge-reader",
+			name:  "review includes frontend-design and guideline-reader",
 			phase: feature.PhaseReview,
-			want:  []string{"frontend-design", "guideline-reader", "knowledge-reader"},
+			want:  []string{"frontend-design", "guideline-reader"},
 		},
 		{
 			// Research intentionally does not surface guideline-reader:
 			// the phase only explores the codebase to answer questions
 			// and never writes or reviews code, so coding-convention
 			// guidance is noise.
-			name:  "research includes only knowledge-reader",
+			name:  "research includes no utility skills",
 			phase: feature.PhaseResearch,
-			want:  []string{"knowledge-reader"},
+			want:  nil,
 		},
 		{
 			// Inquire intentionally does not surface guideline-reader:
 			// the phase only asks clarifying questions and never writes
 			// or reviews code, so coding-convention guidance is noise.
-			name:  "inquire includes only knowledge-reader",
+			name:  "inquire includes no utility skills",
 			phase: feature.PhaseInquire,
-			want:  []string{"knowledge-reader"},
-		},
-		{
-			name:  "knowledge base includes guideline-reader",
-			phase: feature.PhaseKnowledgeBase,
-			want:  []string{"guideline-reader"},
+			want:  nil,
 		},
 	}
 	for _, tt := range tests {
@@ -119,7 +114,6 @@ func TestPhaseAllIncludedEverywhere(t *testing.T) {
 		feature.PhasePlan,
 		feature.PhaseImplement,
 		feature.PhaseReview,
-		feature.PhaseKnowledgeBase,
 		feature.PhaseInquire,
 		feature.PhaseDesign,
 	}

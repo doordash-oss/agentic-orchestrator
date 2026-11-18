@@ -22,17 +22,21 @@ Own functional QA at Final Review:
 - failed smoke paths across the assembled feature, including cross-repo integration behavior
 - evidence you personally capture while exercising the app
 
-Read the design artifact (its acceptance criteria are the feature-level definition of done), roadmap and plan context, previous aggregate feedback, and prior implementation evidence before choosing what to exercise. Prefer a few representative end-to-end journeys over static inspection.
+Read the design artifact (its acceptance criteria are the feature-level definition of done), roadmap and plan context, and any acceptance authority and round scope sections in your prompt before choosing what to exercise. Prefer a few representative end-to-end journeys over static inspection.
 
-Before returning APPROVED, execute the repository's full automated test suites (the documented aggregate commands) yourself and confirm they pass. For features without per-iteration machine verification you are the only execution gate; do not approve on code reading alone.
+Before returning APPROVED, execute the repository's full automated test suites (the documented aggregate commands) yourself and confirm they pass. You are the execution gate for the assembled feature; do not approve on code reading alone.
 
 ## Blocking Mandate
 
 Use `CHANGES_REQUESTED` only for Critical or High defects attributable to the code. Examples: the feature cannot build, cannot launch, crashes, or behaves contrary to approved intent or the cited acceptance criteria.
 
-Do not block merely because recorded implementation evidence is missing; that is owned upstream by per-phase Functionality/Evidence and the implement evidence contract. Do not write `verification-report.yaml`, do not promote files into canonical evidence roots, and do not ask the fixer to repair environment limitations.
+Do not block merely because recorded implementation evidence is missing; that is owned upstream by the implementer and the per-phase Functionality/Evidence reviewer. Do not promote files into canonical evidence roots, and do not ask the fixer to repair environment limitations.
 
 When you cannot exercise a surface for a reason you cannot attribute to the code, record a non-blocking caveat in `## Suggestions`. Examples: a headless browser unavailable in this environment, a local service dependency not present, or a toolchain requiring in-tree writes under an OS sandbox. Be explicit about what you could not verify and why.
+
+## Review Rounds
+
+When your prompt has an Acceptance Authority section, the decisions it names outrank acceptance criteria, and a finding the decisions file records as accepted as is is not raised again. When it has a Round Scope section, that section narrows this skill's scope for the round: in a follow-up, judge your open findings and what the delta changed; in a confirmation, request changes only for a regression the delta introduced.
 
 ## Handoff Contract
 

@@ -17,7 +17,6 @@ package orchestrator_test
 import (
 	"context"
 	"errors"
-	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -30,7 +29,6 @@ import (
 	"github.com/doordash-oss/agentic-orchestrator/internal/git"
 	"github.com/doordash-oss/agentic-orchestrator/internal/orchestrator"
 	"github.com/doordash-oss/agentic-orchestrator/internal/ports"
-	"github.com/doordash-oss/agentic-orchestrator/internal/session"
 	"github.com/doordash-oss/agentic-orchestrator/test/testutil"
 	"github.com/doordash-oss/agentic-orchestrator/test/testutil/mocks"
 )
@@ -91,7 +89,6 @@ func TestOrchestrator_StartFeature_InterruptedFinalReview_ReDispatchesFR(t *test
 
 	o.SetRunMultiRepoFinalReviewFn(func(
 		ff *feature.Feature,
-		_ ...agent.KBInfo,
 	) (chan *agent.OrchestratorResult, error) {
 		ch := make(chan *agent.OrchestratorResult, 1)
 		ch <- &agent.OrchestratorResult{FinalStatus: "all_passed"}
@@ -128,7 +125,6 @@ func TestOrchestrator_StartFeature_FinalReviewDispatchIsAsyncAndIdempotent(t *te
 	dispatches := 0
 	o.SetRunMultiRepoFinalReviewFn(func(
 		ff *feature.Feature,
-		_ ...agent.KBInfo,
 	) (chan *agent.OrchestratorResult, error) {
 		dispatches++
 		return resultCh, nil
@@ -211,7 +207,6 @@ func TestOrchestrator_OnMultiReposPassed_MediumRunsDeferredFinalReview(t *testin
 	o := orchestrator.New(orchestrator.Deps{Manager: lc, Store: fs}, orchestrator.Hooks{})
 	o.SetRunMultiRepoFinalReviewFn(func(
 		ff *feature.Feature,
-		_ ...agent.KBInfo,
 	) (chan *agent.OrchestratorResult, error) {
 		if ff.EffectivePipeline() != feature.PipelineMedium {
 			t.Errorf("final review feature pipeline = %q, want %q", ff.EffectivePipeline(), feature.PipelineMedium)
@@ -237,86 +232,6 @@ func TestOrchestrator_OnMultiReposPassed_MediumRunsDeferredFinalReview(t *testin
 	events := drainEvents(o)
 	if !hasPhaseCompleted(events, feature.PhaseFinalReview) {
 		t.Fatalf("expected PhaseCompleted(PhaseFinalReview); events: %v", events)
-	}
-}
-
-func TestOrchestrator_HandlePhaseCompletion_Implement_MissingEvidenceStaysOnCurrentRoadmapPhase(t *testing.T) {
-	cpr := newCapturingPhaseRunner(t)
-	cpr.sm.StartSessionFn = func(id, featureID string, phase feature.Phase, command []string, workdir string, env []string, opts ...*session.SessionOpts) (ports.SessionHandle, error) {
-		return nil, session.ErrShuttingDown
-	}
-
-	featureID := "feat-impl-missing-evidence-current-phase"
-	roadmapPath := filepath.Join(cpr.stateDir, "roadmap.md")
-	writeRoadmap(t, roadmapPath)
-	unpub := false
-	f := &feature.Feature{
-		ID:                  featureID,
-		Status:              feature.StatusImplementing,
-		CurrentPhase:        feature.PhaseImplement,
-		CurrentRoadmapPhase: 2,
-		TotalRoadmapPhases:  2,
-		ActiveRun:           1,
-		RunCount:            1,
-		Pipeline:            feature.PipelineLarge,
-		Artifacts:           map[string]string{"roadmap": roadmapPath},
-		Repos:               []feature.FeatureRepo{{Name: "r1", Path: cpr.stateDir, Publishable: &unpub}},
-		RepoStates: map[string]*feature.RepoState{
-			"r1": {Touched: true},
-		},
-	}
-	phase1PlanDir := agent.PhasePlanDir(cpr.stateDir, f, 1)
-	phase2PlanDir := agent.PhasePlanDir(cpr.stateDir, f, 2)
-	for phase, dir := range map[int]string{1: phase1PlanDir, 2: phase2PlanDir} {
-		if err := os.MkdirAll(dir, 0o755); err != nil {
-			t.Fatalf("mkdir phase %d plan dir: %v", phase, err)
-		}
-		if err := os.WriteFile(filepath.Join(dir, "plan.md"), []byte(fmt.Sprintf("# Phase %d plan", phase)), 0o644); err != nil {
-			t.Fatalf("write phase %d plan: %v", phase, err)
-		}
-		if err := agent.WritePlanAttemptMeta(dir, agent.PlanAttemptMeta{
-			Attempt:      1,
-			AgentStatus:  "SUCCESS",
-			ReviewStatus: "APPROVED",
-		}); err != nil {
-			t.Fatalf("seed phase %d approved attempt: %v", phase, err)
-		}
-	}
-
-	fs, lc := newStoredFeatureFixture(t, f)
-	cpr.pr.FeatureStore = fs
-	o := orchestrator.New(orchestrator.Deps{
-		Manager:     lc,
-		Store:       fs,
-		Sessions:    cpr.sm,
-		PhaseRunner: cpr.pr,
-		CmdRunner:   cpr.cmd,
-	}, orchestrator.Hooks{})
-	if err := o.HandlePhaseCompletion(featureID, orchestrator.PhaseCompletionInput{
-		Phase: feature.PhaseImplement,
-		MultiRepoResult: &agent.OrchestratorResult{
-			FinalStatus:          "plan_revision_required",
-			PlanRevisionFeedback: "MISSING_EVIDENCE_REQUIREMENT phase 1 behavioral: Record the phase-one create-project CLI journey.",
-		},
-	}); err != nil {
-		t.Fatalf("HandlePhaseCompletion() error = %v", err)
-	}
-
-	if got := loadStoredFeature(t, fs, f.ID).CurrentRoadmapPhase; got != 2 {
-		t.Fatalf("persisted CurrentRoadmapPhase = %d, want current phase 2", got)
-	}
-	if captured := waitForCapturedPhase(t, cpr, feature.PhasePlan, 3*time.Second); len(captured) == 0 {
-		t.Fatalf("no phase-plan revision session captured; captures: %+v", cpr.capturedOpts)
-	}
-	data, err := os.ReadFile(filepath.Join(phase2PlanDir, "attempt-01", "validation-feedback.md"))
-	if err != nil {
-		t.Fatalf("read phase 2 validation feedback: %v", err)
-	}
-	if got := string(data); !strings.Contains(got, "MISSING_EVIDENCE_REQUIREMENT phase 1 behavioral: Record the phase-one create-project CLI journey.") {
-		t.Fatalf("phase 2 validation feedback missing reviewer requirement:\n%s", got)
-	}
-	if _, err := os.Stat(filepath.Join(phase1PlanDir, "attempt-01", "validation-feedback.md")); !os.IsNotExist(err) {
-		t.Fatalf("phase 1 validation feedback should not be overwritten for a current-phase repair, stat err = %v", err)
 	}
 }
 
@@ -399,7 +314,6 @@ func TestOrchestrator_FeatureFinalReview_3Repo_Approves_AllReposAdvanceAndPublis
 	// and per-repo auto-publish.
 	o.SetRunMultiRepoFinalReviewFn(func(
 		ff *feature.Feature,
-		_ ...agent.KBInfo,
 	) (chan *agent.OrchestratorResult, error) {
 		ch := make(chan *agent.OrchestratorResult, 1)
 		go func() {
@@ -507,7 +421,6 @@ func TestAdvanceAfterFinalReviewScrubsRootArtifactsBeforeCommitAll(t *testing.T)
 	}, orchestrator.Hooks{})
 	o.SetRunMultiRepoFinalReviewFn(func(
 		ff *feature.Feature,
-		_ ...agent.KBInfo,
 	) (chan *agent.OrchestratorResult, error) {
 		ch := make(chan *agent.OrchestratorResult, 1)
 		ch <- &agent.OrchestratorResult{FinalStatus: "all_passed"}
@@ -614,7 +527,6 @@ func TestAdvanceAfterFinalReviewRoadmapFinalScrubsRootArtifactsBeforeCommitAll(t
 	}, orchestrator.Hooks{})
 	o.SetRunMultiRepoFinalReviewFn(func(
 		ff *feature.Feature,
-		_ ...agent.KBInfo,
 	) (chan *agent.OrchestratorResult, error) {
 		writeCandidates()
 		ch := make(chan *agent.OrchestratorResult, 1)
@@ -672,7 +584,6 @@ func TestOrchestrator_FeatureFinalReview_3Repo_ChangesRequested_FixApproves(t *t
 	var iterations int
 	o.SetRunMultiRepoFinalReviewFn(func(
 		ff *feature.Feature,
-		_ ...agent.KBInfo,
 	) (chan *agent.OrchestratorResult, error) {
 		ch := make(chan *agent.OrchestratorResult, 1)
 		go func() {
@@ -760,7 +671,6 @@ func TestOrchestrator_FeatureFinalReview_FixerRepoEditsDoNotTripReadOnlyGuard(t 
 
 	o.SetRunMultiRepoFinalReviewFn(func(
 		ff *feature.Feature,
-		_ ...agent.KBInfo,
 	) (chan *agent.OrchestratorResult, error) {
 		if err := os.WriteFile(filepath.Join(repo, "README.md"), []byte("# Test\n\nFixed during final review.\n"), 0o644); err != nil {
 			t.Fatalf("write final review fix: %v", err)
@@ -817,7 +727,6 @@ func TestOrchestrator_FeatureFinalReview_Interrupted_DoesNotMarkFailed(t *testin
 	// emits when the user presses Stop and the FR session terminates early).
 	o.SetRunMultiRepoFinalReviewFn(func(
 		ff *feature.Feature,
-		_ ...agent.KBInfo,
 	) (chan *agent.OrchestratorResult, error) {
 		ch := make(chan *agent.OrchestratorResult, 1)
 		go func() {
@@ -877,14 +786,13 @@ func TestOrchestrator_FeatureFinalReview_FailedProtocolViolationPreserved(t *tes
 	o := orchestrator.New(orchestrator.Deps{Manager: lc, Store: fs}, orchestrator.Hooks{})
 	o.SetRunMultiRepoFinalReviewFn(func(
 		ff *feature.Feature,
-		_ ...agent.KBInfo,
 	) (chan *agent.OrchestratorResult, error) {
 		ch := make(chan *agent.OrchestratorResult, 1)
 		ch <- &agent.OrchestratorResult{
 			FinalStatus:  "failed",
 			RepoStatuses: map[string]string{apiRepoName: agent.BoundedHelperStatusProtocolViolation},
 			FailedRepos:  []string{apiRepoName},
-			LastError:    "protocol violation: final_review_fixer @ /tmp/iter: verification-report.yaml is missing",
+			LastError:    "protocol violation: final_review_fixer @ /tmp/iter: review-feedback.md is missing",
 		}
 		return ch, nil
 	})
@@ -935,7 +843,7 @@ func TestOrchestrator_FeatureFinalReview_ResultAfterInterruptIsDiscarded(t *test
 			}
 			fs, lc := newStoredFeatureFixture(t, f)
 			o := orchestrator.New(orchestrator.Deps{Manager: lc, Store: fs}, orchestrator.Hooks{})
-			o.SetRunMultiRepoFinalReviewFn(func(ff *feature.Feature, _ ...agent.KBInfo) (chan *agent.OrchestratorResult, error) {
+			o.SetRunMultiRepoFinalReviewFn(func(ff *feature.Feature) (chan *agent.OrchestratorResult, error) {
 				ch := make(chan *agent.OrchestratorResult, 1)
 				go func() {
 					_ = fs.Modify(ff.ID, func(target *feature.Feature) error {
@@ -983,7 +891,7 @@ func TestOrchestrator_FeatureFinalReview_ProviderUnavailableFailsWithRetryRemedi
 	}
 	fs, lc := newStoredFeatureFixture(t, f)
 	o := orchestrator.New(orchestrator.Deps{Manager: lc, Store: fs}, orchestrator.Hooks{})
-	o.SetRunMultiRepoFinalReviewFn(func(ff *feature.Feature, _ ...agent.KBInfo) (chan *agent.OrchestratorResult, error) {
+	o.SetRunMultiRepoFinalReviewFn(func(ff *feature.Feature) (chan *agent.OrchestratorResult, error) {
 		ch := make(chan *agent.OrchestratorResult, 1)
 		ch <- &agent.OrchestratorResult{
 			FinalStatus:  "failed",

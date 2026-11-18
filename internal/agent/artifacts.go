@@ -60,19 +60,6 @@ func PhasePlanDir(stateDir string, f *feature.Feature, phase int) string {
 	return filepath.Join(PhaseDir(stateDir, f, phase), "plan")
 }
 
-// phaseTestingContractDir returns the base directory for a roadmap phase's
-// testing contract artifact. The contract lives at the phase root so
-// implementation and review share one binding file.
-func phaseTestingContractDir(stateDir string, f *feature.Feature, phase int) string {
-	return PhaseDir(stateDir, f, phase)
-}
-
-// PhaseTestingContractPath returns the absolute path to a roadmap phase's
-// compiled testing contract artifact.
-func PhaseTestingContractPath(stateDir string, f *feature.Feature, phase int) string {
-	return filepath.Join(phaseTestingContractDir(stateDir, f, phase), "testing-contract.yaml")
-}
-
 // RoadmapDir returns the roadmap artifacts directory within the active run.
 // e.g., runs/run-001/roadmap/.
 func RoadmapDir(stateDir string, f *feature.Feature) string {
@@ -89,6 +76,19 @@ type iterationMeta struct {
 	MadeProgress bool          `yaml:"made_progress"`
 	CostUSD      float64       `yaml:"cost_usd,omitempty"`
 	Context      *contextMeta  `yaml:"context,omitempty"`
+
+	// Multi-axis review round state, replayed on resume.
+	AxisVerdicts map[string]string `yaml:"axis_verdicts,omitempty"`
+	ReviewHeads  map[string]string `yaml:"review_heads,omitempty"`
+	Handoff      string            `yaml:"handoff,omitempty"`
+	// CodeChanged marks a per-phase review that followed code changes made
+	// after the previous review.
+	CodeChanged bool `yaml:"code_changed,omitempty"`
+	// ReviewDirt fingerprints the uncommitted work the review saw.
+	ReviewDirt string `yaml:"review_dirt,omitempty"`
+	// Pending names the stage a review iteration still owes after its
+	// review ("fix" or "handoff"), so a resumed loop runs only that stage.
+	Pending string `yaml:"pending,omitempty"`
 }
 
 type contextMeta struct {

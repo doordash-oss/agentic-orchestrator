@@ -15,10 +15,14 @@
 package agent
 
 import (
+	"fmt"
+	"maps"
 	"os"
 	"path/filepath"
 	"slices"
+	"strconv"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/doordash-oss/agentic-orchestrator/internal/feature"
@@ -37,7 +41,7 @@ func TestImplementationReviewAxesForGate(t *testing.T) {
 		want                 []string
 	}{
 		{
-			name:    "moonshot non-frontend per-phase selects existing read-only axes",
+			name:    "moonshot non-frontend per-phase selects existing axes",
 			gate:    implementationReviewGatePerPhase,
 			profile: feature.PipelineMoonshot,
 			want:    []string{"Craft", "Functionality/Evidence", "Cleanliness"},
@@ -118,7 +122,7 @@ func TestImplementationReviewAxesForGate(t *testing.T) {
 			for _, axis := range axes {
 				got = append(got, axis.Name)
 				switch axis.Name {
-				case "QA", "Design":
+				case "Functionality/Evidence", "QA", "Design":
 					if axis.ExecutionPosture != reviewPostureLiveRun {
 						t.Errorf("axis %s ExecutionPosture = %q, want %q", axis.Name, axis.ExecutionPosture, reviewPostureLiveRun)
 					}
@@ -258,22 +262,18 @@ func TestComposeImplementationReviewFeedbackPoolsDesignOriginalityBlock(t *testi
 
 func TestBuildImplementationReviewAxisPromptIncludesFinalGateContext(t *testing.T) {
 	got := buildImplementationReviewAxisPromptWithOpts(implementationReviewAxisPromptOpts{
-		Gate:                                 implementationReviewGateFinal,
-		AxisLabel:                            "Functionality/Evidence",
-		FeatureDescription:                   "Assembled feature intent.",
-		DesignArtifactPath:                   "/design.md",
-		ExitCriteria:                         "Feature fully implemented.",
-		DiffBase:                             "main",
-		PreviousFeedback:                     "Prior aggregate finding.",
-		Iteration:                            2,
-		RoadmapPath:                          "/roadmap.md",
-		PlanPath:                             "/phase-plan.md",
-		PhaseType:                            "tdd-fill-in",
-		IterDir:                              "/review/iteration-02",
-		FeedbackPath:                         "/review/iteration-02/functionality-evidence/review-feedback.md",
-		PriorImplementationReportPaths:       []string{"/phase-01/implement/iteration-01/verification-report.yaml"},
-		PriorImplementationEvidenceRootDirs:  []string{"/phase-01/implement/iteration-01"},
-		PriorImplementationEvidenceArtifacts: []string{"/phase-01/implement/iteration-01/screenshots/dashboard.png"},
+		Gate:               implementationReviewGateFinal,
+		AxisLabel:          "Functionality/Evidence",
+		FeatureDescription: "Assembled feature intent.",
+		DesignArtifactPath: "/design.md",
+		ExitCriteria:       "Feature fully implemented.",
+		DiffBase:           "main",
+		Iteration:          2,
+		RoadmapPath:        "/roadmap.md",
+		PlanPath:           "/phase-plan.md",
+		PhaseType:          "tdd-fill-in",
+		IterDir:            "/review/iteration-02",
+		FeedbackPath:       "/review/iteration-02/functionality-evidence/review-feedback.md",
 	})
 
 	for _, want := range []string{
@@ -286,10 +286,6 @@ func TestBuildImplementationReviewAxisPromptIncludesFinalGateContext(t *testing.
 		"Feature fully implemented.",
 		"Read the approved roadmap at: /roadmap.md",
 		"Read the implementation plan at: /phase-plan.md",
-		"Prior aggregate finding.",
-		"/phase-01/implement/iteration-01/verification-report.yaml",
-		"/phase-01/implement/iteration-01",
-		"/phase-01/implement/iteration-01/screenshots/dashboard.png",
 		"Review feedback output: /review/iteration-02/functionality-evidence/review-feedback.md",
 	} {
 		if !strings.Contains(got, want) {
@@ -309,20 +305,19 @@ func TestBuildImplementationReviewAxisPromptIncludesFinalGateContext(t *testing.
 
 func TestBuildImplementationReviewAxisPromptLiveRunFinalGuidance(t *testing.T) {
 	got := buildImplementationReviewAxisPromptWithOpts(implementationReviewAxisPromptOpts{
-		Gate:             implementationReviewGateFinal,
-		AxisLabel:        "QA",
-		LiveRunAxis:      true,
-		IterDir:          "/review/iteration-01",
-		FeedbackPath:     "/review/iteration-01/qa/review-feedback.md",
-		ExitCriteria:     "Feature works end to end.",
-		RoadmapPath:      "/roadmap.md",
-		PlanPath:         "/phase-plan.md",
-		PreviousFeedback: "",
+		Gate:         implementationReviewGateFinal,
+		AxisLabel:    "QA",
+		LiveRunAxis:  true,
+		IterDir:      "/review/iteration-01",
+		FeedbackPath: "/review/iteration-01/qa/review-feedback.md",
+		ExitCriteria: "Feature works end to end.",
+		RoadmapPath:  "/roadmap.md",
+		PlanPath:     "/phase-plan.md",
 	})
 
 	for _, want := range []string{
 		"Axis under review: QA",
-		"Use the live-run posture: build, launch, drive, screenshot, and record evidence as needed.",
+		"Use the live-run posture: build, launch, run, drive, screenshot, and record evidence as needed.",
 		"Treat the source tree as read-only. Write captured evidence only under the live-run evidence root named in this prompt.",
 	} {
 		if !strings.Contains(got, want) {
@@ -354,8 +349,8 @@ func TestBuildImplementationReviewAxisPromptLiveRunPerPhaseGuidance(t *testing.T
 		"Gate under review: Per-Phase Implementation Review",
 		"Approved design: /design.md",
 		"Approved intent:\nFrontend app intent.",
-		"Use the live-run posture: build, launch, drive, screenshot, and record evidence as needed.",
-		"Judge from the attached baseline images plus the captured `### Visual Evidence` screenshots under this iteration's `screenshots/` directory.",
+		"Use the live-run posture: build, launch, run, drive, screenshot, and record evidence as needed.",
+		"For visual judgments, use the attached baseline images plus the screenshots captured for the plan's verification under the implementation iteration directories.",
 	} {
 		if !strings.Contains(got, want) {
 			t.Fatalf("BuildImplementationReviewAxisPromptWithOpts() missing %q in:\n%s", want, got)
@@ -378,7 +373,7 @@ func TestBuildImplementationReviewAxisPromptReadOnlyOmitsLiveRunGuidance(t *test
 
 	for _, unwanted := range []string{
 		"Use the live-run posture",
-		"captured `### Visual Evidence` screenshots",
+		"screenshots captured for the plan's verification",
 	} {
 		if strings.Contains(got, unwanted) {
 			t.Fatalf("read-only prompt unexpectedly included %q in:\n%s", unwanted, got)
@@ -389,7 +384,7 @@ func TestBuildImplementationReviewAxisPromptReadOnlyOmitsLiveRunGuidance(t *test
 	}
 }
 
-func TestRunImplementationReviewAxesUsesLiveRunPostureForFrontendDesign(t *testing.T) {
+func TestRunImplementationReviewAxesUsesLiveRunPostureForAcceptanceAndDesign(t *testing.T) {
 	tmpDir := t.TempDir()
 	workDir := filepath.Join(tmpDir, "work")
 	artifactDir := filepath.Join(tmpDir, "artifacts")
@@ -397,19 +392,20 @@ func TestRunImplementationReviewAxesUsesLiveRunPostureForFrontendDesign(t *testi
 	reviewDir := filepath.Join(iterDir, "review")
 	stateDir := filepath.Join(tmpDir, "state")
 	scriptsDir := filepath.Join(tmpDir, "scripts")
-	for _, dir := range []string{workDir, iterDir, scriptsDir} {
+	npmCache := filepath.Join(tmpDir, "home", ".npm")
+	// A toolchain cache inside the worktree must stay unwritable.
+	modCache := filepath.Join(workDir, ".modcache")
+	for _, dir := range []string{workDir, iterDir, scriptsDir, npmCache, modCache} {
 		if err := os.MkdirAll(dir, 0o755); err != nil {
 			t.Fatalf("mkdir %s: %v", dir, err)
 		}
 	}
+	t.Setenv("HOME", filepath.Dir(npmCache))
+	t.Setenv("GOMODCACHE", modCache)
 
 	progressPath := filepath.Join(artifactDir, "progress.md")
 	if err := os.WriteFile(progressPath, []byte("# Iteration Progress\n\n## Iteration State\n\nSUCCESS\n"), 0o644); err != nil {
 		t.Fatalf("write progress: %v", err)
-	}
-	reportPath := filepath.Join(iterDir, "verification-report.yaml")
-	if err := os.WriteFile(reportPath, []byte("version: 1\nrequired_checks: []\n"), 0o644); err != nil {
-		t.Fatalf("write verification report: %v", err)
 	}
 	planPath := filepath.Join(artifactDir, "phase-plan.md")
 	if err := os.WriteFile(planPath, []byte("# Plan\n"), 0o644); err != nil {
@@ -447,14 +443,14 @@ func TestRunImplementationReviewAxesUsesLiveRunPostureForFrontendDesign(t *testi
 		BuildSession: buildSession,
 		Observer:     observerFromModule(t, false, "", "test"),
 	}
-	status, feedback, err := runImplementationReviewAxes(
+	status, feedback, _, err := runImplementationReviewAxes(
 		cfg,
 		sm,
 		1,
 		iterDir,
 		reviewDir,
 		observe.SpanContext{TraceID: f.TraceID, SpanID: "review-span", FeatureID: f.ID, FeatureName: f.Name, RunNumber: 1},
-		implementationReviewInput{ProgressPath: progressPath, VerificationReportPath: reportPath},
+		implementationReviewInput{ProgressPath: progressPath},
 	)
 	if err != nil {
 		t.Fatalf("runImplementationReviewAxes() error = %v", err)
@@ -463,42 +459,54 @@ func TestRunImplementationReviewAxesUsesLiveRunPostureForFrontendDesign(t *testi
 		t.Fatalf("status = %s, want APPROVED; feedback:\n%s", status, feedback)
 	}
 
-	var liveRun, readOnly int
-	var designOpts BuildSessionOpts
+	liveRun := map[string]BuildSessionOpts{}
+	var readOnly int
 	for _, opts := range *captured {
 		if opts.Model != "reviewer" {
 			continue
 		}
 		if permissionHandlerIncludesLiveRun(opts.PermHandler) {
-			liveRun++
-			designOpts = opts
+			for _, axis := range []string{"Functionality/Evidence", "Design"} {
+				if strings.Contains(opts.Prompt, "Axis under review: "+axis+"\n") {
+					liveRun[axis] = opts
+				}
+			}
 		}
 		if permissionHandlerIncludesBoundedArtifacts(opts.PermHandler) {
 			readOnly++
 		}
 	}
-	if liveRun != 1 {
-		t.Fatalf("live-run review BuildSession calls = %d, want exactly one Design axis; captured=%d", liveRun, len(*captured))
+	if len(liveRun) != 2 {
+		t.Fatalf("live-run review axes = %v, want Functionality/Evidence and Design; captured=%d", slices.Sorted(maps.Keys(liveRun)), len(*captured))
 	}
-	if readOnly != 3 {
-		t.Fatalf("read-only review BuildSession calls = %d, want Craft, Functionality/Evidence, and Cleanliness", readOnly)
+	if readOnly != 2 {
+		t.Fatalf("read-only review BuildSession calls = %d, want Craft and Cleanliness", readOnly)
 	}
-	if !strings.Contains(designOpts.Prompt, "Axis under review: Design") {
-		t.Fatalf("Design prompt missing axis label:\n%s", designOpts.Prompt)
-	}
-	for _, want := range []string{
-		filepath.Join(iterDir, "review", "design", "review-feedback.md"),
-		filepath.Join(iterDir, "review", "design", "evidence"),
-		filepath.Join(iterDir, "review", "design", "build-cache"),
-		filepath.Join(iterDir, "review", "design", "tmp"),
-	} {
-		if !sliceContains(designOpts.WritableRoots, want) {
-			t.Fatalf("Design WritableRoots missing %q in %#v", want, designOpts.WritableRoots)
+	for axis, slug := range map[string]string{"Functionality/Evidence": "functionality-evidence", "Design": "design"} {
+		opts := liveRun[axis]
+		axisDir := filepath.Join(iterDir, "review", slug)
+		for _, want := range []string{
+			filepath.Join(axisDir, "review-feedback.md"),
+			filepath.Join(axisDir, "evidence"),
+			filepath.Join(axisDir, "tmp"),
+			npmCache,
+		} {
+			if !sliceContains(opts.WritableRoots, want) {
+				t.Fatalf("%s WritableRoots missing %q in %#v", axis, want, opts.WritableRoots)
+			}
 		}
+		if sliceContains(opts.WritableRoots, filepath.Join(axisDir, "build-cache")) {
+			t.Fatalf("%s WritableRoots include a throwaway build cache: %#v", axis, opts.WritableRoots)
+		}
+		for _, root := range opts.WritableRoots {
+			if pathWithin(workDir, root) || pathWithin(root, workDir) {
+				t.Fatalf("%s WritableRoots include %q, which overlaps the worktree %q", axis, root, workDir)
+			}
+		}
+		requirePermissionDecision(t, opts.PermHandler, "Bash", `{"command":"npm install && npm run build > out.log"}`, "allow")
+		requirePermissionDecision(t, opts.PermHandler, "Write", `{"file_path":"`+filepath.Join(axisDir, "evidence", "home.png")+`"}`, "allow")
+		requirePermissionDecision(t, opts.PermHandler, "Write", `{"file_path":"`+filepath.Join(workDir, "main.go")+`"}`, "deny")
 	}
-	requirePermissionDecision(t, designOpts.PermHandler, "Bash", `{"command":"npm install && npm run build > out.log"}`, "allow")
-	requirePermissionDecision(t, designOpts.PermHandler, "Write", `{"file_path":"`+filepath.Join(iterDir, "review", "design", "evidence", "home.png")+`"}`, "allow")
-	requirePermissionDecision(t, designOpts.PermHandler, "Write", `{"file_path":"`+filepath.Join(workDir, "main.go")+`"}`, "deny")
 }
 
 func TestRunImplementationReviewAxesEmitsEventsAndPersistsStatus(t *testing.T) {
@@ -519,10 +527,6 @@ func TestRunImplementationReviewAxesEmitsEventsAndPersistsStatus(t *testing.T) {
 	progressPath := filepath.Join(artifactDir, "progress.md")
 	if err := os.WriteFile(progressPath, []byte("# Iteration Progress\n\n## Iteration State\n\nSUCCESS\n"), 0o644); err != nil {
 		t.Fatalf("write progress: %v", err)
-	}
-	reportPath := filepath.Join(iterDir, "verification-report.yaml")
-	if err := os.WriteFile(reportPath, []byte("version: 1\nrequired_checks: []\n"), 0o644); err != nil {
-		t.Fatalf("write verification report: %v", err)
 	}
 	planPath := filepath.Join(artifactDir, "phase-plan.md")
 	if err := os.WriteFile(planPath, []byte("# Plan\n"), 0o644); err != nil {
@@ -561,14 +565,14 @@ func TestRunImplementationReviewAxesEmitsEventsAndPersistsStatus(t *testing.T) {
 		BuildSession: mockBuildSession("", reviewScript),
 		Observer:     observerFromModule(t, true, observeDir, "test"),
 	}
-	status, feedback, err := runImplementationReviewAxes(
+	status, feedback, _, err := runImplementationReviewAxes(
 		cfg,
 		sm,
 		1,
 		iterDir,
 		reviewDir,
 		observe.SpanContext{TraceID: f.TraceID, SpanID: "review-span", FeatureID: f.ID, FeatureName: f.Name, RunNumber: 1},
-		implementationReviewInput{ProgressPath: progressPath, VerificationReportPath: reportPath},
+		implementationReviewInput{ProgressPath: progressPath},
 	)
 	if err != nil {
 		t.Fatalf("runImplementationReviewAxes() error = %v", err)
@@ -646,10 +650,6 @@ func TestRunImplementationReviewAxesPerPhaseGateOmitsAcceptanceClause(t *testing
 	if err := os.WriteFile(progressPath, []byte("# Iteration Progress\n\n## Iteration State\n\nSUCCESS\n"), 0o644); err != nil {
 		t.Fatalf("write progress: %v", err)
 	}
-	reportPath := filepath.Join(iterDir, "verification-report.yaml")
-	if err := os.WriteFile(reportPath, []byte("version: 1\nrequired_checks: []\n"), 0o644); err != nil {
-		t.Fatalf("write verification report: %v", err)
-	}
 	planPath := filepath.Join(artifactDir, "phase-plan.md")
 	if err := os.WriteFile(planPath, []byte("# Plan\n"), 0o644); err != nil {
 		t.Fatalf("write plan: %v", err)
@@ -693,14 +693,14 @@ func TestRunImplementationReviewAxesPerPhaseGateOmitsAcceptanceClause(t *testing
 		BuildSession: buildSession,
 		Observer:     observerFromModule(t, false, "", "test"),
 	}
-	status, feedback, err := runImplementationReviewAxes(
+	status, feedback, _, err := runImplementationReviewAxes(
 		cfg,
 		sm,
 		1,
 		iterDir,
 		reviewDir,
 		observe.SpanContext{TraceID: f.TraceID, SpanID: "review-span", FeatureID: f.ID, FeatureName: f.Name, RunNumber: 1},
-		implementationReviewInput{ProgressPath: progressPath, VerificationReportPath: reportPath},
+		implementationReviewInput{ProgressPath: progressPath},
 	)
 	if err != nil {
 		t.Fatalf("runImplementationReviewAxes() error = %v", err)
@@ -722,5 +722,127 @@ func TestRunImplementationReviewAxesPerPhaseGateOmitsAcceptanceClause(t *testing
 		if !strings.Contains(opts.Prompt, "Relevant tests pass") {
 			t.Fatalf("per-phase gate prompt must keep the phase-scoped exit criteria:\n%s", opts.Prompt)
 		}
+	}
+}
+
+// TestImplementLoopMoonshotAcceptanceReviewerRunsPlanVerification drives a
+// Moonshot phase through two iterations: the live-run Functionality/Evidence
+// axis runs the plan's verification itself, requests changes while it fails,
+// and approves once the implementer fixes it.
+func TestImplementLoopMoonshotAcceptanceReviewerRunsPlanVerification(t *testing.T) {
+	tmpDir := t.TempDir()
+	workDir := filepath.Join(tmpDir, "work")
+	artifactDir := filepath.Join(tmpDir, "artifacts")
+	stateDir := filepath.Join(tmpDir, "state", "test-acceptance-live-run")
+	scriptsDir := filepath.Join(tmpDir, "scripts")
+	for _, dir := range []string{workDir, artifactDir, stateDir, scriptsDir} {
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	readyPath := filepath.Join(workDir, "ready.txt")
+	planPath := filepath.Join(artifactDir, "phase-plan.md")
+	plan := "# Phase 1: Ready marker\n\n## Tasks\n\n### Task 1: Write the ready marker\n\n#### Acceptance criteria\n- ready.txt exists in the repository root\n\n## Success Criteria\n\n### Automated Verification\n- [ ] Ready marker exists: `test -f ready.txt`\n"
+	if err := os.WriteFile(planPath, []byte(plan), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	agentScript := testutil.WriteScript(t, scriptsDir, "agent.sh", testutil.JSONLInit+`
+for _d in "`+artifactDir+`"/iteration-*; do :; done
+if [ "$(basename "$_d")" = "iteration-02" ]; then touch "`+readyPath+`"; fi
+`+testutil.WriteImplementNotes(artifactDir)+"\n"+testutil.JSONLSuccess+"\n")
+	approved := testutil.StructuredReviewFeedback("", "", "APPROVED")
+	changesRequested := testutil.StructuredReviewFeedback("- **High**: Automated Verification `test -f ready.txt` fails; see evidence/verify.log.", "", "CHANGES_REQUESTED")
+
+	var mu sync.Mutex
+	var acceptanceOpts []BuildSessionOpts
+	var implementPrompts []string
+	var scriptSeq int
+	buildSession := func(opts BuildSessionOpts) ([]string, []string, *session.SessionOpts, error) {
+		if !isReviewHelper(opts.PermHandler) {
+			mu.Lock()
+			implementPrompts = append(implementPrompts, opts.Prompt)
+			mu.Unlock()
+			return mockBuildSession(agentScript, "")(opts)
+		}
+		_, after, _ := strings.Cut(opts.Prompt, "Review feedback output: ")
+		feedbackPath, _, _ := strings.Cut(after, "\n")
+		axisDir := filepath.Dir(feedbackPath)
+		body := "cat > " + strconv.Quote(feedbackPath) + " <<'REVIEWEOF'\n" + approved + "REVIEWEOF\n"
+		if strings.Contains(opts.Prompt, "Axis under review: Functionality/Evidence\n") {
+			log := filepath.Join(axisDir, "evidence", "verify.log")
+			body = "cd " + strconv.Quote(workDir) + "\nif test -f ready.txt; then\n  echo pass > " + strconv.Quote(log) + "\n" +
+				"  cat > " + strconv.Quote(feedbackPath) + " <<'REVIEWEOF'\n" + approved + "REVIEWEOF\n" +
+				"else\n  echo fail > " + strconv.Quote(log) + "\n" +
+				"  cat > " + strconv.Quote(feedbackPath) + " <<'REVIEWEOF'\n" + changesRequested + "REVIEWEOF\nfi\n"
+			mu.Lock()
+			acceptanceOpts = append(acceptanceOpts, opts)
+			mu.Unlock()
+		}
+		mu.Lock()
+		scriptSeq++
+		name := fmt.Sprintf("review-%02d.sh", scriptSeq)
+		mu.Unlock()
+		script := testutil.WriteScript(t, scriptsDir, name, testutil.JSONLInit+"\n"+body+testutil.JSONLSuccess+"\n")
+		return mockBuildSession("", script)(opts)
+	}
+
+	eventCh := make(chan interface{}, 100)
+	sm := session.NewManager(eventCh)
+	defer sm.Shutdown()
+
+	f := newTestFeature(t, workDir)
+	f.ID = "test-acceptance-live-run"
+	f.Pipeline = feature.PipelineMoonshot
+	f.CurrentRoadmapPhase = 1
+	store := feature.NewStore(filepath.Join(tmpDir, "state"))
+	if err := store.Save(f); err != nil {
+		t.Fatal(err)
+	}
+
+	result, err := runImplementationLoop(ImplementConfig{
+		Feature: f, FeatureStore: store, WorkDir: workDir, PlanPath: planPath,
+		MaxIterations: 3, MaxConsecFails: 3, MaxConsecNoProgress: 3,
+		ExitCriteria: "The ready marker exists.", Model: "agent", ReviewModel: "reviewer",
+		ArtifactDir: artifactDir, StateDir: stateDir, BuildSession: buildSession,
+	}, sm)
+	if err != nil {
+		t.Fatalf("runImplementationLoop() error = %v", err)
+	}
+	if result.FinalStatus != finalStatusReviewPassed || result.Iterations != 2 {
+		t.Fatalf("result = %+v, want review_passed after 2 iterations", result)
+	}
+
+	if len(acceptanceOpts) != 2 {
+		t.Fatalf("acceptance reviewer sessions = %d, want one per iteration", len(acceptanceOpts))
+	}
+	for i, opts := range acceptanceOpts {
+		axisDir := filepath.Join(artifactDir, fmt.Sprintf("iteration-%02d", i+1), "review", "functionality-evidence")
+		if !permissionHandlerIncludesLiveRun(opts.PermHandler) {
+			t.Fatalf("iteration %d acceptance reviewer is not live-run", i+1)
+		}
+		for _, want := range []string{"Evidence root: " + filepath.Join(axisDir, "evidence"), planPath, "Use the live-run posture"} {
+			if !strings.Contains(opts.Prompt, want) {
+				t.Fatalf("iteration %d acceptance prompt missing %q:\n%s", i+1, want, opts.Prompt)
+			}
+		}
+		for _, disposable := range []string{"build-cache", "tmp"} {
+			if _, statErr := os.Stat(filepath.Join(axisDir, disposable)); !os.IsNotExist(statErr) {
+				t.Fatalf("iteration %d %s scratch kept after review: %v", i+1, disposable, statErr)
+			}
+		}
+	}
+	for iteration, want := range map[string]string{"iteration-01": "fail", "iteration-02": "pass"} {
+		data, readErr := os.ReadFile(filepath.Join(artifactDir, iteration, "review", "functionality-evidence", "evidence", "verify.log"))
+		if readErr != nil || strings.TrimSpace(string(data)) != want {
+			t.Fatalf("%s verify.log = %q, %v; want %q", iteration, data, readErr, want)
+		}
+	}
+	aggregate, err := os.ReadFile(filepath.Join(artifactDir, "iteration-01", "review-feedback.md"))
+	if err != nil || !strings.Contains(string(aggregate), "`test -f ready.txt` fails") {
+		t.Fatalf("iteration-01 aggregate feedback = %q, %v; want the acceptance finding", aggregate, err)
+	}
+	if len(implementPrompts) != 2 || !strings.Contains(implementPrompts[1], "`test -f ready.txt` fails") {
+		t.Fatalf("iteration-02 implement prompt did not carry the acceptance finding: %d prompts", len(implementPrompts))
 	}
 }

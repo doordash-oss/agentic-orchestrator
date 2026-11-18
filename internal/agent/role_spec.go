@@ -60,10 +60,9 @@ type roleArtifactSpec struct {
 // reminder. Use it for the Inquiry/Design/Roadmap/Plan family of roles; leave
 // it false for Implement and any other role that has to modify source code.
 //
-// IterationState marks a role whose artifact contract carries a structured
-// iteration state (progress.md). Only such roles may end a turn with the
-// "retry" completion outcome; every other role must complete with "success"
-// and record any findings in its artifacts.
+// AllowsRetry marks a role whose iterations may end with the "retry"
+// completion outcome, asking for another pass. Every other role must
+// complete with "success" and record any findings in its artifacts.
 type roleSpec struct {
 	Phase                feature.Phase
 	Role                 Role
@@ -71,7 +70,18 @@ type roleSpec struct {
 	OutputRoots          []outputRootSpec
 	Artifacts            []roleArtifactSpec
 	ReadOnlyOutsideRoots bool
-	IterationState       bool
+	AllowsRetry          bool
+}
+
+// hasValidatedArtifact reports whether the harness reads any of the role's
+// artifacts.
+func (s roleSpec) hasValidatedArtifact() bool {
+	for _, artifact := range s.Artifacts {
+		if artifact.Validate != nil {
+			return true
+		}
+	}
+	return false
 }
 
 // artifactPath resolves an artifact path using the spec's named output roots.

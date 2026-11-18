@@ -55,35 +55,6 @@ func discoverCarriedPhasePlanDirs(sealedRunDir string) ([]string, error) {
 	return out, nil
 }
 
-// discoverCarriedPhaseFiles scans immediate subdirectories of `sealedRunDir`
-// and returns any root-level contract/history files that should survive a
-// rewind to implementation. The scan is file-driven so new phase or cycle
-// directory names do not require code changes here.
-func discoverCarriedPhaseFiles(sealedRunDir string) ([]string, error) {
-	entries, err := os.ReadDir(sealedRunDir)
-	if err != nil {
-		if os.IsNotExist(err) {
-			return nil, nil
-		}
-		return nil, fmt.Errorf("scanning sealed run dir for phase files: %w", err)
-	}
-
-	var out []string
-	for _, e := range entries {
-		if !e.IsDir() {
-			continue
-		}
-		for _, fileName := range []string{"testing-contract.yaml"} {
-			rel := filepath.Join(e.Name(), fileName)
-			if info, err := os.Stat(filepath.Join(sealedRunDir, rel)); err == nil && !info.IsDir() {
-				out = append(out, rel)
-			}
-		}
-	}
-	sort.Strings(out)
-	return out, nil
-}
-
 func discoverPartialImplementCarryForward(sealedRunDir string, targetRoadmapPhase int) ([]string, error) {
 	entries, err := os.ReadDir(sealedRunDir)
 	if err != nil {
@@ -111,10 +82,6 @@ func discoverPartialImplementCarryForward(sealedRunDir string, targetRoadmapPhas
 			implSub := filepath.Join(e.Name(), "implement")
 			if info, err := os.Stat(filepath.Join(sealedRunDir, implSub)); err == nil && info.IsDir() {
 				out = append(out, implSub)
-			}
-			contract := filepath.Join(e.Name(), "testing-contract.yaml")
-			if info, err := os.Stat(filepath.Join(sealedRunDir, contract)); err == nil && !info.IsDir() {
-				out = append(out, contract)
 			}
 		}
 	}
@@ -264,7 +231,7 @@ func carryForwardArtifactKeyForPartialImplement(key string, targetRoadmapPhase i
 // carryForwardCostKey reports whether a PhaseCosts/PhaseTimings/SessionCosts
 // key survives a rewind to `target` (`targetRoadmapPhase` > 0 for partial
 // implement rewinds). Mirrors the artifact matrices, extended with the
-// cost-only keys ("knowledgebase", "phase-N-impl"): time and money already
+// cost-only keys (legacy "knowledgebase", "phase-N-impl"): time and money already
 // spent on phases whose outputs are kept stay visible on the new run. Spend
 // on phases being redone stays only on the sealed run's ledger.
 func carryForwardCostKey(key string, target Phase, targetRoadmapPhase int) bool {

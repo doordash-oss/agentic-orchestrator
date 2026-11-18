@@ -44,8 +44,7 @@ const installStopConfirmPoll = 200 * time.Millisecond
 // inject deterministic fakes through UpdateOptions.stopper.
 type installStopper interface {
 	// stoppableFeatures lists feature identities matching the enabled
-	// pause-stop projection (running or need-user-input features and active
-	// children), deepest children first so parent/child relationship guards
+	// pause-stop projection (running features and active children), deepest children first so parent/child relationship guards
 	// pass. A listing error means detection failed.
 	stoppableFeatures(ctx context.Context) ([]string, error)
 	// stopFeature interrupts one feature through the guarded mutation,
@@ -69,8 +68,7 @@ type handlerInstallStopper struct {
 }
 
 // stoppableFeatures walks the same projection that enables the pause-stop
-// action and counts detector activity: running or need-user-input features,
-// skipping children whose relationship is closed. Children are ordered
+// action and counts detector activity: running features, skipping children whose relationship is closed. Children are ordered
 // before their parents (deepest first) so stopping them satisfies the
 // parent/child relationship guards.
 func (s handlerInstallStopper) stoppableFeatures(context.Context) ([]string, error) {
@@ -110,7 +108,7 @@ func (s handlerInstallStopper) stoppableFeatures(context.Context) ([]string, err
 			// reconciliation; that work is covered by its reservations.
 			continue
 		}
-		if f.Status.IsRunning() || f.Status == feature.StatusNeedUserInput {
+		if f.Status.IsRunning() {
 			targets = append(targets, stopTarget{id: f.ID, depth: depth(f)})
 		}
 	}

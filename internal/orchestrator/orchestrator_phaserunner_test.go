@@ -16,8 +16,6 @@ package orchestrator_test
 
 import (
 	"context"
-	"encoding/json"
-	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -82,8 +80,7 @@ func newCapturingPhaseRunner(t *testing.T) *capturingPhaseRunner {
 	stateDir := t.TempDir()
 	sm := mocks.NewMockSessionManager()
 	cmd := mocks.NewMockCommandRunner()
-	// Default: git rev-parse HEAD returns a stable commit so KB freshness
-	// can be observed as non-fresh (we don't seed state.json by default).
+	// Default: git commands return a stable commit.
 	cmd.RunFn = func(ctx context.Context, name string, args []string, opts ports.CommandOpts) ([]byte, error) {
 		return []byte("deadbeef\n"), nil
 	}
@@ -131,7 +128,7 @@ func newCapturingPhaseRunner(t *testing.T) *capturingPhaseRunner {
 
 // capturedByPhase returns captured BuildSessionOpts entries whose Phase
 // matches want. A helper because a single StartFeature call may trigger
-// multiple BuildSession invocations (e.g. one per repo in KB).
+// multiple BuildSession invocations.
 func (c *capturingPhaseRunner) capturedByPhase(want feature.Phase) []agent.BuildSessionOpts {
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -156,36 +153,6 @@ func (c *capturingPhaseRunner) startSessionsByPhase(want feature.Phase) []mocks.
 	return out
 }
 
-// seedFreshKB writes a state.json + index.md under the KB dir for repoName
-// so that agent.IsKBFresh returns true when paired with a CommandRunner
-// that echoes the same head commit. Returns the kbDir path.
-func seedFreshKB(t *testing.T, stateDir, repoName, headCommit string) string {
-	t.Helper()
-	kbDir := agent.KBStateDir(stateDir, repoName)
-	if err := os.MkdirAll(kbDir, 0o755); err != nil {
-		t.Fatalf("MkdirAll(%s): %v", kbDir, err)
-	}
-	// Write state.json with matching head commit.
-	stateData := map[string]any{
-		"head_commit":  headCommit,
-		"last_updated": time.Now().UTC().Format(time.RFC3339),
-		"version":      1,
-	}
-	b, err := json.Marshal(stateData)
-	if err != nil {
-		t.Fatalf("marshal state: %v", err)
-	}
-	if err := os.WriteFile(filepath.Join(kbDir, "state.json"), b, 0o644); err != nil {
-		t.Fatalf("write state.json: %v", err)
-	}
-	// Write a non-empty index.md so the existence check passes.
-	if err := os.WriteFile(agent.KBPath(kbDir), []byte("# KB\n"), 0o644); err != nil {
-		t.Fatalf("write index.md: %v", err)
-	}
-	return kbDir
-}
-
-// writeRoadmap writes a minimal roadmap document with two phases to path.
 func writeRoadmap(t *testing.T, path string) {
 	t.Helper()
 	body := strings.Join([]string{
@@ -204,178 +171,6 @@ func writeRoadmap(t *testing.T, path string) {
 	}, "\n")
 	if err := os.WriteFile(path, []byte(body), 0o644); err != nil {
 		t.Fatalf("write roadmap: %v", err)
-	}
-}
-
-// ---------------------------------------------------------------------------
-// Item 5: KB per-repo fan-out (mixed-fresh case)
-// ---------------------------------------------------------------------------
-//
-// With 3 repos where 1 is fresh (state.json + index.md match the runner's
-// HEAD commit) and 2 are not, startKB must:
-//   - transition via StartKnowledgeBase + InitKBStatus exactly once
-//   - NOT call RunKnowledgeBaseForRepo for the fresh repo — instead
-//     MarkRepoKBCompleted is recorded for that repo
-//   - call RunKnowledgeBaseForRepo for each non-fresh repo, which propagates
-//     to MockSessionManager.StartSession with phase=PhaseKnowledgeBase and
-//     session IDs of the form "<featureID>-kb-<repoName>"
-//
-// This exercises the per-repo fan-out through a real PhaseRunner instead of
-// the "not observable" path called out in iteration-01 review feedback.
-
-func TestOrchestrator_StartKB_MixedFresh_FansOutPerRepo(t *testing.T) {
-	cpr := newCapturingPhaseRunner(t)
-
-	// Seed repo-fresh as fresh against headCommit "deadbeef" — the default
-	// MockCommandRunner response.
-	seedFreshKB(t, cpr.stateDir, "repo-fresh", "deadbeef")
-	// repo-stale and repo-dirty are left without state.json so they are
-	// treated as not fresh by IsKBFresh.
-
-	f := &feature.Feature{
-		ID:           "feat-mixed",
-		Status:       feature.StatusInterrupted,
-		CurrentPhase: feature.PhaseKnowledgeBase,
-		Pipeline:     feature.PipelineLarge,
-		Repos: []feature.FeatureRepo{
-			{Name: "repo-fresh", Path: t.TempDir()},
-			{Name: "repo-stale", Path: "/tmp/repo-stale"},
-			{Name: "repo-dirty", Path: "/tmp/repo-dirty"},
-		},
-	}
-	fs, lc := newStoredFeatureFixture(t, f)
-	cpr.pr.FeatureStore = fs
-
-	var startedPhases []feature.Phase
-	o := orchestrator.New(orchestrator.Deps{
-		Manager:     lc,
-		Store:       fs,
-		Sessions:    cpr.sm,
-		PhaseRunner: cpr.pr,
-		CmdRunner:   cpr.cmd,
-	}, orchestrator.Hooks{
-		OnPhaseStarted: func(id string, p feature.Phase) {
-			startedPhases = append(startedPhases, p)
-		},
-	})
-
-	if err := o.StartFeature("feat-mixed"); err != nil {
-		t.Fatalf("StartFeature: %v", err)
-	}
-
-	stored := loadStoredFeature(t, fs, f.ID)
-	if stored.Status != feature.StatusBuildingKB || stored.KBStatus["repo-fresh"] != "completed" {
-		t.Fatalf("persisted KB state = status %s, repos %v; want BuildingKB with repo-fresh completed", stored.Status, stored.KBStatus)
-	}
-
-	// Two KB sessions started — one per non-fresh repo.
-	kbSessions := cpr.startSessionsByPhase(feature.PhaseKnowledgeBase)
-	if len(kbSessions) != 2 {
-		t.Fatalf("KB StartSession calls = %d, want 2", len(kbSessions))
-	}
-	gotRepoIDs := map[string]bool{}
-	for _, call := range kbSessions {
-		if call.FeatureID != "feat-mixed" {
-			t.Errorf("KB session featureID = %q, want feat-mixed", call.FeatureID)
-		}
-		gotRepoIDs[call.ID] = true
-	}
-	for _, want := range []string{"feat-mixed-kb-repo-stale", "feat-mixed-kb-repo-dirty"} {
-		if !gotRepoIDs[want] {
-			t.Errorf("missing KB session with ID %q; got %v", want, gotRepoIDs)
-		}
-	}
-	if gotRepoIDs["feat-mixed-kb-repo-fresh"] {
-		t.Error("fresh repo should NOT get a KB StartSession call")
-	}
-
-	// BuildSession should have been invoked twice for phase=KB, once per
-	// non-fresh repo, with distinct RepoName values.
-	kbBuilds := cpr.capturedByPhase(feature.PhaseKnowledgeBase)
-	if len(kbBuilds) != 2 {
-		t.Fatalf("BuildSession calls for KB = %d, want 2", len(kbBuilds))
-	}
-	buildRepos := map[string]bool{}
-	for _, b := range kbBuilds {
-		buildRepos[b.RepoName] = true
-	}
-	for _, want := range []string{"repo-stale", "repo-dirty"} {
-		if !buildRepos[want] {
-			t.Errorf("BuildSession(KB) missing RepoName %q; got %v", want, buildRepos)
-		}
-	}
-
-	// PhaseStarted hook fired exactly once for KB.
-	if len(startedPhases) != 1 || startedPhases[0] != feature.PhaseKnowledgeBase {
-		t.Errorf("startedPhases = %v, want [PhaseKnowledgeBase]", startedPhases)
-	}
-
-	refuteKBIndexDirCreated(t, cpr.stateDir, "repo-fresh")
-}
-
-// With every repo fresh, startKB skips straight to Inquire: no KB transition,
-// no per-repo completion bookkeeping, no KB sessions, and nothing written
-// under the knowledge-base state directories.
-func TestOrchestrator_StartKB_AllFresh_SkipsToInquire(t *testing.T) {
-	cpr := newCapturingPhaseRunner(t)
-
-	repoNames := []string{"repo-one", "repo-two"}
-	var repos []feature.FeatureRepo
-	for _, name := range repoNames {
-		seedFreshKB(t, cpr.stateDir, name, "deadbeef")
-		repos = append(repos, feature.FeatureRepo{Name: name, Path: t.TempDir()})
-	}
-
-	f := &feature.Feature{
-		ID:           "feat-all-fresh",
-		Status:       feature.StatusInterrupted,
-		CurrentPhase: feature.PhaseKnowledgeBase,
-		Pipeline:     feature.PipelineLarge,
-		Repos:        repos,
-	}
-	fs, lc := newStoredFeatureFixture(t, f)
-	cpr.pr.FeatureStore = fs
-
-	var startedPhases []feature.Phase
-	o := orchestrator.New(orchestrator.Deps{
-		Manager:     lc,
-		Store:       fs,
-		Sessions:    cpr.sm,
-		PhaseRunner: cpr.pr,
-		CmdRunner:   cpr.cmd,
-	}, orchestrator.Hooks{
-		OnPhaseStarted: func(id string, p feature.Phase) {
-			startedPhases = append(startedPhases, p)
-		},
-	})
-
-	if err := o.StartFeature(f.ID); err != nil {
-		t.Fatalf("StartFeature: %v", err)
-	}
-
-	stored := loadStoredFeature(t, fs, f.ID)
-	if stored.Status != feature.StatusInquiring || len(stored.KBStatus) != 0 {
-		t.Errorf("persisted state = status %s, KB %v; want Inquiring with no KB bookkeeping", stored.Status, stored.KBStatus)
-	}
-	if kbSessions := cpr.startSessionsByPhase(feature.PhaseKnowledgeBase); len(kbSessions) != 0 {
-		t.Errorf("KB StartSession calls = %d, want 0", len(kbSessions))
-	}
-	if len(startedPhases) != 1 || startedPhases[0] != feature.PhaseInquire {
-		t.Errorf("startedPhases = %v, want [PhaseInquire]", startedPhases)
-	}
-
-	for _, name := range repoNames {
-		refuteKBIndexDirCreated(t, cpr.stateDir, name)
-	}
-}
-
-// refuteKBIndexDirCreated fails when startKB left an "index" directory in the
-// repo's knowledge-base state directory.
-func refuteKBIndexDirCreated(t *testing.T, stateDir, repoName string) {
-	t.Helper()
-	dir := filepath.Join(agent.KBStateDir(stateDir, repoName), "index")
-	if _, err := os.Stat(dir); !errors.Is(err, os.ErrNotExist) {
-		t.Errorf("knowledge-base index directory %s: stat err = %v, want not exist", dir, err)
 	}
 }
 
@@ -777,12 +572,12 @@ func TestOrchestrator_StartPhase_PhaseRunnerDispatch_Implement(t *testing.T) {
 // ---------------------------------------------------------------------------
 // StartFeature fallback — interrupted feature with corrupted/missing
 // current_phase (zero value == PhaseResearch) on a Large/Moonshot
-// pipeline should route to the pipeline's FirstPhase (KB), not Research.
+// pipeline should route to the pipeline's FirstPhase (Inquire), not Research.
 //
 // Distinguishes the "legitimately interrupted mid-Research" case (StartedAt
 // set → honor CurrentPhase) from "missing current_phase field" (StartedAt
 // nil → fall back to FirstPhase). StartedAt survives the startup interrupt
-// sweep, unlike KBStatus.
+// sweep.
 // ---------------------------------------------------------------------------
 
 func TestOrchestrator_StartFeature_InterruptedWithMissingCurrentPhase_FallsBackToFirstPhase(t *testing.T) {
@@ -794,7 +589,7 @@ func TestOrchestrator_StartFeature_InterruptedWithMissingCurrentPhase_FallsBackT
 		// CurrentPhase deliberately left zero (== PhaseResearch via iota).
 		Pipeline: feature.PipelineLarge,
 		// StartedAt nil — no phase ever started.
-		Repos: nil, // empty repos so startKB skips straight to Inquire
+		Repos: nil,
 	}
 	fs, lc := newStoredFeatureFixture(t, f)
 	cpr.pr.FeatureStore = fs
@@ -814,22 +609,19 @@ func TestOrchestrator_StartFeature_InterruptedWithMissingCurrentPhase_FallsBackT
 		t.Fatalf("StartFeature: %v", err)
 	}
 
-	// Nil StartedAt + zero CurrentPhase + Large pipeline → fallback to KB.
-	// With no repos, startKB cleanly skips to Inquire → StartInquire fires.
+	// Nil StartedAt + zero CurrentPhase + Large pipeline → fallback to Inquire.
 	if got := loadStoredFeature(t, fs, f.ID).Status; got != feature.StatusInquiring {
 		t.Errorf("persisted status = %s, want Inquiring", got)
 	}
 	if observed != feature.PhaseInquire {
-		t.Errorf("OnPhaseStarted phase = %v, want PhaseInquire (KB skipped to Inquire)", observed)
+		t.Errorf("OnPhaseStarted phase = %v, want PhaseInquire", observed)
 	}
 }
 
 // Companion: an interrupted feature with StartedAt set and CurrentPhase==0
 // (PhaseResearch) should honor the CurrentPhase — it was legitimately
-// interrupted mid-Research. Regression guard: the startup interrupt sweep
-// clears KBStatus, so the heuristic must NOT key off KBStatus, otherwise a
-// quit-during-Research feature rewinds all the way back to Inquire/KB on
-// restart.
+// interrupted mid-Research. Regression guard: a quit-during-Research feature
+// must not rewind back to Inquire on restart.
 func TestOrchestrator_StartFeature_InterruptedMidResearch_HonorsCurrentPhase(t *testing.T) {
 	cpr := newCapturingPhaseRunner(t)
 
@@ -839,10 +631,8 @@ func TestOrchestrator_StartFeature_InterruptedMidResearch_HonorsCurrentPhase(t *
 		Status:       feature.StatusInterrupted,
 		CurrentPhase: feature.PhaseResearch, // iota==0, but the intent is real
 		Pipeline:     feature.PipelineLarge,
-		StartedAt:    &started,
-		// KBStatus deliberately empty — simulates the post-sweep state where
-		// InterruptAllRunning cleared it. StartedAt is the signal that
-		// disambiguates legitimate-mid-Research from unset CurrentPhase.
+		// StartedAt disambiguates legitimate-mid-Research from unset CurrentPhase.
+		StartedAt: &started,
 	}
 
 	// Seed an inquire artifact: startResearch demands the questions file

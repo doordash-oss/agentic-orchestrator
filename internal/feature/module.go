@@ -45,11 +45,17 @@ func (gitPRCloser) ClosePR(prURL string) error { return git.ClosePR(prURL) }
 var _ WorktreeOps = (*git.WorktreeManager)(nil)
 var _ PRCloser = gitPRCloser{}
 
+// WorktreesDir is the directory holding every feature worktree for the
+// features state root stateDir.
+func WorktreesDir(stateDir string) string {
+	return filepath.Join(filepath.Dir(stateDir), "worktrees")
+}
+
 // Module provides the feature store, manager, and feature-owned PR closer.
 var Module = fx.Module("feature",
 	fx.Provide(func() PRCloser { return gitPRCloser{} }),
 	fx.Provide(func(p Params) *git.WorktreeManager {
-		return git.NewWorktreeManager(filepath.Join(filepath.Dir(p.StateDir), "worktrees"))
+		return git.NewWorktreeManager(WorktreesDir(p.StateDir))
 	}),
 	fx.Provide(func(wm *git.WorktreeManager) WorktreeOps { return wm }),
 	fx.Provide(func(p Params) *Store {

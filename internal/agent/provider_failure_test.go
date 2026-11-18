@@ -71,6 +71,7 @@ func TestClassifyStartSessionError(t *testing.T) {
 	}{
 		{"missing executable", fmt.Errorf("starting: %w", exec.ErrNotFound), providerFailureHard},
 		{"handshake timeout", errors.New("protocol handshake: opencode initialize timeout: context deadline exceeded"), providerFailureTransient},
+		{"exited before handshake", fmt.Errorf("protocol handshake: %w: exit status 1; stderr: Error: unauthorized", ports.ErrProviderExitedBeforeHandshake), providerFailureTransient},
 		{"shutting down", fmt.Errorf("start: %w", ports.ErrSessionShuttingDown), providerFailureUnknown},
 		{"unrecognized", errors.New("session id already in use"), providerFailureUnknown},
 	}
@@ -184,6 +185,58 @@ func TestRunBoundedHelper_StartSessionHandshakeTimeoutRetries(t *testing.T) {
 	}
 	if want := []string{"helper-handshake", "helper-handshake-retry-02"}; strings.Join(sessionIDs, ",") != strings.Join(want, ",") {
 		t.Fatalf("session IDs = %v, want %v", sessionIDs, want)
+	}
+}
+
+func TestRunBoundedHelper_StartSessionEarlyExitRetries(t *testing.T) {
+	earlyExit := fmt.Errorf("protocol handshake: %w: exit status 1; stderr: Error: database is locked", ports.ErrProviderExitedBeforeHandshake)
+	for _, tc := range []struct {
+		name         string
+		failAttempts int
+		wantIDs      []string
+		wantErr      bool
+	}{
+		{name: "second launch succeeds", failAttempts: 1, wantIDs: []string{"helper-exit", "helper-exit-retry-02"}},
+		{name: "every launch exits early", failAttempts: retryableInfrastructureSessionMaxAttempts,
+			wantIDs: []string{"helper-exit", "helper-exit-retry-02", "helper-exit-retry-03"}, wantErr: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var sessionIDs []string
+			sm := mocks.NewMockSessionManager()
+			sm.StartSessionFn = func(id, featureID string, phase feature.Phase, command []string, workdir string, env []string, opts ...*session.SessionOpts) (ports.SessionHandle, error) {
+				sessionIDs = append(sessionIDs, id)
+				if len(sessionIDs) <= tc.failAttempts {
+					return nil, earlyExit
+				}
+				sess := newBoundedNudgeSession(&llm.ResultMessage{Type: testResultMessageType, Subtype: testResultSuccessValue, StopReason: testStopReasonEndTurn})
+				sess.statusC <- agentStatusSuccess
+				return sess, nil
+			}
+			pr := &PhaseRunner{SessionManager: sm, StateDir: t.TempDir()}
+
+			result, err := pr.runBoundedHelperSession(context.Background(), boundedHelperRunConfig{
+				sessionID: "helper-exit",
+				workDir:   t.TempDir(),
+			})
+			if strings.Join(sessionIDs, ",") != strings.Join(tc.wantIDs, ",") {
+				t.Fatalf("session IDs = %v, want %v", sessionIDs, tc.wantIDs)
+			}
+			if tc.wantErr {
+				if !errors.Is(err, ports.ErrProviderExitedBeforeHandshake) || !strings.Contains(err.Error(), "database is locked") {
+					t.Fatalf("err = %v, want the early-exit error with its stderr", err)
+				}
+				if isProviderUnavailableError(err) {
+					t.Fatalf("err = %v, an early exit must not be provider-unavailable", err)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("runBoundedHelperSession() error = %v", err)
+			}
+			if result.Status != boundedHelperStatusCompleted {
+				t.Fatalf("Status = %q, want completed", result.Status)
+			}
+		})
 	}
 }
 

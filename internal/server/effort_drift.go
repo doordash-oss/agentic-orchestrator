@@ -43,7 +43,6 @@ func effortDriftWarnings(f *feature.Feature, reg *llm.Registry) []Error {
 		{"implementation", f.Models.Implementation, f.Effort.Implementation},
 		{"review", f.Models.Review, f.Effort.Review},
 		{"utilities", f.Models.Utilities, f.Effort.Utilities},
-		{"kb_build", f.Models.KBBuild, f.Effort.KBBuild},
 	}
 	var warnings []Error
 	for _, r := range roles {

@@ -667,8 +667,8 @@ func TestCodexProtocol_TokenUsageUpdated(t *testing.T) {
 
 	u := msg.UsageUpdate
 	// UsageUpdate carries Total (cumulative) tokens for cost tracking
-	if u.InputTokens != 150000 {
-		t.Errorf("InputTokens = %d, want 150000 (Total.InputTokens)", u.InputTokens)
+	if u.InputTokens != 130000 {
+		t.Errorf("InputTokens = %d, want 130000 (Total.InputTokens minus cached)", u.InputTokens)
 	}
 	if u.OutputTokens != 5000 {
 		t.Errorf("OutputTokens = %d, want 5000 (Total.OutputTokens)", u.OutputTokens)

@@ -565,7 +565,7 @@ func TestCreateFeatureAcceptsContextAnnotatedModelFallback(t *testing.T) {
 
 	w := postTrustedJSON(handler, apiPathFeatures, map[string]any{
 		"name":   "fallback model",
-		"models": map[string]string{"kb_build": "sonnet[200K]"},
+		"models": map[string]string{"research": "sonnet[200K]"},
 	})
 	if w.Code != http.StatusCreated {
 		t.Fatalf("create status = %d body=%s; want 201", w.Code, w.Body.String())

@@ -423,7 +423,7 @@ func TestRunBoundedHelper_NudgeWritesContractArtifactsThenCompletes(t *testing.T
 // TestRunBoundedHelper_CommitRejectionNudgesRoleCorrectVerbs pins the live
 // failure where a review validator emitted the retry outcome: the parsed
 // outcome classifies as a clean commit turn, so only the commit step can see
-// that retry is invalid for a role without iteration state. The helper must
+// that retry is invalid for a role that cannot ask for another pass. The helper must
 // correct the live session with the rejection reason — offering success only —
 // instead of failing the phase, and then complete on the corrected outcome.
 func TestRunBoundedHelper_CommitRejectionNudgesRoleCorrectVerbs(t *testing.T) {
@@ -449,7 +449,7 @@ func TestRunBoundedHelper_CommitRejectionNudgesRoleCorrectVerbs(t *testing.T) {
 	}()
 
 	// The validator writes its verdict but closes with retry — invalid for a
-	// role without iteration state. Expect a reason-carrying correction that
+	// role that cannot ask for another pass. Expect a reason-carrying correction that
 	// does not re-offer retry.
 	writeReviewFeedbackFile(t, filepath.Join(phaseDir, "review-feedback.md"), testutil.StructuredReviewFeedback("", "", agentStatusChangesRequested))
 	sess.setRootIntent(llm.CompletionIntent{Found: true, Status: llm.CompletionIntentRetry})
@@ -457,7 +457,7 @@ func TestRunBoundedHelper_CommitRejectionNudgesRoleCorrectVerbs(t *testing.T) {
 
 	select {
 	case nudge := <-sess.nudges:
-		if !strings.Contains(nudge, "retry is only valid for a role with a structured iteration state") {
+		if !strings.Contains(nudge, "retry is only valid for a role that allows another pass") {
 			t.Fatalf("nudge missing the rejection reason: %s", nudge)
 		}
 		if strings.Contains(nudge, `"status":"retry"`) {
@@ -1158,7 +1158,7 @@ func TestRunBoundedHelper_ArmsKeepAliveForCompletionHelpers(t *testing.T) {
 				sess := newUtilityTestSession()
 				sess.CostVal = &llm.ResultMessage{Type: testResultMessageType, Subtype: testResultSuccessValue, Result: "done", StopReason: testStopReasonEndTurn}
 				if tc.phaseDir != "" {
-					if err := os.WriteFile(filepath.Join(tc.phaseDir, "index.md"), []byte("# Knowledge Base\n"), 0o644); err != nil {
+					if err := os.WriteFile(filepath.Join(tc.phaseDir, "research.md"), []byte("# Research\n"), 0o644); err != nil {
 						t.Fatalf("write contract artifact: %v", err)
 					}
 					sess.setRootIntent(validSuccessCompletionIntent())
@@ -1172,8 +1172,8 @@ func TestRunBoundedHelper_ArmsKeepAliveForCompletionHelpers(t *testing.T) {
 				sessionID:     "helper-keepalive",
 				workDir:       t.TempDir(),
 				completionDir: tc.phaseDir,
-				contractPhase: feature.PhaseKnowledgeBase,
-				contractRole:  RoleKnowledgeBaseBuilder,
+				contractPhase: feature.PhaseResearch,
+				contractRole:  RoleResearcher,
 			})
 			if err != nil {
 				t.Fatalf("runBoundedHelperSession() error = %v", err)

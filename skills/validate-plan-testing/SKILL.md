@@ -31,7 +31,7 @@ For roadmaps:
 - **DO NOT evaluate**: Whether every edge case, race condition, or boundary value is enumerated. Per-phase planning provides exhaustive test strategy
 - **DO NOT reject** for missing tests on topics the roadmap explicitly defers or doesn't cover
 
-If the document is a **per-phase plan** using `skills/plan-phase/format.md`, evaluate testing through `## Tasks` acceptance criteria and `## Success Criteria` only. Do NOT require a separate testing-strategy section, test-first ordering, exhaustive edge-case inventory, exact test type taxonomy, or code-level test file names.
+If the document is a **per-phase plan** using `skills/plan-phase/format.md`, evaluate testing through `## Tasks` acceptance criteria and the `## Verification` section only. Do NOT require a separate testing-strategy section, test-first ordering, exhaustive edge-case inventory, exact test type taxonomy, or code-level test file names.
 
 ## Human Decisions Are Authoritative
 
@@ -42,12 +42,10 @@ The plan may contain a **"Human Decisions"** section that records questions the 
 Evaluate the plan against these five dimensions:
 
 For per-phase plans, collapse these dimensions into a concise check:
-- Top-level `### Automated Verification` exists and contains executable commands, or one justified `None required` item when the phase has no meaningful executable behavior.
+- `## Verification` gives commands a reader can run, or explains why a phase without executable behavior has none, and says what to look at for behavior a command cannot show.
 - Each task's acceptance criteria describe observable, testable behavior.
-- Irreducible semantic judgment has at most one consolidated `### Manual Verification` item; outcomes already covered by commands or evidence artifacts are not repeated as self-attestation.
-- Primary-journey evidence has at most one consolidated `### Behavioral Evidence` item and never duplicates command transcripts already captured by the harness.
-- Multi-repo commands each declare `[repo: <name>]`; all commands are repo-relative because the harness runs them from that repository root.
-- Critical failure modes named by the roadmap or phase goal are represented in acceptance criteria or success criteria.
+- When the feature spans several repos, the Verification section says which repo each command runs in.
+- Critical failure modes named by the roadmap or phase goal are represented in acceptance criteria or the Verification section.
 
 ### 1. Coverage Adequacy
 - Are all new code paths planned to be tested?
@@ -101,7 +99,7 @@ Three `## ` sections, in this exact order, are mandatory:
 
 ## Approval Threshold
 
-Only reject for test strategy gaps that would leave **critical functionality unverified** — missing happy-path tests for core features, missing backward compatibility tests for data migration, missing verification for roadmap-identified risks, or a per-phase plan whose acceptance criteria / success criteria do not prove the slice works.
+Only reject for test strategy gaps that would leave **critical functionality unverified** — missing happy-path tests for core features, missing backward compatibility tests for data migration, missing verification for roadmap-identified risks, or a per-phase plan whose acceptance criteria and Verification section do not prove the slice works.
 
 Do NOT request changes for:
 - Missing code-level details (exact test function names, specific mock implementations)
@@ -112,4 +110,4 @@ Do NOT request changes for:
 - Exhaustive edge case enumeration — the per-phase planner determines fine-grained test coverage
 - Tests for topics the plan explicitly defers or delegates to per-phase planning
 - Missing a separate testing-strategy section in a per-phase plan
-- A documentation-only phase using a justified `None required` automated-verification item with proportionate semantic or rendered review
+- A documentation-only phase whose Verification section justifies having no commands and describes a proportionate read-through

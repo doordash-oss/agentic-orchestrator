@@ -190,13 +190,15 @@ func (p *Protocol) updateTokenUsageLocked(usage threadTokenUsage) {
 	}
 }
 
+// usageSnapshotLocked reports uncached input; Codex counts cache reads and
+// writes inside inputTokens.
 func (p *Protocol) usageSnapshotLocked() llm.Usage {
 	source := p.usageState.source
 	if source == "" {
 		source = "unavailable"
 	}
 	return llm.Usage{
-		InputTokens:              p.inputTokens,
+		InputTokens:              max(p.inputTokens-p.cachedInputTokens-p.cacheWriteInputTokens, 0),
 		CacheReadInputTokens:     p.cachedInputTokens,
 		CacheCreationInputTokens: p.cacheWriteInputTokens,
 		OutputTokens:             p.outputTokens,

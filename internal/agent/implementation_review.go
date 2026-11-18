@@ -92,7 +92,7 @@ var implementationReviewAxisRegistry = []implementationReviewAxis{
 		Slug:             "functionality-evidence",
 		SkillName:        "review-implementation-functionality-evidence",
 		Role:             roleImplementationReviewFunctionalityEvidence,
-		ExecutionPosture: reviewPostureReadOnly,
+		ExecutionPosture: reviewPostureLiveRun,
 		Memberships: []implementationReviewGateMembership{
 			{Gate: implementationReviewGatePerPhase, Order: 20, Applies: moonshotImplementationReviewAxis},
 		},
@@ -173,68 +173,91 @@ func implementationReviewAxesForGate(gate implementationReviewGate, selection im
 
 type reviewAxisResult = multiAxisReviewResult
 
-func runImplementationReviewAxes(cfg ImplementConfig, sm ports.SessionManager, iteration int, iterDir, reviewDir string, reviewCtx observe.SpanContext, input implementationReviewInput) (reviewStatus, string, error) {
-	profile := feature.PipelineMoonshot
-	var currentPhaseFrontend bool
-	var anyPhaseFrontend bool
-	if cfg.Feature != nil {
-		profile = cfg.Feature.EffectivePipeline()
-		currentPhaseFrontend = cfg.Feature.RoadmapPhaseFrontend(cfg.Feature.CurrentRoadmapPhase)
-		anyPhaseFrontend = cfg.Feature.AnyRoadmapPhaseFrontend()
+func runImplementationReviewAxes(cfg ImplementConfig, sm ports.SessionManager, iteration int, iterDir, reviewDir string, reviewCtx observe.SpanContext, input implementationReviewInput) (reviewStatus, string, map[string]string, error) {
+	plan := input.Plan
+	if plan == nil {
+		for _, axis := range perPhaseReviewAxes(cfg) {
+			plan = append(plan, reviewAxisRun{Axis: axis, Mode: reviewRoundFull})
+		}
 	}
-	axes := implementationReviewAxesForGate(implementationReviewGatePerPhase, implementationReviewAxisSelection{
-		Profile:              profile,
-		CurrentPhaseFrontend: currentPhaseFrontend,
-		AnyPhaseFrontend:     anyPhaseFrontend,
-	})
-	if len(axes) == 0 {
+	if len(plan) == 0 {
 		feedback := formatStructuredReviewFeedback("Implementation Review", "", "", ReviewApproved)
-		return ReviewApproved, feedback, nil
+		return ReviewApproved, feedback, nil, nil
 	}
 
+	axes := make([]implementationReviewAxis, 0, len(plan))
+	for _, run := range plan {
+		axes = append(axes, run.Axis)
+	}
 	setImplementationReviewAxisStatuses(cfg, axes)
+	if cfg.Feature != nil {
+		for _, name := range input.Sticky {
+			setMultiAxisValidatorState(cfg.FeatureStore, cfg.Feature.ID, name, ReviewApproved.String(), "")
+		}
+	}
 	defer clearImplementationReviewAxisStatuses(cfg)
+
+	// Reviewers may not change the worktrees; a write is undone and fails
+	// the round, as in Final Review.
+	if err := RecordReadOnlyRepoBaseline(context.Background(), cfg.CommandRunner, cfg.Feature, reviewDir); err != nil {
+		return reviewFailed, "", nil, fmt.Errorf("record implementation review read-only repo baseline: %w", err)
+	}
 
 	validationCtx := reviewCtx.Child()
 	validationStart := time.Now()
-	cfg.Observer.ValidationStarted(validationCtx, "implementation_review", len(axes))
+	cfg.Observer.ValidationStarted(validationCtx, "implementation_review", len(plan))
 
-	results := make([]reviewAxisResult, len(axes))
-	runMultiAxisReviews(len(axes), func(i int) {
-		axis := axes[i]
+	results := make([]reviewAxisResult, len(plan))
+	runMultiAxisReviews(len(plan), func(i int) {
+		run := plan[i]
 		axisCtx := validationCtx.Child()
 		axisStart := time.Now()
-		cfg.Observer.ValidatorStarted(axisCtx, axis.Name)
+		cfg.Observer.ValidatorStarted(axisCtx, run.Axis.Name)
 
-		status, feedback, err := runImplementationReviewAxis(cfg, sm, iteration, iterDir, reviewDir, axis, axisCtx, input)
-		results[i] = reviewAxisResult{Axis: axis.Name, Status: status, Feedback: feedback, Error: err}
+		status, feedback, err := runImplementationReviewAxis(cfg, sm, iteration, iterDir, reviewDir, run, axisCtx, input)
+		results[i] = reviewAxisResult{Axis: run.Axis.Name, Status: status, Feedback: feedback, Error: err}
 
 		verdict := status.String()
 		if err != nil {
 			verdict = "error"
 		}
-		cfg.Observer.ValidatorCompleted(axisCtx, axis.Name, verdict, time.Since(axisStart))
-		updateImplementationReviewAxisStatus(cfg, axis.Name, status, err)
+		cfg.Observer.ValidatorCompleted(axisCtx, run.Axis.Name, verdict, time.Since(axisStart))
+		updateImplementationReviewAxisStatus(cfg, run.Axis.Name, status, err)
 	})
+	if cfg.Feature != nil && !isFeatureInterrupted(cfg.FeatureStore, cfg.Feature.ID) {
+		violations, err := EnforceReadOnlyRepoMutations(context.Background(), cfg.CommandRunner, cfg.Feature, feature.PhaseReview, reviewDir)
+		if err != nil {
+			return reviewFailed, "", nil, fmt.Errorf("enforce implementation review read-only repo guard: %w", err)
+		}
+		if len(violations) > 0 {
+			return reviewFailed, "", nil, newProtocolViolationError(roleImplementationReviewCleanliness, iterDir, violations)
+		}
+	}
 
-	status, feedback, err := composeImplementationReviewFeedback(results, len(axes))
+	status, feedback, err := composeImplementationReviewFeedback(results, len(plan))
 	verdict := status.String()
 	if err != nil {
 		verdict = "error"
 	}
-	cfg.Observer.ValidationCompleted(validationCtx, "implementation_review", verdict, time.Since(validationStart), len(axes))
-	return status, feedback, err
+	cfg.Observer.ValidationCompleted(validationCtx, "implementation_review", verdict, time.Since(validationStart), len(plan))
+	verdicts := make(map[string]string, len(plan))
+	for i, run := range plan {
+		verdicts[run.Axis.Slug] = results[i].Status.String()
+	}
+	return status, feedback, verdicts, err
 }
 
+// implementationReviewInput carries a round's scope. A nil Plan runs every
+// per-phase axis in full; Sticky names approved axes the round skips.
 type implementationReviewInput struct {
-	ProgressPath           string
-	ContractPath           string
-	VerificationReportPath string
-	RequiredVerification   []requiredVerificationItem
-	KnownCaveatsGateResult reportGateResult
+	ProgressPath string
+	Plan         []reviewAxisRun
+	Sticky       []string
+	RoundSection func(reviewAxisRun) string
 }
 
-func runImplementationReviewAxis(cfg ImplementConfig, sm ports.SessionManager, iteration int, iterDir, reviewDir string, axis implementationReviewAxis, parentCtx observe.SpanContext, input implementationReviewInput) (reviewStatus, string, error) {
+func runImplementationReviewAxis(cfg ImplementConfig, sm ports.SessionManager, iteration int, iterDir, reviewDir string, run reviewAxisRun, parentCtx observe.SpanContext, input implementationReviewInput) (reviewStatus, string, error) {
+	axis := run.Axis
 	axisSlug := axis.Slug
 	axisDir := filepath.Join(reviewDir, axisSlug)
 	if err := os.MkdirAll(axisDir, 0o755); err != nil {
@@ -253,46 +276,36 @@ func runImplementationReviewAxis(cfg ImplementConfig, sm ports.SessionManager, i
 	removeCompletionReceipt(axisDir)
 	intent := resolvePromptIntent(cfg.Feature)
 	reviewPrompt := buildImplementationReviewAxisPromptWithOpts(implementationReviewAxisPromptOpts{
-		Gate:                   implementationReviewGatePerPhase,
-		AxisLabel:              axis.Name,
-		FeatureDescription:     intent.Description,
-		DesignArtifactPath:     designArtifactPathForImplementationReview(cfg.Feature),
-		LiveRunAxis:            axis.ExecutionPosture == reviewPostureLiveRun,
-		RefactorPassForkPoint:  refactorPassForkPoint(cfg.Feature),
-		PlanPath:               cfg.PlanPath,
-		ExitCriteria:           cfg.ExitCriteria,
-		ProgressPath:           input.ProgressPath,
-		IterDir:                iterDir,
-		ContractPath:           input.ContractPath,
-		VerificationReportPath: input.VerificationReportPath,
-		Iteration:              iteration,
-		RequiredVerification:   input.RequiredVerification,
-		RoadmapPath:            cfg.RoadmapPath,
-		PhaseType:              cfg.PhaseType,
-		FeedbackPath:           feedbackPath,
+		Gate:                  implementationReviewGatePerPhase,
+		AxisLabel:             axis.Name,
+		Repos:                 featureRepoViews(cfg.Feature),
+		FeatureDescription:    intent.Description,
+		DesignArtifactPath:    designArtifactPathForImplementationReview(cfg.Feature),
+		LiveRunAxis:           axis.ExecutionPosture == reviewPostureLiveRun,
+		RefactorPassForkPoint: refactorPassForkPoint(cfg.Feature),
+		PlanPath:              cfg.PlanPath,
+		ExitCriteria:          cfg.ExitCriteria,
+		ProgressPath:          input.ProgressPath,
+		IterDir:               iterDir,
+		Iteration:             iteration,
+		RoadmapPath:           cfg.RoadmapPath,
+		PhaseType:             cfg.PhaseType,
+		FeedbackPath:          feedbackPath,
 	})
+	if input.RoundSection != nil {
+		reviewPrompt += "\n" + input.RoundSection(run)
+	}
 	if cfg.Feature != nil {
 		if block := visualReferencesSection(cfg.Feature.Images, "reviewing this iteration"); block != "" {
 			reviewPrompt = block + reviewPrompt
 		}
-	}
-	if cfg.Feature != nil {
-		if run := cfg.Feature.Run(); run != nil {
-			currentPhase := cfg.Feature.CurrentRoadmapPhase
-			if block := deferralsDueThisPhaseSection(run.Deferrals, currentPhase, deferralPromptKindReview, cfg.RepoName); block != "" {
-				reviewPrompt = block + reviewPrompt
-			}
-		}
-	}
-	if addendum := knownCaveatsReviewAddendum(input.KnownCaveatsGateResult); addendum != "" {
-		reviewPrompt = addendum + "\n\n" + reviewPrompt
 	}
 
 	reviewID := implementationReviewSessionID(cfg, axisSlug, iteration)
 	helper := &PhaseRunner{
 		SessionManager: sm,
 		FeatureStore:   cfg.FeatureStore,
-		StateDir:       cfg.StateDir,
+		StateDir:       cfg.stateRoot(),
 		SkillsDir:      cfg.SkillsDir,
 		GuidelinesDir:  cfg.GuidelinesDir,
 		Observer:       cfg.Observer,
@@ -326,6 +339,7 @@ func runImplementationReviewAxis(cfg ImplementConfig, sm ports.SessionManager, i
 		Kind:                   ports.KindValidator,
 		Label:                  axis.Name,
 		Posture:                axis.ExecutionPosture,
+		SharedCaches:           axis.ExecutionPosture == reviewPostureLiveRun,
 		OnRetry: func(_ int, err error) {
 			if cfg.Feature != nil {
 				markMultiAxisValidatorRetrying(cfg.FeatureStore, cfg.Feature.ID, axis.Name, err)

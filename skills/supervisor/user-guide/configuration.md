@@ -22,7 +22,6 @@ defaults:
     implementation: "opus[1M]"
     review: "gpt-5.4[272K]"
     utilities: "sonnet[200K]"
-    kb_build: "sonnet[200K]"
 ```
 
 | Role             | Default         | Used For                             |
@@ -32,7 +31,6 @@ defaults:
 | `implementation` | `opus[1M]`      | Code implementation                  |
 | `review`         | `gpt-5.4[272K]` | Final Review loop                    |
 | `utilities`      | `sonnet[200K]`  | Supervisor conversation, utility skills |
-| `kb_build`       | `sonnet[200K]`  | Knowledge base construction          |
 
 ## Automatic Bash Review
 
@@ -413,3 +411,5 @@ The same launch flags are accepted by `agentico server`.
   permissions/             # Permission cache (global.json, per-repo JSON)
   agentico.log             # Runtime log output
 ```
+
+`knowledge-base/`, `overlays/`, and `child-kb/` directories that older versions created in `~/.agentic-orchestrator/` are not used or cleaned up by Agentico; you can delete them by hand.

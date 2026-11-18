@@ -143,7 +143,6 @@ const PHASE_MODEL_LABELS: ReadonlyArray<readonly [string, string]> = [
   ['implementation', 'Implementation'],
   ['review', 'Review'],
   ['utilities', 'Utilities'],
-  ['kb_build', 'Knowledge base'],
 ];
 
 const EFFORT_LEVELS = new Set<EffortLevel>([
@@ -983,9 +982,6 @@ function toSnapshot(feature: ServerFeatureDetail): FeatureSnapshot {
     ...(feature.exit_criteria === undefined || feature.exit_criteria === ''
       ? {}
       : { exitCriteria: feature.exit_criteria }),
-    ...(feature.wait_reason === undefined || feature.wait_reason === ''
-      ? {}
-      : { waitReason: redactText(feature.wait_reason) }),
     repos: feature.repos,
     createdAt: feature.created_at,
     activeRun: feature.active_run,
@@ -1159,15 +1155,6 @@ function toSnapshot(feature: ServerFeatureDetail): FeatureSnapshot {
           : { ...feature.review_gate.validator_errors },
       ),
     },
-    ...defined(
-      'verificationItems',
-      feature.verification_items === undefined
-        ? undefined
-        : feature.verification_items.map((item) => ({
-            name: item.name,
-            state: item.state,
-          })),
-    ),
     ...defined(
       'timing',
       feature.timing === undefined ? undefined : { totalSeconds: feature.timing.total_seconds },

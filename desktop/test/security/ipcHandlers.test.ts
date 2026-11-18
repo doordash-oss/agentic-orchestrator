@@ -240,12 +240,6 @@ function makeServices(): IpcServices {
     answerPermission: vi.fn(() => Promise.resolve({ result: 'submitted' })),
     answerQuestions: vi.fn(() => Promise.resolve({ result: 'submitted' })),
     sendHelp: vi.fn(() => Promise.resolve({ result: 'submitted' })),
-    saveGateDraft: vi.fn(() => Promise.resolve({ result: 'drafted' })),
-    resolveGate: vi.fn(() => Promise.resolve({ result: 'resolved' })),
-    waiveTestingContract: vi.fn(() =>
-      Promise.resolve({ result: 'waived', contractRevision: 2, waivedItems: [] }),
-    ),
-    getTestingContract: vi.fn(() => Promise.resolve({ available: false as const })),
     listSessions: vi.fn(() => Promise.resolve([])),
     getSession: vi.fn(() => Promise.reject(new Error('unused'))),
     getSessionTranscript: vi.fn(() => Promise.reject(new Error('unused'))),

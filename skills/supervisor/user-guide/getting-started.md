@@ -1,6 +1,6 @@
 # Getting Started with Agentic Orchestrator
 
-Agentic Orchestrator is an Electron desktop application for supervising the **KB Build → Inquire → Research → Design → Plan → Implement → Review → Publish** lifecycle. It runs AI agent sessions in isolated git worktrees so multiple features can progress without sharing branches or state.
+Agentic Orchestrator is an Electron desktop application for supervising the **Inquire → Research → Design → Plan → Implement → Review → Publish** lifecycle. It runs AI agent sessions in isolated git worktrees so multiple features can progress without sharing branches or state.
 
 The desktop app is the primary interface. `agentico` is the local server and administration CLI; running `agentico` with no subcommand launches or focuses the installed desktop app, which starts and supervises its matched bundled server. Use `agentico server` only for an explicit foreground loopback server.
 
@@ -103,6 +103,8 @@ Fresh installs use:
   permissions/             # Cached permission rules
   agentico.log             # Runtime log output
 ```
+
+`knowledge-base/`, `overlays/`, and `child-kb/` directories left there by older versions are not used and can be deleted by hand.
 
 ## Next Steps
 

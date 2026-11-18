@@ -65,7 +65,7 @@ PROGRESS_FILE="`+progressFile+`"
 ITER=$(($(cat "$PROGRESS_FILE" 2>/dev/null | wc -l) + 1))
 echo "iteration $ITER" >> "$PROGRESS_FILE"
 `+testutil.JSONLInit+`
-`+testutil.WriteImplementSuccessArtifacts(artifactDir)+`
+`+testutil.WriteImplementNotes(artifactDir)+`
 `+testutil.JSONLSuccess+`
 `)
 
@@ -179,7 +179,7 @@ PROGRESS_FILE="`+progressFile+`"
 ITER=$(($(cat "$PROGRESS_FILE" 2>/dev/null | wc -l) + 1))
 echo "iteration $ITER" >> "$PROGRESS_FILE"
 `+testutil.JSONLInit+`
-`+testutil.WriteImplementSuccessArtifacts(artifactDir)+`
+`+testutil.WriteImplementNotes(artifactDir)+`
 `+testutil.JSONLSuccess+`
 `)
 
@@ -263,7 +263,7 @@ func TestRunImplementationLoop_RoundCommitHook_ErrorFailsLoop(t *testing.T) {
 	agentScript := testutil.WriteScript(t, scriptsDir, "agent.sh", `
 echo "iteration 1" >> "`+progressFile+`"
 `+testutil.JSONLInit+`
-`+testutil.WriteImplementSuccessArtifacts(artifactDir)+`
+`+testutil.WriteImplementNotes(artifactDir)+`
 `+testutil.JSONLSuccess+`
 `)
 
@@ -356,8 +356,11 @@ fi`,
 			testutil.WriteFinalReviewChangesRequested(artDir, "- **High**: needs a fix"),
 			testutil.JSONLSuccess))
 
+	// The fixer commits its change itself; the recording hook does not.
 	fixScript := testutil.WriteScript(t, env.scriptsDir, "fix.sh",
-		testutil.JSONLInit+"\n"+testutil.JSONLSuccess+"\n")
+		testutil.JSONLInit+"\n"+
+			fmt.Sprintf(`printf 'fixed\n' > %q/fix.txt && git -C %q add -A && git -C %q commit -qm fix`, repo, repo, repo)+"\n"+
+			testutil.JSONLSuccess+"\n")
 
 	eventCh := make(chan any, 100)
 	sm := session.NewManager(eventCh)
@@ -561,16 +564,16 @@ func TestRunImplementationLoop_RoundCommitHook_ProtocolViolationsCountFixRounds(
 		os.MkdirAll(d, 0o755)
 	}
 
-	// Iterations 1-2 emit success without writing the required artifacts
-	// (implementer contract violation); iteration 3 writes them.
+	// Iterations 1-2 end without a completion outcome (implementer protocol
+	// violation); iteration 3 completes.
 	agentScript := testutil.WriteScript(t, scriptsDir, "agent.sh", `
 if [ -d "`+artifactDir+`/iteration-03" ]; then
 `+testutil.JSONLInit+`
-`+testutil.WriteImplementSuccessArtifacts(artifactDir)+`
+`+testutil.WriteImplementNotes(artifactDir)+`
 `+testutil.JSONLSuccess+`
 else
 `+testutil.JSONLInit+`
-`+testutil.JSONLSuccess+`
+`+testutil.JSONLResult("All done.")+`
 fi
 `)
 

@@ -8,7 +8,7 @@
 # System
 
 Every turn must end in exactly one of three ways:
-1. Complete the task by writing and validating the required output files, then {{ if .CompletionTool }}call `{{ .CompletionTool }}` as described{{ else }}emit exactly one structured outcome tag described{{ end }} in "## Completion".
+1. Complete the task by writing{{ if .ArtifactPreflight }} and validating{{ end }} the required output files, then {{ if .CompletionTool }}call `{{ .CompletionTool }}` as described{{ else }}emit exactly one structured outcome tag described{{ end }} in "## Completion".
 2. Ask the user through the {{ if .CompletionTool }}question tool{{ else }}formal AskUserQuestion control{{ end }} described in "## Asking Questions".
 3. Continue working by using tools. Do not end the turn yet.
 
@@ -42,27 +42,27 @@ Before declaring completion, ensure every file you changed is inside the output 
 
 {{- if .CompletionTool }}
 
-After the artifacts pass preflight, call `{{ .CompletionTool }}` with `{"status":"success"}`{{ if .RetryOutcomeAllowed }} or `{"status":"retry","summary":"brief handoff"}` for an incomplete iteration recorded in progress.md{{ end }}.
+{{ if .ArtifactPreflight }}After the artifacts pass preflight, call{{ else }}When the work is done, call{{ end }} `{{ .CompletionTool }}` with `{"status":"success"}`{{ if .RetryOutcomeAllowed }} or `{"status":"retry","summary":"brief handoff"}` for an incomplete iteration that needs another pass{{ end }}.
 
-The tool requests completion; the harness validates the role artifacts and checks pending questions and delegated tasks before writing `phase_complete`. If the tool rejects the request, address the reported violations and try again. Questions that still need an answer must go through the question tool; writing provisional notes does not resolve them.{{ if not .RetryOutcomeAllowed }} This role has no iteration state, so `retry` is not a valid outcome.{{ end }}
+The tool requests completion; the harness validates the role artifacts and checks pending questions and delegated tasks before writing `phase_complete`. If the tool rejects the request, address the reported violations and try again. Questions that still need an answer must go through the question tool; writing provisional notes does not resolve them.{{ if not .RetryOutcomeAllowed }} This role cannot ask for another pass, so `retry` is not a valid outcome.{{ end }}
 
 Do not emit completion tags in prose. A normal assistant message cannot complete the phase. Do not request completion while awaiting a user answer.
 {{- else if .RetryOutcomeAllowed }}
 
-After the artifacts pass preflight, finish your final root response with exactly one of:
+{{ if .ArtifactPreflight }}After the artifacts pass preflight, finish{{ else }}When the work is done, finish{{ end }} your final root response with exactly one of:
 
 `<agentico-outcome>{"status":"success"}</agentico-outcome>`
 
 `<agentico-outcome>{"status":"retry","summary":"brief handoff"}</agentico-outcome>`
 
-Use `retry` only for an incomplete iteration recorded in your progress artifact. The tag is the root agent's intent, not the durable receipt: the harness validates artifacts and task liveness before it writes `phase_complete`. Ending a turn without exactly one valid outcome tag and without a formal AskUserQuestion is a protocol violation.
+Use `retry` only for an incomplete iteration that needs another pass. The tag is the root agent's intent, not the durable receipt: the harness validates artifacts and task liveness before it writes `phase_complete`. Ending a turn without exactly one valid outcome tag and without a formal AskUserQuestion is a protocol violation.
 {{- else }}
 
-After the artifacts pass preflight, finish your final root response with exactly one:
+{{ if .ArtifactPreflight }}After the artifacts pass preflight, finish{{ else }}When the work is done, finish{{ end }} your final root response with exactly one:
 
 `<agentico-outcome>{"status":"success"}</agentico-outcome>`
 
-`success` means your assignment completed — including when your findings request changes to the work you examined; record those findings in your role's artifacts (for reviewers, the feedback verdict). This role has no iteration state, so `retry` is not a valid outcome and the harness rejects it as a protocol violation. The tag is the root agent's intent, not the durable receipt: the harness validates artifacts and task liveness before it writes `phase_complete`. Ending a turn without exactly one valid outcome tag and without a formal AskUserQuestion is a protocol violation.
+`success` means your assignment completed — including when your findings request changes to the work you examined; record those findings in your role's artifacts (for reviewers, the feedback verdict). This role cannot ask for another pass, so `retry` is not a valid outcome and the harness rejects it as a protocol violation. The tag is the root agent's intent, not the durable receipt: the harness validates artifacts and task liveness before it writes `phase_complete`. Ending a turn without exactly one valid outcome tag and without a formal AskUserQuestion is a protocol violation.
 {{- end }}
 {{ if .ArtifactPreflight }}
 
@@ -94,17 +94,15 @@ The following skills are also mandatory for this assignment. After reading the p
 {{ range .RequiredSkills }}- **{{ .Name }}** — `{{ .Path }}`{{ if .Condition }} — when: {{ .Condition }}{{ end }}
 {{ end }}
 {{ end }}
-{{ if or .Preflight.HasKB .Preflight.HasGuidelines .Preflight.HasSkills }}# Useful Resources
+# Useful Resources
 
 The resources below are available for this assignment. Skim each catalog so you know what exists, and open specific leaf files only when a concrete question comes up during the work.
 
-{{ if .Preflight.HasKB }}## Knowledge Base
+## Repository Instructions
 
-The knowledge base captures architecture, conventions, dependencies, API surface, and verification approaches for each repository involved in this feature. Browse a repo's index to see the category map; open category leaves on demand when a concrete question comes up.
+A target repository's own instruction files for coding agents (such as `AGENTS.md` or `CLAUDE.md`, at its root and in the directories your work touches) state its conventions and how to verify changes. Read the ones that apply before relying on assumptions about that repository.
 
-{{ range .Preflight.KBInfos }}- **{{ .Name }}** — index: `{{ .IndexPath }}` — root: `{{ .RootDir }}`
-{{ end }}
-{{ end }}{{ if .Preflight.HasGuidelines }}## Guidelines
+{{ if .Preflight.HasGuidelines }}## Guidelines
 
 Language guidelines are a catalog of cross-cutting coding conventions (error handling, testing patterns, formatting). Skim each language's top-level `index.md` to see its category map; open category indexes on demand when a relevant question comes up.
 
@@ -118,6 +116,6 @@ In addition to the skill(s) already loaded in your system instructions, the foll
 |-------|-------------|--------|------|
 {{ range .Preflight.Skills }}| {{ .Name }} | {{ .Description }} | {{ .Topics }} | {{ .Path }} |
 {{ end }}
-{{ end }}{{ end }}
+{{ end }}
 {{ .AskingClause }}
 {{- end -}}

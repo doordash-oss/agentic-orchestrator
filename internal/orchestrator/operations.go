@@ -278,11 +278,12 @@ func (o *Orchestrator) EnableFeatureAutomaticReview(featureID string) error {
 		return err
 	}
 	mode := feature.AutomaticReviewEnabled
+	checkpoints := f.Pipeline.NormalizeCheckpoints(f.Checkpoints, f.IsPublishable())
 	_, err = o.updateFeatureConfigLocked(featureID, UpdateFeatureConfigInput{
 		Models:              f.Models,
 		Effort:              f.Effort,
 		Inquireness:         f.Inquireness,
-		Checkpoints:         f.Pipeline.NormalizeCheckpoints(f.Checkpoints, f.IsPublishable()),
+		Checkpoints:         &checkpoints,
 		InputNotifications:  feature.NormalizeInputNotificationsMode(f.InputNotifications),
 		AutomaticReviewMode: &mode,
 		Pipeline:            f.Pipeline,
@@ -357,19 +358,6 @@ func (o *Orchestrator) AnswerQueuedHelp(featureID, message string) (bool, error)
 		return nil
 	})
 	return found, err
-}
-
-// PendingNeedUserInputGatePath returns the gate artifact of the feature's
-// open need-user-input request, or an error when none is open.
-func (o *Orchestrator) PendingNeedUserInputGatePath(featureID string) (string, error) {
-	f, err := o.deps.Store.Load(featureID)
-	if err != nil {
-		return "", err
-	}
-	if f.PendingNeedUserInputPath == "" {
-		return "", fmt.Errorf("feature %s is not paused on a need-user-input gate", featureID)
-	}
-	return f.PendingNeedUserInputPath, nil
 }
 
 // Steps recorded by the operation trace, in the order an operation may take

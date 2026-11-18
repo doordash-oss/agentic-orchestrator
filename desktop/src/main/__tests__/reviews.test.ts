@@ -101,11 +101,11 @@ describe('ReviewService', () => {
       {
         api_version: 'v1',
         error: {
-          code: 'need_user_input_open',
+          code: 'parent_mutation_locked',
           class: 'blocking',
-          title: 'Waiting on user input',
-          summary: 'The feature is waiting on an open user input request.',
-          remediation: { hint: 'Answer the open input request to continue.' },
+          title: 'Parent locked during child pass',
+          summary: 'The parent feature is locked while a child pass is active.',
+          remediation: { hint: 'Wait for the child pass to finish, then retry.' },
         },
       },
       409,
@@ -119,7 +119,7 @@ describe('ReviewService', () => {
       })
       .catch((e: unknown) => e);
     expect(err).toBeInstanceOf(CanonicalErrorException);
-    expect((err as CanonicalErrorException).canonical.code).toBe('need_user_input_open');
+    expect((err as CanonicalErrorException).canonical.code).toBe('parent_mutation_locked');
     // Only one network call — the mutation must not be replayed for error mapping.
     expect(client.calls).toHaveLength(1);
   });

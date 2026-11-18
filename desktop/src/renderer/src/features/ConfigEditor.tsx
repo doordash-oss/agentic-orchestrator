@@ -80,7 +80,6 @@ const PHASE_FIELDS: ReadonlyArray<PhaseField> = [
   },
   { key: 'review', label: 'Review', role: 'review', hint: 'Reviewing implementation output' },
   { key: 'utilities', label: 'Utilities', role: 'chat', hint: 'Chat and workspace utilities' },
-  { key: 'kbBuild', label: 'KB Build', role: 'kb_build', hint: 'Knowledge base construction' },
   {
     key: 'automaticReview',
     label: 'Auto mode reviewer',

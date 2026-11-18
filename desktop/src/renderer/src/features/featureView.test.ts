@@ -62,9 +62,7 @@ function ownedError(
 describe('displayStatusLabel', () => {
   it('translates server enum spellings into user-facing status labels', () => {
     expect(displayStatusLabel('SettingUpWorktrees')).toBe('Setting up worktrees');
-    expect(displayStatusLabel('BuildingKB')).toBe('Building knowledge base');
     expect(displayStatusLabel('CodeReady')).toBe('Code ready');
-    expect(displayStatusLabel('NeedUserInput')).toBe('Input needed');
     expect(displayStatusLabel('ResearchNeedsReview')).toBe('Research needs review');
   });
 
@@ -75,9 +73,9 @@ describe('displayStatusLabel', () => {
 
 describe('displayFeatureMessage', () => {
   it('translates embedded server status tokens without rewriting the explanation', () => {
-    expect(displayFeatureMessage('action unavailable while feature status is BuildingKB')).toBe(
-      'action unavailable while feature status is Building knowledge base',
-    );
+    expect(
+      displayFeatureMessage('action unavailable while feature status is SettingUpWorktrees'),
+    ).toBe('action unavailable while feature status is Setting up worktrees');
   });
 });
 
@@ -122,7 +120,7 @@ describe('intervention-first dashboard ordering', () => {
         errors: [ownedError('run', 'blocking', 'failed-old')],
       }),
       snapshot('review', 'PlanNeedsReview', '2026-07-14T08:00:00Z'),
-      snapshot('input', 'NeedUserInput', '2026-07-13T08:00:00Z'),
+      snapshot('paused', 'Interrupted', '2026-07-13T08:00:00Z'),
       featureSnapshot({
         ...snapshot('failed-new', 'Failed', '2026-07-15T08:00:00Z'),
         errors: [ownedError('run', 'blocking', 'failed-new')],
@@ -133,7 +131,7 @@ describe('intervention-first dashboard ordering', () => {
     expect(orderDashboardFeatures(features).map((feature) => feature.id)).toStrictEqual([
       'failed-new',
       'review',
-      'input',
+      'paused',
       'failed-old',
       'active',
       'start-new',
@@ -256,7 +254,6 @@ describe('intervention-first dashboard ordering', () => {
     );
     // Paused/waiting states carry no phase; an approximate needle would lie.
     expect(childStatusSpineIndex('Interrupted', stages)).toBeNull();
-    expect(childStatusSpineIndex('NeedUserInput', stages)).toBeNull();
   });
 });
 
@@ -287,7 +284,6 @@ describe('spineStages', () => {
     for (const pipeline of ['large', 'moonshot', undefined]) {
       expect(spineStages(pipeline).map((stage) => stage.label)).toEqual([
         'Setup',
-        'Knowledge Base',
         'Inquire',
         'Research',
         'Design',
@@ -340,9 +336,9 @@ describe('spineActiveIndex', () => {
 
   it('uses the same phase mapping for archived and live cockpit spines', () => {
     const stages = spineStages('large');
-    expect(spineActiveIndexForPhase('Final Review', stages)).toBe(7);
-    expect(spineActiveIndexForPhase('Implement', stages)).toBe(6);
-    expect(spineActiveIndexForPhase('implement', stages)).toBe(6);
+    expect(spineActiveIndexForPhase('Final Review', stages)).toBe(6);
+    expect(spineActiveIndexForPhase('Implement', stages)).toBe(5);
+    expect(spineActiveIndexForPhase('implement', stages)).toBe(5);
     expect(spineActiveIndexForPhase('Unknown', stages)).toBe(0);
   });
 });
@@ -401,7 +397,6 @@ describe('isRunAtRest', () => {
     for (const status of [
       'Implementing',
       'FinalReviewing',
-      'NeedUserInput',
       'PlanNeedsReview',
       'Interrupted',
       'Failed',

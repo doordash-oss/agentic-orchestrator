@@ -45,7 +45,7 @@ func modelConfigToPatch(m config.ModelConfig) serverruntime.ModelConfigPatch {
 	patch := serverruntime.ModelConfigPatch{
 		Inquiry: m.Inquiry, Research: m.Research, Planning: m.Planning,
 		Implementation: m.Implementation, Review: m.Review,
-		Utilities: m.Utilities, KBBuild: m.KBBuild,
+		Utilities: m.Utilities,
 	}
 	if m.AutomaticReview != "" {
 		value := m.AutomaticReview

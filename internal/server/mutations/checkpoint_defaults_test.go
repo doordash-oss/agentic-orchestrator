@@ -1,0 +1,232 @@
+// Copyright 2026 DoorDash, Inc.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+package mutations
+
+import (
+	"encoding/json"
+	"path/filepath"
+	"testing"
+
+	"github.com/doordash-oss/agentic-orchestrator/internal/config"
+	"github.com/doordash-oss/agentic-orchestrator/internal/feature"
+	serverruntime "github.com/doordash-oss/agentic-orchestrator/internal/server"
+)
+
+const allFalseCheckpointsJSON = `{"inquiry_review":false,"research_review":false,"design_review":false,"roadmap_review":false,"phase_plan_review":false,"manual_publish":false,"draft_publish":false}`
+
+func TestServerMutationTargetCreateFeatureResolvesCheckpoints(t *testing.T) {
+	allOn := feature.Checkpoints{InquiryReview: true, ResearchReview: true, DesignReview: true, RoadmapReview: true, PhasePlanReview: true, ManualPublish: true}
+	tests := []struct {
+		name        string
+		pipeline    feature.PipelineProfile
+		checkpoints string
+		defaults    func(*config.Checkpoints)
+		want        feature.Checkpoints
+	}{
+		{
+			name:     "omitted uses defaults on large",
+			pipeline: feature.PipelineLarge,
+			want:     allOn,
+		},
+		{
+			name:     "omitted drops gates medium does not support",
+			pipeline: feature.PipelineMedium,
+			want:     feature.Checkpoints{RoadmapReview: true, PhasePlanReview: true, ManualPublish: true},
+		},
+		{
+			name:     "omitted follows configured defaults",
+			pipeline: feature.PipelineLarge,
+			defaults: func(c *config.Checkpoints) { c.DesignReview = false; c.DraftPublish = true },
+			want:     feature.Checkpoints{InquiryReview: true, ResearchReview: true, RoadmapReview: true, PhasePlanReview: true, ManualPublish: true, DraftPublish: true},
+		},
+		{
+			name:        "explicit all false stays off",
+			pipeline:    feature.PipelineLarge,
+			checkpoints: allFalseCheckpointsJSON,
+			want:        feature.Checkpoints{},
+		},
+		{
+			name:        "explicit partial is used as given",
+			pipeline:    feature.PipelineLarge,
+			checkpoints: `{"research_review":true,"manual_publish":true}`,
+			want:        feature.Checkpoints{ResearchReview: true, ManualPublish: true},
+		},
+		{
+			name:        "explicit gate medium does not support is dropped",
+			pipeline:    feature.PipelineMedium,
+			checkpoints: `{"inquiry_review":true,"roadmap_review":true}`,
+			want:        feature.Checkpoints{RoadmapReview: true},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			runtimeDir := t.TempDir()
+			configPath := filepath.Join(runtimeDir, "config.yaml")
+			repoPath := filepath.Join(runtimeDir, testRepoAName)
+			initMutationGitRepo(t, repoPath)
+			cfg := config.NewDefault()
+			cfg.Repos[testRepoAName] = config.RepoConfig{Path: repoPath}
+			if tt.defaults != nil {
+				tt.defaults(&cfg.Defaults.Checkpoints)
+			}
+			if err := config.Save(configPath, cfg); err != nil {
+				t.Fatal(err)
+			}
+			store := feature.NewStore(filepath.Join(runtimeDir, "features"))
+			target := newRESTCreateFeatureTarget(store, feature.NewManager(store, cfg), cfg, configPath)
+
+			body := `{"name":"Gate defaults","repos":["` + testRepoAName + `"],"pipeline":"` + string(tt.pipeline) + `"`
+			if tt.checkpoints != "" {
+				body += `,"checkpoints":` + tt.checkpoints
+			}
+			body += `}`
+			var req serverruntime.CreateFeatureRequest
+			if err := json.Unmarshal([]byte(body), &req); err != nil {
+				t.Fatal(err)
+			}
+
+			resp, err := target.CreateFeature(req)
+			if err != nil {
+				t.Fatalf("CreateFeature() error = %v", err)
+			}
+			created, err := store.Load(resp.FeatureID)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if created.Checkpoints != tt.want {
+				t.Fatalf("checkpoints = %+v, want %+v", created.Checkpoints, tt.want)
+			}
+		})
+	}
+}
+
+func TestServerMutationTargetRefactorFeatureResolvesCheckpoints(t *testing.T) {
+	parentGates := feature.Checkpoints{RoadmapReview: true, PhasePlanReview: true, ManualPublish: true}
+	tests := []struct {
+		name        string
+		checkpoints string
+		want        feature.Checkpoints
+	}{
+		{name: "omitted inherits parent", want: parentGates},
+		{name: "explicit all false stays off", checkpoints: allFalseCheckpointsJSON, want: feature.Checkpoints{}},
+		{name: "explicit partial is used as given", checkpoints: `{"roadmap_review":true}`, want: feature.Checkpoints{RoadmapReview: true}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			target, store, parent := newChildLaunchTarget(t)
+			if err := store.Modify(parent.ID, func(f *feature.Feature) error {
+				f.Checkpoints = parentGates
+				return nil
+			}); err != nil {
+				t.Fatal(err)
+			}
+
+			body := `{"name":"Rework"`
+			if tt.checkpoints != "" {
+				body += `,"checkpoints":` + tt.checkpoints
+			}
+			body += `}`
+			var req serverruntime.RefactorFeatureRequest
+			if err := json.Unmarshal([]byte(body), &req); err != nil {
+				t.Fatal(err)
+			}
+
+			resp, err := target.RefactorFeature(parent.ID, req)
+			if err != nil {
+				t.Fatalf("RefactorFeature() error = %v", err)
+			}
+			child, err := store.Load(resp.FeatureID)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if child.Checkpoints != tt.want {
+				t.Fatalf("child checkpoints = %+v, want %+v", child.Checkpoints, tt.want)
+			}
+			reloaded, err := store.Load(parent.ID)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if reloaded.Checkpoints != tt.want {
+				t.Fatalf("parent checkpoints = %+v, want %+v", reloaded.Checkpoints, tt.want)
+			}
+		})
+	}
+}
+
+func TestServerMutationTargetUpdateFeatureConfigResolvesCheckpoints(t *testing.T) {
+	current := feature.Checkpoints{RoadmapReview: true, PhasePlanReview: true, ManualPublish: true}
+	tests := []struct {
+		name        string
+		checkpoints string
+		want        feature.Checkpoints
+	}{
+		{name: "omitted keeps current", want: current},
+		{name: "explicit all false clears", checkpoints: allFalseCheckpointsJSON, want: feature.Checkpoints{}},
+		{name: "explicit partial replaces", checkpoints: `{"roadmap_review":true}`, want: feature.Checkpoints{RoadmapReview: true}},
+	}
+	for _, paired := range []bool{false, true} {
+		for _, tt := range tests {
+			name := tt.name
+			if paired {
+				name = "paired " + name
+			}
+			t.Run(name, func(t *testing.T) {
+				target, store, parent := newChildLaunchTarget(t)
+				target.configPath = filepath.Join(t.TempDir(), "config.yaml")
+				if err := store.Modify(parent.ID, func(f *feature.Feature) error {
+					f.Checkpoints = current
+					return nil
+				}); err != nil {
+					t.Fatal(err)
+				}
+				var childID string
+				if paired {
+					resp, err := target.RefactorFeature(parent.ID, serverruntime.RefactorFeatureRequest{Name: "Rework"})
+					if err != nil {
+						t.Fatalf("RefactorFeature() error = %v", err)
+					}
+					childID = resp.FeatureID
+				}
+
+				body := `{"pipeline":"medium"`
+				if tt.checkpoints != "" {
+					body += `,"checkpoints":` + tt.checkpoints
+				}
+				body += `}`
+				var req serverruntime.FeatureConfigMutationRequest
+				if err := json.Unmarshal([]byte(body), &req); err != nil {
+					t.Fatal(err)
+				}
+				if _, err := target.UpdateFeatureConfig(parent.ID, req); err != nil {
+					t.Fatalf("UpdateFeatureConfig() error = %v", err)
+				}
+
+				ids := []string{parent.ID}
+				if childID != "" {
+					ids = append(ids, childID)
+				}
+				for _, id := range ids {
+					got, err := store.Load(id)
+					if err != nil {
+						t.Fatal(err)
+					}
+					if got.Checkpoints != tt.want {
+						t.Fatalf("%s checkpoints = %+v, want %+v", id, got.Checkpoints, tt.want)
+					}
+				}
+			})
+		}
+	}
+}

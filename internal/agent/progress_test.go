@@ -23,43 +23,6 @@ import (
 	"testing"
 )
 
-func TestFingerprint(t *testing.T) {
-	dir := t.TempDir()
-	path := filepath.Join(dir, "progress.md")
-
-	// Non-existent file returns empty
-	fp, err := fingerprint(path)
-	if err != nil {
-		t.Fatalf("fingerprint non-existent: %v", err)
-	}
-	if fp != "" {
-		t.Errorf("expected empty fingerprint for non-existent file, got %s", fp)
-	}
-
-	// Write content
-	os.WriteFile(path, []byte("step 1 done\n"), 0o644)
-	fp1, err := fingerprint(path)
-	if err != nil {
-		t.Fatalf("fingerprint: %v", err)
-	}
-	if fp1 == "" {
-		t.Error("expected non-empty fingerprint")
-	}
-
-	// Same content = same fingerprint
-	fp2, _ := fingerprint(path)
-	if fp1 != fp2 {
-		t.Error("expected same fingerprint for same content")
-	}
-
-	// Different content = different fingerprint
-	os.WriteFile(path, []byte("step 2 done\n"), 0o644)
-	fp3, _ := fingerprint(path)
-	if fp1 == fp3 {
-		t.Error("expected different fingerprint for different content")
-	}
-}
-
 func TestProgressTracker(t *testing.T) {
 	pt := newProgressTracker()
 
@@ -117,30 +80,27 @@ func TestProgressTrackerVerifiedOutcomeCreditsWorktreeChanges(t *testing.T) {
 func TestProgressTrackerRetryOutcome(t *testing.T) {
 	pt := newProgressTracker()
 
-	if !pt.observeRetryOutcome("n1", "w1") {
+	if !pt.observeRetryOutcome("w1") {
 		t.Fatal("first RETRY observation should establish a baseline")
 	}
-	if pt.observeRetryOutcome("n1", "w1") {
-		t.Fatal("RETRY with unchanged narrative and worktree should not count as progress")
+	if pt.observeRetryOutcome("w1") {
+		t.Fatal("RETRY with an unchanged worktree should not count as progress")
 	}
 	if pt.consecutiveNoProgress() != 1 {
 		t.Fatalf("NoProgressCount = %d, want 1", pt.consecutiveNoProgress())
 	}
-	if !pt.observeRetryOutcome("n1", "w2") {
+	if !pt.observeRetryOutcome("w2") {
 		t.Fatal("RETRY with changed worktree should count as progress")
 	}
 	if pt.consecutiveNoProgress() != 1 {
 		t.Fatalf("NoProgressCount = %d, want 1 (progressing RETRY must not reset the verified-outcome counter)", pt.consecutiveNoProgress())
 	}
-	if !pt.observeRetryOutcome("n2", "w2") {
-		t.Fatal("RETRY with changed narrative should count as progress")
-	}
-	// Empty fingerprints (unreadable progress.md, git failure) must not
-	// disarm the rail: treated as unchanged.
-	if pt.observeRetryOutcome("", "") {
+	// An empty fingerprint (git failure) must not disarm the rail: treated as
+	// unchanged.
+	if pt.observeRetryOutcome("") {
 		t.Fatal("RETRY with no fingerprint signal should not count as progress")
 	}
-	if pt.observeRetryOutcome("", "") {
+	if pt.observeRetryOutcome("") {
 		t.Fatal("repeated signal-less RETRY should keep counting no-progress")
 	}
 	if pt.consecutiveNoProgress() != 3 {

@@ -32,7 +32,7 @@ import (
 
 // TestPhaseImplementUnified_ProtocolViolation_EndToEnd drives the real unified
 // phase-implement loop with a mock agent process that reports SDK success but
-// omits its required artifacts. The observable contract is that the loop never
+// ends its turn without a completion outcome. The observable contract is that the loop never
 // invokes review, never commits a receipt, trips the protocol-violation rail,
 // and atomically stamps the phase-declared repos failed with the contract
 // reason.
@@ -59,7 +59,7 @@ func TestPhaseImplementUnified_ProtocolViolation_EndToEnd(t *testing.T) {
 		ID:            "phase-protocol-violation",
 		Name:          "Phase protocol violation",
 		Slug:          "phase-protocol-violation",
-		Description:   "Agent reports success without required artifacts",
+		Description:   "Agent reports success without a completion outcome",
 		Status:        feature.StatusImplementing,
 		CurrentPhase:  feature.PhaseImplement,
 		ActiveRun:     1,
@@ -106,12 +106,12 @@ func TestPhaseImplementUnified_ProtocolViolation_EndToEnd(t *testing.T) {
 	}
 
 	agentScript := testutil.WriteScript(t, scriptsDir, "agent.sh",
-		testutil.JSONLInit+"\n"+testutil.JSONLSuccess+"\n")
+		testutil.JSONLInit+"\n"+testutil.JSONLResult("All done.")+"\n")
 	reviewMarker := filepath.Join(tmp, "review-ran")
 	reviewScript := testutil.WriteScript(t, scriptsDir, "review.sh",
 		`touch "`+reviewMarker+`"`+"\n"+
 			testutil.JSONLInit+"\n"+testutil.WriteReviewApproved(artifactDir)+"\n"+testutil.JSONLSuccess+"\n")
-	t.Logf("behavior input: mock implement agent omits required artifacts under %s and reports semantic success; review marker path is %s", artifactDir, reviewMarker)
+	t.Logf("behavior input: mock implement agent under %s reports SDK success without a completion outcome; review marker path is %s", artifactDir, reviewMarker)
 
 	eventCh := make(chan interface{}, 100)
 	sm := session.NewManager(eventCh)
@@ -141,8 +141,8 @@ func TestPhaseImplementUnified_ProtocolViolation_EndToEnd(t *testing.T) {
 	if result.Iterations != 2 {
 		t.Errorf("Iterations = %d, want 2", result.Iterations)
 	}
-	if !strings.Contains(result.LastError, "protocol violation: implementer @") || !strings.Contains(result.LastError, "progress.md") {
-		t.Errorf("LastError = %q, want implementer progress.md protocol violation", result.LastError)
+	if !strings.Contains(result.LastError, "protocol violation: implementer @") {
+		t.Errorf("LastError = %q, want implementer protocol violation", result.LastError)
 	}
 	if !reflect.DeepEqual(result.PhaseRepos, []string{"repo-a", "repo-b"}) {
 		t.Errorf("PhaseRepos = %v, want [repo-a repo-b]", result.PhaseRepos)

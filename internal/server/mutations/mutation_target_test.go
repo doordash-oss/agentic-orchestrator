@@ -666,7 +666,7 @@ func TestServerMutationTargetRefactorFeatureMapsBriefToSpec(t *testing.T) {
 		Images:       []string{"~/shots/login.png"},
 		Attachments:  []string{"~/docs/auth.md"},
 		Pipeline:     feature.PipelineLarge,
-		Checkpoints:  feature.Checkpoints{InquiryReview: true},
+		Checkpoints:  &feature.Checkpoints{InquiryReview: true},
 		Effort:       config.EffortConfig{Planning: "high"},
 		Models:       config.ModelConfig{Planning: testModelClaudeSonnet},
 		RiskLevel:    feature.RiskLow,
@@ -926,144 +926,6 @@ func TestServerMutationTargetSendHelpAnswersFeatureHelpQueueWhenNoSessionIsActiv
 	assertJSONDoesNotContain(t, result, "Continue from the feature cockpit.")
 }
 
-func TestServerMutationTargetDraftNeedUserInputAnswersUpdatesPendingArtifactByStoredIndex(t *testing.T) {
-	gatePath := filepath.Join(t.TempDir(), agent.NeedUserInputArtifactName)
-	original := agent.NeedUserInputRecord{
-		Summary:   "Implementation is blocked on product choices.",
-		Iteration: 3,
-		Questions: []agent.NeedUserInputQuestion{
-			{Index: 1, Prompt: "Which database should back search?"},
-			{Index: 3, Prompt: "How should rollout be staged?"},
-		},
-	}
-	if err := agent.WriteNeedUserInputRecord(gatePath, original); err != nil {
-		t.Fatalf("WriteNeedUserInputRecord() error = %v", err)
-	}
-
-	store := feature.NewStore(t.TempDir())
-	cfg := config.NewDefault()
-	manager := feature.NewManager(store, cfg)
-	f := &feature.Feature{
-		ID:                       "feat-need-input",
-		Name:                     "Need input",
-		Slug:                     "need-input",
-		Status:                   feature.StatusNeedUserInput,
-		PendingNeedUserInputPath: gatePath,
-		SchemaVersion:            feature.SchemaVersionCurrent,
-	}
-	if err := store.Save(f); err != nil {
-		t.Fatalf("Save feature error = %v", err)
-	}
-	target := newMutationTarget(Deps{
-		Orchestrator: orchestrator.New(orchestrator.Deps{Manager: manager, Store: store}, orchestrator.Hooks{}),
-		Config:       cfg,
-	})
-
-	result, err := target.DraftNeedUserInputAnswers("feat-need-input", serverruntime.NeedUserInputDraftRequest{
-		Answers: map[string]string{
-			"1": "Use Postgres first.",
-			"3": "Start with one internal workspace.",
-		},
-	})
-	if err != nil {
-		t.Fatalf("DraftNeedUserInputAnswers() error = %v", err)
-	}
-
-	updated, err := agent.ReadNeedUserInputRecord(gatePath)
-	if err != nil {
-		t.Fatalf("ReadNeedUserInputRecord() error = %v", err)
-	}
-	if updated.Summary != original.Summary {
-		t.Fatalf("Summary = %q, want unchanged %q", updated.Summary, original.Summary)
-	}
-	if updated.Iteration != original.Iteration {
-		t.Fatalf("Iteration = %d, want unchanged %d", updated.Iteration, original.Iteration)
-	}
-	if updated.Questions[0].Prompt != original.Questions[0].Prompt || updated.Questions[1].Prompt != original.Questions[1].Prompt {
-		t.Fatalf("Prompts changed: got %+v, want %+v", updated.Questions, original.Questions)
-	}
-	if updated.Questions[0].Answer != "Use Postgres first." || updated.Questions[1].Answer != "Start with one internal workspace." {
-		t.Fatalf("Answers = %+v, want stored-index updates", updated.Questions)
-	}
-	if result.FeatureID != "feat-need-input" || result.Result != "drafted" {
-		t.Fatalf("DraftNeedUserInputAnswers() result = %+v; want drafted feature", result)
-	}
-}
-
-func TestServerMutationTargetDraftNeedUserInputAnswersAcceptsOnlyStoredIndex(t *testing.T) {
-	tests := []struct {
-		name string
-		key  string
-	}{
-		{name: "q form", key: "q1"},
-		{name: "prompt text", key: "Which database should back search?"},
-		{name: "index naming no question", key: "2"},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			target, gatePath := newNeedUserInputDraftTarget(t, []agent.NeedUserInputQuestion{
-				{Index: 1, Prompt: "Which database should back search?"},
-				{Index: 3, Prompt: "How should rollout be staged?"},
-			})
-			before, err := os.ReadFile(gatePath)
-			if err != nil {
-				t.Fatalf("ReadFile() error = %v", err)
-			}
-			_, err = target.DraftNeedUserInputAnswers("feat-need-input", serverruntime.NeedUserInputDraftRequest{
-				Answers: map[string]string{tt.key: "Use Postgres first."},
-			})
-			if err == nil || !strings.Contains(err.Error(), fmt.Sprintf("%q", tt.key)) {
-				t.Fatalf("DraftNeedUserInputAnswers(%q) error = %v, want error naming the key", tt.key, err)
-			}
-			after, err := os.ReadFile(gatePath)
-			if err != nil {
-				t.Fatalf("ReadFile() error = %v", err)
-			}
-			if string(after) != string(before) {
-				t.Fatalf("gate file rewritten after rejected key %q", tt.key)
-			}
-		})
-	}
-}
-
-func TestServerMutationTargetDraftNeedUserInputAnswersSurfacesGateReadError(t *testing.T) {
-	target, _ := newNeedUserInputDraftTarget(t, []agent.NeedUserInputQuestion{
-		{Index: 1, Prompt: "Which database should back search?"},
-		{Prompt: "How should rollout be staged?"},
-	})
-	_, err := target.DraftNeedUserInputAnswers("feat-need-input", serverruntime.NeedUserInputDraftRequest{
-		Answers: map[string]string{"1": "Use Postgres first."},
-	})
-	if err == nil || !strings.Contains(err.Error(), "How should rollout be staged?") {
-		t.Fatalf("DraftNeedUserInputAnswers() error = %v, want gate read error naming the question", err)
-	}
-}
-
-func newNeedUserInputDraftTarget(t *testing.T, questions []agent.NeedUserInputQuestion) (*mutationTarget, string) {
-	t.Helper()
-	gatePath := filepath.Join(t.TempDir(), agent.NeedUserInputArtifactName)
-	if err := agent.WriteNeedUserInputRecord(gatePath, agent.NeedUserInputRecord{Summary: "Blocked on product choices.", Questions: questions}); err != nil {
-		t.Fatalf("WriteNeedUserInputRecord() error = %v", err)
-	}
-	store := feature.NewStore(t.TempDir())
-	cfg := config.NewDefault()
-	f := &feature.Feature{
-		ID:                       "feat-need-input",
-		Name:                     "Need input",
-		Slug:                     "need-input",
-		Status:                   feature.StatusNeedUserInput,
-		PendingNeedUserInputPath: gatePath,
-		SchemaVersion:            feature.SchemaVersionCurrent,
-	}
-	if err := store.Save(f); err != nil {
-		t.Fatalf("Save feature error = %v", err)
-	}
-	return newMutationTarget(Deps{
-		Orchestrator: orchestrator.New(orchestrator.Deps{Manager: feature.NewManager(store, cfg), Store: store}, orchestrator.Hooks{}),
-		Config:       cfg,
-	}), gatePath
-}
-
 func TestServerMutationTargetRuntimeConfigPersistsAllowedDefaultsChanges(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
@@ -1256,7 +1118,6 @@ func TestServerMutationTargetCreateFeaturePersistsSelectedRESTOptions(t *testing
 		Implementation: "default-implementation",
 		Review:         "default-review",
 		Utilities:      "default-utilities",
-		KBBuild:        "default-kb",
 	}
 	if err := config.Save(configPath, cfg); err != nil {
 		t.Fatalf("Save config error = %v", err)
@@ -1278,14 +1139,13 @@ func TestServerMutationTargetCreateFeaturePersistsSelectedRESTOptions(t *testing
 		Models: config.ModelConfig{
 			Research:       "claude:opus",
 			Implementation: testModelCodexGPT54,
-			KBBuild:        "claude:haiku",
 		},
 		Attachments:             []string{attachment},
 		UseCurrentBranch:        true,
 		UseCurrentBranchPerRepo: map[string]bool{testRepoAName: true},
 		RiskLevel:               feature.RiskHigh,
 		Pipeline:                feature.PipelineMedium,
-		Checkpoints: feature.Checkpoints{
+		Checkpoints: &feature.Checkpoints{
 			InquiryReview:   true,
 			RoadmapReview:   true,
 			PhasePlanReview: true,
@@ -1308,7 +1168,7 @@ func TestServerMutationTargetCreateFeaturePersistsSelectedRESTOptions(t *testing
 		t.Fatalf("created feature text config = desc:%q exit:%q inq:%q", created.Description, created.ExitCriteria, created.Inquireness)
 	}
 	if created.Models.Research != "claude:opus" || created.Models.Planning != testPlanningModelDefault ||
-		created.Models.Implementation != testModelCodexGPT54 || created.Models.KBBuild != "claude:haiku" {
+		created.Models.Implementation != testModelCodexGPT54 {
 		t.Fatalf("created feature models = %+v; want REST selections over defaults", created.Models)
 	}
 	if created.Pipeline != feature.PipelineMedium || created.CurrentPhase != feature.PhasePlan || created.RiskLevel != feature.RiskHigh {
@@ -1758,7 +1618,7 @@ func TestServerMutationTargetRetryFeatureDispatchesFailedPhase(t *testing.T) {
 		Manager: manager,
 		Store:   store,
 	}, orchestrator.Hooks{})
-	orch.SetRunMultiRepoImplFn(func(f *feature.Feature, planPath string, _ ...agent.KBInfo) (chan *agent.OrchestratorResult, error) {
+	orch.SetRunMultiRepoImplFn(func(f *feature.Feature, planPath string) (chan *agent.OrchestratorResult, error) {
 		dispatched = append(dispatched, f.ID+":"+planPath)
 		ch := make(chan *agent.OrchestratorResult)
 		close(ch)
@@ -1890,7 +1750,7 @@ func TestServerMutationTargetUpdateFeatureConfigPersistsRuntimePreferences(t *te
 		},
 		Inquireness: testInquirenessHigh,
 		Pipeline:    feature.PipelineMedium,
-		Checkpoints: feature.Checkpoints{
+		Checkpoints: &feature.Checkpoints{
 			InquiryReview:   true,
 			DesignReview:    true,
 			RoadmapReview:   true,
@@ -1930,7 +1790,7 @@ func TestServerMutationTargetUpdateFeatureConfigPersistsRuntimePreferences(t *te
 		Effort:             updated.Effort,
 		Inquireness:        string(updated.Inquireness),
 		Pipeline:           updated.Pipeline,
-		Checkpoints:        updated.Checkpoints,
+		Checkpoints:        &updated.Checkpoints,
 		InputNotifications: string(updated.InputNotifications),
 	}); err != nil {
 		t.Fatalf("UpdateFeatureConfig() preserving omitted automatic review mode: %v", err)
@@ -1998,7 +1858,7 @@ func TestServerMutationTargetClosedChildConfigReturnsRelationshipClosed(t *testi
 		Models:      config.ModelConfig{Research: "new-research"},
 		Inquireness: testInquirenessHigh,
 		Pipeline:    feature.PipelineMedium,
-		Checkpoints: feature.Checkpoints{ManualPublish: true},
+		Checkpoints: &feature.Checkpoints{ManualPublish: true},
 	})
 	if err != nil {
 		t.Fatalf("Marshal request: %v", err)
@@ -2350,14 +2210,14 @@ func TestServerMutationTargetRewindActionUpgradePipelineBranch(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Load feature: %v", err)
 	}
-	if updated.Pipeline != feature.PipelineLarge || updated.CurrentPhase != feature.PhaseKnowledgeBase {
-		t.Fatalf("feature pipeline/current phase = %s/%s, want large/knowledge base", updated.Pipeline, updated.CurrentPhase)
+	if updated.Pipeline != feature.PipelineLarge || updated.CurrentPhase != feature.PhaseInquire {
+		t.Fatalf("feature pipeline/current phase = %s/%s, want large/inquire", updated.Pipeline, updated.CurrentPhase)
 	}
 	if got := strings.Join(sessions.stopCalls, ","); got != "session-upgrade-rewind" {
 		t.Fatalf("StopSession calls = %q, want session-upgrade-rewind", got)
 	}
-	if result.FeatureID != f.ID || result.TargetPhase != phaseNameInquire || result.UpgradePipeline != "large" || result.EffectivePhase != feature.PhaseKnowledgeBase.DirName() || result.Result != "rewound" {
-		t.Fatalf("RewindFeature() result = %+v; want large KB rewind", result)
+	if result.FeatureID != f.ID || result.TargetPhase != phaseNameInquire || result.UpgradePipeline != "large" || result.EffectivePhase != feature.PhaseInquire.DirName() || result.Result != "rewound" {
+		t.Fatalf("RewindFeature() result = %+v; want large Inquire rewind", result)
 	}
 }
 
@@ -2426,7 +2286,7 @@ func TestServerMutationTargetRestartFeatureDispatchesPhaseWork(t *testing.T) {
 		Manager: manager,
 		Store:   store,
 	}, orchestrator.Hooks{})
-	orch.SetRunMultiRepoImplFn(func(f *feature.Feature, planPath string, _ ...agent.KBInfo) (chan *agent.OrchestratorResult, error) {
+	orch.SetRunMultiRepoImplFn(func(f *feature.Feature, planPath string) (chan *agent.OrchestratorResult, error) {
 		dispatched = append(dispatched, f.ID+":"+planPath)
 		ch := make(chan *agent.OrchestratorResult)
 		close(ch)

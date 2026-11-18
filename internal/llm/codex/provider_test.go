@@ -527,6 +527,47 @@ func TestProviderPrepareRealHome_PartialFailureThenRetrySucceeds(t *testing.T) {
 	assertAgentTOMLs(t, codexHome)
 }
 
+func TestProviderReconcileAgenticAgents_RemovesRetiredGeneratedAgents(t *testing.T) {
+	p := &Provider{}
+	codexHome := filepath.Join(t.TempDir(), "codex-home")
+	agentsDir := filepath.Join(codexHome, "agents")
+	if err := os.MkdirAll(agentsDir, 0o755); err != nil {
+		t.Fatalf("MkdirAll(%s): %v", agentsDir, err)
+	}
+	released, err := os.ReadFile(filepath.Join("testdata", "retired-agents", "verification-researcher.toml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	generated := filepath.Join(agentsDir, "verification-researcher.toml")
+	if err := os.WriteFile(generated, released, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	userFiles := map[string]string{
+		"conventions-researcher.toml": "# mine\nname = \"conventions-researcher\"\n",
+		// Same header a generated file starts with, as a user re-creating
+		// the agent after the upgrade would write.
+		"api-surface-researcher.toml": agentTOMLContent("api-surface-researcher", agentdef.AgentDef{Description: "mine", Prompt: "my prompt"}),
+	}
+	for name, content := range userFiles {
+		if err := os.WriteFile(filepath.Join(agentsDir, name), []byte(content), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	if err := p.reconcileAgenticAgents(codexHome); err != nil {
+		t.Fatalf("reconcileAgenticAgents() error: %v", err)
+	}
+
+	if _, err := os.Stat(generated); !os.IsNotExist(err) {
+		t.Fatalf("retired generated agent should be removed, stat err = %v", err)
+	}
+	for name, content := range userFiles {
+		if data, err := os.ReadFile(filepath.Join(agentsDir, name)); err != nil || string(data) != content {
+			t.Fatalf("user-authored agent %s changed: data=%q err=%v", name, data, err)
+		}
+	}
+}
+
 func TestProviderBuildCommand_UnwritableResolvedHomeFailsFast(t *testing.T) {
 	p := &Provider{}
 	blockingFile := filepath.Join(t.TempDir(), "not-a-directory")

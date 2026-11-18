@@ -132,10 +132,9 @@ describe('passState', () => {
     expect(state).toMatchObject({ id: 'working', sentence: 'Implementing.', tone: 'live' });
   });
 
-  it('routes pauses, input requests, and review gates to attention', () => {
+  it('routes pauses and review gates to attention', () => {
     const base = { setupComplete: true, setup: doneSetup };
     expect(passState(featureSnapshot({ ...base, status: 'Interrupted' })).id).toBe('interrupted');
-    expect(passState(featureSnapshot({ ...base, status: 'NeedUserInput' })).id).toBe('input');
     expect(passState(featureSnapshot({ ...base, status: 'FinalReviewNeedsReview' })).id).toBe(
       'review',
     );

@@ -50,6 +50,4 @@ type phasePlanRevisionUserInput struct {
 	PhasePlanFormatPath string
 
 	Inquireness prompts.AutonomousInquirenessInput
-
-	AutomatedVerificationOnly bool
 }

@@ -314,7 +314,7 @@ func TestMultiRepoOrchestratorConfigEffortRouting(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			cfg := pr.multiRepoOrchestratorConfig(f, tc.passRole, nil)
+			cfg := pr.multiRepoOrchestratorConfig(f, tc.passRole)
 			if cfg.EffectiveEffort != tc.wantEffort || cfg.EffortSource != tc.wantSource {
 				t.Errorf("effective effort = %q/%q, want %q/%q", cfg.EffectiveEffort, cfg.EffortSource, tc.wantEffort, tc.wantSource)
 			}

@@ -1,0 +1,43 @@
+{{- /*
+  review_round.user: appended to a multi-axis review axis prompt. States which
+  decisions outrank the design's acceptance criteria and, after the first
+  round, narrows the axis to its open findings or to a one-time confirmation
+  of its earlier approval.
+*/ -}}
+{{- define "review_round.user" -}}
+## Acceptance Authority
+
+Later approved decisions override {{ .AcceptanceSource }}: the roadmap's out-of-scope list, the user's recorded answers, and the {{ .GateLabel }} decisions file. Where one of them conflicts with an acceptance criterion, judge against the later decision. Do not raise again a finding the decisions file records as accepted as is.
+{{ if .RoadmapPath }}
+Roadmap: {{ .RoadmapPath }}
+{{ end }}{{ if .UserAnswerPaths }}
+User's recorded answers:
+{{ range .UserAnswerPaths }}- {{ . }}
+{{ end }}{{ end }}{{ if .DecisionsPath }}
+{{ .GateLabel }} decisions: {{ .DecisionsPath }}
+{{ end }}{{ if eq .Mode "follow_up" }}
+## Round Scope: Follow-Up
+
+This round narrows the scope above. You requested changes in iteration {{ .Since }}; review only whether those findings are resolved and what the fixes changed.
+
+- Your open findings: {{ .PriorFeedbackPath }}
+{{ template "review_round_delta" . }}
+Report each open finding as resolved or still open. Raise a new finding only for a problem the fix delta introduced on your axis, and leave code outside the delta alone.{{ if .LiveRun }} Rerun the checks behind your open findings on the current commit.{{ end }}
+{{ else if eq .Mode "confirm" }}
+## Round Scope: Confirmation
+
+This round narrows the scope above. You approved in iteration {{ .Since }} ({{ .PriorFeedbackPath }}), and fixes landed after that approval. Confirm it once against the cumulative fix delta.
+
+{{ template "review_round_delta" . }}
+Your approval stands unless the delta introduced a problem on your axis; request changes only for such a regression.{{ if .LiveRun }} Rerun the checks you ran for that approval on the current commit.{{ end }}
+{{ end }}
+{{- end -}}
+
+{{- define "review_round_delta" -}}
+{{ if .Deltas }}- Fix delta since iteration {{ .Since }}:
+{{ range .Deltas }}  - {{ .Repo }}: `cd {{ .Path }} && git diff {{ .Base }}`
+{{ end }}{{ else }}- Fix delta: the changes the fix rounds made after iteration {{ .Since }}
+{{ end }}{{ if .FixNotePaths }}- Fixer notes:
+{{ range .FixNotePaths }}  - {{ . }}
+{{ end }}{{ end }}
+{{- end -}}

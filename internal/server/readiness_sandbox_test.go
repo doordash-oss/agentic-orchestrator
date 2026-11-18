@@ -32,14 +32,14 @@ import (
 // assert exact issue lists do not depend on whether the suite itself runs
 // inside a macOS sandbox.
 func TestMain(m *testing.M) {
-	verificationSandboxStatus = func() agent.SandboxStatus { return agent.SandboxStatus{} }
+	reviewSandboxStatus = func() agent.SandboxStatus { return agent.SandboxStatus{} }
 	os.Exit(m.Run())
 }
 
 // Not parallel: replaces the package-level sandbox probe.
-func TestReadinessWarnsOnceWhenVerificationSandboxUnavailable(t *testing.T) {
-	original := verificationSandboxStatus
-	t.Cleanup(func() { verificationSandboxStatus = original })
+func TestReadinessWarnsOnceWhenReviewSandboxUnavailable(t *testing.T) {
+	original := reviewSandboxStatus
+	t.Cleanup(func() { reviewSandboxStatus = original })
 	registry := newReadinessRegistry(&readinessProbeProvider{
 		MockProvider: &mocks.MockProvider{ProviderName: "plain", CLIDetected: true, Models: []string{"m"}},
 		status:       staticReadiness(llm.ProviderReadiness{Ready: true}),
@@ -55,12 +55,12 @@ func TestReadinessWarnsOnceWhenVerificationSandboxUnavailable(t *testing.T) {
 		return out
 	}
 
-	verificationSandboxStatus = func() agent.SandboxStatus { return agent.SandboxStatus{} }
+	reviewSandboxStatus = func() agent.SandboxStatus { return agent.SandboxStatus{} }
 	if got := sandboxIssues(getReadinessSnapshot(t, handler)); len(got) != 0 {
 		t.Fatalf("issues with a usable sandbox = %+v; want none", got)
 	}
 
-	verificationSandboxStatus = func() agent.SandboxStatus {
+	reviewSandboxStatus = func() agent.SandboxStatus {
 		return agent.SandboxStatus{Unavailable: true, Reason: "nested sandbox-exec is not permitted"}
 	}
 	snapshot := getReadinessSnapshot(t, handler)
@@ -70,7 +70,7 @@ func TestReadinessWarnsOnceWhenVerificationSandboxUnavailable(t *testing.T) {
 	}
 	issue := got[0]
 	if issue.Class != "warning" || issue.Diagnostics != "nested sandbox-exec is not permitted" ||
-		issue.Summary != "Verification sandbox is unavailable on this machine; contract commands and review validators run unconfined." ||
+		issue.Summary != "The review sandbox is unavailable on this machine; review validators run unconfined." ||
 		issue.Remediation == nil || issue.Remediation.Hint == "" {
 		t.Fatalf("sandbox issue = %+v; want warning with probe diagnostics and a remediation hint", issue)
 	}

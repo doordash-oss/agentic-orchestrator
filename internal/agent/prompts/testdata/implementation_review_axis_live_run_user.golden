@@ -13,9 +13,9 @@ Launch a polished settings dashboard.
 
 ## Live-Run Posture
 
-- Use the live-run posture: build, launch, drive, screenshot, and record evidence as needed.
+- Use the live-run posture: build, launch, run, drive, screenshot, and record evidence as needed.
 - Treat the source tree as read-only. Write captured evidence only under the live-run evidence root named in this prompt.
-- Judge from the attached baseline images plus the captured `### Visual Evidence` screenshots under this iteration's `screenshots/` directory.
+- For visual judgments, use the attached baseline images plus the screenshots captured for the plan's verification under the implementation iteration directories.
 
 ## Approved Roadmap
 
@@ -35,12 +35,6 @@ Read the implementation plan (source of truth) at: /state/feat-x/run-1/phase-2/p
 ## Exit Criteria
 
 Settings dashboard matches the approved design.
-
-## Verification Report
-
-Read the verification report at: /state/feat-x/run-1/phase-2/implement/iteration-01/verification-report.yaml
-
-Apply the "Review Rules (Without Verification Items)" section from the axis methodology.
 
 ## Progress
 

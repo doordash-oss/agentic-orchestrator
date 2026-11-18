@@ -1376,13 +1376,6 @@ const ReviewGateViewSchema = z.strictObject({
 });
 export type ReviewGateView = z.output<typeof ReviewGateViewSchema>;
 
-/** One harness-executed verification command and its current state. */
-const VerificationItemViewSchema = z.strictObject({
-  name: z.string(),
-  state: z.string(),
-});
-export type VerificationItemView = z.output<typeof VerificationItemViewSchema>;
-
 const AutomaticReviewModeSchema = z.enum([
   'default',
   'enabled',
@@ -1430,7 +1423,6 @@ export const FeatureSnapshotSchema = z.strictObject({
   /** Run-contract axes surfaced so child launches can seed from the parent. */
   riskLevel: z.string().max(100).optional(),
   exitCriteria: z.string().max(4000).optional(),
-  waitReason: z.string().optional(),
   repos: z.array(z.string()),
   createdAt: z.string(),
   activeRun: z.number().int().nonnegative(),
@@ -1468,8 +1460,6 @@ export const FeatureSnapshotSchema = z.strictObject({
   reviewGate: ReviewGateViewSchema,
   /** Effective Automatic Bash review state and the scope that selected it. */
   automaticReview: AutomaticReviewStateSchema,
-  /** Ordered per-command harness verification state during phaseStatus "verifying". */
-  verificationItems: z.array(VerificationItemViewSchema).optional(),
   /** Aggregate run time across the feature's runs, for the queue readout. */
   timing: z.strictObject({ totalSeconds: z.number().int().nonnegative() }).optional(),
   /** The durable run failure: the canonical catalog-rendered error object, diagnostics redacted. */
@@ -1934,7 +1924,6 @@ const RunSummaryViewSchema = z.strictObject({
   pendingReviewPhase: z.string().optional(),
   isRewind: z.boolean().optional(),
   artifactCount: z.number().int().nonnegative(),
-  hasNeedUserGate: z.boolean().optional(),
 });
 export type RunSummaryView = z.output<typeof RunSummaryViewSchema>;
 
@@ -2211,51 +2200,6 @@ const AttentionHelpSchema = z.strictObject({
   /** Descriptions of the session's still-running background tasks. */
   runningTasks: z.array(z.string().max(500)).max(100).optional(),
 });
-export const VerificationGateActionSchema = z.enum([
-  'WAIVE',
-  'RETRY_AFTER_AUTH',
-  'ALLOW_SUBSTITUTE',
-]);
-export type VerificationGateAction = z.output<typeof VerificationGateActionSchema>;
-const AttentionGateSchema = z.strictObject({
-  kind: z.literal('gate'),
-  id: z.string().min(1).max(1000),
-  featureId: FeatureIdSchema,
-  /** Set when the gate belongs to a refactor pass: the parent tab owns it. */
-  parentFeatureId: FeatureIdSchema.optional(),
-  waitingSince: z.string().max(100),
-  scope: z.string().max(100).optional(),
-  repoName: z.string().max(500).optional(),
-  iteration: z.number().int().nonnegative().optional(),
-  summary: AttentionTextSchema.optional(),
-  questions: z
-    .array(
-      z.strictObject({
-        index: z.number().int().min(1),
-        prompt: AttentionTextSchema,
-        answer: AttentionTextSchema,
-      }),
-    )
-    .max(100),
-  verification: z
-    .strictObject({
-      blockers: z
-        .array(
-          z.strictObject({
-            itemId: AttentionIDSchema,
-            name: AttentionTextSchema,
-            repoName: z.string().max(500).optional(),
-            command: AttentionTextSchema,
-            reason: AttentionTextSchema,
-            capabilities: z.array(AttentionTextSchema).max(20),
-            remediation: AttentionTextSchema,
-          }),
-        )
-        .max(100),
-      allowedActions: z.array(VerificationGateActionSchema).max(3),
-    })
-    .optional(),
-});
 /** A review is actionable only in the cockpit; the inbox is a deliberate jump. */
 const AttentionReviewSchema = z.strictObject({
   kind: z.literal('review'),
@@ -2299,7 +2243,6 @@ export const AttentionItemSchema = z.discriminatedUnion('kind', [
   AttentionPermissionSchema,
   AttentionQuestionBundleSchema,
   AttentionHelpSchema,
-  AttentionGateSchema,
   AttentionReviewSchema,
   AttentionRecoverySchema,
   AttentionErrorSchema,
@@ -2392,85 +2335,12 @@ export const HelpAnswerRequestSchema = z
     message: 'A feature or session is required.',
   });
 export type HelpAnswerRequest = z.output<typeof HelpAnswerRequestSchema>;
-const GateTargetSchema = z.strictObject({
-  featureId: FeatureIdSchema,
-  repoName: z.string().max(500).optional(),
-});
-export const GateDraftRequestSchema = GateTargetSchema.extend({
-  /** Keyed by the stored gate question index as a decimal string. */
-  answers: z
-    .record(QuestionIndexKeySchema, AttentionTextSchema)
-    .refine((answers) => Object.keys(answers).length > 0),
-});
-export type GateDraftRequest = z.output<typeof GateDraftRequestSchema>;
-export const GateResumeRequestSchema = GateTargetSchema;
-export type GateResumeRequest = z.output<typeof GateResumeRequestSchema>;
 const AttentionActionResultSchema = z.strictObject({
   result: z.string().max(500),
   alreadyResolved: z.boolean().optional(),
   notice: z.string().max(500).optional(),
 });
 export type AttentionActionResult = z.output<typeof AttentionActionResultSchema>;
-/** User-authorized waivers on the current phase's testing contract, outside the gate. */
-export const TestingContractWaiveRequestSchema = z.strictObject({
-  featureId: FeatureIdSchema,
-  itemIds: z
-    .array(AttentionIDSchema.refine((value) => value.trim() !== ''))
-    .min(1)
-    .max(100),
-  reason: AttentionTextSchema.refine((value) => value.trim() !== ''),
-  // Bind the waiver to the contract the user saw; the server rejects a
-  // mismatch with 409 `conflict`. Phase and revision numbers restart after
-  // a rewind, so the run is part of the binding.
-  activeRun: z.number().int().positive(),
-  roadmapPhase: z.number().int().positive(),
-  contractRevision: z.number().int().positive(),
-});
-export type TestingContractWaiveRequest = z.output<typeof TestingContractWaiveRequestSchema>;
-export const TestingContractWaiveResultSchema = z.strictObject({
-  result: z.string().max(500),
-  contractRevision: z.number().int().positive(),
-  waivedItems: z.array(AttentionIDSchema).max(100),
-});
-export type TestingContractWaiveResult = z.output<typeof TestingContractWaiveResultSchema>;
-/** The current phase's compiled testing contract, read to drive the waiver checklist. */
-export const TestingContractRequestSchema = z.strictObject({ featureId: FeatureIdSchema });
-export type TestingContractRequest = z.output<typeof TestingContractRequestSchema>;
-const TestingContractItemSchema = z.strictObject({
-  itemId: AttentionIDSchema,
-  source: z.string().min(1).max(100),
-  owner: z.string().min(1).max(100),
-  repo: z.string().max(500).optional(),
-  name: AttentionTextSchema,
-  command: AttentionTextSchema,
-  required: z.boolean(),
-  allowSubstitution: z.boolean(),
-  allowBlocked: z.boolean(),
-  allowWaiver: z.boolean(),
-  disposition: z
-    .strictObject({
-      status: z.string().min(1).max(100),
-      reason: z.string().max(2000).optional(),
-      changedBy: z.string().max(200).optional(),
-    })
-    .optional(),
-  capabilities: z.array(z.string().max(500)).max(20),
-});
-export type TestingContractItem = z.output<typeof TestingContractItemSchema>;
-/** `available: false` when the phase has no contract yet (server 404). */
-export const TestingContractSnapshotSchema = z.discriminatedUnion('available', [
-  z.strictObject({ available: z.literal(false) }),
-  z.strictObject({
-    available: z.literal(true),
-    featureId: FeatureIdSchema,
-    activeRun: z.number().int().positive(),
-    roadmapPhase: z.number().int().positive(),
-    revision: z.number().int().positive(),
-    items: z.array(TestingContractItemSchema).max(500),
-  }),
-]);
-export type TestingContractSnapshot = z.output<typeof TestingContractSnapshotSchema>;
-
 // --- Staged uploads ---------------------------------------------------------
 
 /** An opaque, single-use staged-upload handle the server returned. */
@@ -4188,7 +4058,6 @@ const PhaseModelsSchema = z.strictObject({
   implementation: z.string().max(200).optional(),
   review: z.string().max(200).optional(),
   utilities: z.string().max(200).optional(),
-  kbBuild: z.string().max(200).optional(),
   automaticReview: z.string().max(200).optional(),
 });
 export type PhaseModels = z.output<typeof PhaseModelsSchema>;
@@ -4200,7 +4069,6 @@ const PhaseEffortSchema = z.strictObject({
   implementation: EffortLevelSchema.optional(),
   review: EffortLevelSchema.optional(),
   utilities: EffortLevelSchema.optional(),
-  kbBuild: EffortLevelSchema.optional(),
 });
 export type PhaseEffort = z.output<typeof PhaseEffortSchema>;
 
@@ -4411,22 +4279,6 @@ export const ipcContracts = {
     response: AttentionActionResultSchema,
   },
   sendHelp: { request: z.tuple([HelpAnswerRequestSchema]), response: AttentionActionResultSchema },
-  saveGateDraft: {
-    request: z.tuple([GateDraftRequestSchema]),
-    response: AttentionActionResultSchema,
-  },
-  resolveGate: {
-    request: z.tuple([GateResumeRequestSchema]),
-    response: AttentionActionResultSchema,
-  },
-  waiveTestingContract: {
-    request: z.tuple([TestingContractWaiveRequestSchema]),
-    response: TestingContractWaiveResultSchema,
-  },
-  getTestingContract: {
-    request: z.tuple([TestingContractRequestSchema]),
-    response: TestingContractSnapshotSchema,
-  },
   listSessions: { request: z.tuple([]), response: z.array(SessionSummarySchema).max(1000) },
   getSession: { request: z.tuple([SessionIdSchema]), response: SessionDetailSchema },
   getSessionTranscript: {
@@ -4764,10 +4616,6 @@ export interface AgenticoApi {
   answerPermission(request: PermissionDecisionRequest): Promise<AttentionActionResult>;
   answerQuestions(request: AskUserAnswerRequest): Promise<AttentionActionResult>;
   sendHelp(request: HelpAnswerRequest): Promise<AttentionActionResult>;
-  saveGateDraft(request: GateDraftRequest): Promise<AttentionActionResult>;
-  resolveGate(request: GateResumeRequest): Promise<AttentionActionResult>;
-  waiveTestingContract(request: TestingContractWaiveRequest): Promise<TestingContractWaiveResult>;
-  getTestingContract(request: TestingContractRequest): Promise<TestingContractSnapshot>;
   listSessions(): Promise<SessionSummary[]>;
   getSession(sessionId: string): Promise<SessionDetail>;
   getSessionTranscript(request: SessionTranscriptRequest): Promise<SessionTranscript>;

@@ -39,11 +39,11 @@ const fourSegments: RailSegment[] = [
     accessibleName: 'Setup, completed',
   },
   {
-    id: 'knowledge-base',
-    label: 'Knowledge',
+    id: 'plan',
+    label: 'Plan',
     state: 'completed',
     held: false,
-    accessibleName: 'Knowledge Base, completed',
+    accessibleName: 'Plan, completed',
   },
   segment({ id: 'implement', label: 'Implement', state: 'current' }),
   {
@@ -78,7 +78,7 @@ describe('PhaseRailTrack', () => {
   it("encodes each segment's state in its accessible name, reusing the view-model verbatim", () => {
     render(<PhaseRailTrack segments={fourSegments} />);
     expect(screen.getByLabelText('Setup, completed')).toBeInTheDocument();
-    expect(screen.getByLabelText('Knowledge Base, completed')).toBeInTheDocument();
+    expect(screen.getByLabelText('Plan, completed')).toBeInTheDocument();
     expect(screen.getByLabelText('Implement, current')).toBeInTheDocument();
     expect(screen.getByLabelText('Review, upcoming')).toBeInTheDocument();
   });

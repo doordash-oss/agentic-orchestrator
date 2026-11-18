@@ -82,7 +82,7 @@ func CommitPhaseOutcome(in CompletionCommitInput) (Outcome, CompletionReceipt, [
 	if len(violations) > 0 || !outcome.OK {
 		return outcome, CompletionReceipt{}, violations, nil
 	}
-	if mismatch := completionIntentMismatch(in.Intent, outcome); mismatch != "" {
+	if mismatch := completionIntentMismatch(in.Intent, in.Phase, in.Role); mismatch != "" {
 		return outcome, CompletionReceipt{}, []ProtocolViolation{{
 			Artifact: "agentico-outcome",
 			Reason:   mismatch,
@@ -103,26 +103,16 @@ func CommitPhaseOutcome(in CompletionCommitInput) (Outcome, CompletionReceipt, [
 	return outcome, receipt, nil, nil
 }
 
-func completionIntentMismatch(intent llm.CompletionIntent, outcome Outcome) string {
-	if outcome.Progress == nil {
-		if intent.Status == llm.CompletionIntentRetry {
-			return "retry is only valid for a role with a structured iteration state"
-		}
+// completionIntentMismatch rejects a retry outcome from a role that cannot
+// ask for another pass.
+func completionIntentMismatch(intent llm.CompletionIntent, phase feature.Phase, role Role) string {
+	if intent.Status != llm.CompletionIntentRetry {
 		return ""
 	}
-	switch outcome.Progress.State {
-	case stateSuccess:
-		if intent.Status != llm.CompletionIntentSuccess {
-			return fmt.Sprintf("root outcome status %q disagrees with progress.md iteration state %q", intent.Status, outcome.Progress.State)
-		}
-	case stateRetry:
-		if intent.Status != llm.CompletionIntentRetry {
-			return fmt.Sprintf("root outcome status %q disagrees with progress.md iteration state %q", intent.Status, outcome.Progress.State)
-		}
-	default:
-		return fmt.Sprintf("progress.md iteration state %q cannot be committed by a root outcome", outcome.Progress.State)
+	if spec, ok := lookupRoleSpec(phase, role); ok && spec.AllowsRetry {
+		return ""
 	}
-	return ""
+	return "retry is only valid for a role that allows another pass"
 }
 
 func writeCompletionReceipt(path string, receipt CompletionReceipt) error {
@@ -207,7 +197,7 @@ func hasCommittedPhaseOutcome(dir string, phase feature.Phase, role Role) bool {
 		return false
 	}
 	intent := llm.CompletionIntent{Found: true, Status: receipt.Status}
-	return completionIntentMismatch(intent, outcome) == ""
+	return completionIntentMismatch(intent, phase, role) == ""
 }
 
 // removeCompletionReceipt removes only the harness completion receipt.

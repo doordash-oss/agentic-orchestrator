@@ -12,10 +12,10 @@ The hard part of agentic coding is not asking a model to edit files. The hard pa
 
 That is the real "oneshot" value: an engineer can describe a large feature once, then supervise the checkpoints where judgment matters instead of manually shepherding every prompt, terminal session, worktree, test run, review pass, and PR step.
 
-- **Context is built, not hoped for** — Large and Moonshot features start by building a per-repo knowledge base, then run inquiry, research, and design phases before planning. The implementation agent reads structured artifacts instead of relying on a single overloaded chat history.
+- **Context is built, not hoped for** — Large and Moonshot features run inquiry, research, and design phases before planning. The implementation agent reads structured artifacts instead of relying on a single overloaded chat history.
 - **Complexity is phased** — Planning produces a roadmap, then each roadmap phase gets its own detailed phase plan. A tracer-bullet phase establishes the path; later TDD fill-in phases retire stubs and expand coverage.
-- **Quality gates happen before the diff gets expensive** — Plan validators review architecture, scope, structure, and, for high-risk work, security, performance, and testing. Implementation and Final Review loops use explicit verification evidence before the feature becomes publishable.
-- **Human attention is reserved for decisions** — Optional gates pause on inquiry review, research review, design review, roadmap review, phase plan review, user-input, and publish decisions. You approve direction, request iteration, or answer targeted questions; the orchestrator keeps the workflow state.
+- **Quality gates happen before the diff gets expensive** — Plan validators review architecture, scope, structure, and, for high-risk work, security, performance, and testing. The implementer runs each phase plan's verification itself, and Final Review runs the product and the full test suites before the feature becomes publishable.
+- **Human attention is reserved for decisions** — Optional gates pause on inquiry review, research review, design review, roadmap review, phase plan review, and publish decisions. You approve direction, request iteration, or answer targeted questions; the orchestrator keeps the workflow state.
 - **Parallelism is the multiplier, not the premise** — Because every feature gets isolated worktrees, branches, sessions, and artifacts, you can run several complex workflows at once without mixing state or blocking your main checkout.
 - **Provider orchestration is explicit** — One provider is enough to run the whole workflow; add more to split the work. Claude, Codex, and OpenCode are co-equal: each phase uses [configurable model recommendations and discovered capabilities](docs/model-selection.md) across detected providers, and models can be overridden per phase and swapped at runtime. Use `--providers` to restrict the orchestrator to the CLIs you actually have installed.
 
@@ -80,7 +80,7 @@ Agentic Orchestrator needs **at least one** AI provider CLI.
 
 | Tool                                     | Role                                                                                                                              | Install                                                                                                                   |
 | ---------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------- |
-| **Claude Code CLI >= 2.1.81** (`claude`) | Backend for KB, inquiry, research, design, planning, implementation, and chat                                                     | [Claude Code setup](https://code.claude.com/docs/en/getting-started) or `npm install -g @anthropic-ai/claude-code@latest` |
+| **Claude Code CLI >= 2.1.81** (`claude`) | Backend for inquiry, research, design, planning, implementation, and chat                                                         | [Claude Code setup](https://code.claude.com/docs/en/getting-started) or `npm install -g @anthropic-ai/claude-code@latest` |
 | **Codex CLI >= 0.153.2** (`codex`)       | Backend for Final Review and Codex-backed review models                                                                           | [Codex CLI setup](https://developers.openai.com/codex/cli) or `npm i -g @openai/codex@latest`                             |
 | **OpenCode CLI >= 1.17.9** (`opencode`)  | Co-equal backend for every phase and chat; selected with `opencode:<backend/model>` (e.g. `opencode:anthropic/claude-sonnet-4-5`) | [opencode.ai](https://opencode.ai) or `curl -fsSL https://opencode.ai/install \| bash`                                    |
 
@@ -99,19 +99,17 @@ After installing your provider CLI(s), confirm each is authenticated — `claude
 
 ### The Feature Lifecycle
 
-The lifecycle is profile-dependent and checkpoint-driven. Medium starts at planning. Large and Moonshot first build context, clarify intent, and explore design options. All profiles then enter the roadmap loop: create a roadmap, plan one roadmap phase at a time, implement it, commit phase anchors, and continue until the final phase reaches Final Review.
+The lifecycle is profile-dependent and checkpoint-driven. Medium starts at planning. Large and Moonshot first clarify intent, research the codebase, and explore design options. All profiles then enter the roadmap loop: create a roadmap, plan one roadmap phase at a time, implement it, commit phase anchors, and continue until the final phase reaches Final Review.
 
 <img width="1051" height="570" alt="image" src="https://github.com/user-attachments/assets/00eb8559-0b0c-4000-a029-2210aa50f920" />
-
-**Knowledge Base Build** — Builds or refreshes a per-repo knowledge base covering architecture, conventions, API surface, dependencies, and verification. Fresh KBs are reused and the phase is skipped.
 
 **Inquire, Research, Design** — Turns a high-level request into explicit answers, research findings, and a design direction. Q&A artifacts are persisted and fed forward so later phases do not depend on memory alone.
 
 **Roadmap and Phase Planning** — Creates the top-level roadmap, then a detailed plan for each roadmap phase. Large and Moonshot run plan validators; Medium skips plan critics for lower overhead.
 
-**Implementation** — Runs a unified phase implementation loop across the phase-scoped repo set. Medium and Large rely on Final Review; Moonshot also keeps per-iteration review during implementation.
+**Implementation** — Runs a unified phase implementation loop across the phase-scoped repo set. On every profile the implementer runs the phase plan's verification itself and leaves free-form handoff notes for the next iteration; whether an iteration succeeds or retries comes from the agent's completion outcome. Medium and Large rely on Final Review; on Moonshot each successful iteration is followed by a per-phase review whose Functionality/Evidence reviewer runs the phase plan's verification itself. That review follows the same round rules as Final Review, and its handoff question offers to continue with guidance, accept and finish the phase, or stop.
 
-**Final Review** — Runs once after the last roadmap phase, across every touched repo that has not already been published. The phase contains its own review/fix loop. Passing Final Review moves the feature to `CodeReady`; exhausting the loop or violating the phase contract fails the feature.
+**Final Review** — Runs once after the last roadmap phase, across every touched repo that has not already been published. The phase contains its own review/fix loop: the first round runs every review axis over the full diff, later rounds rerun only the axes that requested changes, scoped to their open findings and what changed since, and an earlier approval is confirmed once if code changed after it. The QA reviewer runs the product and the full test suites. The fixer can dispute a finding by asking you; your answer is recorded in a decisions file that later reviewers read, and approved decisions override the design's acceptance criteria. When a fix round changes nothing, or one axis requests changes three rounds in a row, Final Review asks you one question: continue with guidance, accept and proceed to Publish, or stop. Stopping parks the feature as `Interrupted`, and resuming re-enters Final Review. Passing Final Review moves the feature to `CodeReady`. The iteration cap limits fix rounds, not reviews: the review after a fix, your guidance, or a resume always runs. Needing a fix beyond the cap, or violating the phase contract, fails the feature.
 
 **Publishing** — If auto-publish is enabled, Agentic Orchestrator commits, pushes, creates PRs, and injects cross-repo PR links automatically. If manual publish is enabled, the desktop app pauses at `CodeReady` so you can review the diff and PR description first.
 
@@ -119,11 +117,11 @@ The lifecycle is profile-dependent and checkpoint-driven. Medium starts at plann
 
 When creating a feature, choose a pipeline depth:
 
-| Profile      | Phases                                                                                 | Best for                                                           |
-| ------------ | -------------------------------------------------------------------------------------- | ------------------------------------------------------------------ |
-| **Medium**   | Roadmap plan → per-phase plan/implement loop → Final Review → Publish                  | Small, well-understood changes where you already know the approach |
-| **Large**    | KB → Inquire → Research → Design → roadmap loop → Final Review → Publish               | Most complex features (default)                                    |
-| **Moonshot** | Same phase sequence as Large, with high effort and per-iteration implementation review | High-risk or highly ambiguous changes                              |
+| Profile      | Phases                                                                                             | Best for                                                           |
+| ------------ | -------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------ |
+| **Medium**   | Roadmap plan → per-phase plan/implement loop → Final Review → Publish                              | Small, well-understood changes where you already know the approach |
+| **Large**    | Inquire → Research → Design → roadmap loop → Final Review → Publish                                | Most complex features (default)                                    |
+| **Moonshot** | Same phase sequence as Large, with per-phase review after each successful implementation iteration | High-risk or highly ambiguous changes                              |
 
 ### Worktree Isolation
 
@@ -144,10 +142,6 @@ Every feature targets one or more repositories with the same lifecycle and state
 - Cross-references PRs across repos automatically
 
 When a feature targets a single repo, the per-repo Repo Progress panel and the cross-reference PR table collapse — the rest of the lifecycle is identical.
-
-### Knowledge Base
-
-Before diving into a feature, Agentic Orchestrator can build a per-repo knowledge base — a structured document graph covering architecture, conventions, API surface, dependencies, and verification methods. The KB is cached and incrementally updated (only when HEAD changes), so subsequent features in the same repo start faster.
 
 ### Plan Validation Gate
 
@@ -194,7 +188,6 @@ defaults:
     implementation: "opus[1M]"   # Model for implementation phase
     review: "gpt-5.4[272K]"      # Model for review phase (Codex)
     utilities: "sonnet[200K]"    # Model for chat and utility tasks
-    kb_build: "sonnet[200K]"     # Model for knowledge base builds
     automatic_review: ""         # Empty selects Automatic
   automatic_review_enabled: false
   exit_criteria: |
@@ -213,7 +206,6 @@ defaults:
 repos:
   my-service:
     path: /home/user/projects/my-service
-    verification: "go test ./..."
 
 workspace_roots:
   - /home/user/projects # Scanned for git repos on startup

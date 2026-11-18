@@ -104,37 +104,6 @@ func TestAtomicPhaseStamp_AllFailed(t *testing.T) {
 	}
 }
 
-func TestAtomicPhaseStamp_NeedUserInputDoesNotMutateRepoStatus(t *testing.T) {
-	repos := []feature.FeatureRepo{{Name: testRepoNameAPI}, {Name: testRepoNameWeb}}
-	prior := map[string]*feature.RepoState{
-		testRepoNameAPI: {},
-		testRepoNameWeb: {},
-	}
-	store, id := newTestStoreWithFeature(t, repos, prior)
-
-	err := AtomicPhaseStamp(store, AtomicPhaseStampInput{
-		FeatureID: id,
-		Repos:     []string{testRepoNameAPI, testRepoNameWeb},
-		Outcome:   phaseOutcomeNeedUserInput,
-		GatePath:  "/state/runs/run-001/phase-01/implement/iteration-02/need-user-input.yaml",
-	})
-	if err != nil {
-		t.Fatalf("stamp: %v", err)
-	}
-	got, err := store.Load(id)
-	if err != nil {
-		t.Fatalf("load: %v", err)
-	}
-	for _, name := range []string{testRepoNameAPI, testRepoNameWeb} {
-		if ns := got.RepoStates[name]; ns != nil && (ns.Touched || ns.Error != nil) {
-			t.Errorf("repo %s = %+v, want untouched (NEED_USER_INPUT is feature-level only)", name, ns)
-		}
-	}
-	if got.PendingNeedUserInputPath == "" {
-		t.Errorf("expected feature-level gate path to be recorded")
-	}
-}
-
 func TestAtomicPhaseStamp_DoesNotTouchOutsideRepos(t *testing.T) {
 	// 3 feature repos, but only 2 in the phase.
 	repos := []feature.FeatureRepo{{Name: testRepoNameAPI}, {Name: testRepoNameWeb}, {Name: "outside"}}

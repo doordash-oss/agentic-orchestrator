@@ -45,7 +45,7 @@ func TestUpdatePairedConfigAtomicallyUpdatesBothRecords(t *testing.T) {
 	child, err := mgr.CreateRefactorChild("p-cfg", feature.RefactorChildSpec{
 		Name:        "Child Cfg",
 		Pipeline:    feature.PipelineMedium,
-		Checkpoints: feature.Checkpoints{PhasePlanReview: true},
+		Checkpoints: &feature.Checkpoints{PhasePlanReview: true},
 	})
 	if err != nil {
 		t.Fatalf("CreateRefactorChild: %v", err)

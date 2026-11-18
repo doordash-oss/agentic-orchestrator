@@ -49,19 +49,10 @@ const (
 	// which owns events.jsonl emission with run_number tagging. The desktop SSE
 	// consumer treats this event as an invalidation and reloads the feature.
 	FeatureConfigChanged
-	// NeedUserInputRequired fires when deterministic verification creates a
-	// durable capability-decision gate. The desktop app consumes it to surface
-	// a `Needs user input` banner. Message carries the harness-authored summary.
-	NeedUserInputRequired
 	SetupStarted
 	SetupProgress
 	SetupCompleted
 	SetupFailed
-	// VerificationProgress fires after the harness durably changes the
-	// ordered per-command verification status. API clients use it to refresh
-	// feature detail while no agent session is active to provide refresh
-	// signals of its own.
-	VerificationProgress
 	// RuntimeShutdownStarted fires when the orchestrator/runtime has begun a
 	// graceful shutdown. SSE consumers use it as a metadata-only signal to
 	// refresh authoritative REST snapshots during reconnect.

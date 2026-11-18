@@ -17,11 +17,9 @@ package orchestrator
 import (
 	"errors"
 	"fmt"
-	"os"
 	"strings"
 	"time"
 
-	"github.com/doordash-oss/agentic-orchestrator/internal/agent"
 	"github.com/doordash-oss/agentic-orchestrator/internal/errcat"
 	"github.com/doordash-oss/agentic-orchestrator/internal/feature"
 	"github.com/doordash-oss/agentic-orchestrator/internal/git"
@@ -453,58 +451,7 @@ func (o *Orchestrator) settleChildClosureTail(childID, parentID string) error {
 	// worktrees. Best-effort: capture failures never block the closure tail.
 	o.preserveChildDiffSummary(childID)
 
-	// Promote child KB workspaces to parent overlays before cleanup. The
-	// promotion is a post-close operation: a completed child never reopens.
-	// If promotion fails, the workspace is preserved and promotion remains
-	// pending for idempotent recovery. Cleanup and auto-publish are blocked
-	// until promotion succeeds — the parent must not publish before its
-	// successful child knowledge is available in the overlay.
-	if child.EffectivePipeline().HasPhase(feature.PhaseKnowledgeBase) {
-		if err := o.PromoteChildKBWorkspaces(childID, parentID); err != nil {
-			o.emitEvent(ports.Event{
-				Type:      ports.RepoStatusChanged,
-				FeatureID: childID,
-				ParentID:  parentID,
-				ChildID:   childID,
-				Message:   "child KB promotion failed: " + err.Error(),
-			})
-			// Promotion is pending — block cleanup and auto-publish. The
-			// child stays Completed with its workspace preserved for
-			// idempotent recovery by reconcilePromotions.
-			return fmt.Errorf("child KB promotion pending for %s: %w", childID, err)
-		}
-	}
-
 	warnings := o.cleanupChildResourcesPerRepo(child)
-
-	// Clean up child KB workspaces after successful promotion. If promotion
-	// is still pending, the workspace is preserved for recovery.
-	baseDir := o.stateDir()
-	if baseDir != "" && child.EffectivePipeline().HasPhase(feature.PhaseKnowledgeBase) {
-		{
-			journal, jerr := o.deps.Store.LoadPromotion(childID)
-			if jerr != nil {
-				return fmt.Errorf("loading promotion journal for cleanup: %w", jerr)
-			}
-			// The journal is the only recovery input for a stranded overlay
-			// lock, so it (and the disposable workspaces it references) may
-			// only be removed once "promoted and unlocked" is durable. The
-			// PromoteChildKBWorkspaces call above establishes LocksReleased
-			// before returning success; anything less keeps the journal for
-			// reconcilePromotions.
-			if journal != nil && journal.Phase == feature.PromotionPhasePromoted && journal.LocksReleased {
-				for _, repo := range child.Repos {
-					workspaceDir := feature.ChildKBWorkspaceDir(baseDir, childID, repo.Name)
-					if err := agent.RemoveWorkspace(workspaceDir); err != nil {
-						warnings[repo.Name] = fmt.Sprintf("removing child KB workspace for %s: %v", repo.Name, err)
-					}
-				}
-				if err := o.deps.Store.DeletePromotion(childID); err != nil && !os.IsNotExist(err) {
-					return fmt.Errorf("deleting settled promotion journal for %s: %w", childID, err)
-				}
-			}
-		}
-	}
 
 	for _, repo := range child.Repos {
 		warning := warnings[repo.Name]

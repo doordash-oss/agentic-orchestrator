@@ -31,13 +31,12 @@ const phaseSupervisorStatusSuccess = "SUCCESS"
 // Shared FinalStatus values reported by agent implementation/review
 // loops (agent.OrchestratorResult, agent.LoopResult, etc.).
 const (
-	reviewStatusPassed              = "review_passed"
-	finalStatusAllPassed            = "all_passed"
-	finalStatusPlanRevisionRequired = "plan_revision_required"
-	finalStatusFailed               = "failed"
-	finalStatusInterrupted          = "interrupted"
-	finalStatusNeedUserInput        = "need_user_input"
-	finalStatusNoOp                 = "no_op"
+	reviewStatusPassed     = "review_passed"
+	finalStatusAllPassed   = "all_passed"
+	finalStatusFailed      = "failed"
+	finalStatusInterrupted = "interrupted"
+	finalStatusStopped     = "stopped"
+	finalStatusNoOp        = "no_op"
 )
 
 type phaseCompletionSink interface {
@@ -139,9 +138,6 @@ func (s *phaseSupervisor) runSingleShotSession(featureID, sessionID string, phas
 }
 
 func singleShotPhaseRole(phase feature.Phase) agent.Role {
-	if phase == feature.PhaseKnowledgeBase {
-		return agent.RoleKnowledgeBaseBuilder
-	}
 	role, _ := artifactPhaseRole(phase)
 	return role
 }
@@ -203,7 +199,7 @@ func (s *phaseSupervisor) superviseImplementationLoop(featureID string, resultCh
 				continue
 			}
 			switch res.FinalStatus {
-			case finalStatusAllPassed, "awaiting_final_review", finalStatusFailed, finalStatusNeedUserInput, finalStatusPlanRevisionRequired, finalStatusInterrupted:
+			case finalStatusAllPassed, "awaiting_final_review", finalStatusFailed, finalStatusInterrupted, finalStatusStopped:
 				s.complete(featureID, PhaseCompletionInput{
 					Phase:           feature.PhaseImplement,
 					MultiRepoResult: res,

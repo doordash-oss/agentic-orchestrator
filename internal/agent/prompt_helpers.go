@@ -30,16 +30,15 @@ import (
 )
 
 // contextReadTracker holds the directories and observer needed to track
-// reads of KB, skill, and guideline files during agent sessions.
+// reads of skill and guideline files during agent sessions.
 type contextReadTracker struct {
-	KBBaseDir     string
 	SkillsDir     string
 	GuidelinesDir string
 	Observer      *observe.Observer
 }
 
 // install sets an onToolAllowed callback on the session that emits
-// context.file_read events when the agent reads KB, skill, or guideline files.
+// context.file_read events when the agent reads skill or guideline files.
 func (t *contextReadTracker) install(sess interface {
 	SetOnToolAllowed(func(string, json.RawMessage))
 	SetOnFileRead(func(llm.FileReadEvent))
@@ -51,7 +50,7 @@ func (t *contextReadTracker) install(sess interface {
 		if read.FilePath == "" {
 			return
 		}
-		category, ok := classifyContextRead(read.FilePath, t.KBBaseDir, t.SkillsDir, t.GuidelinesDir)
+		category, ok := classifyContextRead(read.FilePath, t.SkillsDir, t.GuidelinesDir)
 		if !ok {
 			return
 		}
@@ -82,9 +81,8 @@ func (t *contextReadTracker) install(sess interface {
 func (pr *PhaseRunner) installContextReadTracker(sess interface {
 	SetOnToolAllowed(func(string, json.RawMessage))
 	SetOnFileRead(func(llm.FileReadEvent))
-}, sc observe.SpanContext, phase, sessionID, stateDir string) {
+}, sc observe.SpanContext, phase, sessionID string) {
 	tracker := &contextReadTracker{
-		KBBaseDir:     filepath.Join(filepath.Dir(stateDir), "knowledge-base"),
 		SkillsDir:     pr.SkillsDir,
 		GuidelinesDir: pr.GuidelinesDir,
 		Observer:      pr.Observer,
@@ -159,13 +157,10 @@ func (pr *PhaseRunner) installSubagentProgressTracker(sess interface {
 	tracker.install(sess)
 }
 
-// classifyContextRead determines if a file path is a KB, skill, or guideline
-// file. Returns the category ("kb", "skill", "guideline") and true, or "" and
+// classifyContextRead determines if a file path is a skill or guideline
+// file. Returns the category ("skill", "guideline") and true, or "" and
 // false if the path doesn't match any context directory.
-func classifyContextRead(filePath, kbBaseDir, skillsDir, guidelinesDir string) (category string, ok bool) {
-	if kbBaseDir != "" && strings.HasPrefix(filePath, kbBaseDir) {
-		return "kb", true
-	}
+func classifyContextRead(filePath, skillsDir, guidelinesDir string) (category string, ok bool) {
 	if skillsDir != "" && strings.HasPrefix(filePath, skillsDir) {
 		return "skill", true
 	}
@@ -175,23 +170,17 @@ func classifyContextRead(filePath, kbBaseDir, skillsDir, guidelinesDir string) (
 	return "", false
 }
 
-// buildPreflightInput projects KBInfo / phase / skillsDir / guidelinesDir
+// buildPreflightInput projects phase / skillsDir / guidelinesDir
 // into the typed PreflightInput consumed by the RoleSpec system prompt.
 // Centralized so all phase-specific prompt builders share one source of
 // truth for which orientation surfaces fire and how Skills / Guidelines
 // are resolved.
-func buildPreflightInput(phase feature.Phase, skillsDir string, kbInfos []KBInfo, guidelinesDir string, requiredSkillNames ...string) prompts.PreflightInput {
-	kbViews := make([]prompts.KBView, 0, len(kbInfos))
-	for _, kb := range kbInfos {
-		kbViews = append(kbViews, prompts.KBView{Name: kb.Name, IndexPath: kb.IndexPath, RootDir: kb.RootDir})
-	}
+func buildPreflightInput(phase feature.Phase, skillsDir string, guidelinesDir string, requiredSkillNames ...string) prompts.PreflightInput {
 	skillViews := resolveAdditionalSkills(phase, skillsDir, requiredSkillNames...)
 	guidelineViews := resolveGuidelineViews(guidelinesDir)
 	return prompts.PreflightInput{
-		KBInfos:       kbViews,
 		Guidelines:    guidelineViews,
 		Skills:        skillViews,
-		HasKB:         len(kbViews) > 0,
 		HasGuidelines: len(guidelineViews) > 0,
 		HasSkills:     len(skillViews) > 0,
 	}

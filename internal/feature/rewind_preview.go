@@ -63,7 +63,7 @@ type RewindPreviewResult struct {
 	SourceRevision string `json:"source_revision"`
 	// TargetPhase / EffectivePhase / RoadmapPhase / UpgradePipeline echo
 	// the resolved request. EffectivePhase may differ from TargetPhase when
-	// an upgrade-from-medium left KB unbuilt.
+	// an upgrade from Medium restarts the pipeline from its first phase.
 	TargetPhase     Phase           `json:"target_phase"`
 	EffectivePhase  Phase           `json:"effective_phase"`
 	RoadmapPhase    int             `json:"roadmap_phase"`
@@ -101,19 +101,21 @@ func validateRewindTarget(choices []RewindChoice, target Phase, status Status) e
 			return nil
 		}
 	}
-	if target == PhaseKnowledgeBase {
-		return fmt.Errorf("cannot rewind to knowledge base phase")
-	}
 	return fmt.Errorf("cannot rewind to %s from current state %s", target, status)
 }
 
-// effectiveRewindPhase applies the pipeline-medium escalation rule: when a
-// feature was upgraded from PipelineMedium without rewinding, pre-plan phases
-// that PipelineMedium lacks are escalated to PhaseKnowledgeBase because KB was
-// never completed. Shared by the preview and RewindWithRequest.
+// rewindRestartsPipeline reports whether rewinding to target restarts the
+// pipeline from its first phase: a feature upgraded from PipelineMedium never
+// produced the pre-plan artifacts that PipelineMedium lacks.
+func rewindRestartsPipeline(f *Feature, target Phase) bool {
+	return f.PipelineUpgradedFrom == PipelineMedium && !PipelineMedium.HasPhase(target)
+}
+
+// effectiveRewindPhase returns the phase a rewind to target actually resumes
+// from. Shared by the preview and RewindWithRequest.
 func effectiveRewindPhase(f *Feature, target Phase) Phase {
-	if f.PipelineUpgradedFrom == PipelineMedium && !PipelineMedium.HasPhase(target) {
-		return PhaseKnowledgeBase
+	if rewindRestartsPipeline(f, target) {
+		return f.EffectivePipeline().FirstPhase()
 	}
 	return target
 }
@@ -157,8 +159,6 @@ func FeatureWithUpgrade(f *Feature, upgrade PipelineProfile) Feature {
 // Shared by the server's rewind-preview handler and the CLI's phase parser.
 func ParsePhaseDirName(name string) (Phase, bool) {
 	switch strings.ToLower(strings.TrimSpace(name)) {
-	case "knowledgebase", "knowledge-base", "knowledge base", "kb":
-		return PhaseKnowledgeBase, true
 	case "inquire":
 		return PhaseInquire, true
 	case "research":

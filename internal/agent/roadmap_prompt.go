@@ -48,9 +48,12 @@ func phasePlanFormatPath(skillsDir string) string {
 	return filepath.Join(skillsDir, "plan-phase", "format.md")
 }
 
-// roadmapFeatureViews projects a feature's repos for the roadmap-family
-// templates. Returned slice is an independent copy.
-func roadmapFeatureViews(f *feature.Feature) []prompts.RepoView {
+// featureRepoViews projects a feature's repos, preferring each worktree path.
+// Returned slice is an independent copy.
+func featureRepoViews(f *feature.Feature) []prompts.RepoView {
+	if f == nil {
+		return nil
+	}
 	repos := make([]prompts.RepoView, 0, len(f.Repos))
 	for _, r := range f.Repos {
 		path := r.Path
@@ -97,7 +100,7 @@ func refactorPassForkPoint(f *feature.Feature) string {
 //
 // The prose lives in internal/agent/prompts/templates/roadmap.user.tmpl.
 func buildRoadmapPromptWithResearch(f *feature.Feature, designArtifactPath, researchArtifactPath string, qaFilePaths []string) string {
-	repos := roadmapFeatureViews(f)
+	repos := featureRepoViews(f)
 	return prompts.MustRender(prompts.TemplateRoadmapUser, roadmapUserInput{
 		Name:                  f.Name,
 		Description:           f.Description,
@@ -174,8 +177,7 @@ func buildPhasePlanPromptWithResearch(f *feature.Feature, roadmapPath, researchA
 			Lead:          "Read these Q&A files for important context about their intent and preferences — do not re-ask questions that have already been answered:",
 			TrailingBlank: true,
 		},
-		Inquireness:               prompts.GrillMeInquirenessInput{Level: string(f.Inquireness)},
-		AutomatedVerificationOnly: !f.EffectivePipeline().ShouldContractAgentEvidence(),
+		Inquireness: prompts.GrillMeInquirenessInput{Level: string(f.Inquireness)},
 	})
 }
 
@@ -203,9 +205,8 @@ func buildPhasePlanRevisionPrompt(f *feature.Feature, skillsDir, phasePlanPath, 
 			ArtifactName: "phase plan",
 			Approvals:    axisApprovalViews(approvals),
 		},
-		PhasePlanPath:             phasePlanPath,
-		PhasePlanFormatPath:       phasePlanFormatPath(skillsDir),
-		Inquireness:               prompts.AutonomousInquirenessInput{},
-		AutomatedVerificationOnly: !f.EffectivePipeline().ShouldContractAgentEvidence(),
+		PhasePlanPath:       phasePlanPath,
+		PhasePlanFormatPath: phasePlanFormatPath(skillsDir),
+		Inquireness:         prompts.AutonomousInquirenessInput{},
 	})
 }

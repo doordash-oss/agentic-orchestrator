@@ -79,10 +79,6 @@ type MutationTarget interface {
 	// review-session decision endpoint, which uses the request only.
 	ReviewDecision(featureID string, req ReviewDecisionRequest) error
 	UpdateFeatureConfig(featureID string, req FeatureConfigMutationRequest) (FeatureActionResponse, error)
-	DraftNeedUserInputAnswers(featureID string, req NeedUserInputDraftRequest) (FeatureActionResponse, error)
-	// WaiveTestingContractItems records user-authorized waivers on the
-	// current phase's testing contract outside the verification gate.
-	WaiveTestingContractItems(featureID string, req TestingContractWaiveRequest) (TestingContractWaiveResponse, error)
 	AnswerPermission(req PermissionAnswerRequest) (PermissionAnswerResponse, error)
 	AnswerAskUser(req AskUserAnswerRequest) (AskUserAnswerResponse, error)
 	SendHelp(req HelpAnswerRequest) (HelpSendResponse, error)
@@ -146,7 +142,7 @@ type CreateFeatureRequest struct {
 	UseCurrentBranch        bool                    `json:"use_current_branch,omitempty"`
 	UseCurrentBranchPerRepo map[string]bool         `json:"use_current_branch_per_repo,omitempty"`
 	RepositorySources       []RepositorySource      `json:"repository_sources,omitempty"`
-	Checkpoints             feature.Checkpoints     `json:"checkpoints,omitempty"`
+	Checkpoints             *feature.Checkpoints    `json:"checkpoints,omitempty"`
 	Attachments             []string                `json:"attachments,omitempty"`
 	AttachmentUploads       []string                `json:"attachment_uploads,omitempty"`
 	RiskLevel               feature.RiskLevel       `json:"risk_level,omitempty"`
@@ -171,27 +167,10 @@ type FeatureConfigMutationRequest struct {
 	Models              config.ModelConfig      `json:"models,omitempty"`
 	Effort              config.EffortConfig     `json:"effort,omitempty"`
 	Inquireness         string                  `json:"inquireness,omitempty"`
-	Checkpoints         feature.Checkpoints     `json:"checkpoints,omitempty"`
+	Checkpoints         *feature.Checkpoints    `json:"checkpoints,omitempty"`
 	Pipeline            feature.PipelineProfile `json:"pipeline,omitempty"`
 	InputNotifications  string                  `json:"input_notifications,omitempty"`
 	AutomaticReviewMode *string                 `json:"automatic_review_mode,omitempty"`
-}
-
-// TestingContractWaiveRequest names the contract items a user waives on the
-// current roadmap phase and why.
-type TestingContractWaiveRequest struct {
-	ItemIDs []string `json:"item_ids"`
-	Reason  string   `json:"reason"`
-	// ActiveRun, RoadmapPhase, and ContractRevision bind the waiver to the
-	// contract the client displayed; the server rejects a stale selection
-	// with 409.
-	ActiveRun        int `json:"active_run,omitempty"`
-	RoadmapPhase     int `json:"roadmap_phase,omitempty"`
-	ContractRevision int `json:"contract_revision,omitempty"`
-}
-
-type NeedUserInputDraftRequest struct {
-	Answers map[string]string `json:"answers"`
 }
 
 type PermissionAnswerRequest struct {
@@ -261,7 +240,6 @@ type ModelConfigPatch struct {
 	Implementation  string  `json:"implementation,omitempty"`
 	Review          string  `json:"review,omitempty"`
 	Utilities       string  `json:"utilities,omitempty"`
-	KBBuild         string  `json:"kb_build,omitempty"`
 	AutomaticReview *string `json:"automatic_review,omitempty"`
 }
 
@@ -290,9 +268,6 @@ func ApplyModelConfigPatch(base config.ModelConfig, patch ModelConfigPatch) conf
 	}
 	if patch.Utilities != "" {
 		base.Utilities = patch.Utilities
-	}
-	if patch.KBBuild != "" {
-		base.KBBuild = patch.KBBuild
 	}
 	if patch.AutomaticReview != nil {
 		base.AutomaticReview = *patch.AutomaticReview
@@ -430,10 +405,6 @@ func writeMutationError(w http.ResponseWriter, err error) {
 	// State-based rejections are conflicts, not malformed input: reporting them
 	// as bad_request makes clients ask the user to correct a field they never
 	// typed.
-	if errors.Is(err, feature.ErrNeedUserInputGateOpen) {
-		writeAPIError(w, http.StatusConflict, errcat.NeedUserInputOpen)
-		return
-	}
 	if errors.Is(err, feature.ErrPhaseFinalizing) {
 		writeAPIError(w, http.StatusConflict, errcat.PhaseFinalizing)
 		return
@@ -699,7 +670,7 @@ func mutationRouteMethods(path string) ([]string, bool) {
 			return nil, false
 		}
 		switch parts[2] {
-		case string(FeatureActionSetup), string(FeatureActionStart), string(FeatureActionPauseStop), string(FeatureActionResume), string(FeatureActionRestart), string(FeatureActionPublish), string(FeatureActionMerge), string(FeatureActionRewind), string(FeatureActionRebase), string(FeatureActionRefactor), string(FeatureActionReviewFeedback), string(FeatureActionNeedUserInput), string(FeatureActionNeedUserInputDraft), string(FeatureActionTestingContractWaive), string(FeatureActionRetry), string(FeatureActionMarkDone), string(FeatureActionCleanup), string(FeatureActionDelete), string(FeatureActionDiscard):
+		case string(FeatureActionSetup), string(FeatureActionStart), string(FeatureActionPauseStop), string(FeatureActionResume), string(FeatureActionRestart), string(FeatureActionPublish), string(FeatureActionMerge), string(FeatureActionRewind), string(FeatureActionRebase), string(FeatureActionRefactor), string(FeatureActionReviewFeedback), string(FeatureActionRetry), string(FeatureActionMarkDone), string(FeatureActionCleanup), string(FeatureActionDelete), string(FeatureActionDiscard):
 			if len(parts) == 3 {
 				return []string{http.MethodPost}, true
 			}
@@ -822,7 +793,6 @@ func (h *apiHandler) validateRequestedModels(w http.ResponseWriter, models confi
 		{"implementation", models.Implementation},
 		{"review", models.Review},
 		{"utilities", models.Utilities},
-		{"kb_build", models.KBBuild},
 	} {
 		if strings.TrimSpace(candidate.model) == "" {
 			continue
@@ -953,36 +923,6 @@ func (h *apiHandler) handleFeatureActionRoute(w http.ResponseWriter, r *http.Req
 	case string(FeatureActionRestart):
 		serveMutation(w, r, http.StatusOK, nil, func(req RestartFeatureRequest) (FeatureActionResponse, error) {
 			return h.mutations.RestartFeature(featureID, req)
-		})
-	case string(FeatureActionNeedUserInput):
-		// The resume takes no input, but the empty struct still rejects the
-		// retired decision payload as an unknown field.
-		serveMutation(w, r, http.StatusOK, nil, func(struct{}) (FeatureActionResponse, error) {
-			return h.mutations.RunFeatureLifecycle(featureID, FeatureActionNeedUserInput, GuardedFeatureActionRequest{})
-		})
-	case string(FeatureActionTestingContractWaive):
-		serveMutation(w, r, http.StatusOK, func(req *TestingContractWaiveRequest) bool {
-			if len(req.ItemIDs) == 0 {
-				writeAPIError(w, http.StatusBadRequest, errcat.BadRequest, errcat.WithDiagnostics("item_ids are required"))
-				return false
-			}
-			if strings.TrimSpace(req.Reason) == "" {
-				writeAPIError(w, http.StatusBadRequest, errcat.BadRequest, errcat.WithDiagnostics("reason is required"))
-				return false
-			}
-			return true
-		}, func(req TestingContractWaiveRequest) (TestingContractWaiveResponse, error) {
-			return h.mutations.WaiveTestingContractItems(featureID, req)
-		})
-	case string(FeatureActionNeedUserInputDraft):
-		serveMutation(w, r, http.StatusOK, func(req *NeedUserInputDraftRequest) bool {
-			if len(req.Answers) == 0 {
-				writeAPIError(w, http.StatusBadRequest, errcat.BadRequest, errcat.WithDiagnostics("answers are required"))
-				return false
-			}
-			return true
-		}, func(req NeedUserInputDraftRequest) (FeatureActionResponse, error) {
-			return h.mutations.DraftNeedUserInputAnswers(featureID, req)
 		})
 	case string(FeatureActionPublish):
 		serveMutation(w, r, http.StatusOK, func(req *PublishFeatureRequest) bool {
@@ -1320,7 +1260,6 @@ func validateEffortConfig(w http.ResponseWriter, effort config.EffortConfig, mod
 		{effort.Implementation, models.Implementation, "implementation"},
 		{effort.Review, models.Review, "review"},
 		{effort.Utilities, models.Utilities, "utilities"},
-		{effort.KBBuild, models.KBBuild, "kb_build"},
 	}
 	for _, r := range roles {
 		if r.val == "" {
@@ -1388,7 +1327,7 @@ func validateRepoName(w http.ResponseWriter, repo string, required bool) bool {
 
 func validatePhaseName(w http.ResponseWriter, phase string) bool {
 	switch strings.ToLower(strings.TrimSpace(phase)) {
-	case "knowledge-base", "knowledgebase", targetPhaseInquire, "research", "design", targetPhasePlan, targetPhaseImplement, "review", "final-review", string(FeatureActionPublish):
+	case targetPhaseInquire, "research", "design", targetPhasePlan, targetPhaseImplement, "review", "final-review", string(FeatureActionPublish):
 		return true
 	default:
 		writeAPIError(w, http.StatusBadRequest, errcat.BadRequest, errcat.WithDiagnostics("target_phase is invalid"))

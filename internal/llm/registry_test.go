@@ -557,7 +557,7 @@ func TestRegistry_CatalogModelsForProvider(t *testing.T) {
 func TestRegistry_EligibleModelsForPhase(t *testing.T) {
 	r := llm.NewRegistry()
 	r.Register(&stubCatalogProvider{stubProvider: stubProvider{name: "gateway", hasCLI: true}, catalog: []llm.ModelInfo{{ID: "flash", Category: "cheap"}, {ID: "kimi"}, {ID: "big", Category: "capable"}, {ID: "fourth"}}})
-	for _, role := range []llm.PhaseRole{llm.PhaseInquiry, llm.PhaseResearch, llm.PhasePlanning, llm.PhaseImplementation, llm.PhaseReview, llm.PhaseChat, llm.PhaseKBBuild} {
+	for _, role := range []llm.PhaseRole{llm.PhaseInquiry, llm.PhaseResearch, llm.PhasePlanning, llm.PhaseImplementation, llm.PhaseReview, llm.PhaseChat} {
 		if got := r.EligibleModelsForPhase(role)["gateway"]; len(got) != 4 {
 			t.Errorf("%s: got %v, want all four models regardless of category", role, got)
 		}
@@ -737,7 +737,7 @@ func TestRegistry_CatalogDefaults_ProviderNeutralRanking(t *testing.T) {
 		mc := r.CatalogDefaultModels()
 		roles := map[string]string{
 			"research": mc.Research, "planning": mc.Planning, "implementation": mc.Implementation,
-			"review": mc.Review, "chat": mc.Utilities, "kb_build": mc.KBBuild,
+			"review": mc.Review, "chat": mc.Utilities,
 		}
 		for role, got := range roles {
 			if got != "gateway:vendor/big[400K]" {

@@ -228,7 +228,7 @@ func TestRestartIterationResolution(t *testing.T) {
 			}
 			if tc.writePhaseDone {
 				writeTestCompletionReceiptFor(t, it1, feature.PhaseImplement, roleImplementer)
-				testutil.WriteImplementHandoffFiles(t, dir, it1, agentStatusSuccess)
+				testutil.WriteImplementHandoffFiles(t, dir, it1)
 			}
 			if tc.writeMeta {
 				if err := am.writeMeta(it1, iterationMeta{Iteration: 1, AgentStatus: agentStatusSuccess, ReviewStatus: tc.reviewStatus}); err != nil {
@@ -385,24 +385,6 @@ func TestPhasePlanDir(t *testing.T) {
 	want := "/tmp/state/feat1/runs/run-001/phase-02/plan"
 	if got != want {
 		t.Errorf("PhasePlanDir = %q, want %q", got, want)
-	}
-}
-
-func TestPhaseTestingContractDir(t *testing.T) {
-	f := &feature.Feature{ID: "feat1", ActiveRun: 1}
-	got := phaseTestingContractDir("/tmp/state", f, 2)
-	want := "/tmp/state/feat1/runs/run-001/phase-02"
-	if got != want {
-		t.Errorf("PhaseTestingContractDir = %q, want %q", got, want)
-	}
-}
-
-func TestPhaseTestingContractPath(t *testing.T) {
-	f := &feature.Feature{ID: "feat1", ActiveRun: 1}
-	got := PhaseTestingContractPath("/tmp/state", f, 2)
-	want := "/tmp/state/feat1/runs/run-001/phase-02/testing-contract.yaml"
-	if got != want {
-		t.Errorf("PhaseTestingContractPath = %q, want %q", got, want)
 	}
 }
 

@@ -53,7 +53,7 @@ func TestUpdateFeatureConfig_ClosedChildRejectsWithoutMutation(t *testing.T) {
 	_, err := o.UpdateFeatureConfig(f.ID, orchestrator.UpdateFeatureConfigInput{
 		Models:      config.ModelConfig{Research: "new-research"},
 		Inquireness: feature.InquirenessHigh,
-		Checkpoints: feature.Checkpoints{ManualPublish: true},
+		Checkpoints: &feature.Checkpoints{ManualPublish: true},
 	})
 	if !errors.Is(err, feature.ErrChildRelationshipClosed) {
 		t.Fatalf("UpdateFeatureConfig() error = %v, want ErrChildRelationshipClosed", err)
@@ -113,7 +113,7 @@ func TestUpdateFeatureConfig_QuiescentWritesAllAxes(t *testing.T) {
 			newInput := orchestrator.UpdateFeatureConfigInput{
 				Models:              config.ModelConfig{Research: "new-research", Planning: "new-planning"},
 				Inquireness:         feature.InquirenessHigh,
-				Checkpoints:         feature.Checkpoints{InquiryReview: true, ManualPublish: true},
+				Checkpoints:         &feature.Checkpoints{InquiryReview: true, ManualPublish: true},
 				AutomaticReviewMode: &enabled,
 			}
 			if _, err := o.UpdateFeatureConfig("feat-1", newInput); err != nil {
@@ -232,7 +232,7 @@ func TestUpdateFeatureConfig_NonQuiescentWritesAllThreeAxes(t *testing.T) {
 			_, err := o.UpdateFeatureConfig("feat-1", orchestrator.UpdateFeatureConfigInput{
 				Models:      config.ModelConfig{Research: "new-research"},
 				Inquireness: feature.InquirenessHigh,
-				Checkpoints: feature.Checkpoints{ManualPublish: true},
+				Checkpoints: &feature.Checkpoints{ManualPublish: true},
 			})
 			if err != nil {
 				t.Fatalf("UpdateFeatureConfig: %v", err)
@@ -302,7 +302,7 @@ func TestUpdateFeatureConfig_NormalizesCheckpointsForPipeline(t *testing.T) {
 	o := orchestrator.New(orchestrator.Deps{Manager: lc, Store: fs}, orchestrator.Hooks{})
 
 	input := orchestrator.UpdateFeatureConfigInput{
-		Checkpoints: feature.Checkpoints{
+		Checkpoints: &feature.Checkpoints{
 			InquiryReview:   true,
 			DesignReview:    true,
 			RoadmapReview:   true,

@@ -1,0 +1,19 @@
+## Acceptance Authority
+
+Later approved decisions override the acceptance criteria in the design and the phase plan: the roadmap's out-of-scope list, the user's recorded answers, and the Per-Phase Implementation Review decisions file. Where one of them conflicts with an acceptance criterion, judge against the later decision. Do not raise again a finding the decisions file records as accepted as is.
+
+Roadmap: /state/feat-x/run-1/roadmap/plan.md
+
+Per-Phase Implementation Review decisions: /state/feat-x/run-1/phase-02/implement/review-decisions.md
+
+## Round Scope: Follow-Up
+
+This round narrows the scope above. You requested changes in iteration 2; review only whether those findings are resolved and what the fixes changed.
+
+- Your open findings: /state/feat-x/run-1/phase-02/implement/iteration-02/review/functionality-evidence/review-feedback.md
+- Fix delta since iteration 2:
+  - api: `cd /state/wt/api && git diff 1111111`
+- Fixer notes:
+  - /state/feat-x/run-1/phase-02/implement/iteration-03/fix-notes.md
+
+Report each open finding as resolved or still open. Raise a new finding only for a problem the fix delta introduced on your axis, and leave code outside the delta alone. Rerun the checks behind your open findings on the current commit.

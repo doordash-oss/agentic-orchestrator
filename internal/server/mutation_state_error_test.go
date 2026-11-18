@@ -43,9 +43,8 @@ func (t *stateErrorMutationTarget) RestartFeature(string, RestartFeatureRequest)
 // clients ask the user to correct input they never typed.
 func TestLifecycleActionsClassifyStateRejections(t *testing.T) {
 	t.Parallel()
-	gatePath := "/state/feat/run-1/need-user-input.yaml"
-	transitionErr := (&feature.Feature{Status: feature.StatusNeedUserInput}).
-		Transition(feature.StatusImplementReady)
+	transitionErr := (&feature.Feature{Status: feature.StatusCreated}).
+		Transition(feature.StatusPublished)
 
 	tests := []struct {
 		name        string
@@ -55,22 +54,6 @@ func TestLifecycleActionsClassifyStateRejections(t *testing.T) {
 		wantTitle   string
 		wantSummary string
 	}{
-		{
-			name:        "resume with open gate",
-			action:      "resume",
-			err:         fmt.Errorf("%w: %s", feature.ErrNeedUserInputGateOpen, gatePath),
-			wantCode:    string(errcat.NeedUserInputOpen),
-			wantTitle:   "Waiting on user input",
-			wantSummary: "The feature is waiting on an open user input request.",
-		},
-		{
-			name:        "start with open gate",
-			action:      "start",
-			err:         fmt.Errorf("%w: %s", feature.ErrNeedUserInputGateOpen, gatePath),
-			wantCode:    string(errcat.NeedUserInputOpen),
-			wantTitle:   "Waiting on user input",
-			wantSummary: "The feature is waiting on an open user input request.",
-		},
 		{
 			name:        "start while finalizing",
 			action:      "start",

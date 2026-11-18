@@ -586,6 +586,31 @@ func TestIterationEndedEmitsEventWithUsage(t *testing.T) {
 	}
 }
 
+func TestUnpricedUsageOmitsCost(t *testing.T) {
+	stateDir := t.TempDir()
+	featureID := "unpriced_feat"
+	os.MkdirAll(filepath.Join(stateDir, featureID), 0755)
+	obs := newObserver(true, stateDir, false, "", false, "agentic")
+
+	sc := SpanContextForFeature(featureID, "", "", "").Child()
+	usage := SessionUsage{CostSource: CostSourceUnavailable, InputTokens: 20000, CacheReadInputTokens: 120000, OutputTokens: 5000}
+	obs.SessionEnded(sc.Child(), "research", "sess-1", "", usage, time.Second, nil)
+	obs.IterationEnded(sc, 1, usage, time.Second, "SUCCESS")
+
+	events := readEvents(t, stateDir, featureID)
+	if len(events) != 2 {
+		t.Fatalf("expected 2 events, got %d", len(events))
+	}
+	for _, evt := range events {
+		if cost, ok := evt.Data["total_cost_usd"]; ok {
+			t.Errorf("%s: total_cost_usd = %v, want absent", evt.EventType, cost)
+		}
+		if evt.Data["cost_source"] != CostSourceUnavailable {
+			t.Errorf("%s: cost_source = %v, want %q", evt.EventType, evt.Data["cost_source"], CostSourceUnavailable)
+		}
+	}
+}
+
 func TestContextHandoffTriggeredEmitsEvent(t *testing.T) {
 	stateDir := t.TempDir()
 	featureID := "context_handoff_feat"
@@ -739,7 +764,7 @@ func TestAgentTaskProgressEmitsEvent(t *testing.T) {
 	phaseCtx := featureCtx.Child()
 	sessionCtx := phaseCtx.Child()
 
-	obs.AgentTaskProgress(sessionCtx, "Knowledge Base", "sess-kb", "task1", "toolu_1",
+	obs.AgentTaskProgress(sessionCtx, "Research", "sess-research", "task1", "toolu_1",
 		"Reading go.mod", "Read", 202895, 96, 2034491)
 
 	events := readEvents(t, stateDir, featureID)
@@ -750,10 +775,10 @@ func TestAgentTaskProgressEmitsEvent(t *testing.T) {
 	if evt.EventType != "agent.task_progress" {
 		t.Errorf("EventType = %q, want agent.task_progress", evt.EventType)
 	}
-	if evt.Phase != "Knowledge Base" {
+	if evt.Phase != "Research" {
 		t.Errorf("Phase = %q", evt.Phase)
 	}
-	if evt.SessionID != "sess-kb" {
+	if evt.SessionID != "sess-research" {
 		t.Errorf("SessionID = %q", evt.SessionID)
 	}
 	if evt.FeatureID != featureID {
@@ -791,7 +816,7 @@ func TestAgentTaskEndedEmitsEventWithStatus(t *testing.T) {
 
 	sc := SpanContextForFeature(featureID, "", "", "").Child()
 
-	obs.AgentTaskEnded(sc, "Knowledge Base", "sess-kb", "task2", "toolu_2", "completed",
+	obs.AgentTaskEnded(sc, "Research", "sess-research", "task2", "toolu_2", "completed",
 		"Re-run conventions research", 3247, 95, 4624037)
 
 	events := readEvents(t, stateDir, featureID)
@@ -826,9 +851,9 @@ func TestNilObserverMethodsAreNoOps(t *testing.T) {
 	obs.IterationEnded(sc, 1, usage, time.Second, "done")
 	obs.ReviewStarted(sc, 1)
 	obs.ReviewCompleted(sc, 1, "APPROVED", time.Second)
-	obs.AgentTaskStarted(sc, "kb", "s", "t", "u", "d", "local_agent")
-	obs.AgentTaskProgress(sc, "kb", "s", "t", "u", "d", "Read", 1, 1, 1)
-	obs.AgentTaskEnded(sc, "kb", "s", "t", "u", "completed", "ok", 1, 1, 1)
+	obs.AgentTaskStarted(sc, "research", "s", "t", "u", "d", "local_agent")
+	obs.AgentTaskProgress(sc, "research", "s", "t", "u", "d", "Read", 1, 1, 1)
+	obs.AgentTaskEnded(sc, "research", "s", "t", "u", "completed", "ok", 1, 1, 1)
 	obs.FeatureRewound(sc, RewindEventInput{
 		TargetPhase:     feature.PhaseImplement,
 		EffectiveTarget: feature.PhaseImplement,
@@ -856,9 +881,9 @@ func TestDisabledObserverMethodsAreNoOps(t *testing.T) {
 	obs.IterationEnded(sc, 1, usage, time.Second, "done")
 	obs.ReviewStarted(sc, 1)
 	obs.ReviewCompleted(sc, 1, "APPROVED", time.Second)
-	obs.AgentTaskStarted(sc, "kb", "s", "t", "u", "d", "local_agent")
-	obs.AgentTaskProgress(sc, "kb", "s", "t", "u", "d", "Read", 1, 1, 1)
-	obs.AgentTaskEnded(sc, "kb", "s", "t", "u", "completed", "ok", 1, 1, 1)
+	obs.AgentTaskStarted(sc, "research", "s", "t", "u", "d", "local_agent")
+	obs.AgentTaskProgress(sc, "research", "s", "t", "u", "d", "Read", 1, 1, 1)
+	obs.AgentTaskEnded(sc, "research", "s", "t", "u", "completed", "ok", 1, 1, 1)
 	obs.FeatureRewound(sc, RewindEventInput{
 		TargetPhase:     feature.PhaseImplement,
 		EffectiveTarget: feature.PhaseImplement,
@@ -2018,7 +2043,7 @@ func TestEmit_IncludesRunNumber(t *testing.T) {
 	obs.QuestionAnswered(sc, "s1", "repo-a", 1, "ready?", "yes")
 	obs.RecoveryScanned(sc, 2, 1)
 	obs.RecoveryAction(sc, "resume", "implement", true)
-	obs.ContextFileRead(sc, "implement", "s1", "kb", "/path/to/file.md")
+	obs.ContextFileRead(sc, "implement", "s1", "skill", "/path/to/file.md")
 	obs.ContextHandoffTriggered(sc, "implement", "s1", "repo-a", "codex", 1, 81, 80, 211000, 258400, 12000)
 	exitCode := 0
 	durationMs := int64(123)

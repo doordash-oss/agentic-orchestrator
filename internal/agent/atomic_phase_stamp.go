@@ -35,11 +35,6 @@ const (
 	// reviewer rejection after MaxIterations, etc.). Every declared repo
 	// is stamped Touched=true; the failure itself lives on the run record.
 	phaseOutcomeFailed
-	// phaseOutcomeNeedUserInput marks the phase as paused on a need-user-input
-	// gate. Per-repo state is NOT mutated (the gate lives at the feature
-	// level under the unified flow); the function still records the gate
-	// path so the harness can surface it.
-	phaseOutcomeNeedUserInput
 	// PhaseOutcomeFinalReviewPassed marks the feature-level Final Review
 	// as passing. No per-repo state mutation happens (feature-level Status
 	// carries the verdict). Optional PR URL writes are mirrored when
@@ -49,13 +44,11 @@ const (
 
 // AtomicPhaseStampInput is the input to AtomicPhaseStamp. Repos is the
 // phase-declared subset (typically PhaseScopeResult.Repos). Outcome
-// determines how the per-repo state transitions. GatePath is populated
-// only on PhaseOutcomeNeedUserInput.
+// determines how the per-repo state transitions.
 type AtomicPhaseStampInput struct {
 	FeatureID string
 	Repos     []string
 	Outcome   phaseOutcome
-	GatePath  string
 	// PRURLs is an optional per-repo PR URL map applied alongside the
 	// state transition. May be nil.
 	PRURLs map[string]string
@@ -67,8 +60,6 @@ type AtomicPhaseStampInput struct {
 // Atomicity guarantees:
 //   - Either every declared repo is stamped, or none is (Modify is single-write).
 //   - Repos NOT in the declared subset are untouched.
-//   - On NEED_USER_INPUT, no per-repo state mutation happens. The gate path
-//     is recorded on the feature for the harness to surface.
 //
 // The per-repo stored failure record is publish-scoped: it is written at the
 // publish boundary and cleared by the published setter or phase retry, never
@@ -104,11 +95,6 @@ func AtomicPhaseStamp(store FeatureStore, in AtomicPhaseStampInput) error {
 					ns.PRURL = pr
 				}
 			}
-		case phaseOutcomeNeedUserInput:
-			// Per-repo state is intentionally NOT mutated. The unified-flow
-			// gate is feature-level; we still attach the gate path to the
-			// feature for the harness to surface.
-			f.PendingNeedUserInputPath = in.GatePath
 		case PhaseOutcomeFinalReviewPassed:
 			// FR pass is feature-level; only the optional PR URL mirror
 			// writes per-repo state.

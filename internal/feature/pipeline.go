@@ -47,7 +47,7 @@ func (p PipelineProfile) IsValid() bool {
 
 // phasesForProfile returns the ordered phases for this profile.
 // Medium: Plan, Implement, Review, Publish
-// Large/Moonshot: KnowledgeBase, Inquire, Research, Design, Plan, Implement, Review, Publish
+// Large/Moonshot: Inquire, Research, Design, Plan, Implement, Review, Publish
 func phasesForProfile(profile PipelineProfile) []Phase {
 	switch profile {
 	case PipelineMedium:
@@ -55,7 +55,7 @@ func phasesForProfile(profile PipelineProfile) []Phase {
 	default:
 		// Large and Moonshot run the same phase sequence; they differ in effort
 		// and validation behavior.
-		return []Phase{PhaseKnowledgeBase, PhaseInquire, PhaseResearch, PhaseDesign, PhasePlan, PhaseImplement, PhaseReview, PhasePublish}
+		return []Phase{PhaseInquire, PhaseResearch, PhaseDesign, PhasePlan, PhaseImplement, PhaseReview, PhasePublish}
 	}
 }
 
@@ -80,7 +80,7 @@ func (p PipelineProfile) UpgradeOptions() []PipelineProfile {
 }
 
 // FirstPhase returns the first phase to execute for this profile.
-// Medium: PhasePlan, Large/Moonshot: PhaseKnowledgeBase
+// Medium: PhasePlan, Large/Moonshot: PhaseInquire
 func (p PipelineProfile) FirstPhase() Phase {
 	phases := phasesForProfile(p)
 	return phases[0]
@@ -129,23 +129,6 @@ func (p PipelineProfile) ShouldSkipFinalReview() bool {
 // review and rely solely on the Final Review. Moonshot retains both.
 func (p PipelineProfile) ShouldSkipIterationReview() bool {
 	return p == PipelineMedium || p == PipelineLarge
-}
-
-// ShouldRunImplementationHarness returns true if the deterministic
-// verification harness executes the phase testing contract during
-// implementation iterations. Moonshot only; Medium and Large trust the
-// implementer and verify at Final Review through live-run review axes.
-func (p PipelineProfile) ShouldRunImplementationHarness() bool {
-	return p == PipelineMoonshot
-}
-
-// ShouldContractAgentEvidence returns true if phase plans may contract
-// agent-owned evidence (visual matrices, manual observations, behavioral
-// journey artifacts). Moonshot only — its per-phase harness validates that
-// evidence and its Functionality/Evidence axis audits it. Medium and Large
-// plans contract automated test commands only.
-func (p PipelineProfile) ShouldContractAgentEvidence() bool {
-	return p == PipelineMoonshot
 }
 
 // DefaultCheckpointsForProfile returns the default checkpoints for a profile.
@@ -254,6 +237,19 @@ func ParsePipelineProfile(s string) (PipelineProfile, error) {
 		return PipelineMoonshot, nil
 	default:
 		return "", fmt.Errorf("invalid pipeline profile %q: must be medium, large, or moonshot", s)
+	}
+}
+
+// CheckpointsFromConfig converts config.Checkpoints to feature.Checkpoints.
+func CheckpointsFromConfig(c config.Checkpoints) Checkpoints {
+	return Checkpoints{
+		InquiryReview:   c.InquiryReview,
+		ResearchReview:  c.ResearchReview,
+		DesignReview:    c.DesignReview,
+		RoadmapReview:   c.RoadmapReview,
+		PhasePlanReview: c.PhasePlanReview,
+		ManualPublish:   c.ManualPublish,
+		DraftPublish:    c.DraftPublish,
 	}
 }
 

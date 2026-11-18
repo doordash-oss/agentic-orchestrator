@@ -20,9 +20,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"image"
-	"image/color"
-	"image/png"
 	"io/fs"
 	"os"
 	"os/exec"
@@ -873,8 +870,7 @@ func TestDiscoverProviderCatalogs_OpenCodeFallsBackOnDiscoveryFailure(t *testing
 
 // TestCanonicalizeStateDir_ResolvesSymlink guards the macOS /var ->
 // /private/var (and /tmp -> /private/tmp) class of bug: every path Agentico
-// derives from stateDir — worktrees, the knowledge-base tree, skills/
-// guidelines mounts — gets handed to providers as a workdir or a writable/
+// derives from stateDir — worktrees, skills/guidelines mounts — gets handed to providers as a workdir or a writable/
 // read root, and OpenCode's permission engine matches those paths
 // inconsistently against their raw and symlink-resolved forms (upstream
 // opencode#14473, opencode#20045). Resolving stateDir once up front avoids
@@ -1115,139 +1111,6 @@ func TestRunArgsValidateArtifactsAcceptsValidArtifacts(t *testing.T) {
 	}
 	if stderr.Len() != 0 {
 		t.Fatalf("stderr = %q, want empty", stderr.String())
-	}
-}
-
-// TestRunArgsValidateArtifactsImplementerRejectsDuplicateCaptures pins the
-// folded evidence preflight: the implementer branch of validate-artifacts
-// fails on two byte-identical passed agent-owned captures with the same
-// reason text the standalone evidence preflight produced, and passes when
-// the captures differ.
-func TestRunArgsValidateArtifactsImplementerRejectsDuplicateCaptures(t *testing.T) {
-	dir := t.TempDir()
-	phaseDir := filepath.Join(dir, "phase-01")
-	artifactDir := filepath.Join(phaseDir, "implement")
-	if err := os.MkdirAll(artifactDir, 0o755); err != nil {
-		t.Fatalf("mkdir artifact dir: %v", err)
-	}
-	writeImplementerProgress(t, filepath.Join(artifactDir, "progress.md"))
-
-	contract := agent.CompileTestingContract(strings.Join([]string{
-		"### Visual Evidence",
-		"- [ ] Capture the settings light theme [size: 1x1]",
-		"- [ ] Capture the settings dark theme [size: 1x1]",
-	}, "\n"), filepath.Join(phaseDir, "plan.md"), "collapsed")
-	if err := agent.WriteTestingContract(filepath.Join(phaseDir, "testing-contract.yaml"), contract); err != nil {
-		t.Fatalf("write contract: %v", err)
-	}
-	var paths []string
-	for _, item := range contract.Items {
-		if rel := strings.TrimSpace(item.ExpectedEvidence.Path); rel != "" {
-			paths = append(paths, rel)
-		}
-	}
-	if len(paths) != 2 {
-		t.Fatalf("compiled contract visual paths = %v, want two", paths)
-	}
-	writeCapture := func(iterDir string, fill color.RGBA) {
-		t.Helper()
-		for _, rel := range paths {
-			writeTestPNGFile(t, filepath.Join(iterDir, filepath.FromSlash(rel)), 1, 1, fill)
-		}
-	}
-	run := func(iterDir string) (int, string, string) {
-		var stdout, stderr bytes.Buffer
-		code := runArgs(
-			[]string{cliSubcommandValidateArtifacts, cliFlagPhase, "implement", cliFlagRole, "implementer", cliFlagDir, iterDir},
-			&stdout, &stderr,
-			failingServerLauncher(t),
-		)
-		return code, stdout.String(), stderr.String()
-	}
-
-	t.Run("byte-identical captures fail", func(t *testing.T) {
-		dupIter := filepath.Join(artifactDir, "iteration-dup")
-		if err := os.MkdirAll(dupIter, 0o755); err != nil {
-			t.Fatal(err)
-		}
-		writeCapture(dupIter, color.RGBA{G: 99, A: 255})
-		code, stdout, stderr := run(dupIter)
-		if code != 1 {
-			t.Fatalf("code = %d, want 1 for duplicate captures; stdout=%q stderr=%q", code, stdout, stderr)
-		}
-		if stdout != "" {
-			t.Fatalf("stdout = %q, want empty on failure", stdout)
-		}
-		if !strings.Contains(stderr, "these captures are byte-identical, so they cannot each depict their own contracted surface — recapture each distinctly") {
-			t.Fatalf("stderr = %q, want the duplicate-capture reason text", stderr)
-		}
-	})
-
-	t.Run("distinct captures pass", func(t *testing.T) {
-		distinctIter := filepath.Join(artifactDir, "iteration-distinct")
-		if err := os.MkdirAll(distinctIter, 0o755); err != nil {
-			t.Fatal(err)
-		}
-		writeTestPNGFile(t, filepath.Join(distinctIter, filepath.FromSlash(paths[0])), 1, 1, color.RGBA{R: 10, A: 255})
-		writeTestPNGFile(t, filepath.Join(distinctIter, filepath.FromSlash(paths[1])), 1, 1, color.RGBA{B: 200, A: 255})
-		code, stdout, stderr := run(distinctIter)
-		if code != 0 {
-			t.Fatalf("code = %d, want 0; stderr=%q", code, stderr)
-		}
-		if !strings.Contains(stdout, "artifacts OK") {
-			t.Fatalf("stdout = %q, want OK confirmation", stdout)
-		}
-	})
-}
-
-func writeImplementerProgress(t *testing.T, path string) {
-	t.Helper()
-	body := `# Iteration Progress
-
-## Iteration Handoff
-
-### Completed this iteration
-- registry test
-
-### Remaining from the plan
-- none
-
-### Where I stopped
-- complete
-
-### Gotchas / blockers / in-flight decisions
-- none
-
-## Deferrals
-
-` + "```" + `yaml
-deferrals: []
-closed_deferrals: []
-` + "```" + `
-
-## Iteration State
-
-SUCCESS
-`
-	if err := os.WriteFile(path, []byte(body), 0o644); err != nil {
-		t.Fatalf("write progress: %v", err)
-	}
-}
-
-func writeTestPNGFile(t *testing.T, path string, w, h int, c color.Color) {
-	t.Helper()
-	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
-		t.Fatal(err)
-	}
-	img := image.NewRGBA(image.Rect(0, 0, w, h))
-	img.Set(0, 0, c)
-	f, err := os.Create(path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer f.Close()
-	if err := png.Encode(f, img); err != nil {
-		t.Fatal(err)
 	}
 }
 
@@ -1548,7 +1411,7 @@ func TestApplyCatalogModelDefaultsToConfig_OpenCodeOnlyPersistsBareBackendIDs(t 
 	got := cfg.Defaults.Models
 	for field, val := range map[string]string{
 		"inquiry": got.Inquiry, "research": got.Research, "planning": got.Planning, "implementation": got.Implementation,
-		"review": got.Review, chatName: got.Utilities, "kb_build": got.KBBuild,
+		"review": got.Review, chatName: got.Utilities,
 	} {
 		if val != want {
 			t.Errorf("%s = %q, want bare backend id %q (single provider → no opencode: prefix)", field, val, want)
@@ -1599,7 +1462,7 @@ func TestApplyCatalogModelDefaultsToConfig_ExistingConfigCanonicalizesAndFills(t
 		Inquiry:  "claude:SONNET", // explicit prefix + non-canonical case
 		Research: "claude:SONNET", // explicit prefix + non-canonical case
 		Review:   testModelGPT54,  // bare codex name
-		// Planning/Implementation/Utilities/KBBuild left empty → filled from defaults.
+		// Planning/Implementation/Utilities left empty → filled from defaults.
 	}
 
 	changed := applyCatalogModelDefaultsToConfig(cfg, reg, false)
@@ -1632,7 +1495,7 @@ func TestRemapUnresolvableModels(t *testing.T) {
 		// the only provider. The annotated Codex review default remains because
 		// ResolveModel falls back through its bare alias.
 		m := cfg.Defaults.Models
-		for _, field := range []string{m.Inquiry, m.Research, m.Planning, m.Implementation, m.Utilities, m.KBBuild} {
+		for _, field := range []string{m.Inquiry, m.Research, m.Planning, m.Implementation, m.Utilities} {
 			if field != testModelGPT54 {
 				t.Errorf("expected gpt-5.4, got %q", field)
 			}
@@ -1764,7 +1627,6 @@ func TestReconcileModelDefaults_ExistingConfigProviderFilterStaysRuntimeOnly(t *
 		Implementation: modelNameSonnet200K,
 		Review:         "gpt-5.4[272K]",
 		Utilities:      modelNameSonnet200K,
-		KBBuild:        modelNameSonnet200K,
 	}
 	path := filepath.Join(t.TempDir(), "config.yaml")
 	if err := config.Save(path, cfg); err != nil {

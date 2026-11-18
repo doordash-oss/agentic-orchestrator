@@ -73,20 +73,6 @@ func (h *SessionGuardHandler) CanUseTool(req ports.ToolPermissionRequest) (ports
 			Reason:   "phase_complete is a harness-owned completion receipt; emit the structured root outcome instead",
 		}, nil
 	}
-	if requestsHarnessFileMutation(req, testingContractFilename) {
-		if req.ToolName == toolNameBash {
-			if subcommand, ok := attemptedHarnessCLISubcommand(extractBashCommand(req.Input)); ok {
-				return ports.PermissionDecision{
-					Behavior: decisionDeny,
-					Reason:   malformedHarnessCLIReason(subcommand),
-				}, nil
-			}
-		}
-		return ports.PermissionDecision{
-			Behavior: decisionDeny,
-			Reason:   "testing-contract.yaml is harness-owned and regenerated every iteration; amend the phase plan's verification section instead",
-		}, nil
-	}
 	if h.MaxWriteBytes > 0 && req.ProviderName == providerNameClaude && req.ToolName == toolNameWrite {
 		if n, ok := writeContentSize(req.Input); ok && n > h.MaxWriteBytes {
 			return ports.PermissionDecision{
@@ -103,10 +89,7 @@ func (h *SessionGuardHandler) CanUseTool(req ports.ToolPermissionRequest) (ports
 	return h.Inner.CanUseTool(req)
 }
 
-const (
-	completionReceiptFilename = "phase_complete"
-	testingContractFilename   = "testing-contract.yaml"
-)
+const completionReceiptFilename = "phase_complete"
 
 func requestsCompletionReceiptMutation(req ports.ToolPermissionRequest) bool {
 	return requestsHarnessFileMutation(req, completionReceiptFilename)
@@ -122,14 +105,8 @@ func requestsHarnessFileMutation(req ports.ToolPermissionRequest, filename strin
 	case toolNameBash:
 		// Bash is write-capable and shell syntax is intentionally not parsed
 		// here. Deny any reference through Bash; read-only inspection
-		// remains available through the Read tool. The only exception is a
-		// bare harness CLI invocation, which reads the contract and writes
-		// nothing but its own gate artifact.
-		command := extractBashCommand(req.Input)
-		if filename == testingContractFilename && isHarnessCLIInvocation(command) {
-			return false
-		}
-		return strings.Contains(command, filename)
+		// remains available through the Read tool.
+		return strings.Contains(extractBashCommand(req.Input), filename)
 	default:
 		return false
 	}
@@ -150,8 +127,8 @@ func writeContentSize(raw string) (int, bool) {
 }
 
 // Guarded wraps inner in a SessionGuardHandler. Every guarded session rejects
-// agent writes to the harness completion receipt and the harness-owned
-// testing contract; oversized Claude Writes are rejected uniformly as well.
+// agent writes to the harness completion receipt; oversized Claude Writes are
+// rejected uniformly as well.
 func Guarded(inner ports.PermissionHandler) ports.PermissionHandler {
 	return &SessionGuardHandler{Inner: inner, MaxWriteBytes: defaultWriteGuardBytes}
 }
@@ -705,16 +682,9 @@ func gitReadOnlyBranchAllowed(fields []string) bool {
 	return true
 }
 
-// harnessCLISubcommands are the agentico subcommands an implementer session
-// may run against the harness-owned contract path.
-var harnessCLISubcommands = map[string]bool{
-	"validate-artifacts": true,
-	"report-blocker":     true,
-}
-
 // supervisorHelperSubcommands are the agentico subcommands the supervisor
 // conversation may run without a prompt. Feature-worker sessions never gain
-// them: harnessCLISubcommands is a separate set.
+// them.
 var supervisorHelperSubcommands = map[string]bool{
 	"api": true,
 }
@@ -727,12 +697,6 @@ const supervisorHelperShapeReason = "agentico api must be invoked as a single ba
 // harnessCLIBinaryRE matches the sanctioned binary spellings: the
 // $AGENTICO_BIN expansion (optionally quoted) or an agentico executable path.
 var harnessCLIBinaryRE = regexp.MustCompile(`^(?:"\$AGENTICO_BIN"|\$AGENTICO_BIN|(?:\S*/)?agentico)$`)
-
-// isHarnessCLIInvocation reports whether command is exactly one sanctioned
-// feature-worker agentico subcommand call with plain arguments.
-func isHarnessCLIInvocation(command string) bool {
-	return isBareAgenticoInvocation(command, harnessCLISubcommands)
-}
 
 // isBareAgenticoInvocation reports whether command is exactly one agentico
 // call whose subcommand is in subcommands, with plain arguments: no chaining,
@@ -778,12 +742,6 @@ func expandsBinaryDirectory(command string) bool {
 	return strings.ContainsAny(fields[0], "$~")
 }
 
-// attemptedHarnessCLISubcommand reports the sanctioned feature-worker
-// subcommand of an agentico call embedded anywhere in command.
-func attemptedHarnessCLISubcommand(command string) (string, bool) {
-	return attemptedAgenticoSubcommand(command, harnessCLISubcommands)
-}
-
 // attemptedAgenticoSubcommand reports the subcommand of an agentico call
 // embedded anywhere in command when it is in subcommands. It only selects the
 // deny or deferral reason for commands isBareAgenticoInvocation already
@@ -799,22 +757,4 @@ func attemptedAgenticoSubcommand(command string, subcommands map[string]bool) (s
 		}
 	}
 	return "", false
-}
-
-// malformedHarnessCLIReason explains why a recognizable harness CLI call was
-// refused, so the agent retries with the sanctioned shape instead of
-// concluding the subcommand is forbidden outright.
-func malformedHarnessCLIReason(subcommand string) string {
-	shape := fmt.Sprintf(
-		"absolute paths for --contract and --dir "+
-			"(e.g. \"$AGENTICO_BIN\" %s --contract /abs/path/testing-contract.yaml --dir /abs/path/implement/iteration-NN ...)",
-		subcommand)
-	if subcommand == "validate-artifacts" {
-		shape = "absolute paths for --dir " +
-			"(e.g. \"$AGENTICO_BIN\" validate-artifacts --phase implement --role implementer --dir /abs/path/implement/iteration-NN)"
-	}
-	return fmt.Sprintf(
-		"agentico %s must be invoked as a single bare command: no cd, &&, ;, pipes, redirects or command substitution, "+
-			"no shell variables in arguments, %s",
-		subcommand, shape)
 }

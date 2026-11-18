@@ -20,10 +20,7 @@
 package agent
 
 import (
-	"fmt"
-	"os"
 	"path/filepath"
-	"strings"
 
 	"github.com/doordash-oss/agentic-orchestrator/internal/agent/prompts"
 	"github.com/doordash-oss/agentic-orchestrator/internal/feature"
@@ -31,6 +28,7 @@ import (
 
 // finalFixPromptOpts contains the parameters for building the fix agent prompt.
 type finalFixPromptOpts struct {
+	Repos            []prompts.RepoView
 	Feedback         string
 	FeedbackPath     string
 	ExitCriteria     string
@@ -41,6 +39,11 @@ type finalFixPromptOpts struct {
 	// RefactorPassForkPoint resolves the spec's "fork point" references for a
 	// refactor child ("repo @ sha"). Empty for top-level features.
 	RefactorPassForkPoint string
+
+	RoadmapPath     string
+	UserAnswerPaths []string
+	DecisionsPath   string
+	Handoff         *reviewHandoffPromptInput
 }
 
 // buildFinalFixPrompt constructs the prompt for the fix agent session.
@@ -54,37 +57,19 @@ func buildFinalFixPrompt(opts finalFixPromptOpts) string {
 			Images: opts.Images,
 			Label:  "applying this fix",
 		},
-		Iteration:                         opts.Iteration,
-		ExitCriteria:                      opts.ExitCriteria,
-		AcceptanceClause:                  opts.AcceptanceClause,
-		Feedback:                          opts.Feedback,
-		FeedbackPath:                      opts.FeedbackPath,
-		IncludeManualVerificationOutcomes: feedbackMentionsManualVerification(opts.Feedback),
-		Publishable:                       opts.Publishable,
-		RefactorPassForkPoint:             opts.RefactorPassForkPoint,
+		Iteration:             opts.Iteration,
+		Repos:                 opts.Repos,
+		ExitCriteria:          opts.ExitCriteria,
+		AcceptanceClause:      opts.AcceptanceClause,
+		Feedback:              opts.Feedback,
+		FeedbackPath:          opts.FeedbackPath,
+		Publishable:           opts.Publishable,
+		RefactorPassForkPoint: opts.RefactorPassForkPoint,
+		RoadmapPath:           opts.RoadmapPath,
+		UserAnswerPaths:       opts.UserAnswerPaths,
+		DecisionsPath:         opts.DecisionsPath,
+		Handoff:               opts.Handoff,
 	})
-}
-
-// feedbackMentionsManualVerification returns true if the reviewer feedback
-// references a manual-verification gate. Used to decide whether to inject
-// the outcomes guidance into the fix prompt. Phrasings observed in real
-// feedback: "manual verification", "manual-verification bullets", "manual
-// bullet(s)", "manual evidence", "unattested manual".
-func feedbackMentionsManualVerification(feedback string) bool {
-	lower := strings.ToLower(feedback)
-	needles := []string{
-		"manual verification",
-		"manual-verification",
-		"manual bullet",
-		"manual evidence",
-		"unattested manual",
-	}
-	for _, needle := range needles {
-		if strings.Contains(lower, needle) {
-			return true
-		}
-	}
-	return false
 }
 
 // guidelineAdditionalDirs returns a single-element slice containing dir when
@@ -106,122 +91,4 @@ func finalReviewArtifactPath(stateDir string, f *feature.Feature, key string) st
 		return path
 	}
 	return filepath.Join(ActiveRunDir(stateDir, f), path)
-}
-
-type priorImplementationEvidenceContext struct {
-	ReportPaths           []string
-	EvidenceRootDirs      []string
-	EvidenceArtifactPaths []string
-}
-
-func priorImplementationEvidenceContextForRun(runDir string) priorImplementationEvidenceContext {
-	var ctx priorImplementationEvidenceContext
-	addImplementationDir := func(scopeDir string) {
-		if reportPath := latestCompletedImplementationReportPath(filepath.Join(scopeDir, feature.PhaseImplement.DirName())); reportPath != "" {
-			ctx.ReportPaths = append(ctx.ReportPaths, reportPath)
-			ctx.EvidenceRootDirs = append(ctx.EvidenceRootDirs, filepath.Dir(reportPath))
-			ctx.EvidenceArtifactPaths = appendEvidenceArtifactPaths(ctx.EvidenceArtifactPaths, reportPath)
-		}
-	}
-
-	addImplementationDir(runDir)
-	entries, err := os.ReadDir(runDir)
-	if err != nil {
-		return ctx
-	}
-	for _, entry := range entries {
-		if !entry.IsDir() || !strings.HasPrefix(entry.Name(), "phase-") {
-			continue
-		}
-		addImplementationDir(filepath.Join(runDir, entry.Name()))
-	}
-	return ctx
-}
-
-func appendEvidenceArtifactPaths(out []string, reportPath string) []string {
-	report, err := readVerificationReport(reportPath)
-	if err != nil {
-		return out
-	}
-	seen := make(map[string]bool, len(out))
-	for _, path := range out {
-		seen[path] = true
-	}
-	add := func(raw string) {
-		raw = strings.TrimSpace(raw)
-		if raw == "" {
-			return
-		}
-		path := raw
-		if !filepath.IsAbs(path) {
-			path = filepath.Join(filepath.Dir(reportPath), path)
-		}
-		path = filepath.Clean(path)
-		if seen[path] {
-			return
-		}
-		seen[path] = true
-		out = append(out, path)
-	}
-	for _, check := range allVerificationChecks(report) {
-		add(check.EvidenceData.Primary)
-		for _, attachment := range check.EvidenceData.Attachments {
-			add(attachment)
-		}
-	}
-	return out
-}
-
-func allVerificationChecks(report *verificationReport) []verificationCheckResult {
-	if report == nil {
-		return nil
-	}
-	checks := make([]verificationCheckResult, 0, len(report.Results)+len(report.RequiredChecks)+len(report.AdditionalChecks))
-	checks = append(checks, report.Results...)
-	checks = append(checks, report.RequiredChecks...)
-	checks = append(checks, report.AdditionalChecks...)
-	return checks
-}
-
-func latestCompletedImplementationReportPath(implementDir string) string {
-	entries, err := os.ReadDir(implementDir)
-	if err != nil {
-		return ""
-	}
-	am := newArtifactManager(implementDir)
-	latest := 0
-	best := ""
-	for _, entry := range entries {
-		if !entry.IsDir() {
-			continue
-		}
-		var iteration int
-		if _, err := fmt.Sscanf(entry.Name(), "iteration-%d", &iteration); err != nil || iteration <= latest {
-			continue
-		}
-		iterDir := filepath.Join(implementDir, entry.Name())
-		meta, err := am.readMeta(iterDir)
-		if err != nil || !completedImplementationMeta(meta) {
-			continue
-		}
-		reportPath := filepath.Join(iterDir, "verification-report.yaml")
-		if _, err := os.Stat(reportPath); err != nil {
-			continue
-		}
-		latest = iteration
-		best = reportPath
-	}
-	return best
-}
-
-func completedImplementationMeta(meta iterationMeta) bool {
-	if strings.TrimSpace(meta.AgentStatus) != agentStatusSuccess {
-		return false
-	}
-	switch strings.ToLower(strings.TrimSpace(meta.ReviewStatus)) {
-	case strings.ToLower(ReviewApproved.String()), reviewStatusSkipped:
-		return true
-	default:
-		return false
-	}
 }

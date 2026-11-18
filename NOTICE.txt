@@ -57,10 +57,8 @@ humanlayer/humanlayer (https://github.com/humanlayer/humanlayer)
     skills/research-codebase and four embedded research agents are adapted
     from HumanLayer's Apache-2.0 research command and agents, originally
     authored by Allison Durham and subsequently maintained by HumanLayer
-    contributors.
-    skills/build-knowledge-base is informed by the same documentation-only
-    methodology and retains limited explanatory language from it. Pinned
-    sources and attributions are embedded beside the affected assets.
+    contributors. Pinned sources and attributions are embedded beside the
+    affected assets.
 
 Acknowledged methodology inspiration (no substantive verbatim overlap found):
 

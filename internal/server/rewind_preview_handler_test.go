@@ -90,7 +90,7 @@ func TestRewindPreviewEndpointRejectsInvalidTarget(t *testing.T) {
 	store, f := seedReadFeature(t)
 	handler := NewHandler(baseReadHandlerOptions(store))
 
-	req := httptest.NewRequest(http.MethodGet, "/api/v1/features/"+f.ID+"/rewind/preview?target_phase=knowledge-base", nil)
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/features/"+f.ID+"/rewind/preview?target_phase=final-review", nil)
 	w := httptest.NewRecorder()
 	handler.ServeHTTP(w, req)
 	if w.Code != http.StatusOK {
@@ -98,7 +98,7 @@ func TestRewindPreviewEndpointRejectsInvalidTarget(t *testing.T) {
 	}
 	body := decodeBodyMap(t, w.Result())
 	if eligible := body["eligible"]; eligible == true {
-		t.Fatal("eligible = true for KB target; want false")
+		t.Fatal("eligible = true for invalid target; want false")
 	}
 	findings, _ := body["validation_findings"].([]any)
 	if len(findings) == 0 {

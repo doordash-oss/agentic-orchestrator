@@ -52,17 +52,6 @@ type serverConfig struct {
 	// validated at server launch and, like the rest of this section,
 	// intentionally never appear on the runtime-config REST surface.
 	Updates ServerUpdatesConfig `yaml:"updates,omitempty"`
-	// Capabilities controls built-in verification capability probes.
-	Capabilities serverCapabilitiesConfig `yaml:"capabilities,omitempty"`
-}
-
-// serverCapabilitiesConfig holds server.capabilities startup settings.
-type serverCapabilitiesConfig struct {
-	// BrowserState is "allow" or "deny" for the authenticated-browser
-	// capability. Empty defaults to allow on loopback servers and deny on
-	// servers exposed to the network, where a signed-in session must never
-	// be provisioned.
-	BrowserState string `yaml:"browser_state,omitempty"`
 }
 
 // ServerUpdatesConfig is the raw server.updates config map. Values stay
@@ -163,7 +152,6 @@ type ModelConfig struct {
 	Implementation string `yaml:"implementation" json:"implementation,omitempty"`
 	Review         string `yaml:"review" json:"review,omitempty"`
 	Utilities      string `yaml:"utilities" json:"utilities,omitempty"`
-	KBBuild        string `yaml:"kb_build" json:"kb_build,omitempty"`
 	// AutomaticReview is the optional reviewer model for automatic Bash review.
 	// An empty value is meaningful: it means "Automatic" (resolve the first
 	// eligible provider's preferred inexpensive model at review time). It is
@@ -181,7 +169,6 @@ func (m ModelConfig) IsEmpty() bool {
 		m.Implementation == "" &&
 		m.Review == "" &&
 		m.Utilities == "" &&
-		m.KBBuild == "" &&
 		m.AutomaticReview == ""
 }
 
@@ -197,7 +184,6 @@ type EffortConfig struct {
 	Implementation string `yaml:"implementation,omitempty" json:"implementation,omitempty"`
 	Review         string `yaml:"review,omitempty" json:"review,omitempty"`
 	Utilities      string `yaml:"utilities,omitempty" json:"utilities,omitempty"`
-	KBBuild        string `yaml:"kb_build,omitempty" json:"kb_build,omitempty"`
 }
 
 // role is one model-and-effort role, keyed by the role string the provider
@@ -218,7 +204,6 @@ var Roles = []role{
 	{"implementation", func(m *ModelConfig) *string { return &m.Implementation }, func(e *EffortConfig) *string { return &e.Implementation }},
 	{"review", func(m *ModelConfig) *string { return &m.Review }, func(e *EffortConfig) *string { return &e.Review }},
 	{"chat", func(m *ModelConfig) *string { return &m.Utilities }, func(e *EffortConfig) *string { return &e.Utilities }},
-	{"kb_build", func(m *ModelConfig) *string { return &m.KBBuild }, func(e *EffortConfig) *string { return &e.KBBuild }},
 }
 
 // RoleNamed returns the role with the given name and whether it exists.
@@ -293,6 +278,9 @@ func Load(path string) (*Config, error) {
 	var cfg Config
 	if err := yaml.Unmarshal(data, &cfg); err != nil {
 		return nil, fmt.Errorf("parsing config: %w", err)
+	}
+	for role := range retiredRoles {
+		delete(cfg.ModelRecommendations, role)
 	}
 	if err := validateModelRecommendations(cfg.ModelRecommendations); err != nil {
 		return nil, err
@@ -503,6 +491,10 @@ func overlayModelConfig(base, override ModelConfig) ModelConfig {
 	}
 	return base
 }
+
+// retiredRoles are phases that no longer exist; configs written before their
+// removal may still name them, so Load drops them instead of failing.
+var retiredRoles = map[string]bool{"kb_build": true}
 
 // validateModelRecommendations rejects typos instead of silently falling back
 // to an unrelated model. Missing catalog entries remain valid fallbacks: access

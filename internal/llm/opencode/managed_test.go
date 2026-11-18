@@ -481,7 +481,7 @@ func TestManagedConfig_DangerousSkipAllowsExternalDirectory(t *testing.T) {
 // deny in normal mode (fail fast, not hang); questions deny (no human answer).
 func TestManagedConfig_SubagentsRunNonInteractive(t *testing.T) {
 	state := t.TempDir()
-	agentsJSON := `{"api-surface-researcher":{"description":"Researches API surface","prompt":"You research."}}`
+	agentsJSON := `{"web-search-researcher":{"description":"Researches the web","prompt":"You research."}}`
 	p := New("", nil)
 	_, env, err := p.BuildCommand(llm.CommandBuildOpts{
 		Model:         "openai/gpt-5",
@@ -492,9 +492,9 @@ func TestManagedConfig_SubagentsRunNonInteractive(t *testing.T) {
 	if err != nil {
 		t.Fatalf("BuildCommand: %v", err)
 	}
-	ag, ok := readManagedConfigFile(t, env).Agent["api-surface-researcher"]
+	ag, ok := readManagedConfigFile(t, env).Agent["web-search-researcher"]
 	if !ok {
-		t.Fatalf("converted agents missing api-surface-researcher")
+		t.Fatalf("converted agents missing web-search-researcher")
 	}
 	if ag.Permission == nil {
 		t.Fatalf("subagent carries no permission override; an un-forwardable ask would deadlock it")
@@ -522,7 +522,7 @@ func TestManagedConfig_SubagentsRunNonInteractive(t *testing.T) {
 // run is already noninteractive.
 func TestManagedConfig_SubagentBashAllowedUnderDangerousSkip(t *testing.T) {
 	state := t.TempDir()
-	agentsJSON := `{"api-surface-researcher":{"description":"d","prompt":"p"}}`
+	agentsJSON := `{"web-search-researcher":{"description":"d","prompt":"p"}}`
 	p := New("", nil)
 	_, env, err := p.BuildCommand(llm.CommandBuildOpts{
 		Model:                "openai/gpt-5",
@@ -534,7 +534,7 @@ func TestManagedConfig_SubagentBashAllowedUnderDangerousSkip(t *testing.T) {
 	if err != nil {
 		t.Fatalf("BuildCommand: %v", err)
 	}
-	ag := readManagedConfigFile(t, env).Agent["api-surface-researcher"]
+	ag := readManagedConfigFile(t, env).Agent["web-search-researcher"]
 	for _, key := range []string{"bash", "skill"} {
 		if got := permString(t, ag.Permission, key); got != "allow" {
 			t.Errorf("dangerous-skip subagent permission[%q] = %q, want allow", key, got)

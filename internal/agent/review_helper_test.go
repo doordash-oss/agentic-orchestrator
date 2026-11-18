@@ -231,6 +231,122 @@ func TestRunReviewHelper_LiveRunConfiguresScratchRootsEnvAndPermissions(t *testi
 	requirePermissionDecision(t, startOpts.PermHandler, "Write", `{"file_path":"`+filepath.Join(workDir, "main.go")+`"}`, "deny")
 }
 
+func TestRunReviewHelper_LiveRunSharedCachesUsesToolchainCaches(t *testing.T) {
+	root := t.TempDir()
+	stateDir := filepath.Join(root, "state")
+	helperDir := filepath.Join(stateDir, "implement", "iteration-01", "review", "functionality-evidence")
+	workDir := filepath.Join(root, "worktrees", "repo")
+	home := filepath.Join(root, "home")
+	npmCache := filepath.Join(home, ".npm")
+	goCache := filepath.Join(root, "gocache")
+	inWorktree := filepath.Join(workDir, ".modcache")
+	// A second worktree that holds a toolchain cache directory.
+	otherRepo := filepath.Join(home, ".cargo")
+	cargoRegistry := filepath.Join(otherRepo, "registry")
+	for _, d := range []string{helperDir, workDir, npmCache, goCache, inWorktree, cargoRegistry} {
+		if err := os.MkdirAll(d, 0o755); err != nil {
+			t.Fatalf("mkdir %s: %v", d, err)
+		}
+	}
+	t.Setenv("HOME", home)
+	t.Setenv("XDG_CACHE_HOME", filepath.Join(home, ".cache"))
+	t.Setenv("GOCACHE", goCache)
+	t.Setenv("GOMODCACHE", inWorktree)
+
+	feedbackPath := filepath.Join(helperDir, "review-feedback.md")
+	evidenceRoot := filepath.Join(helperDir, "evidence")
+	tempRoot := filepath.Join(helperDir, "tmp")
+
+	sess := newUtilityTestSession()
+	sess.CostVal = &llm.ResultMessage{Type: "result", Subtype: "success", StopReason: "end_turn"}
+	sm := mocks.NewMockSessionManager()
+	var startEnv []string
+	var startOpts *ports.SessionOpts
+	sm.StartSessionFn = func(id, featureID string, phase feature.Phase, command []string, workdir string, env []string, opts ...*session.SessionOpts) (ports.SessionHandle, error) {
+		startEnv = append([]string(nil), env...)
+		if len(opts) > 0 {
+			startOpts = opts[0]
+		}
+		if err := os.WriteFile(feedbackPath, []byte(testutil.StructuredReviewFeedback("", "", "APPROVED")), 0o644); err != nil {
+			t.Errorf("write feedback: %v", err)
+		}
+		sess.setRootIntent(validSuccessCompletionIntent())
+		sess.StatusChVal <- "SUCCESS"
+		return sess, nil
+	}
+
+	var got BuildSessionOpts
+	pr := &PhaseRunner{
+		StateDir:       stateDir,
+		SessionManager: sm,
+		BuildSessionFn: func(opts BuildSessionOpts) ([]string, []string, *ports.SessionOpts, error) {
+			got = opts
+			got.WritableRoots = append([]string(nil), opts.WritableRoots...)
+			return []string{"mock-reviewer"}, []string{"GOCACHE=" + goCache}, &ports.SessionOpts{
+				PermHandler:  opts.PermHandler,
+				ProviderName: "mock",
+			}, nil
+		},
+	}
+
+	result, err := pr.runReviewHelper(context.Background(), reviewHelperConfig{
+		Posture:        reviewPostureLiveRun,
+		SharedCaches:   true,
+		SessionID:      "phase-review-live-run",
+		FeatureID:      "feature-1",
+		Phase:          feature.PhaseReview,
+		Model:          "test-model",
+		Prompt:         "run the checks",
+		PromptPath:     filepath.Join(helperDir, "review-prompt.md"),
+		FeedbackPath:   feedbackPath,
+		HelperIterDir:  helperDir,
+		Role:           RoleImplementationReviewCraft,
+		WorkDir:        workDir,
+		AdditionalDirs: []string{otherRepo},
+		LogPath:        filepath.Join(helperDir, "review-output.txt"),
+		EffortLevel:    llm.EffortMedium,
+		Kind:           ports.KindValidator,
+		Label:          "Functionality/Evidence",
+	})
+	if err != nil {
+		t.Fatalf("runReviewHelper(shared caches) error = %v", err)
+	}
+	if result.Status != ReviewApproved {
+		t.Fatalf("result.Status = %s, want APPROVED", result.Status)
+	}
+
+	if _, err := os.Stat(filepath.Join(helperDir, "build-cache")); !os.IsNotExist(err) {
+		t.Fatalf("build-cache stat = %v; want no throwaway cache", err)
+	}
+	for _, want := range []string{feedbackPath, evidenceRoot, tempRoot, npmCache, goCache} {
+		if !stringSliceContains(got.WritableRoots, want) {
+			t.Fatalf("WritableRoots missing %q in %#v", want, got.WritableRoots)
+		}
+	}
+	for _, root := range got.WritableRoots {
+		for _, repo := range []string{workDir, otherRepo} {
+			if pathWithin(repo, root) || pathWithin(root, repo) {
+				t.Fatalf("WritableRoots include %q, which overlaps the worktree %q", root, repo)
+			}
+		}
+	}
+	if got := envValue(startEnv, "TMPDIR"); got != tempRoot {
+		t.Fatalf("TMPDIR = %q, want %q; env=%v", got, tempRoot, startEnv)
+	}
+	if got := envValue(startEnv, "GOCACHE"); got != goCache {
+		t.Fatalf("GOCACHE = %q, want the shared cache %q; env=%v", got, goCache, startEnv)
+	}
+	if got := envValue(startEnv, "npm_config_cache"); got != "" {
+		t.Fatalf("npm_config_cache = %q, want unset; env=%v", got, startEnv)
+	}
+	if startOpts == nil || startOpts.PermHandler == nil {
+		t.Fatal("session PermHandler was not configured")
+	}
+	requirePermissionDecision(t, startOpts.PermHandler, "Write", `{"file_path":"`+filepath.Join(evidenceRoot, "run.log")+`"}`, "allow")
+	requirePermissionDecision(t, startOpts.PermHandler, "Write", `{"file_path":"`+filepath.Join(npmCache, "index")+`"}`, "deny")
+	requirePermissionDecision(t, startOpts.PermHandler, "Write", `{"file_path":"`+filepath.Join(workDir, "main.go")+`"}`, "deny")
+}
+
 func TestRunReviewHelper_ReadOnlyNarrowsWritableRootsToDeclaredArtifacts(t *testing.T) {
 	root := t.TempDir()
 	helperDir := filepath.Join(root, "attempt-01", "validate-scope")

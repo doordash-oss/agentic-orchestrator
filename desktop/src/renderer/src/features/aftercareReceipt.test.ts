@@ -17,13 +17,7 @@ limitations under the License.
 import { describe, expect, it } from 'vitest';
 import type { CompletionPreflightResult, RepositoryDiffResult } from '../../../shared/ipc';
 import { featureSnapshot } from '../test/agenticoMock';
-import {
-  changesFact,
-  phasesFact,
-  pullRequestNumber,
-  pullRequestRows,
-  verificationFact,
-} from './aftercareReceipt';
+import { changesFact, phasesFact, pullRequestNumber, pullRequestRows } from './aftercareReceipt';
 
 function diff(repo: string, files: RepositoryDiffResult['files']): RepositoryDiffResult {
   return { featureId: 'abcd1234ef567890', repo, files };
@@ -78,23 +72,6 @@ describe('changesFact', () => {
         ]),
       )?.commitPhrase,
     ).toBeUndefined();
-  });
-});
-
-describe('verificationFact', () => {
-  it('counts passed checks and lists their names', () => {
-    expect(
-      verificationFact([
-        { name: 'lint', state: 'passed' },
-        { name: 'unit', state: 'passed' },
-        { name: 'e2e', state: 'failed' },
-      ]),
-    ).toEqual({ summary: '2 of 3 checks passed', names: ['lint', 'unit', 'e2e'] });
-  });
-
-  it('is null when the snapshot carries no check states', () => {
-    expect(verificationFact(undefined)).toBeNull();
-    expect(verificationFact([])).toBeNull();
   });
 });
 

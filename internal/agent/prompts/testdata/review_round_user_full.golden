@@ -1,0 +1,8 @@
+## Acceptance Authority
+
+Later approved decisions override the design's acceptance criteria: the roadmap's out-of-scope list, the user's recorded answers, and the Final Review decisions file. Where one of them conflicts with an acceptance criterion, judge against the later decision. Do not raise again a finding the decisions file records as accepted as is.
+
+Roadmap: /state/feat-x/run-1/roadmap/plan.md
+
+User's recorded answers:
+- /state/feat-x/run-1/design/qa-answers.md

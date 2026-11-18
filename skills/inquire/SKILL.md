@@ -56,7 +56,7 @@ Better questions lead to better research, which leads to better designs. Take yo
 
 ## Constraints
 
-- Do NOT deeply explore the codebase. You may glance at directory structure, or the Knowledge Base when available, but do NOT read implementation files.
+- Read only enough of the target repositories (layout, instruction files such as `AGENTS.md`, the code the request names) to ask grounded questions. Do NOT investigate the answers yourself; that is research's job.
 - Do NOT propose solutions or implementation approaches.
 - Do NOT generate questions about things that are clearly stated in the feature description.
 - Do NOT perform web searches yourself — only generate questions for the research phase to answer.

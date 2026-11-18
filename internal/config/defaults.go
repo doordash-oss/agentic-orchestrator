@@ -31,7 +31,6 @@ func NewDefault() *Config {
 				Implementation: "sonnet[200K]",
 				Review:         "gpt-5.4[272K]",
 				Utilities:      "sonnet[200K]",
-				KBBuild:        "sonnet[200K]",
 			},
 			Checkpoints: Checkpoints{
 				InquiryReview:   true,

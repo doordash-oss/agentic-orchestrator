@@ -37,7 +37,6 @@ type PassStateId =
   | 'ready'
   | 'working'
   | 'review'
-  | 'input'
   | 'interrupted'
   | 'failed'
   | 'final-reviewing'
@@ -128,9 +127,6 @@ export function passState(child: FeatureSnapshot): PassState {
       tone: 'attention',
     };
   }
-  if (child.status === 'NeedUserInput') {
-    return { id: 'input', sentence: 'The agent is waiting for your input.', tone: 'attention' };
-  }
   if (isPendingReviewStatus(child.status)) {
     return {
       id: 'review',
@@ -188,8 +184,6 @@ function passStationDetail(state: PassState, child: FeatureSnapshot): string {
       return 'Ready to start';
     case 'review':
       return 'Review waiting';
-    case 'input':
-      return 'Input needed';
     case 'interrupted':
       return 'Paused';
     case 'failed':

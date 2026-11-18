@@ -15,7 +15,6 @@
 package agent
 
 import (
-	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -34,8 +33,8 @@ func TestContractRegistryImplementerLookup(t *testing.T) {
 	if contract.Role != roleImplementer {
 		t.Fatalf("Lookup(PhaseImplement, RoleImplementer).Role = %q, want %q", contract.Role, roleImplementer)
 	}
-	if len(contract.Required) != 1 {
-		t.Fatalf("Lookup(PhaseImplement, RoleImplementer) required artifacts = %d, want 1", len(contract.Required))
+	if len(contract.Required) != 0 {
+		t.Fatalf("Lookup(PhaseImplement, RoleImplementer) required artifacts = %d, want 0", len(contract.Required))
 	}
 }
 
@@ -167,6 +166,18 @@ func TestContractRegistryPlanPhasePlanner(t *testing.T) {
 	}
 }
 
+func TestContractRegistryPlanPhasePlannerAcceptsLegacyPlan(t *testing.T) {
+	attemptDir := writePhasePlannerAttempt(t, phasePlannerArtifacts{PlanText: legacyPhasePlanText()})
+
+	out, violations, err := Validate(feature.PhasePlan, RolePlanPhasePlanner, attemptDir)
+	if err != nil {
+		t.Fatalf("Validate() error = %v", err)
+	}
+	if len(violations) != 0 || !out.OK {
+		t.Fatalf("Validate() = (%+v, %v), want OK", out, violations)
+	}
+}
+
 func TestContractRegistryPlanPhasePlannerReportsMissingPlanMarkdown(t *testing.T) {
 	attemptDir := writePhasePlannerAttempt(t, phasePlannerArtifacts{})
 
@@ -195,292 +206,6 @@ func TestContractRegistryPlanPhasePlannerReportsEmptyPlanMarkdown(t *testing.T) 
 	}
 }
 
-func TestContractRegistryPlanPhasePlannerReportsMissingEvidenceSections(t *testing.T) {
-	attemptDir := writePhasePlannerAttempt(t, phasePlannerArtifacts{
-		PlanText: "# Phase 1 Plan\n\n" +
-			"## Overview\nShip the phase.\n\n" +
-			"## Tasks\n\n" +
-			"### Task 1: Build\n\n" +
-			"#### What to build\nDo the work.\n\n" +
-			"#### Acceptance criteria\n- [ ] Done.\n\n" +
-			"#### Blocked by\nNone - can start immediately\n\n" +
-			"## Success Criteria\n\n" +
-			"### Automated Verification\n- [ ] Tests pass: `go test ./...`\n\n" +
-			"### Manual Verification\n- [ ] None required: internal-only phase.\n",
-	})
-
-	out, violations, err := Validate(feature.PhasePlan, RolePlanPhasePlanner, attemptDir)
-	if err != nil {
-		t.Fatalf("Validate() error = %v", err)
-	}
-	got := joinProtocolViolations(violations)
-	if out.OK || !strings.Contains(got, "### Visual Evidence") || !strings.Contains(got, "### Behavioral Evidence") {
-		t.Fatalf("JoinProtocolViolations() = %q, want missing evidence section violations", got)
-	}
-}
-
-func TestContractRegistryPlanPhasePlannerReportsMissingAutomatedVerification(t *testing.T) {
-	plan := strings.Replace(validPhasePlanText(), "### Automated Verification\n- [ ] Tests pass: `go test ./...`\n\n", "", 1)
-	attemptDir := writePhasePlannerAttempt(t, phasePlannerArtifacts{PlanText: plan})
-
-	out, violations, err := Validate(feature.PhasePlan, RolePlanPhasePlanner, attemptDir)
-	if err != nil {
-		t.Fatalf("Validate() error = %v", err)
-	}
-	got := joinProtocolViolations(violations)
-	if out.OK || !strings.Contains(got, "### Automated Verification") {
-		t.Fatalf("Validate() = (%+v, %q), want missing automated verification violation", out, got)
-	}
-}
-
-func TestContractRegistryPlanPhasePlannerAllowsJustifiedNoAutomatedVerification(t *testing.T) {
-	plan := strings.Replace(validPhasePlanText(), "- [ ] Tests pass: `go test ./...`", "- [ ] None required: documentation-only change with no executable behavior.", 1)
-	attemptDir := writePhasePlannerAttempt(t, phasePlannerArtifacts{PlanText: plan})
-
-	out, violations, err := Validate(feature.PhasePlan, RolePlanPhasePlanner, attemptDir)
-	if err != nil {
-		t.Fatalf("Validate() error = %v", err)
-	}
-	if !out.OK || len(violations) != 0 {
-		t.Fatalf("Validate() = (%+v, %v), want justified no-automation plan accepted", out, violations)
-	}
-}
-
-func TestContractRegistryPlanPhasePlannerRejectsUnscopedMultiRepoCommand(t *testing.T) {
-	plan := strings.Replace(validPhasePlanText(), "### Task 1: Build the slice\n", "### Task 1: Build the slice\n\n**Repo:** api\n", 1)
-	plan = strings.Replace(plan, "## Success Criteria", "### Task 2: Build the client\n\n**Repo:** web\n\n#### What to build\n\nBuild it.\n\n#### Acceptance criteria\n\n- [ ] It works.\n\n#### Blocked by\n\nNone - can start immediately.\n\n## Success Criteria", 1)
-	attemptDir := writePhasePlannerAttempt(t, phasePlannerArtifacts{PlanText: plan})
-
-	out, violations, err := Validate(feature.PhasePlan, RolePlanPhasePlanner, attemptDir)
-	if err != nil {
-		t.Fatalf("Validate() error = %v", err)
-	}
-	got := joinProtocolViolations(violations)
-	if out.OK || !strings.Contains(got, "[repo: <name>]") {
-		t.Fatalf("Validate() = (%+v, %q), want explicit multi-repo verification scope violation", out, got)
-	}
-}
-
-func TestContractRegistryPlanPhasePlannerAcceptsScopedMultiRepoCommands(t *testing.T) {
-	plan := strings.Replace(validPhasePlanText(), "### Task 1: Build the slice\n", "### Task 1: Build the slice\n\n**Repo:** api\n", 1)
-	plan = strings.Replace(plan, "## Success Criteria", "### Task 2: Build the client\n\n**Repo:** web\n\n#### What to build\n\nBuild it.\n\n#### Acceptance criteria\n\n- [ ] It works.\n\n#### Blocked by\n\nNone - can start immediately.\n\n## Success Criteria", 1)
-	plan = strings.Replace(plan, "- [ ] Tests pass: `go test ./...`", "- [ ] [repo: api] API tests pass: `go test ./...`\n- [ ] [repo: web] Web tests pass: `npm test`", 1)
-	attemptDir := writePhasePlannerAttempt(t, phasePlannerArtifacts{PlanText: plan})
-
-	out, violations, err := Validate(feature.PhasePlan, RolePlanPhasePlanner, attemptDir)
-	if err != nil {
-		t.Fatalf("Validate() error = %v", err)
-	}
-	if !out.OK || len(violations) != 0 {
-		t.Fatalf("Validate() = (%+v, %v), want scoped multi-repo verification accepted", out, violations)
-	}
-}
-
-func TestContractRegistryPlanPhasePlannerRejectsEmptyNoneReasonAndManualCommand(t *testing.T) {
-	plan := strings.Replace(validPhasePlanText(), "- [ ] Tests pass: `go test ./...`", "- [ ] None required:", 1)
-	plan = strings.Replace(plan, "- [ ] None required: internal-only test fixture.", "- [ ] Inspect by running `make test`.", 1)
-	attemptDir := writePhasePlannerAttempt(t, phasePlannerArtifacts{PlanText: plan})
-
-	out, violations, err := Validate(feature.PhasePlan, RolePlanPhasePlanner, attemptDir)
-	if err != nil {
-		t.Fatalf("Validate() error = %v", err)
-	}
-	got := joinProtocolViolations(violations)
-	if out.OK || !strings.Contains(got, "concrete reason") || !strings.Contains(got, "without executable backtick commands") {
-		t.Fatalf("Validate() = (%+v, %q), want empty None reason and disguised manual command rejected", out, got)
-	}
-}
-
-func TestPhasePlanCommandWarningsFlagsDoubledBackslash(t *testing.T) {
-	t.Parallel()
-	single := "- [ ] Fences match: `python3 -c 'import re; re.findall(r\"^[^\\n]*$\", \"\")'`"
-	doubled := "- [ ] Fences match: `python3 -c 'import re; re.findall(r\"^[^\\\\n]*$\", \"\")'`"
-	for _, tc := range []struct {
-		name string
-		item string
-		want int
-	}{
-		{name: "single backslash", item: single, want: 0},
-		{name: "doubled backslash", item: doubled, want: 1},
-	} {
-		plan := strings.Replace(validPhasePlanText(), "- [ ] Tests pass: `go test ./...`", tc.item, 1)
-		attemptDir := writePhasePlannerAttempt(t, phasePlannerArtifacts{PlanText: plan})
-
-		out, violations, err := ValidateArtifactsPreflight(feature.PhasePlan, RolePlanPhasePlanner, attemptDir)
-		if err != nil || !out.OK {
-			t.Fatalf("%s: ValidateArtifactsPreflight() = (%+v, %v, %v), want OK (lint must only warn)", tc.name, out, violations, err)
-		}
-		got := PhasePlanCommandWarnings(feature.PhasePlan, RolePlanPhasePlanner, attemptDir)
-		if len(got) != tc.want {
-			t.Fatalf("%s: PhasePlanCommandWarnings() = %q, want %d warning(s)", tc.name, got, tc.want)
-		}
-		if tc.want > 0 && !strings.Contains(got[0], "Fences match") {
-			t.Fatalf("%s: warning %q does not name the offending item", tc.name, got[0])
-		}
-	}
-	if got := PhasePlanCommandWarnings(feature.PhasePlan, RolePlanRoadmapPlanner, t.TempDir()); got != nil {
-		t.Fatalf("PhasePlanCommandWarnings(roadmap planner) = %q, want nil", got)
-	}
-}
-
-func TestContractRegistryPlanPhasePlannerRejectsMultipleManualArtifacts(t *testing.T) {
-	plan := strings.Replace(validPhasePlanText(),
-		"- [ ] None required: internal-only test fixture.",
-		"- [ ] Inspect the primary journey.\n- [ ] Inspect the same journey again.", 1)
-	attemptDir := writePhasePlannerAttempt(t, phasePlannerArtifacts{PlanText: plan})
-
-	out, violations, err := Validate(feature.PhasePlan, RolePlanPhasePlanner, attemptDir)
-	if err != nil {
-		t.Fatalf("Validate() error = %v", err)
-	}
-	got := joinProtocolViolations(violations)
-	if out.OK || !strings.Contains(got, "single consolidated") {
-		t.Fatalf("Validate() = (%+v, %q), want consolidated manual evidence violation", out, got)
-	}
-}
-
-func TestContractRegistryPlanPhasePlannerRejectsMultipleBehavioralArtifacts(t *testing.T) {
-	plan := strings.Replace(validPhasePlanText(),
-		"- [ ] None required: automated tests provide the artifact.",
-		"- [ ] Capture the primary journey trace.\n- [ ] Capture a second log for the same journey.", 1)
-	attemptDir := writePhasePlannerAttempt(t, phasePlannerArtifacts{PlanText: plan})
-
-	out, violations, err := Validate(feature.PhasePlan, RolePlanPhasePlanner, attemptDir)
-	if err != nil {
-		t.Fatalf("Validate() error = %v", err)
-	}
-	got := joinProtocolViolations(violations)
-	if out.OK || !strings.Contains(got, "one consolidated primary-journey artifact") {
-		t.Fatalf("Validate() = (%+v, %q), want consolidated behavioral evidence violation", out, got)
-	}
-}
-
-func TestContractRegistryPlanPhasePlannerReportsTaskScopedEvidenceSections(t *testing.T) {
-	attemptDir := writePhasePlannerAttempt(t, phasePlannerArtifacts{
-		PlanText: "# Phase 1 Plan\n\n" +
-			"## Overview\nShip the phase.\n\n" +
-			"## Tasks\n\n" +
-			"### Task 1: Build\n\n" +
-			"#### What to build\nDo the work.\n\n" +
-			"#### Acceptance criteria\n- [ ] Done.\n\n" +
-			"#### Visual Evidence\n- [ ] Capture only inside the task.\n\n" +
-			"#### Behavioral Evidence\n- [ ] Attach only inside the task.\n\n" +
-			"#### Blocked by\nNone - can start immediately\n\n" +
-			"## Success Criteria\n\n" +
-			"### Automated Verification\n- [ ] Tests pass: `go test ./...`\n\n" +
-			"### Manual Verification\n- [ ] None required: internal-only phase.\n\n" +
-			"### Visual Evidence\n- [ ] None required: no UI surface.\n\n" +
-			"### Behavioral Evidence\n- [ ] None required: no user journey artifact.\n",
-	})
-
-	out, violations, err := Validate(feature.PhasePlan, RolePlanPhasePlanner, attemptDir)
-	if err != nil {
-		t.Fatalf("Validate() error = %v", err)
-	}
-	got := joinProtocolViolations(violations)
-	if out.OK || !strings.Contains(got, "Task 1") || !strings.Contains(got, "phase-level") {
-		t.Fatalf("JoinProtocolViolations() = %q, want task-scoped evidence violation", got)
-	}
-}
-
-// frontendPlanTextWithNoneRequiredVisualEvidence returns a frontend phase
-// plan whose Visual Evidence section carries a None-required marker instead
-// of real rows — the shape that deadlocked automated-only frontend features
-// before phasePlanEvidenceModeViolations became profile-aware.
-func frontendPlanTextWithNoneRequiredVisualEvidence() string {
-	return "# Phase 1 Plan\n\n" +
-		"## Metadata\n\n" +
-		"**Frontend:** true\n\n" +
-		"## Overview\nShip the phase.\n\n" +
-		"## Tasks\n\n" +
-		"### Task 1: Build\n\n" +
-		"#### What to build\nDo the work.\n\n" +
-		"#### Acceptance criteria\n- [ ] Done.\n\n" +
-		"#### Blocked by\nNone - can start immediately\n\n" +
-		"## Success Criteria\n\n" +
-		"### Automated Verification\n- [ ] Tests pass: `go test ./...`\n\n" +
-		"### Manual Verification\n- [ ] None required: internal-only phase.\n\n" +
-		"### Visual Evidence\n- [ ] None required: no UI surface.\n\n" +
-		"### Behavioral Evidence\n- [ ] None required: no user journey artifact.\n"
-}
-
-func TestPhasePlanEvidenceModeViolationsRejectsFrontendWithoutRealVisualEvidenceWhenContracting(t *testing.T) {
-	violations := phasePlanEvidenceModeViolations(frontendPlanTextWithNoneRequiredVisualEvidence(), true)
-	got := joinProtocolViolations(violations)
-	if !strings.Contains(got, "frontend/visual-evidence rule") || !strings.Contains(got, "real checklist visual evidence requirement") {
-		t.Fatalf("phasePlanEvidenceModeViolations() = %q, want frontend visual evidence rule violation", got)
-	}
-}
-
-func TestPhasePlanEvidenceModeViolationsAllowsFrontendNoneRequiredVisualEvidenceWhenAutomatedOnly(t *testing.T) {
-	// This is the deadlock case: a frontend + automated-only feature must be
-	// plannable, so the None-required marker is allowed when the profile
-	// never contracts agent evidence.
-	if got := phasePlanEvidenceModeViolations(frontendPlanTextWithNoneRequiredVisualEvidence(), false); len(got) != 0 {
-		t.Fatalf("phasePlanEvidenceModeViolations() = %v, want no violations", got)
-	}
-}
-
-func TestContractRegistryPlanPhasePlannerAcceptsFrontendWithRealVisualEvidence(t *testing.T) {
-	attemptDir := writePhasePlannerAttempt(t, phasePlannerArtifacts{
-		PlanText: "# Phase 1 Plan\n\n" +
-			"## Metadata\n\n" +
-			"**Frontend:** true\n\n" +
-			"## Overview\nShip the phase.\n\n" +
-			"## Tasks\n\n" +
-			"### Task 1: Build\n\n" +
-			"#### What to build\nDo the work.\n\n" +
-			"#### Acceptance criteria\n- [ ] Done.\n\n" +
-			"#### Blocked by\nNone - can start immediately\n\n" +
-			"## Success Criteria\n\n" +
-			"### Automated Verification\n- [ ] Tests pass: `go test ./...`\n\n" +
-			"### Manual Verification\n- [ ] None required: internal-only phase.\n\n" +
-			"### Visual Evidence\n- [ ] Capture the dashboard state after the UI update.\n\n" +
-			"### Behavioral Evidence\n- [ ] None required: no user journey artifact.\n",
-	})
-
-	out, violations, err := Validate(feature.PhasePlan, RolePlanPhasePlanner, attemptDir)
-	if err != nil {
-		t.Fatalf("Validate() error = %v", err)
-	}
-	if len(violations) != 0 {
-		t.Fatalf("Validate() violations = %v, want none", violations)
-	}
-	if !out.OK {
-		t.Fatalf("Validate() outcome = %+v, want OK", out)
-	}
-}
-
-func TestContractRegistryPlanPhasePlannerAllowsNonFrontendNoneRequiredVisualEvidence(t *testing.T) {
-	attemptDir := writePhasePlannerAttempt(t, phasePlannerArtifacts{
-		PlanText: "# Phase 1 Plan\n\n" +
-			"## Metadata\n\n" +
-			"**Frontend:** false\n\n" +
-			"## Overview\nShip the phase.\n\n" +
-			"## Tasks\n\n" +
-			"### Task 1: Build\n\n" +
-			"#### What to build\nDo the work.\n\n" +
-			"#### Acceptance criteria\n- [ ] Done.\n\n" +
-			"#### Blocked by\nNone - can start immediately\n\n" +
-			"## Success Criteria\n\n" +
-			"### Automated Verification\n- [ ] Tests pass: `go test ./...`\n\n" +
-			"### Manual Verification\n- [ ] None required: internal-only phase.\n\n" +
-			"### Visual Evidence\n- [ ] None required: no rendered surface.\n\n" +
-			"### Behavioral Evidence\n- [ ] None required: no user journey artifact.\n",
-	})
-
-	out, violations, err := Validate(feature.PhasePlan, RolePlanPhasePlanner, attemptDir)
-	if err != nil {
-		t.Fatalf("Validate() error = %v", err)
-	}
-	if len(violations) != 0 {
-		t.Fatalf("Validate() violations = %v, want none", violations)
-	}
-	if !out.OK {
-		t.Fatalf("Validate() outcome = %+v, want OK", out)
-	}
-}
-
 func TestContractRegistryPlanPhasePlannerReportsMissingMeta(t *testing.T) {
 	attemptDir := writePhasePlannerAttempt(t, phasePlannerArtifacts{
 		PlanText: validPhasePlanText(),
@@ -504,68 +229,6 @@ func TestContractRegistryHasNoLegacyRefactorPlanRole(t *testing.T) {
 		if spec.SkillName == "refactor" || strings.Contains(string(spec.Role), "refactor") {
 			t.Errorf("legacy refactor role still registered: %+v", spec)
 		}
-	}
-}
-
-func TestContractKnowledgeBaseBuilderRequiresIndexPresence(t *testing.T) {
-	kbDir := t.TempDir()
-	if err := os.WriteFile(filepath.Join(kbDir, "index.md"), []byte("# repo kb\n"), 0o644); err != nil {
-		t.Fatalf("write index.md: %v", err)
-	}
-
-	contract, ok := lookup(feature.PhaseKnowledgeBase, RoleKnowledgeBaseBuilder)
-	if !ok {
-		t.Fatal("Lookup(PhaseKnowledgeBase, RoleKnowledgeBaseBuilder) ok = false, want true")
-	}
-	if contract.Role != RoleKnowledgeBaseBuilder {
-		t.Fatalf("Lookup(PhaseKnowledgeBase, RoleKnowledgeBaseBuilder).Role = %q, want %q", contract.Role, RoleKnowledgeBaseBuilder)
-	}
-
-	out, violations, err := Validate(feature.PhaseKnowledgeBase, RoleKnowledgeBaseBuilder, kbDir)
-	if err != nil {
-		t.Fatalf("Validate() error = %v", err)
-	}
-	if !out.OK {
-		t.Fatalf("Validate() OK = false, violations = %#v", violations)
-	}
-	if len(violations) != 0 {
-		t.Fatalf("Validate() violations = %#v, want none", violations)
-	}
-}
-
-func TestContractKnowledgeBaseBuilderReportsMissingIndex(t *testing.T) {
-	kbDir := t.TempDir()
-
-	out, violations, err := Validate(feature.PhaseKnowledgeBase, RoleKnowledgeBaseBuilder, kbDir)
-	if err != nil {
-		t.Fatalf("Validate() error = %v", err)
-	}
-	if out.OK {
-		t.Fatal("Validate() OK = true, want false")
-	}
-	if len(violations) != 1 {
-		t.Fatalf("Validate() violations = %#v, want one", violations)
-	}
-	if violations[0].Artifact != "index.md" {
-		t.Fatalf("ProtocolViolation.Artifact = %q, want index.md", violations[0].Artifact)
-	}
-	if !strings.Contains(violations[0].Reason, "missing") {
-		t.Fatalf("ProtocolViolation.Reason = %q, want missing index reason", violations[0].Reason)
-	}
-}
-
-func TestContractKnowledgeBaseBuilderIndexPresenceOnly(t *testing.T) {
-	kbDir := t.TempDir()
-	if err := os.WriteFile(filepath.Join(kbDir, "index.md"), nil, 0o644); err != nil {
-		t.Fatalf("write empty index.md: %v", err)
-	}
-
-	out, violations, err := Validate(feature.PhaseKnowledgeBase, RoleKnowledgeBaseBuilder, kbDir)
-	if err != nil {
-		t.Fatalf("Validate() error = %v", err)
-	}
-	if !out.OK || len(violations) != 0 {
-		t.Fatalf("Validate() = outcome=%#v violations=%#v, want presence-only success", out, violations)
 	}
 }
 
@@ -687,189 +350,31 @@ func TestContractRegistryArtifactPhaseRolesSelectNewestMarkdown(t *testing.T) {
 	}
 }
 
-func TestContractRegistryImplementer(t *testing.T) {
-	iterDir := t.TempDir()
-	artifactDir := filepath.Dir(iterDir)
-	progressPath := filepath.Join(artifactDir, "progress.md")
-	writeValidProgress(t, progressPath, "", stateSuccess)
-
-	out, violations, err := Validate(feature.PhaseImplement, roleImplementer, iterDir)
-	if err != nil {
-		t.Fatalf("Validate() error = %v", err)
+func TestContractRegistryImplementerAcceptsAnyProgressNotes(t *testing.T) {
+	tests := []struct {
+		name  string
+		notes string
+	}{
+		{name: "missing"},
+		{name: "free-form", notes: "Wired the handler; the migration is still left.\n"},
+		{name: "legacy template", notes: "# Iteration Progress\n\n## Iteration Handoff\n- done\n\n## Iteration State\n\nSUCCESS\n"},
 	}
-	if len(violations) != 0 {
-		t.Fatalf("Validate() violations = %v, want none", violations)
-	}
-	if !out.OK || out.Progress == nil || out.VerificationReport != nil {
-		t.Fatalf("Validate() outcome = %+v, want parsed progress only", out)
-	}
-}
-
-func TestValidateArtifactsPreflightImplementerAcceptsAgentEvidence(t *testing.T) {
-	phaseDir := filepath.Join(t.TempDir(), "phase-01")
-	artifactDir := filepath.Join(phaseDir, "implement")
-	iterDir := filepath.Join(artifactDir, "iteration-01")
-	if err := os.MkdirAll(iterDir, 0o755); err != nil {
-		t.Fatalf("mkdir iteration: %v", err)
-	}
-	writeValidProgress(t, filepath.Join(artifactDir, "progress.md"), "", stateSuccess)
-
-	contract := CompileTestingContract(strings.Join([]string{
-		"### Visual Evidence",
-		"- [ ] Capture the dashboard empty state [size: 1x1]",
-	}, "\n"), filepath.Join(phaseDir, "plan.md"), "collapsed")
-	if err := WriteTestingContract(filepath.Join(phaseDir, "testing-contract.yaml"), contract); err != nil {
-		t.Fatalf("WriteTestingContract() error = %v", err)
-	}
-
-	var visual TestingContractItem
-	for _, item := range contract.Items {
-		if item.Owner == testingContractOwnerAgent && item.Source == testingContractVisualSource {
-			visual = item
-			break
-		}
-	}
-	if visual.ID == "" {
-		t.Fatal("compiled contract has no agent-owned visual item")
-	}
-	writeTestPNG(t, filepath.Join(iterDir, filepath.FromSlash(visual.ExpectedEvidence.Path)), 1, 1)
-
-	out, violations, err := ValidateArtifactsPreflight(feature.PhaseImplement, roleImplementer, iterDir)
-	if err != nil {
-		t.Fatalf("ValidateArtifactsPreflight() error = %v", err)
-	}
-	if len(violations) != 0 || !out.OK {
-		t.Fatalf("ValidateArtifactsPreflight() = (%+v, %v), want OK", out, violations)
-	}
-}
-
-func TestValidateArtifactsPreflightImplementerReportsMissingAgentEvidence(t *testing.T) {
-	phaseDir := filepath.Join(t.TempDir(), "phase-01")
-	artifactDir := filepath.Join(phaseDir, "implement")
-	iterDir := filepath.Join(artifactDir, "iteration-01")
-	if err := os.MkdirAll(iterDir, 0o755); err != nil {
-		t.Fatalf("mkdir iteration: %v", err)
-	}
-	writeValidProgress(t, filepath.Join(artifactDir, "progress.md"), "", stateSuccess)
-
-	contract := CompileTestingContract(strings.Join([]string{
-		"### Manual Verification",
-		"- [ ] Confirm the status copy is understandable to a user.",
-	}, "\n"), filepath.Join(phaseDir, "plan.md"), "collapsed")
-	if err := WriteTestingContract(filepath.Join(phaseDir, "testing-contract.yaml"), contract); err != nil {
-		t.Fatalf("WriteTestingContract() error = %v", err)
-	}
-
-	_, violations, err := ValidateArtifactsPreflight(feature.PhaseImplement, roleImplementer, iterDir)
-	if err != nil {
-		t.Fatalf("ValidateArtifactsPreflight() error = %v", err)
-	}
-	got := joinProtocolViolations(violations)
-	if !strings.Contains(got, "observations/confirm-the-status-copy-is-understandable-to-a-user.md") ||
-		!strings.Contains(got, "required agent-owned evidence is missing") {
-		t.Fatalf("JoinProtocolViolations() = %q, want missing agent evidence", got)
-	}
-}
-
-func TestContractRegistryImplementerReportsMissingArtifacts(t *testing.T) {
-	iterDir := t.TempDir()
-
-	out, violations, err := Validate(feature.PhaseImplement, roleImplementer, iterDir)
-	if err != nil {
-		t.Fatalf("Validate() error = %v", err)
-	}
-	if out.OK {
-		t.Fatal("Validate() OK = true, want false")
-	}
-	got := joinProtocolViolations(violations)
-	if !strings.Contains(got, "progress.md") {
-		t.Fatalf("JoinProtocolViolations() = %q, want progress.md", got)
-	}
-}
-
-// notRunVerificationReport builds a legacy v1 report listing each required
-// item as an unrun check.
-func notRunVerificationReport(required ...requiredVerificationItem) verificationReport {
-	report := verificationReport{Version: 1}
-	for _, item := range required {
-		report.RequiredChecks = append(report.RequiredChecks, verificationCheckResult{
-			Name:        item.Name,
-			Requirement: item.Requirement,
-			Command:     item.Requirement,
-			Mode:        verificationModeUnknown,
-			Status:      verificationStatusNotRun,
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			iterDir := t.TempDir()
+			if tt.notes != "" {
+				if err := os.WriteFile(filepath.Join(filepath.Dir(iterDir), "progress.md"), []byte(tt.notes), 0o644); err != nil {
+					t.Fatalf("write progress: %v", err)
+				}
+			}
+			out, violations, err := Validate(feature.PhaseImplement, roleImplementer, iterDir)
+			if err != nil {
+				t.Fatalf("Validate() error = %v", err)
+			}
+			if len(violations) != 0 || !out.OK {
+				t.Fatalf("Validate() = (%+v, %v), want OK", out, violations)
+			}
 		})
-	}
-	return report
-}
-
-func TestContractRegistryImplementerReportsMalformedProgress(t *testing.T) {
-	iterDir := t.TempDir()
-	artifactDir := filepath.Dir(iterDir)
-	progressPath := filepath.Join(artifactDir, "progress.md")
-	reportPath := filepath.Join(iterDir, "verification-report.yaml")
-
-	if err := os.WriteFile(progressPath, []byte("# Iteration Progress\n\n## Iteration Handoff\n- malformed\n"), 0o644); err != nil {
-		t.Fatalf("write malformed progress: %v", err)
-	}
-	if err := writeVerificationReport(reportPath, notRunVerificationReport()); err != nil {
-		t.Fatalf("WriteVerificationReport() error = %v", err)
-	}
-
-	out, violations, err := Validate(feature.PhaseImplement, roleImplementer, iterDir)
-	if err != nil {
-		t.Fatalf("Validate() error = %v", err)
-	}
-	if out.OK {
-		t.Fatal("Validate() OK = true, want false")
-	}
-	got := joinProtocolViolations(violations)
-	if !strings.Contains(got, "progress.md") || !strings.Contains(got, "Iteration State") {
-		t.Fatalf("JoinProtocolViolations() = %q, want progress.md Iteration State violation", got)
-	}
-}
-
-func TestContractRegistryImplementerAllowsRetryWithNotRunVerification(t *testing.T) {
-	iterDir := t.TempDir()
-	artifactDir := filepath.Dir(iterDir)
-	progressPath := filepath.Join(artifactDir, "progress.md")
-	reportPath := filepath.Join(iterDir, "verification-report.yaml")
-
-	writeValidProgress(t, progressPath, reportPath, stateRetry)
-	report := notRunVerificationReport(requiredVerificationItem{Name: "Relevant tests pass", Requirement: "go test ./..."})
-	if err := writeVerificationReport(reportPath, report); err != nil {
-		t.Fatalf("WriteVerificationReport() error = %v", err)
-	}
-
-	out, violations, err := Validate(feature.PhaseImplement, roleImplementer, iterDir)
-	if err != nil {
-		t.Fatalf("Validate() error = %v", err)
-	}
-	if len(violations) != 0 {
-		t.Fatalf("Validate() violations = %v, want none for RETRY with not_run verification", violations)
-	}
-	if !out.OK {
-		t.Fatal("Validate() OK = false, want true for RETRY with not_run verification")
-	}
-}
-
-func TestContractRegistryImplementerDoesNotRequireNeedUserInputForSuccess(t *testing.T) {
-	iterDir := t.TempDir()
-	artifactDir := filepath.Dir(iterDir)
-	progressPath := filepath.Join(artifactDir, "progress.md")
-	reportPath := filepath.Join(iterDir, "verification-report.yaml")
-
-	writeValidProgress(t, progressPath, reportPath, stateSuccess)
-	if err := writeVerificationReport(reportPath, notRunVerificationReport()); err != nil {
-		t.Fatalf("WriteVerificationReport() error = %v", err)
-	}
-
-	out, violations, err := Validate(feature.PhaseImplement, roleImplementer, iterDir)
-	if err != nil {
-		t.Fatalf("Validate() error = %v", err)
-	}
-	if len(violations) != 0 || !out.OK {
-		t.Fatalf("Validate() = (%+v, %v), want OK without need-user-input payload", out, violations)
 	}
 }
 
@@ -882,8 +387,7 @@ func TestContractRegistryFinalReviewFixerRequiresNoReportArtifact(t *testing.T) 
 		t.Fatalf("Lookup(PhaseReview, RoleFinalReviewFixer).Role = %q, want %q", contract.Role, roleFinalReviewFixer)
 	}
 
-	// verification-report.yaml is harness-owned: an empty fix iteration dir
-	// must validate cleanly instead of demanding an agent-authored report.
+	// An empty fix iteration dir must validate cleanly.
 	out, violations, err := Validate(feature.PhaseReview, roleFinalReviewFixer, t.TempDir())
 	if err != nil {
 		t.Fatalf("Validate() error = %v", err)
@@ -1002,41 +506,6 @@ func writeReviewFeedbackFile(t *testing.T, path, body string) {
 	}
 }
 
-func writeValidProgress(t *testing.T, path string, reportPath string, state iterationState) {
-	t.Helper()
-	_ = reportPath
-	body := fmt.Sprintf(`# Iteration Progress
-
-## Iteration Handoff
-
-### Completed this iteration
-- registry test
-
-### Remaining from the plan
-- none
-
-### Where I stopped
-- complete
-
-### Gotchas / blockers / in-flight decisions
-- none
-
-## Deferrals
-
-`+"```"+`yaml
-deferrals: []
-closed_deferrals: []
-`+"```"+`
-
-## Iteration State
-
-%s
-`, state.String())
-	if err := os.WriteFile(path, []byte(body), 0o644); err != nil {
-		t.Fatalf("write progress: %v", err)
-	}
-}
-
 func writeRoadmapPlannerAttempt(t *testing.T, roadmapText, metaText string) string {
 	t.Helper()
 
@@ -1097,189 +566,23 @@ func writePhasePlannerAttempt(t *testing.T, artifacts phasePlannerArtifacts) str
 
 func validPhasePlanText() string {
 	return "# Phase 1 Plan\n\n" +
+		"## Metadata\n\n**Frontend:** false\n\n" +
 		"## Overview\nShip the phase.\n\n" +
 		"## Tasks\n\n" +
 		"### Task 1: Build the slice\n\n" +
 		"#### What to build\nImplement the phase behavior.\n\n" +
 		"#### Acceptance criteria\n- [ ] Behavior is complete.\n\n" +
 		"#### Blocked by\nNone - can start immediately\n\n" +
+		"## Verification\n\nRun `go test ./...` and check the new endpoint answers.\n"
+}
+
+func legacyPhasePlanText() string {
+	return "# Phase 1 Plan\n\n" +
+		"## Overview\nShip the phase.\n\n" +
+		"## Tasks\n\n" +
+		"### Task 1: Build the slice\n\n" +
+		"#### Acceptance criteria\n- [ ] Behavior is complete.\n\n" +
 		"## Success Criteria\n\n" +
-		"### Automated Verification\n- [ ] Tests pass: `go test ./...`\n\n" +
-		"### Manual Verification\n- [ ] None required: internal-only test fixture.\n\n" +
-		"### Visual Evidence\n- [ ] None required: no user-facing rendered surface.\n\n" +
-		"### Behavioral Evidence\n- [ ] None required: automated tests provide the artifact.\n"
-}
-
-func TestVerificationScopeViolations(t *testing.T) {
-	multiRepoTasks := "## Tasks\n\n### Task 1: api work\n**Repo:** `api`\n\nBody.\n\n### Task 2: web work\n**Repo:** `web`\n\nBody.\n"
-	tests := []struct {
-		name    string
-		plan    string
-		wantIn  string
-		wantLen int
-	}{
-		{
-			name:    "multi-repo unscoped command in success criteria",
-			plan:    multiRepoTasks + "\n## Success Criteria\n\n### Automated Verification\n- [ ] Tests pass: `go test ./...`\n",
-			wantIn:  "must scope every command",
-			wantLen: 1,
-		},
-		{
-			name:    "multi-repo unscoped command in top-level section outside success criteria",
-			plan:    "### Automated Verification\n- [ ] Tests pass: `go test ./...`\n\n" + multiRepoTasks,
-			wantIn:  "must scope every command",
-			wantLen: 1,
-		},
-		{
-			name:    "case-drifted repo tag accepted",
-			plan:    multiRepoTasks + "\n## Success Criteria\n\n### Automated Verification\n- [ ] [repo: API] Tests pass: `go test ./...`\n",
-			wantLen: 0,
-		},
-		{
-			name:    "unknown repo rejected",
-			plan:    multiRepoTasks + "\n## Success Criteria\n\n### Automated Verification\n- [ ] [repo: ghost] Tests pass: `go test ./...`\n",
-			wantIn:  "not assigned to any phase task",
-			wantLen: 1,
-		},
-		{
-			name:    "per-task step with case-drifted matching repo accepted",
-			plan:    "## Tasks\n\n### Task 1: api work\n**Repo:** `api`\n\n#### Automated Verification:\n- [ ] [repo: API] Tests: `go test ./...`\n",
-			wantLen: 0,
-		},
-		{
-			name:    "single-repo unscoped accepted",
-			plan:    "## Tasks\n\n### Task 1: work\n**Repo:** `solo`\n\nBody.\n\n## Success Criteria\n\n### Automated Verification\n- [ ] Tests pass: `go test ./...`\n",
-			wantLen: 0,
-		},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			got := verificationScopeViolations(tt.plan)
-			if len(got) != tt.wantLen {
-				t.Fatalf("verificationScopeViolations() = %+v, want %d violations", got, tt.wantLen)
-			}
-			if tt.wantLen > 0 && !strings.Contains(got[0].Reason, tt.wantIn) {
-				t.Fatalf("violation = %q, want to contain %q", got[0].Reason, tt.wantIn)
-			}
-		})
-	}
-}
-
-func TestValidateAutomatedVerificationSectionParserAgreement(t *testing.T) {
-	tests := []struct {
-		name   string
-		body   string
-		wantIn string
-	}{
-		{
-			name: "tilde fence with checklist-looking content accepted",
-			body: "### Automated Verification\n- [ ] Tests pass: `go test ./...`\n\n~~~\n- [ ] example: `not a real command`\n~~~\n",
-		},
-		{
-			name: "level-4 sub-heading does not truncate the section",
-			body: "### Automated Verification\n- [ ] Tests pass: `go test ./...`\n\n#### Notes\n- [ ] Lint passes: `go vet ./...`\n",
-		},
-		{
-			name:   "command-less checklist item still rejected",
-			body:   "### Automated Verification\n- [ ] Tests pass somehow\n",
-			wantIn: "one complete executable command",
-		},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			got := validateAutomatedVerificationSection("## Success Criteria\n\n" + tt.body)
-			if tt.wantIn == "" && got != "" {
-				t.Fatalf("validateAutomatedVerificationSection() = %q, want no violation", got)
-			}
-			if tt.wantIn != "" && !strings.Contains(got, tt.wantIn) {
-				t.Fatalf("validateAutomatedVerificationSection() = %q, want to contain %q", got, tt.wantIn)
-			}
-		})
-	}
-}
-
-func TestValidateManualVerificationSectionAllowsInlineCodeReferences(t *testing.T) {
-	tests := []struct {
-		name   string
-		body   string
-		wantIn string
-	}{
-		{
-			name: "inline symbol reference accepted",
-			body: "### Manual Verification\n- [ ] Confirm the `Submit` button label reads correctly\n",
-		},
-		{
-			name: "fenced example ignored",
-			body: "### Manual Verification\n- [ ] Confirm the error page renders the fallback copy\n\n```\n- [ ] not a check: `go test ./...`\n```\n",
-		},
-		{
-			name:   "command-shaped backtick still rejected",
-			body:   "### Manual Verification\n- [ ] Confirm tests pass by running `go test ./...`\n",
-			wantIn: "without executable backtick commands",
-		},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			got := validateManualVerificationSection("## Success Criteria\n\n" + tt.body)
-			if tt.wantIn == "" && got != "" {
-				t.Fatalf("validateManualVerificationSection() = %q, want no violation", got)
-			}
-			if tt.wantIn != "" && !strings.Contains(got, tt.wantIn) {
-				t.Fatalf("validateManualVerificationSection() = %q, want to contain %q", got, tt.wantIn)
-			}
-		})
-	}
-}
-
-func TestValidateEvidenceSectionBodyParserAgreement(t *testing.T) {
-	tests := []struct {
-		name   string
-		body   string
-		wantIn string
-	}{
-		{
-			name:   "command-only behavioral bullet rejected",
-			body:   "### Behavioral Evidence\n- [ ] `npx playwright test e2e/a.spec.ts`\n",
-			wantIn: "must include prose describing the evidence before the trailing executable command",
-		},
-		{
-			name: "behavioral bullet with prose and command still validates",
-			body: "### Behavioral Evidence\n- [ ] Checkout journey completes: `npx playwright test e2e/a.spec.ts`\n",
-		},
-		{
-			name:   "command-only visual bullet rejected",
-			body:   "### Visual Evidence\n- [ ] `npx playwright test e2e/a.spec.ts --screenshot`\n",
-			wantIn: "must include prose describing the evidence before the trailing executable command",
-		},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			heading := "### Behavioral Evidence"
-			if strings.Contains(tt.body, "### Visual Evidence") {
-				heading = "### Visual Evidence"
-			}
-			got := validateEvidenceSectionBody("## Success Criteria\n\n"+tt.body, heading)
-			if tt.wantIn == "" && got != "" {
-				t.Fatalf("validateEvidenceSectionBody() = %q, want no violation", got)
-			}
-			if tt.wantIn != "" && !strings.Contains(got, tt.wantIn) {
-				t.Fatalf("validateEvidenceSectionBody() = %q, want to contain %q", got, tt.wantIn)
-			}
-		})
-	}
-}
-
-func TestAgentEvidencePlanViolations(t *testing.T) {
-	plan := "## Success Criteria\n\n### Automated Verification\n\n- [ ] tests pass: `go test ./...`\n\n### Manual Verification\n\n- [ ] None required: automated-only verification for this feature\n\n### Visual Evidence\n\n- [ ] Home screen default state [size: 760x480]\n\n### Behavioral Evidence\n\n- [ ] None required: automated-only verification for this feature\n"
-	violations := agentEvidencePlanViolations(plan)
-	if len(violations) != 1 {
-		t.Fatalf("expected 1 violation for visual row, got %d: %v", len(violations), violations)
-	}
-	if !strings.Contains(violations[0].Reason, "### Visual Evidence") {
-		t.Fatalf("violation should name the section: %v", violations[0])
-	}
-	clean := strings.Replace(plan, "- [ ] Home screen default state [size: 760x480]", "- [ ] None required: automated-only verification for this feature", 1)
-	if got := agentEvidencePlanViolations(clean); len(got) != 0 {
-		t.Fatalf("all-none plan should produce no violations, got %v", got)
-	}
+		"### Automated Verification\n- [ ] Tests pass: `go test ./...` [repo: api]\n\n" +
+		"### Visual Evidence\n- [ ] None required: no user-facing rendered surface.\n"
 }

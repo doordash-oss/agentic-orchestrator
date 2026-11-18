@@ -33,12 +33,11 @@ import (
 // ---------------------------------------------------------------------------
 
 func TestOrchestrator_StartFeature_FirstPhase(t *testing.T) {
-	// Feature with no repos + large pipeline → KB phase skips to Inquire.
 	f := &feature.Feature{
 		ID:       "feat-1",
 		Status:   feature.StatusCreated,
 		Pipeline: feature.PipelineLarge,
-		Repos:    nil, // no repos → KB skipped
+		Repos:    nil,
 	}
 	fs, lc := newStoredFeatureFixture(t, f)
 
@@ -65,7 +64,6 @@ func TestOrchestrator_StartFeature_FirstPhase(t *testing.T) {
 		t.Errorf("OnFeatureStarted hook got feature ID %q, want %q", startedFeatureID, "feat-1")
 	}
 
-	// KB was skipped (no repos), so Inquire should have started.
 	if stored := loadStoredFeature(t, fs, f.ID); stored.Status != feature.StatusInquiring || stored.CurrentPhase != feature.PhaseInquire {
 		t.Errorf("stored state = %s/%s, want Inquiring/Inquire", stored.Status, stored.CurrentPhase)
 	}
@@ -83,10 +81,6 @@ func TestOrchestrator_StartFeature_FirstPhase(t *testing.T) {
 	}
 	if hasPhaseStarted(events, feature.PhaseInquire) == nil {
 		t.Error("expected PhaseStarted event for PhaseInquire")
-	}
-	// KB was skipped, so no PhaseStarted event for KB.
-	if hasPhaseStarted(events, feature.PhaseKnowledgeBase) != nil {
-		t.Error("unexpected PhaseStarted event for PhaseKnowledgeBase (should have been skipped)")
 	}
 }
 

@@ -1,0 +1,48 @@
+# Fix Context
+
+This is fix iteration 3.
+
+## Repositories
+
+Make every change in these worktrees. Other checkouts of the same repositories exist and are off-limits.
+- **api**: /state/worktrees/feat-x/api
+- **web**: /state/worktrees/feat-x/web
+
+## Handoff to the User
+
+Final Review stopped its automatic loop: The QA axis requested changes in 3 consecutive rounds.
+
+Before any other work, ask the user exactly one single-choice question with the ask-user tool described under Asking Questions. Ask no dispute questions this round. Use this question text verbatim:
+
+> Final Review needs your decision. The QA axis requested changes in 3 consecutive rounds.
+> 
+> Open findings:
+> - QA: **High**: export button stays disabled.
+> 
+> Details: /state/feat-x/run-1/review/iteration-03/handoff/handoff.md
+> 
+> How should Final Review proceed?
+
+Offer exactly these options, with these labels:
+- "Continue with guidance": the user types guidance as the answer; you apply it and Final Review continues.
+- "Accept and proceed to Publish": the open findings are accepted as they are and the feature moves on to Publish.
+- "Stop": Final Review stops; the user resumes or rewinds the feature later.
+
+If the answer is "Accept and proceed to Publish" or "Stop", make no changes and finish. Any other answer is the user's guidance: apply it as this round's fix, using the open findings as reviewer feedback where the guidance leaves something open, then finish. "Continue with guidance" with no further text means fix the open findings. The harness records the answer in the decisions file.
+
+Open findings and the previous fixer's note: /state/feat-x/run-1/review/iteration-03/handoff/handoff.md
+
+**Acceptance**:
+Feature acceptance is defined by the `## Acceptance Criteria` section of the approved design at /state/feat-x/run-1/design/design.md. Judge acceptance against that section, not against any restatement of it.
+
+## Approved Decisions
+
+Later approved decisions override the design's acceptance criteria where they conflict:
+- Roadmap, including its out-of-scope list: /state/feat-x/run-1/roadmap/plan.md
+- User's recorded answers: /state/feat-x/run-1/design/qa-answers.md
+- Final Review decisions: /state/feat-x/run-1/review/review-decisions.md
+
+## Reviewer Feedback
+
+Read the reviewer feedback at: /state/feat-x/run-1/review/iteration-03/review-feedback.md
+

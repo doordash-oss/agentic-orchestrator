@@ -1,99 +1,65 @@
 ---
-description: Execute an approved phase plan with TDD, dependency-aware task fan-out, required evidence, and a strict iteration handoff
+description: Execute an approved phase plan with TDD, dependency-aware task fan-out, the plan's verification, and short handoff notes
 license: Apache-2.0; Superpowers inspiration acknowledged in ATTRIBUTION.md
 provenance: upstream-inspired
 ---
 
 # Plan Execution
 
-Implement the approved phase plan. You own code, development-time testing, explicitly agent-owned evidence, and the progress handoff. The verification harness owns final contract execution and `verification-report.yaml`.
+Implement the approved phase plan. You own code, development-time testing, the plan's verification, and the handoff notes.
 
 ## Output Files
 
 | Artifact | Path | Requirement | Purpose |
 |----------|------|-------------|---------|
-| `progress.md` | `{phase_dir}/progress.md` | required | structured progress markdown with iteration handoff, deferrals, and iteration state |
+| `progress.md` | `{phase_dir}/progress.md` | expected | short handoff notes for the next session |
 
 ## Start Here
 
-Never create or edit `verification-report.yaml` or `phase_complete`. When a testing contract exists, the harness derives the report after it commits your structured root outcome.
+Never create or edit `phase_complete`.
 
 1. Read the full phase plan.
-2. If `{phase_dir}/progress.md` exists, read it and resume from `### Where I stopped`. Reviewer feedback and the current plan override stale handoff prose.
-3. Read `testing-contract.yaml` if it exists — at `{phase_dir}/../testing-contract.yaml` for roadmap phases, or `{phase_dir}/testing-contract.yaml` for cycle layouts (rebase/review-comments, where `{phase_dir}` is the cycle root). Note only items with `owner: agent`; final execution of `owner: harness` items is not your responsibility. If the file does not exist, this feature has no per-iteration machine verification: run every command under the plan's `### Automated Verification` yourself each iteration and record the commands and results in your handoff — SUCCESS asserts they pass.
-4. Confirm every Task `**Repo:** <name>` is mounted. If the plan or repo scope is contradictory, call the formal AskUserQuestion control and continue after the answer.
-5. Build a dependency graph from `Blocked by`, shared files, repo tags, and acceptance criteria.
+2. If `{phase_dir}/progress.md` exists, read it and resume from where it left off. Reviewer feedback and the current plan override stale notes.
+3. Confirm every Task `**Repo:** <name>` is mounted. If the plan or repo scope is contradictory, call the formal AskUserQuestion control and continue after the answer.
+4. Build a dependency graph from `Blocked by`, shared files, repo tags, and acceptance criteria.
 
 ## Implementation Rules
 
-- The approved Tasks, acceptance criteria, and Success Criteria define scope.
+- The approved Tasks, acceptance criteria, and Verification section define scope.
 - For behavior changes, use a red-green-refactor loop: add a focused failing test, verify the expected failure, implement the smallest fix, run the focused test and relevant surrounding suite, then refactor while green.
 - Pin discovered bugs with regression tests before fixing them when practical.
 - Manual evidence does not replace an automated test for behavior that can reasonably be automated.
 - Use stubs only when the plan explicitly requests them. Mark intentional stubs with `// STUB(Phase N): <purpose>`.
-- Do not invent bookkeeping rows or edit the testing contract. If the contract or scope must change, request user input.
+- If the plan or scope must change, call the formal AskUserQuestion control.
 - Add comments only for intent, rationale, invariants, or non-obvious tradeoffs.
+
+## Disputing a Review Finding
+
+Later approved decisions outrank the plan's acceptance criteria: the roadmap's out-of-scope list, the user's recorded answers, and the phase's review decisions file. A reviewer finding that one of them supersedes, or that is wrong on the facts, is not fixed. Follow a decision the decisions file already records; for any other disputed blocking finding, call the formal AskUserQuestion control once per finding. Start the question with "Dispute:", quote the finding, name its axis, and say why you dispute it, citing the decision when there is one. Offer exactly these options:
+
+- "Fix it": you fix the finding as the reviewer asked.
+- "Accept as is": the finding stands accepted and is not raised again.
+- "Change the scope": the user describes the scope change in the answer, and you apply it.
+
+Act on the answer. The harness records dispute and handoff answers in the decisions file that later reviewers and implementers read; other questions are not decisions. When you worked on review findings, end your final response with a short note for the next reviewers: what you fixed, what you disputed, and why.
+
+When your prompt has a Handoff to the User section, the phase review stopped converging. Ask that section's question first, verbatim and as a single choice, ask no dispute questions this iteration, and act on the answer as the section says.
 
 ## Task Fan-Out
 
 Parallelize independent non-trivial Tasks. Give each worker the exact Task and acceptance criteria, its repo/file boundary, dependencies, and the focused development test it should use. Sequentialize shared migrations, API decisions, and overlapping edits. Review returned diffs and integrate them before unlocking dependents.
 
-Workers validate the code they change. They do not author final verification results; when a testing contract exists, the harness runs it after handoff. Otherwise, run the plan's Automated Verification before reporting SUCCESS.
+Workers validate the code they change. Before reporting success, follow the plan's `## Verification` section yourself: run its commands from the root of the repository each belongs to, and look at what it asks you to look at. Success asserts that the verification passes. An older plan without `## Verification` keeps its checks under `## Success Criteria`; treat that section as the verification. Save any screenshots, logs, or recordings you produce under `{iteration_dir}`.
 
-## Agent-Owned Evidence
-
-For every testing-contract item with `owner: agent`, write the file named by `expected_evidence.path` under `{iteration_dir}`.
-
-- `manual_observation`: one concise Markdown record covering the contract's consolidated semantic checklist, the observed result, and enough concrete detail for review.
-- `visual_artifact`: the actual image at the specified `screenshots/` path.
-- `behavioral_artifact`: one actual trace, recording, or interaction log covering the contract's consolidated primary-journey checklist at the specified `behaviors/` path.
-
-Do not write evidence for `owner: harness` items. Do not invent statuses, counts, transcripts, or waiver claims. If required evidence needs authorization, hardware, or an environment this session lacks, run `"$AGENTICO_BIN" report-blocker --contract "{testing_contract_path}" --dir "{iteration_dir}" --items <id,id,...> --capability <name> --reason <text>` with the affected contract item ids, then end the iteration with `RETRY`; the harness pauses on the user gate, which owns waivers and substitutions. Run it as a single bare command with absolute literal paths — no `cd`, `&&`, `;`, pipes, redirects, command substitution, or shell variables in arguments — or the permission guard refuses it. A row with `allow_substitution: true` accepts a faithful, labelled substitute. Never create placeholder evidence.
+Never report a result you did not observe. If verification needs authorization, hardware, or an environment this session lacks, call the formal AskUserQuestion control, or say in your notes exactly what you could not check and why.
 
 ## Handoff
 
-At iteration end:
+At iteration end, write `{phase_dir}/progress.md`: short notes a fresh session can pick up from. Say what was done, what is left, and anything surprising, including the verification you ran and its results. There is no template; replace stale notes rather than appending to them.
 
-1. Write all required agent-owned evidence files.
-2. Write `{phase_dir}/progress.md`.
-3. Run `"$AGENTICO_BIN" validate-artifacts --phase implement --role implementer --dir "{iteration_dir}"`; fix every reported handoff defect — including evidence gaps: missing, malformed, mis-sized, or byte-identical duplicate captures. This runs the same file-backed checks the post-handoff integrity gate applies — clearing them here avoids losing a whole iteration to a gap you can fix now.
-4. Finish the root response with exactly one structured outcome tag from the system prompt. The harness writes `phase_complete` after validation.
+Then finish the root response with exactly one structured outcome from the system prompt. The harness writes `phase_complete`.
 
-Use this `progress.md` shape:
+- `success`: implementation, acceptance criteria, development tests, and the plan's verification are complete.
+- `retry`: useful implementation progress landed and a concrete in-scope next action is possible in the current environment.
 
-````markdown
-# Iteration Progress
-
-## Iteration Handoff
-
-### Completed this iteration
-- <concrete files, functions, or change units landed>
-
-### Remaining from the plan
-- <unfinished Tasks or Success Criteria; empty when complete>
-
-### Where I stopped
-<next concrete action, or "Complete">
-
-### Gotchas / blockers / in-flight decisions
-- <anything the next iteration cannot infer from the plan and diff>
-
-## Deferrals
-
-```yaml
-deferrals: []
-closed_deferrals: []
-```
-
-## Iteration State
-
-SUCCESS
-````
-
-The Deferrals block must include both keys. Deferrals are work due in a numbered future roadmap phase; permissions, external systems, and human follow-ups are blockers, not deferrals.
-
-Choose exactly one state:
-
-- `SUCCESS`: implementation, acceptance criteria, development tests, due deferrals, and all `owner: agent` evidence are complete. When a testing contract exists, the harness performs final contract verification next; otherwise your reported automated-verification runs are the record.
-- `RETRY`: useful implementation progress landed and a concrete in-scope next action is possible in the current environment.
-Never emit a bare `RETRY` for a blocker you cannot act on in this environment (missing credentials, absent hardware): the harness re-dispatches `RETRY` iterations unchanged. Record the blocker with `report-blocker` first, or call the formal AskUserQuestion control for a human decision and resume the same iteration after the answer.
+Never ask for `retry` because of a blocker you cannot act on in this environment (missing credentials, absent hardware): the harness re-dispatches retry iterations unchanged. Call the formal AskUserQuestion control for a human decision and resume the same iteration after the answer.

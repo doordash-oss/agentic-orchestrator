@@ -33,8 +33,33 @@ type tokenRate struct {
 }
 
 // modelRates maps canonical model names to their token pricing.
-// Source: https://developers.openai.com/api/docs/pricing (verified 2026-09-04; standard API estimates, not ChatGPT credit prices)
+// Source: https://developers.openai.com/api/docs/pricing (verified 2026-11-18; standard API estimates, not ChatGPT credit prices)
+// Cache writes use the 30-minute write price.
 var modelRates = map[string]tokenRate{
+	"gpt-6.2-astra": {
+		inputPerMToken: 8, cachedInputPerMToken: 0.4, cacheWritePerMToken: 10, outputPerMToken: 40,
+		longInputPerMToken: 16, longCachedInputPerMToken: 0.8, longCacheWritePerMToken: 20, longOutputPerMToken: 60,
+	},
+	"gpt-6.2-sol": {
+		inputPerMToken: 2, cachedInputPerMToken: 0.1, cacheWritePerMToken: 2.5, outputPerMToken: 10,
+		longInputPerMToken: 4, longCachedInputPerMToken: 0.2, longCacheWritePerMToken: 5, longOutputPerMToken: 15,
+	},
+	"gpt-6.1-sol": {
+		inputPerMToken: 2, cachedInputPerMToken: 0.1, cacheWritePerMToken: 2.5, outputPerMToken: 10,
+		longInputPerMToken: 4, longCachedInputPerMToken: 0.2, longCacheWritePerMToken: 5, longOutputPerMToken: 15,
+	},
+	"gpt-6.1-terra": {
+		inputPerMToken: 1, cachedInputPerMToken: 0.05, cacheWritePerMToken: 1.25, outputPerMToken: 5,
+		longInputPerMToken: 2, longCachedInputPerMToken: 0.1, longCacheWritePerMToken: 2.5, longOutputPerMToken: 7.5,
+	},
+	"gpt-6-sol": {
+		inputPerMToken: 2, cachedInputPerMToken: 0.2, cacheWritePerMToken: 2.5, outputPerMToken: 10,
+		longInputPerMToken: 4, longCachedInputPerMToken: 0.4, longCacheWritePerMToken: 5, longOutputPerMToken: 15,
+	},
+	"gpt-6-luna": {
+		inputPerMToken: 0.1, cachedInputPerMToken: 0.01, cacheWritePerMToken: 0.125, outputPerMToken: 0.5,
+		longInputPerMToken: 0.2, longCachedInputPerMToken: 0.02, longCacheWritePerMToken: 0.25, longOutputPerMToken: 0.75,
+	},
 	"gpt-6-astra": {
 		inputPerMToken: 10, cachedInputPerMToken: 1, cacheWritePerMToken: 12.5, outputPerMToken: 50,
 		longInputPerMToken: 20, longCachedInputPerMToken: 2, longCacheWritePerMToken: 25, longOutputPerMToken: 75,
@@ -94,8 +119,7 @@ func computeCostForServiceTier(model, tier string, input, cached, writes, output
 	case "flex", "batch":
 		return cost * 0.5
 	case "fast", "priority":
-		switch strings.ToLower(llm.StripModelContextWindow(model)) {
-		case "gpt-6-astra", "gpt-5.6", "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna":
+		if m := strings.ToLower(llm.StripModelContextWindow(model)); strings.HasPrefix(m, "gpt-6") || strings.HasPrefix(m, "gpt-5.6") {
 			return cost * 2
 		}
 	}

@@ -105,7 +105,7 @@ func childTestSpec() feature.RefactorChildSpec {
 		Name:        "Refactor Widget",
 		Description: "rework the widget",
 		Pipeline:    feature.PipelineMoonshot,
-		Checkpoints: feature.Checkpoints{PhasePlanReview: true, ManualPublish: true},
+		Checkpoints: &feature.Checkpoints{PhasePlanReview: true, ManualPublish: true},
 		RiskLevel:   feature.RiskMedium,
 	}
 }

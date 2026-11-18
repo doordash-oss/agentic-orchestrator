@@ -278,11 +278,12 @@ func (o *Orchestrator) EnableFeatureAutomaticReview(featureID string) error {
 		return err
 	}
 	mode := feature.AutomaticReviewEnabled
+	checkpoints := f.Pipeline.NormalizeCheckpoints(f.Checkpoints, f.IsPublishable())
 	_, err = o.updateFeatureConfigLocked(featureID, UpdateFeatureConfigInput{
 		Models:              f.Models,
 		Effort:              f.Effort,
 		Inquireness:         f.Inquireness,
-		Checkpoints:         f.Pipeline.NormalizeCheckpoints(f.Checkpoints, f.IsPublishable()),
+		Checkpoints:         &checkpoints,
 		InputNotifications:  feature.NormalizeInputNotificationsMode(f.InputNotifications),
 		AutomaticReviewMode: &mode,
 		Pipeline:            f.Pipeline,

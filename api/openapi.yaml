@@ -104,6 +104,11 @@ paths:
     post:
       operationId: updateFeatureConfig
       summary: Update feature configuration.
+      description: >-
+        Replaces the feature's editable configuration. An omitted
+        `checkpoints` keeps the feature's current gates; an explicit object,
+        including one with every gate false, replaces them. Gates the
+        pipeline does not support are always off.
       parameters:
         - $ref: "#/components/parameters/FeatureID"
         - $ref: "#/components/parameters/TrustedMutationHeader"

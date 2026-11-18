@@ -88,7 +88,10 @@ export interface paths {
         /** Read feature configuration. */
         get: operations["getFeatureConfig"];
         put?: never;
-        /** Update feature configuration. */
+        /**
+         * Update feature configuration.
+         * @description Replaces the feature's editable configuration. An omitted `checkpoints` keeps the feature's current gates; an explicit object, including one with every gate false, replaces them. Gates the pipeline does not support are always off.
+         */
         post: operations["updateFeatureConfig"];
         delete?: never;
         options?: never;

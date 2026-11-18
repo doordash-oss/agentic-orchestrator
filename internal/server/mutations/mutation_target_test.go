@@ -1750,7 +1750,7 @@ func TestServerMutationTargetUpdateFeatureConfigPersistsRuntimePreferences(t *te
 		},
 		Inquireness: testInquirenessHigh,
 		Pipeline:    feature.PipelineMedium,
-		Checkpoints: feature.Checkpoints{
+		Checkpoints: &feature.Checkpoints{
 			InquiryReview:   true,
 			DesignReview:    true,
 			RoadmapReview:   true,
@@ -1790,7 +1790,7 @@ func TestServerMutationTargetUpdateFeatureConfigPersistsRuntimePreferences(t *te
 		Effort:             updated.Effort,
 		Inquireness:        string(updated.Inquireness),
 		Pipeline:           updated.Pipeline,
-		Checkpoints:        updated.Checkpoints,
+		Checkpoints:        &updated.Checkpoints,
 		InputNotifications: string(updated.InputNotifications),
 	}); err != nil {
 		t.Fatalf("UpdateFeatureConfig() preserving omitted automatic review mode: %v", err)
@@ -1858,7 +1858,7 @@ func TestServerMutationTargetClosedChildConfigReturnsRelationshipClosed(t *testi
 		Models:      config.ModelConfig{Research: "new-research"},
 		Inquireness: testInquirenessHigh,
 		Pipeline:    feature.PipelineMedium,
-		Checkpoints: feature.Checkpoints{ManualPublish: true},
+		Checkpoints: &feature.Checkpoints{ManualPublish: true},
 	})
 	if err != nil {
 		t.Fatalf("Marshal request: %v", err)

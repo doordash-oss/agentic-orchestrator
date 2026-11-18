@@ -164,3 +164,69 @@ func TestServerMutationTargetRefactorFeatureResolvesCheckpoints(t *testing.T) {
 		})
 	}
 }
+
+func TestServerMutationTargetUpdateFeatureConfigResolvesCheckpoints(t *testing.T) {
+	current := feature.Checkpoints{RoadmapReview: true, PhasePlanReview: true, ManualPublish: true}
+	tests := []struct {
+		name        string
+		checkpoints string
+		want        feature.Checkpoints
+	}{
+		{name: "omitted keeps current", want: current},
+		{name: "explicit all false clears", checkpoints: allFalseCheckpointsJSON, want: feature.Checkpoints{}},
+		{name: "explicit partial replaces", checkpoints: `{"roadmap_review":true}`, want: feature.Checkpoints{RoadmapReview: true}},
+	}
+	for _, paired := range []bool{false, true} {
+		for _, tt := range tests {
+			name := tt.name
+			if paired {
+				name = "paired " + name
+			}
+			t.Run(name, func(t *testing.T) {
+				target, store, parent := newChildLaunchTarget(t)
+				target.configPath = filepath.Join(t.TempDir(), "config.yaml")
+				if err := store.Modify(parent.ID, func(f *feature.Feature) error {
+					f.Checkpoints = current
+					return nil
+				}); err != nil {
+					t.Fatal(err)
+				}
+				var childID string
+				if paired {
+					resp, err := target.RefactorFeature(parent.ID, serverruntime.RefactorFeatureRequest{Name: "Rework"})
+					if err != nil {
+						t.Fatalf("RefactorFeature() error = %v", err)
+					}
+					childID = resp.FeatureID
+				}
+
+				body := `{"pipeline":"medium"`
+				if tt.checkpoints != "" {
+					body += `,"checkpoints":` + tt.checkpoints
+				}
+				body += `}`
+				var req serverruntime.FeatureConfigMutationRequest
+				if err := json.Unmarshal([]byte(body), &req); err != nil {
+					t.Fatal(err)
+				}
+				if _, err := target.UpdateFeatureConfig(parent.ID, req); err != nil {
+					t.Fatalf("UpdateFeatureConfig() error = %v", err)
+				}
+
+				ids := []string{parent.ID}
+				if childID != "" {
+					ids = append(ids, childID)
+				}
+				for _, id := range ids {
+					got, err := store.Load(id)
+					if err != nil {
+						t.Fatal(err)
+					}
+					if got.Checkpoints != tt.want {
+						t.Fatalf("%s checkpoints = %+v, want %+v", id, got.Checkpoints, tt.want)
+					}
+				}
+			})
+		}
+	}
+}

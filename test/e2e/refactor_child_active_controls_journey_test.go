@@ -179,7 +179,7 @@ func TestRefactorChildActiveControlsJourney(t *testing.T) {
 	const wantInquireness = "high"
 	configResp, err := client.UpdateFeatureConfig(t.Context(), childID, server.FeatureConfigMutationRequest{
 		Inquireness: wantInquireness,
-		Checkpoints: feature.Checkpoints{
+		Checkpoints: &feature.Checkpoints{
 			RoadmapReview:   true,
 			PhasePlanReview: true,
 			ManualPublish:   true,

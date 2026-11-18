@@ -167,7 +167,7 @@ type FeatureConfigMutationRequest struct {
 	Models              config.ModelConfig      `json:"models,omitempty"`
 	Effort              config.EffortConfig     `json:"effort,omitempty"`
 	Inquireness         string                  `json:"inquireness,omitempty"`
-	Checkpoints         feature.Checkpoints     `json:"checkpoints,omitempty"`
+	Checkpoints         *feature.Checkpoints    `json:"checkpoints,omitempty"`
 	Pipeline            feature.PipelineProfile `json:"pipeline,omitempty"`
 	InputNotifications  string                  `json:"input_notifications,omitempty"`
 	AutomaticReviewMode *string                 `json:"automatic_review_mode,omitempty"`

@@ -232,10 +232,11 @@ func (o *Orchestrator) MergeFeatureLocal(featureID string) error {
 // plus their edits, so a zero-value field is a real "set this to empty"
 // operation, not "leave alone".
 type UpdateFeatureConfigInput struct {
-	Models             config.ModelConfig
-	Effort             config.EffortConfig
-	Inquireness        feature.Inquireness
-	Checkpoints        feature.Checkpoints
+	Models      config.ModelConfig
+	Effort      config.EffortConfig
+	Inquireness feature.Inquireness
+	// Checkpoints nil keeps the feature's current gates.
+	Checkpoints        *feature.Checkpoints
 	InputNotifications feature.InputNotificationsMode
 	// AutomaticReviewMode nil keeps the feature's current mode.
 	AutomaticReviewMode *feature.AutomaticReviewMode
@@ -257,13 +258,17 @@ func (o *Orchestrator) UpdateFeatureConfig(featureID string, input UpdateFeature
 
 func (o *Orchestrator) updateFeatureConfigLocked(featureID string, input UpdateFeatureConfigInput) (*feature.Feature, error) {
 	var mode feature.AutomaticReviewMode
-	if input.AutomaticReviewMode != nil {
-		mode = *input.AutomaticReviewMode
-	} else {
-		current, err := o.deps.Store.Load(featureID)
+	var current *feature.Feature
+	if input.AutomaticReviewMode == nil || input.Checkpoints == nil {
+		loaded, err := o.deps.Store.Load(featureID)
 		if err != nil {
 			return nil, err
 		}
+		current = loaded
+	}
+	if input.AutomaticReviewMode != nil {
+		mode = *input.AutomaticReviewMode
+	} else {
 		mode = feature.NormalizeAutomaticReviewMode(current.AutomaticReviewMode)
 	}
 	parentID, _, paired, err := o.detectPairedConfigTarget(featureID)
@@ -271,11 +276,15 @@ func (o *Orchestrator) updateFeatureConfigLocked(featureID string, input UpdateF
 		return nil, fmt.Errorf("detecting paired config target: %w", err)
 	}
 	if paired {
+		checkpoints := current.Checkpoints
+		if input.Checkpoints != nil {
+			checkpoints = *input.Checkpoints
+		}
 		err = o.updatePairedFeatureConfig(parentID, feature.PairedConfigInput{
 			Models:              input.Models,
 			Effort:              input.Effort,
 			Inquireness:         input.Inquireness,
-			Checkpoints:         input.Checkpoints,
+			Checkpoints:         checkpoints,
 			InputNotifications:  input.InputNotifications,
 			AutomaticReviewMode: mode,
 		}, input.Pipeline, featureID)
@@ -319,7 +328,11 @@ func (o *Orchestrator) updateFeatureConfigRecord(featureID string, input UpdateF
 		f.Models = input.Models
 		f.Effort = input.Effort
 		f.Inquireness = input.Inquireness
-		f.Checkpoints = f.Pipeline.NormalizeCheckpoints(input.Checkpoints, f.IsPublishable())
+		checkpoints := f.Checkpoints
+		if input.Checkpoints != nil {
+			checkpoints = *input.Checkpoints
+		}
+		f.Checkpoints = f.Pipeline.NormalizeCheckpoints(checkpoints, f.IsPublishable())
 		f.InputNotifications = feature.PersistInputNotificationsMode(input.InputNotifications)
 		f.AutomaticReviewMode = feature.PersistAutomaticReviewMode(mode)
 		after = feature.ConfigSnapshot{

@@ -4660,10 +4660,15 @@ components:
             path: github.com/doordash-oss/agentic-orchestrator/internal/feature
             name: feature
         checkpoints:
+          description: >-
+            Review gates committed to both the child and the parent. When
+            omitted, the child inherits the parent's current gates. An explicit
+            object, including one with every gate false, is used as given.
           x-go-type: feature.Checkpoints
           x-go-type-import:
             path: github.com/doordash-oss/agentic-orchestrator/internal/feature
             name: feature
+          x-go-type-skip-optional-pointer: false
         effort:
           $ref: "#/components/schemas/EffortConfig"
         models:

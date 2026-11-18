@@ -3536,19 +3536,21 @@ type RecoverySnapshotResponse struct {
 
 // RefactorFeatureRequest defines model for RefactorFeatureRequest.
 type RefactorFeatureRequest struct {
-	AttachmentUploads []string                `json:"attachment_uploads,omitempty"`
-	Attachments       []string                `json:"attachments,omitempty"`
-	Checkpoints       feature.Checkpoints     `json:"checkpoints,omitempty"`
-	Description       string                  `json:"description,omitempty"`
-	Effort            EffortConfig            `json:"effort,omitempty"`
-	ExitCriteria      string                  `json:"exit_criteria,omitempty"`
-	ImageUploads      []string                `json:"image_uploads,omitempty"`
-	Images            []string                `json:"images,omitempty"`
-	Inquireness       feature.Inquireness     `json:"inquireness,omitempty"`
-	Models            ModelDefaults           `json:"models,omitempty"`
-	Name              string                  `json:"name"`
-	Pipeline          feature.PipelineProfile `json:"pipeline,omitempty"`
-	RiskLevel         feature.RiskLevel       `json:"risk_level,omitempty"`
+	AttachmentUploads []string `json:"attachment_uploads,omitempty"`
+	Attachments       []string `json:"attachments,omitempty"`
+
+	// Checkpoints Review gates committed to both the child and the parent. When omitted, the child inherits the parent's current gates. An explicit object, including one with every gate false, is used as given.
+	Checkpoints  *feature.Checkpoints    `json:"checkpoints,omitempty"`
+	Description  string                  `json:"description,omitempty"`
+	Effort       EffortConfig            `json:"effort,omitempty"`
+	ExitCriteria string                  `json:"exit_criteria,omitempty"`
+	ImageUploads []string                `json:"image_uploads,omitempty"`
+	Images       []string                `json:"images,omitempty"`
+	Inquireness  feature.Inquireness     `json:"inquireness,omitempty"`
+	Models       ModelDefaults           `json:"models,omitempty"`
+	Name         string                  `json:"name"`
+	Pipeline     feature.PipelineProfile `json:"pipeline,omitempty"`
+	RiskLevel    feature.RiskLevel       `json:"risk_level,omitempty"`
 }
 
 // RelationshipChild defines model for RelationshipChild.

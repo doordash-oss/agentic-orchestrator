@@ -428,8 +428,8 @@ type RefactorChildSpec struct {
 	// the parent's profile.
 	Pipeline PipelineProfile
 	// Checkpoints is the submitted Review configuration, committed
-	// consistently to both parent and child.
-	Checkpoints Checkpoints
+	// consistently to both parent and child. Nil inherits the parent's gates.
+	Checkpoints *Checkpoints
 	// Effort and Models: zero values inherit the parent's settings.
 	Effort config.EffortConfig
 	Models config.ModelConfig
@@ -563,7 +563,7 @@ func (m *Manager) CreateReviewFeedbackChild(parentID string, spec ReviewFeedback
 			Name:         ReviewFeedbackChildName,
 			Description:  reviewFeedbackDescription(lockedParent, spec.Comments),
 			Pipeline:     PipelineMedium,
-			Checkpoints:  checkpoints,
+			Checkpoints:  &checkpoints,
 			ExitCriteria: reviewFeedbackExitCriteria(spec.Comments),
 		}, bases, now)
 		child.Parent.Kind = ChildKindReviewFeedback
@@ -631,7 +631,7 @@ func (m *Manager) CreateRebaseChild(parentID string, spec RebaseChildSpec) (*Fea
 			Name:               rebaseChildName,
 			Description:        rebaseDescription(lockedParent, spec.Targets, spec.Behind),
 			Pipeline:           PipelineMedium,
-			Checkpoints:        lockedParent.Checkpoints,
+			Checkpoints:        &lockedParent.Checkpoints,
 			ExitCriteria:       rebaseExitCriteria(spec.Targets, spec.Behind),
 			RebaseMergeTargets: rebaseMergeTargets(spec.Targets, spec.Behind),
 		}, bases, now)
@@ -1056,6 +1056,10 @@ func (m *Manager) buildRefactorChild(parent *Feature, spec RefactorChildSpec, ba
 	if exitCriteria == "" {
 		exitCriteria = parent.ExitCriteria
 	}
+	checkpoints := parent.Checkpoints
+	if spec.Checkpoints != nil {
+		checkpoints = *spec.Checkpoints
+	}
 	inquireness := spec.Inquireness
 	if inquireness == "" {
 		inquireness = parent.Inquireness
@@ -1080,7 +1084,7 @@ func (m *Manager) buildRefactorChild(parent *Feature, spec RefactorChildSpec, ba
 		Effort:       effort,
 		ExitCriteria: exitCriteria,
 		Inquireness:  inquireness,
-		Checkpoints:  spec.Checkpoints,
+		Checkpoints:  checkpoints,
 		RiskLevel:    risk,
 		Parent: &ChildRelationship{
 			ParentID: parent.ID,

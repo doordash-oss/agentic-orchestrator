@@ -2264,6 +2264,7 @@ export interface components {
             attachments?: string[];
             attachment_uploads?: string[];
             pipeline?: string;
+            /** @description Review gates committed to both the child and the parent. When omitted, the child inherits the parent's current gates. An explicit object, including one with every gate false, is used as given. */
             checkpoints?: unknown;
             effort?: components["schemas"]["EffortConfig"];
             models?: components["schemas"]["ModelDefaults"];

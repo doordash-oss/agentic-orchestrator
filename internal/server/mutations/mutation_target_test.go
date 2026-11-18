@@ -666,7 +666,7 @@ func TestServerMutationTargetRefactorFeatureMapsBriefToSpec(t *testing.T) {
 		Images:       []string{"~/shots/login.png"},
 		Attachments:  []string{"~/docs/auth.md"},
 		Pipeline:     feature.PipelineLarge,
-		Checkpoints:  feature.Checkpoints{InquiryReview: true},
+		Checkpoints:  &feature.Checkpoints{InquiryReview: true},
 		Effort:       config.EffortConfig{Planning: "high"},
 		Models:       config.ModelConfig{Planning: testModelClaudeSonnet},
 		RiskLevel:    feature.RiskLow,

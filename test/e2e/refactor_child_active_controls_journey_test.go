@@ -150,7 +150,7 @@ func TestRefactorChildActiveControlsJourney(t *testing.T) {
 	resp, err := client.RefactorFeature(t.Context(), parent.ID, server.RefactorFeatureRequest{
 		Name:     "Active controls rework",
 		Pipeline: feature.PipelineMedium,
-		Checkpoints: feature.Checkpoints{
+		Checkpoints: &feature.Checkpoints{
 			RoadmapReview:   true,
 			PhasePlanReview: true,
 			ManualPublish:   true,
@@ -337,7 +337,7 @@ func TestRefactorChildActiveControlsJourney(t *testing.T) {
 	resp2, err := client.RefactorFeature(t.Context(), parent.ID, server.RefactorFeatureRequest{
 		Name:     "Second rework after discard",
 		Pipeline: feature.PipelineMedium,
-		Checkpoints: feature.Checkpoints{
+		Checkpoints: &feature.Checkpoints{
 			RoadmapReview:   true,
 			PhasePlanReview: true,
 			ManualPublish:   true,

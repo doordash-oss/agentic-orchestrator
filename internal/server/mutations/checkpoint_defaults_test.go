@@ -111,3 +111,56 @@ func TestServerMutationTargetCreateFeatureResolvesCheckpoints(t *testing.T) {
 		})
 	}
 }
+
+func TestServerMutationTargetRefactorFeatureResolvesCheckpoints(t *testing.T) {
+	parentGates := feature.Checkpoints{RoadmapReview: true, PhasePlanReview: true, ManualPublish: true}
+	tests := []struct {
+		name        string
+		checkpoints string
+		want        feature.Checkpoints
+	}{
+		{name: "omitted inherits parent", want: parentGates},
+		{name: "explicit all false stays off", checkpoints: allFalseCheckpointsJSON, want: feature.Checkpoints{}},
+		{name: "explicit partial is used as given", checkpoints: `{"roadmap_review":true}`, want: feature.Checkpoints{RoadmapReview: true}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			target, store, parent := newChildLaunchTarget(t)
+			if err := store.Modify(parent.ID, func(f *feature.Feature) error {
+				f.Checkpoints = parentGates
+				return nil
+			}); err != nil {
+				t.Fatal(err)
+			}
+
+			body := `{"name":"Rework"`
+			if tt.checkpoints != "" {
+				body += `,"checkpoints":` + tt.checkpoints
+			}
+			body += `}`
+			var req serverruntime.RefactorFeatureRequest
+			if err := json.Unmarshal([]byte(body), &req); err != nil {
+				t.Fatal(err)
+			}
+
+			resp, err := target.RefactorFeature(parent.ID, req)
+			if err != nil {
+				t.Fatalf("RefactorFeature() error = %v", err)
+			}
+			child, err := store.Load(resp.FeatureID)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if child.Checkpoints != tt.want {
+				t.Fatalf("child checkpoints = %+v, want %+v", child.Checkpoints, tt.want)
+			}
+			reloaded, err := store.Load(parent.ID)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if reloaded.Checkpoints != tt.want {
+				t.Fatalf("parent checkpoints = %+v, want %+v", reloaded.Checkpoints, tt.want)
+			}
+		})
+	}
+}

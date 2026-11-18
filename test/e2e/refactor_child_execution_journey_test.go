@@ -300,7 +300,7 @@ func runRefactorChildLifecycle(t *testing.T, store *feature.Store, baseURL strin
 	resp, err := client.RefactorFeature(t.Context(), parentID, server.RefactorFeatureRequest{
 		Name:     fmt.Sprintf("Rework pass (manual=%v)", manualPublish),
 		Pipeline: feature.PipelineMedium,
-		Checkpoints: feature.Checkpoints{
+		Checkpoints: &feature.Checkpoints{
 			RoadmapReview:   true,
 			PhasePlanReview: true,
 			ManualPublish:   manualPublish,

@@ -207,6 +207,11 @@ Clients bootstrap from a snapshot and then consume ordered event deltas:
    window, beyond the head, or from another epoch), re-read snapshots and
    reconnect from the returned sequence and epoch.
 
+To follow one feature or a set of kinds, add `feature_id=<id>` and/or
+`kind=<kind>[,<kind>...]` to `/api/v1/events`. `connected`, `stream.reset` and
+`heartbeat` always pass, and `seq` still counts every event, so a filtered
+cursor resumes the same way.
+
 Event envelopes include `seq`, `epoch`, `kind`, `resource`,
 `resource_version`, and `snapshot_required`. Snapshot responses include
 `meta.as_of_seq`, and revisioned resources also expose `ETag`.

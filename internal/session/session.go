@@ -116,9 +116,10 @@ type Session struct {
 	permissionResponseMu sync.Mutex
 
 	// SDK protocol fields
-	model            string      // from SystemInitMessage — e.g. "opus[1m]", "sonnet"
-	latestUsage      *llm.Usage  // most recent usage from a non-partial assistant message
-	accumulatedUsage llm.Usage   // cumulative usage across all messages
+	model            string     // from SystemInitMessage — e.g. "opus[1m]", "sonnet"
+	latestUsage      *llm.Usage // most recent usage from a non-partial assistant message
+	accumulatedUsage llm.Usage  // cumulative usage across all messages
+	streamedUsage    streamedMessageUsage
 	messageLog       *MessageLog // structured message log
 	cost             *llm.ResultMessage
 	// resultSeq counts terminal Result records. Monotonic, so waiters can tell
@@ -379,6 +380,31 @@ func (s *Session) AccumulatedUsage() llm.Usage {
 	return s.accumulatedUsage
 }
 
+// streamedMessageUsage is the last streamed assistant message's contribution
+// to accumulatedUsage.
+type streamedMessageUsage struct {
+	id    string
+	usage llm.Usage
+}
+
+func addUsageTokens(dst *llm.Usage, u llm.Usage, sign int) {
+	dst.InputTokens += sign * u.InputTokens
+	dst.OutputTokens += sign * u.OutputTokens
+	dst.CacheReadInputTokens += sign * u.CacheReadInputTokens
+	dst.CacheCreationInputTokens += sign * u.CacheCreationInputTokens
+}
+
+func modelUsageTotal(models map[string]llm.ModelUsageEntry) (llm.Usage, bool) {
+	var total llm.Usage
+	for _, m := range models {
+		total.InputTokens += m.InputTokens
+		total.OutputTokens += m.OutputTokens
+		total.CacheReadInputTokens += m.CacheReadInputTokens
+		total.CacheCreationInputTokens += m.CacheCreationInputTokens
+	}
+	return total, total.InputTokens+total.OutputTokens+total.CacheReadInputTokens+total.CacheCreationInputTokens > 0
+}
+
 func (s *Session) seedInitialPromptContextEstimate(prompt string, contextWindow int) {
 	if prompt == "" || contextWindow <= 0 {
 		return
@@ -596,6 +622,7 @@ func (s *Session) SetAccumulatedUsage(u llm.Usage) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.accumulatedUsage = u
+	s.streamedUsage = streamedMessageUsage{}
 }
 func (s *Session) SetCost(c *llm.ResultMessage) { s.cost = c }
 func (s *Session) SetIteration(i int)           { s.iteration = i }
@@ -1082,6 +1109,15 @@ func (s *Session) readMessages(onMessage func(llm.SDKMessage)) {
 				if msg.Result.Usage != nil && s.accumulatedUsage == (llm.Usage{}) {
 					s.accumulatedUsage = *msg.Result.Usage
 				}
+				// modelUsage is the session's cumulative total, the same scope
+				// as total_cost_usd; result.usage covers only the latest turn.
+				if total, ok := modelUsageTotal(msg.Result.ModelUsage); ok {
+					s.accumulatedUsage.InputTokens = total.InputTokens
+					s.accumulatedUsage.OutputTokens = total.OutputTokens
+					s.accumulatedUsage.CacheReadInputTokens = total.CacheReadInputTokens
+					s.accumulatedUsage.CacheCreationInputTokens = total.CacheCreationInputTokens
+					s.streamedUsage = streamedMessageUsage{}
+				}
 				s.mu.Unlock()
 			}
 
@@ -1092,11 +1128,13 @@ func (s *Session) readMessages(onMessage func(llm.SDKMessage)) {
 				s.mu.Lock()
 				s.latestUsage = msg.Assistant.Message.Usage
 				// Accumulate: ADD per-message usage (Claude path — each message is a delta)
-				u := msg.Assistant.Message.Usage
-				s.accumulatedUsage.InputTokens += u.InputTokens
-				s.accumulatedUsage.OutputTokens += u.OutputTokens
-				s.accumulatedUsage.CacheReadInputTokens += u.CacheReadInputTokens
-				s.accumulatedUsage.CacheCreationInputTokens += u.CacheCreationInputTokens
+				u := *msg.Assistant.Message.Usage
+				// Claude repeats a message's usage on every content block.
+				if id := msg.Assistant.Message.ID; id != "" && id == s.streamedUsage.id {
+					addUsageTokens(&s.accumulatedUsage, s.streamedUsage.usage, -1)
+				}
+				addUsageTokens(&s.accumulatedUsage, u, 1)
+				s.streamedUsage = streamedMessageUsage{id: msg.Assistant.Message.ID, usage: u}
 				s.mu.Unlock()
 			}
 

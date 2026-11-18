@@ -259,4 +259,7 @@ func TestResearchSessionOnGPT6SolIsPriced(t *testing.T) {
 	if usage.CostSource != "token_estimate" {
 		t.Fatalf("cost source = %q, want token_estimate", usage.CostSource)
 	}
+	if usage.InputTokens != 20_000 || usage.CacheReadInputTokens != 120_000 {
+		t.Fatalf("input = %d, cache read = %d, want 20000 uncached and 120000 cached", usage.InputTokens, usage.CacheReadInputTokens)
+	}
 }

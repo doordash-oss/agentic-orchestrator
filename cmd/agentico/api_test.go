@@ -394,8 +394,9 @@ func TestAPIStreamPathRecognition(t *testing.T) {
 	}
 }
 
-// streamResult is a running `agentico api` stream whose stdout is a pipe,
-// so the test observes each line as soon as the command flushes it.
+// streamResult is a running `agentico api` stream whose stdout is an OS
+// pipe, as when a script pipes the command, so the test observes each line
+// as soon as the command writes it.
 type streamResult struct {
 	lines chan string
 	done  chan int
@@ -406,7 +407,11 @@ type streamResult struct {
 
 func startAPIStream(t *testing.T, args ...string) *streamResult {
 	t.Helper()
-	pr, pw := io.Pipe()
+	pr, pw, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = pr.Close() })
 	res := &streamResult{lines: make(chan string, 64), done: make(chan int, 1)}
 	go func() {
 		code := runArgs(append([]string{cliSubcommandAPI}, args...), pw, &res.err, failingServerLauncher(t))

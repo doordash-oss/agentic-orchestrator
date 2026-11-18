@@ -333,6 +333,7 @@ connection failures render an error on stderr (exit 1).
 Stream paths (/api/v1/events, /api/v1/supervisor/events,
 /api/v1/sessions/<id>/output/stream) print one line per event carrying its
 data payload, skip heartbeats, and exit 0 when the timeout elapses or the
-server closes the stream.
+server closes the stream. Each line is written as soon as its event arrives,
+also when stdout is a pipe or a file.
 `, agent.RuntimeDirEnv)
 }

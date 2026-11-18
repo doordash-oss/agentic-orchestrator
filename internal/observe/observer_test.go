@@ -586,6 +586,31 @@ func TestIterationEndedEmitsEventWithUsage(t *testing.T) {
 	}
 }
 
+func TestUnpricedUsageOmitsCost(t *testing.T) {
+	stateDir := t.TempDir()
+	featureID := "unpriced_feat"
+	os.MkdirAll(filepath.Join(stateDir, featureID), 0755)
+	obs := newObserver(true, stateDir, false, "", false, "agentic")
+
+	sc := SpanContextForFeature(featureID, "", "", "").Child()
+	usage := SessionUsage{CostSource: CostSourceUnavailable, InputTokens: 20000, CacheReadInputTokens: 120000, OutputTokens: 5000}
+	obs.SessionEnded(sc.Child(), "research", "sess-1", "", usage, time.Second, nil)
+	obs.IterationEnded(sc, 1, usage, time.Second, "SUCCESS")
+
+	events := readEvents(t, stateDir, featureID)
+	if len(events) != 2 {
+		t.Fatalf("expected 2 events, got %d", len(events))
+	}
+	for _, evt := range events {
+		if cost, ok := evt.Data["total_cost_usd"]; ok {
+			t.Errorf("%s: total_cost_usd = %v, want absent", evt.EventType, cost)
+		}
+		if evt.Data["cost_source"] != CostSourceUnavailable {
+			t.Errorf("%s: cost_source = %v, want %q", evt.EventType, evt.Data["cost_source"], CostSourceUnavailable)
+		}
+	}
+}
+
 func TestContextHandoffTriggeredEmitsEvent(t *testing.T) {
 	stateDir := t.TempDir()
 	featureID := "context_handoff_feat"

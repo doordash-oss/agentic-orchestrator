@@ -584,6 +584,23 @@ type SessionUsage struct {
 	Truncated                bool
 }
 
+// CostSourceUnavailable marks usage whose provider reported no price.
+const CostSourceUnavailable = "unavailable"
+
+// addCostData omits total_cost_usd when the price is unknown, so readers see
+// a missing cost rather than $0.
+func addCostData(data map[string]any, usage SessionUsage) {
+	if usage.CostSource != CostSourceUnavailable {
+		data["total_cost_usd"] = usage.TotalCostUSD
+	}
+	if usage.CostSource != "" {
+		data["cost_source"] = usage.CostSource
+	}
+	if usage.CostCreditsMicros != nil {
+		data["cost_credits_micros"] = *usage.CostCreditsMicros
+	}
+}
+
 // ErrSessionInterrupted marks a session ended by a user stop or a cancelled
 // context. SessionEnded records it with status "interrupted" rather than as
 // a successful or failed session.
@@ -611,7 +628,6 @@ func (o *Observer) SessionEnded(sc SpanContext, phase, sessionID, repoName strin
 		DurationMs:   duration.Milliseconds(),
 		Status:       "ok",
 		Data: map[string]any{
-			"total_cost_usd":              usage.TotalCostUSD,
 			"input_tokens":                usage.InputTokens,
 			"output_tokens":               usage.OutputTokens,
 			"cache_read_input_tokens":     usage.CacheReadInputTokens,
@@ -620,12 +636,7 @@ func (o *Observer) SessionEnded(sc SpanContext, phase, sessionID, repoName strin
 			"context_total_tokens":        usage.ContextTotalTokens,
 		},
 	}
-	if usage.CostSource != "" {
-		evt.Data["cost_source"] = usage.CostSource
-	}
-	if usage.CostCreditsMicros != nil {
-		evt.Data["cost_credits_micros"] = *usage.CostCreditsMicros
-	}
+	addCostData(evt.Data, usage)
 
 	if err != nil {
 		evt.Status = "error"
@@ -693,6 +704,13 @@ func (o *Observer) IterationEnded(sc SpanContext, iteration int, usage SessionUs
 	if o == nil || !o.enabled {
 		return
 	}
+	data := map[string]any{
+		"input_tokens":                usage.InputTokens,
+		"output_tokens":               usage.OutputTokens,
+		"cache_read_input_tokens":     usage.CacheReadInputTokens,
+		"cache_creation_input_tokens": usage.CacheCreationInputTokens,
+	}
+	addCostData(data, usage)
 	o.emit(sc, Event{
 		Timestamp:    time.Now(),
 		TraceID:      sc.TraceID,
@@ -703,13 +721,7 @@ func (o *Observer) IterationEnded(sc SpanContext, iteration int, usage SessionUs
 		Iteration:    iteration,
 		DurationMs:   duration.Milliseconds(),
 		Status:       status,
-		Data: map[string]any{
-			"total_cost_usd":              usage.TotalCostUSD,
-			"input_tokens":                usage.InputTokens,
-			"output_tokens":               usage.OutputTokens,
-			"cache_read_input_tokens":     usage.CacheReadInputTokens,
-			"cache_creation_input_tokens": usage.CacheCreationInputTokens,
-		},
+		Data:         data,
 	})
 	o.otel.EndSpan(sc.SpanID, status, map[string]string{
 		"iteration": fmt.Sprintf("%d", iteration),

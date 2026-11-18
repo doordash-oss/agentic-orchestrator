@@ -244,3 +244,19 @@ func TestUnknownModelHasNoInventedPrice(t *testing.T) {
 		t.Fatalf("unknown rate: %+v", usage)
 	}
 }
+
+func TestResearchSessionOnGPT6SolIsPriced(t *testing.T) {
+	p := NewProtocol(llm.ProtocolOpts{Model: "gpt-6-sol[872K]"})
+	for _, line := range []string{
+		`{"id":1,"result":{"thread":{"id":"root"},"model":"gpt-6-sol","serviceTier":null}}`,
+		`{"method":"thread/tokenUsage/updated","params":{"threadId":"root","turnId":"turn-1","tokenUsage":{"total":{"totalTokens":76000,"inputTokens":72000,"cachedInputTokens":60000,"outputTokens":4000,"reasoningOutputTokens":1500},"last":{"totalTokens":76000,"inputTokens":72000,"cachedInputTokens":60000,"outputTokens":4000,"reasoningOutputTokens":1500},"modelContextWindow":872000}}}`,
+		`{"method":"thread/tokenUsage/updated","params":{"threadId":"root","turnId":"turn-1","tokenUsage":{"total":{"totalTokens":145000,"inputTokens":140000,"cachedInputTokens":120000,"outputTokens":5000,"reasoningOutputTokens":2000},"last":{"totalTokens":69000,"inputTokens":68000,"cachedInputTokens":60000,"outputTokens":1000,"reasoningOutputTokens":500},"modelContextWindow":872000}}}`,
+	} {
+		parseUsageLine(t, p, line)
+	}
+	// 20K uncached at $2, 120K cached at $0.20, 5K output at $10 per 1M.
+	usage := assertUsageCost(t, p, 0.114)
+	if usage.CostSource != "token_estimate" {
+		t.Fatalf("cost source = %q, want token_estimate", usage.CostSource)
+	}
+}

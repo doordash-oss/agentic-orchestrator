@@ -22,6 +22,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"os"
 	"strconv"
 	"strings"
@@ -40,6 +41,7 @@ const (
 	apiTrustedClientValue = "local"
 	apiContentTypeJSON    = "application/json"
 	apiSSEHeartbeatEvent  = "heartbeat"
+	apiPathEvents         = "/api/v1/events"
 )
 
 // apiOptions is one parsed `agentico api` invocation.
@@ -52,6 +54,8 @@ type apiOptions struct {
 	timeout    time.Duration
 	hasTimeout bool
 	after      string
+	feature    string
+	kind       string
 	stream     bool
 }
 
@@ -84,7 +88,7 @@ func parseAPIArgs(opts launchOptions, args []string) (launchOptions, error) {
 		}
 		name, value, hasValue := strings.Cut(arg, "=")
 		switch name {
-		case "--timeout", "--after":
+		case "--timeout", "--after", "--feature", "--kind":
 		default:
 			return opts, fmt.Errorf("unknown api flag: %s", arg)
 		}
@@ -107,6 +111,15 @@ func parseAPIArgs(opts launchOptions, args []string) (launchOptions, error) {
 				return opts, fmt.Errorf("invalid --after %q: expected a non-negative event cursor", value)
 			}
 			api.after = value
+		case "--feature", "--kind":
+			if strings.TrimSpace(value) == "" {
+				return opts, fmt.Errorf("%s requires a value", name)
+			}
+			if name == "--feature" {
+				api.feature = value
+			} else {
+				api.kind = value
+			}
 		}
 	}
 	if len(positionals) < 2 {
@@ -143,6 +156,23 @@ func parseAPIArgs(opts launchOptions, args []string) (launchOptions, error) {
 	} else if api.after != "" {
 		return opts, fmt.Errorf("--after applies only to stream paths")
 	}
+	if api.feature != "" || api.kind != "" {
+		base, rawQuery, _ := strings.Cut(api.path, "?")
+		if base != apiPathEvents {
+			return opts, fmt.Errorf("--feature and --kind apply only to %s", apiPathEvents)
+		}
+		query, err := url.ParseQuery(rawQuery)
+		if err != nil {
+			return opts, fmt.Errorf("invalid query in path %q", api.path)
+		}
+		if api.feature != "" {
+			query.Set("feature_id", api.feature)
+		}
+		if api.kind != "" {
+			query.Set("kind", api.kind)
+		}
+		api.path = base + "?" + query.Encode()
+	}
 	if !api.hasTimeout {
 		api.timeout = apiDefaultTimeout
 	}
@@ -154,7 +184,7 @@ func parseAPIArgs(opts launchOptions, args []string) (launchOptions, error) {
 func isAPIStreamPath(path string) bool {
 	path, _, _ = strings.Cut(path, "?")
 	switch path {
-	case "/api/v1/events", "/api/v1/supervisor/events":
+	case apiPathEvents, "/api/v1/supervisor/events":
 		return true
 	}
 	id, ok := strings.CutPrefix(path, "/api/v1/sessions/")
@@ -307,7 +337,7 @@ func copySSEData(ctx context.Context, body io.Reader, stdout, stderr io.Writer, 
 }
 
 func printAPIUsage(w io.Writer) {
-	_, _ = fmt.Fprintf(w, `Usage: agentico api [--timeout <duration>] [--after <cursor>] METHOD /api/v1/<path>[?query] [json]
+	_, _ = fmt.Fprintf(w, `Usage: agentico api [--timeout <duration>] [--after <cursor>] [--feature <id>] [--kind <kinds>] METHOD /api/v1/<path>[?query] [json]
 
 Performs one authenticated REST call against this machine's Agentico server.
 The helper reads the server's owner-only discovery file, adds the bearer
@@ -322,6 +352,8 @@ Flags (before or after the positionals; '--' ends flag parsing):
   --timeout <duration>    Request timeout (default 30s). Required for stream paths,
                           where it bounds how long events are printed
   --after <cursor>        Stream paths only: resume after this event cursor
+  --feature <id>          /api/v1/events only: just events about this feature
+  --kind <kind>[,<kind>]  /api/v1/events only: just events of these kinds
 
 The runtime directory holding the discovery file resolves from $%s, else
 ~/.agentic-orchestrator.
@@ -336,9 +368,9 @@ data payload, skip heartbeats, and exit 0 when the timeout elapses or the
 server closes the stream. Each line is written as soon as its event arrives,
 also when stdout is a pipe or a file.
 
-/api/v1/events accepts feature_id=<id> and kind=<kind>[,<kind>...] to follow
-one feature or a set of event kinds, for example:
+--feature and --kind set the feature_id and kind query parameters of
+/api/v1/events, so a watcher filters on the server and needs no pipe:
 
-  agentico api --timeout 30m GET '/api/v1/events?feature_id=<id>&kind=lifecycle.updated,prompt.updated,permission.updated,session.updated'
+  agentico api --timeout 30m --feature <id> --kind lifecycle.updated,session.updated,prompt.updated,permission.updated,config.updated GET /api/v1/events
 `, agent.RuntimeDirEnv)
 }

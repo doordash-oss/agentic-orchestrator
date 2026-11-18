@@ -336,6 +336,9 @@ func TestAPIInvalidUsageNeverReachesTheServer(t *testing.T) {
 		{"stream with post", []string{"--timeout", "1s", "POST", "/api/v1/events"}, "stream paths accept only GET"},
 		{"after on one-shot path", []string{"--after", "3", "GET", "/api/v1/features"}, "--after applies only to stream paths"},
 		{"non-numeric after", []string{"--timeout", "1s", "--after", "x", "GET", "/api/v1/events"}, "invalid --after"},
+		{"feature on another stream", []string{"--timeout", "1s", "--feature", "F", "GET", "/api/v1/supervisor/events"}, "--feature and --kind apply only to /api/v1/events"},
+		{"kind on one-shot path", []string{"--kind", "lifecycle.updated", "GET", "/api/v1/features"}, "--feature and --kind apply only to /api/v1/events"},
+		{"empty feature", []string{"--timeout", "1s", "--feature=", "GET", "/api/v1/events"}, "--feature requires a value"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -492,6 +495,24 @@ func TestAPIStreamPrintsConnectedAndPublishedEventsUntilTimeout(t *testing.T) {
 		if strings.Contains(line, "heartbeat") {
 			t.Fatalf("heartbeat printed: %q", line)
 		}
+	}
+}
+
+func TestAPIStreamFeatureAndKindFlagsFilterOnTheServer(t *testing.T) {
+	srv, events := realAPIServer(t)
+	useAPIRuntime(t, newAPIRuntime(t, srv))
+	stream := startAPIStream(t, "--timeout", "2s", "--feature", "feat-watched", "--kind", "lifecycle.updated,prompt.updated", "GET", "/api/v1/events")
+	if first := stream.next(t); !strings.Contains(first, `"kind":"connected"`) {
+		t.Fatalf("first line = %q; want connected", first)
+	}
+	events <- ports.Event{Type: ports.PhaseCompleted, FeatureID: "feat-other", Phase: feature.PhaseImplement}
+	events <- ports.Event{Type: ports.SessionOutput, FeatureID: "feat-watched", Phase: feature.PhaseImplement}
+	events <- ports.Event{Type: ports.PhaseCompleted, FeatureID: "feat-watched", Phase: feature.PhaseImplement}
+	if line := stream.next(t); !strings.Contains(line, `"kind":"lifecycle.updated"`) || !strings.Contains(line, `"feat-watched"`) {
+		t.Fatalf("line = %q; want only the watched feature's lifecycle event", line)
+	}
+	if code, lines := stream.wait(t); code != 0 || len(lines) != 2 {
+		t.Fatalf("code = %d lines = %q; want exit 0 and no other events", code, lines)
 	}
 }
 

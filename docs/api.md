@@ -76,7 +76,8 @@ stdout (exit 0), any other status writes the canonical error envelope to
 stdout (exit 1), and discovery or connection failures render
 `discovery_missing`, `discovery_untrusted` or `server_unreachable` on stderr.
 On the SSE routes it requires `--timeout <duration>`, forwards `--after
-<cursor>` as `Last-Event-ID`, never uses the `access_token` query fallback,
+<cursor>` as `Last-Event-ID`, maps `--feature <id>` and `--kind <kinds>` to the
+`/api/v1/events` filters, never uses the `access_token` query fallback,
 and prints one line per event payload (heartbeats skipped) until the timeout
 or the server closes the stream. Run `agentico api --help` for the full
 grammar.

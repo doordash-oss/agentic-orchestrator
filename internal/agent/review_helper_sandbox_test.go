@@ -132,6 +132,9 @@ func TestPerPhaseReviewHelperUsesStateRootPaths(t *testing.T) {
 					continue
 				}
 				reviewers++
+				if !strings.Contains(opts.Prompt, "## Repositories Under Review") || !strings.Contains(opts.Prompt, workDir) {
+					t.Errorf("reviewer prompt does not list the worktree %s:\n%s", workDir, opts.Prompt)
+				}
 				if want := filepath.Join(stateRoot, f.ID); opts.PIDDir != want {
 					t.Errorf("reviewer PIDDir = %q, want %q", opts.PIDDir, want)
 				}

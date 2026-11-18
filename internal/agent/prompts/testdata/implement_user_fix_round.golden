@@ -1,0 +1,16 @@
+# Implementation Context
+
+## Repositories
+
+Make every change in these worktrees. Other checkouts of the same repositories exist and are off-limits.
+- **api**: /state/worktrees/feat-x/api
+- **web**: /state/worktrees/feat-x/web
+
+**Plan**: /state/feat-x/run-1/phase-1/plan.md
+
+**Exit criteria**: Relevant tests pass.
+This is iteration 2. Resume according to the implement skill handoff rules and use the context below.
+
+Reviewer feedback from previous iteration:
+## Findings
+- **High**: retry loop has no backoff.

@@ -45,6 +45,7 @@ func TestBuildImplementPrompt(t *testing.T) {
 		"Fix the auth bug",
 		"Use JWT",
 		3,
+		nil,
 	)
 
 	checks := []string{
@@ -73,7 +74,7 @@ func TestBuildImplementPrompt(t *testing.T) {
 }
 
 func TestBuildImplementPromptMinimal(t *testing.T) {
-	prompt := buildImplementPrompt("/tmp/plan.md", "criteria", "", "", 1)
+	prompt := buildImplementPrompt("/tmp/plan.md", "criteria", "", "", 1, nil)
 	if !strings.Contains(prompt, "/tmp/plan.md") {
 		t.Error("expected plan path in minimal prompt")
 	}
@@ -191,6 +192,7 @@ func TestBuildImplementPromptSkipsStalePlanValidatorFeedback(t *testing.T) {
 		planPath,
 		"Relevant tests pass",
 		"", "", 2,
+		nil,
 	)
 
 	for _, unexpected := range []string{
@@ -427,6 +429,7 @@ func TestBuildImplementPromptWithHelpAnswers(t *testing.T) {
 		"",
 		"Q: What auth?\nA: Use JWT",
 		1,
+		nil,
 	)
 	if !strings.Contains(prompt, "Q: What auth?") {
 		t.Error("expected help question in prompt")

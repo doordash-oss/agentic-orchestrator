@@ -4,6 +4,12 @@ Review feedback output: /state/feat-x/run-1/phase-1/implement/iteration-02/revie
 Iteration under review: 2
 Iteration artifacts directory: /state/feat-x/run-1/phase-1/implement/iteration-02
 
+## Repositories Under Review
+
+The code under review is in these worktrees. Other checkouts of the same repositories exist and are off-limits: do not read or judge them.
+- **api**: /state/worktrees/feat-x/api
+- **web**: /state/worktrees/feat-x/web
+
 ## Live-Run Posture
 
 - Use the live-run posture: build, launch, run, drive, screenshot, and record evidence as needed.

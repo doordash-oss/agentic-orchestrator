@@ -8,7 +8,7 @@
 Iteration under review: {{ .Iteration }}
 Iteration artifacts directory: {{ .IterDir }}
 
-{{ if .RoadmapPath }}## Approved Roadmap
+{{ template "review_worktrees" .Repos }}{{ if .RoadmapPath }}## Approved Roadmap
 
 This phase is one step in a larger plan. Read the approved roadmap at: {{ .RoadmapPath }}
 

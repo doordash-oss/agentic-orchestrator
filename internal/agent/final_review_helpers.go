@@ -28,6 +28,7 @@ import (
 
 // finalFixPromptOpts contains the parameters for building the fix agent prompt.
 type finalFixPromptOpts struct {
+	Repos            []prompts.RepoView
 	Feedback         string
 	FeedbackPath     string
 	ExitCriteria     string
@@ -57,6 +58,7 @@ func buildFinalFixPrompt(opts finalFixPromptOpts) string {
 			Label:  "applying this fix",
 		},
 		Iteration:             opts.Iteration,
+		Repos:                 opts.Repos,
 		ExitCriteria:          opts.ExitCriteria,
 		AcceptanceClause:      opts.AcceptanceClause,
 		Feedback:              opts.Feedback,

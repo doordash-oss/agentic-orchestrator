@@ -8,7 +8,7 @@
 {{- define "implement.user" -}}
 # Implementation Context
 
-**Plan**: {{ .PlanPath }}
+{{ template "fix_worktrees" .Repos }}**Plan**: {{ .PlanPath }}
 {{- if .ExitCriteria }}
 
 **Exit criteria**: {{ .ExitCriteria }}

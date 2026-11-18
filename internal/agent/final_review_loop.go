@@ -819,6 +819,7 @@ func (s *featureFinalReviewLoopState) runFinalReviewAxis(ctx context.Context, it
 	prompt := buildImplementationReviewAxisPromptWithOpts(implementationReviewAxisPromptOpts{
 		Gate:                  implementationReviewGateFinal,
 		AxisLabel:             axis.Name,
+		Repos:                 featureRepoViews(cfg.Feature),
 		FeatureDescription:    intent.Description,
 		DesignArtifactPath:    cfg.Feature.DesignArtifactPath(),
 		LiveRunAxis:           axis.ExecutionPosture == reviewPostureLiveRun,
@@ -1004,6 +1005,7 @@ func (s *featureFinalReviewLoopState) runFix(run finalFixRun) finalFixResult {
 
 	intent := resolvePromptIntent(cfg.Feature)
 	prompt := buildFinalFixPrompt(finalFixPromptOpts{
+		Repos:                 featureRepoViews(cfg.Feature),
 		Feedback:              run.Feedback,
 		FeedbackPath:          run.FeedbackPath,
 		ExitCriteria:          intent.ExitCriteria,

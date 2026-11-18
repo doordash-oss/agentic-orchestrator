@@ -54,6 +54,7 @@ func (s reviewStatus) String() string {
 type reviewUserInput struct {
 	Iteration int
 	IterDir   string
+	Repos     []prompts.RepoView
 
 	GateLabel          string
 	FinalGate          bool
@@ -84,6 +85,7 @@ type reviewUserInput struct {
 type implementationReviewAxisPromptOpts struct {
 	Gate      implementationReviewGate
 	AxisLabel string
+	Repos     []prompts.RepoView
 
 	FeatureDescription string
 	DesignArtifactPath string
@@ -116,6 +118,7 @@ func buildImplementationReviewAxisPromptWithOpts(opts implementationReviewAxisPr
 		reviewUserInput: reviewUserInput{
 			Iteration:             opts.Iteration,
 			IterDir:               opts.IterDir,
+			Repos:                 opts.Repos,
 			GateLabel:             implementationReviewGateLabel(opts.Gate),
 			FinalGate:             opts.Gate == implementationReviewGateFinal,
 			LiveRunAxis:           opts.LiveRunAxis,

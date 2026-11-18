@@ -12,7 +12,7 @@ Review feedback output: {{ .FeedbackPath }}
 Iteration under review: {{ .Iteration }}
 Iteration artifacts directory: {{ .IterDir }}
 
-{{ if or .DesignArtifactPath .FeatureDescription }}## Approved Design Grounding
+{{ template "review_worktrees" .Repos }}{{ if or .DesignArtifactPath .FeatureDescription }}## Approved Design Grounding
 
 {{ if .DesignArtifactPath }}Approved design: {{ .DesignArtifactPath }}
 

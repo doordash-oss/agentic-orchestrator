@@ -181,6 +181,7 @@ type PhasePlanRevisionUserInput struct {
 
 type ImplementUserInput struct {
 	PlanPath     string
+	Repos        []RepoView
 	ExitCriteria string
 	Feedback     string
 	HelpAnswers  string
@@ -191,6 +192,7 @@ type ReviewUserInput struct {
 	Iteration int
 	IterDir   string
 	AxisLabel string
+	Repos     []RepoView
 
 	GateLabel             string
 	FinalGate             bool
@@ -215,6 +217,7 @@ type FinalFixUserInput struct {
 	VisualReferences VisualReferencesInput
 
 	Iteration        int
+	Repos            []RepoView
 	ExitCriteria     string
 	AcceptanceClause string
 	Feedback         string
@@ -568,6 +571,7 @@ func TestGoldenSnapshots(t *testing.T) {
 					Iteration:    2,
 					IterDir:      "/state/feat-x/run-1/phase-1/implement/iteration-02",
 					AxisLabel:    "Functionality/Evidence",
+					Repos:        []RepoView{{Name: "api", Path: "/state/worktrees/feat-x/api"}, {Name: "web", Path: "/state/worktrees/feat-x/web"}},
 					LiveRunAxis:  true,
 					RoadmapPath:  "/state/feat-x/run-1/roadmap/plan.md",
 					PlanPath:     "/state/feat-x/run-1/phase-1/plan.md",
@@ -603,6 +607,7 @@ func TestGoldenSnapshots(t *testing.T) {
 				return ImplementationReviewAxisUserPrompt(ReviewUserInput{
 					Iteration:          3,
 					IterDir:            "/state/feat-x/run-1/review/iteration-03",
+					Repos:              []RepoView{{Name: "api", Path: "/state/worktrees/feat-x/api"}, {Name: "web", Path: "/state/worktrees/feat-x/web"}},
 					AxisLabel:          "Functionality/Evidence",
 					GateLabel:          "Final Review",
 					FinalGate:          true,
@@ -614,6 +619,18 @@ func TestGoldenSnapshots(t *testing.T) {
 					PhaseType:          "tdd-fill-in",
 					AcceptanceClause:   "Feature acceptance is defined by the `## Acceptance Criteria` section of the approved design at /state/feat-x/run-1/design/design.md. Judge acceptance against that section, not against any restatement of it.",
 					FeedbackPath:       "/state/feat-x/run-1/review/iteration-03/functionality-evidence/review-feedback.md",
+				})
+			},
+		},
+		{
+			name: "implement_user_fix_round",
+			render: func() string {
+				return MustRender(TemplateImplementUser, ImplementUserInput{
+					PlanPath:     "/state/feat-x/run-1/phase-1/plan.md",
+					Repos:        []RepoView{{Name: "api", Path: "/state/worktrees/feat-x/api"}, {Name: "web", Path: "/state/worktrees/feat-x/web"}},
+					ExitCriteria: "Relevant tests pass.",
+					Feedback:     "## Findings\n- **High**: retry loop has no backoff.",
+					Iteration:    2,
 				})
 			},
 		},
@@ -668,6 +685,7 @@ func TestGoldenSnapshots(t *testing.T) {
 			render: func() string {
 				return MustRender(TemplateFinalFixUser, FinalFixUserInput{
 					Iteration:        3,
+					Repos:            []RepoView{{Name: "api", Path: "/state/worktrees/feat-x/api"}, {Name: "web", Path: "/state/worktrees/feat-x/web"}},
 					AcceptanceClause: "Feature acceptance is defined by the `## Acceptance Criteria` section of the approved design at /state/feat-x/run-1/design/design.md. Judge acceptance against that section, not against any restatement of it.",
 					Feedback:         "## Findings\n### QA\n- **High**: export button stays disabled.",
 					FeedbackPath:     "/state/feat-x/run-1/review/iteration-03/review-feedback.md",

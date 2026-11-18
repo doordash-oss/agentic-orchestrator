@@ -443,6 +443,7 @@ func runImplementationLoop(cfg ImplementConfig, sm ports.SessionManager) (result
 				reviewerFeedback,
 				helpAnswers,
 				i,
+				featureRepoViews(cfg.Feature),
 			)
 			// Re-inject user-attached visual references (mockups, design
 			// comps, desired-state screenshots) on every implement
@@ -1383,9 +1384,10 @@ func runReviewGate(cfg ImplementConfig, sm ports.SessionManager, iteration int, 
 // iteration. Role-internal artifact paths, resource catalogs, and static
 // verification discovery live in the RoleSpec-backed system prompt and
 // skills/implement/SKILL.md.
-func buildImplementPrompt(planPath, exitCriteria, feedback, helpAnswers string, iteration int) string {
+func buildImplementPrompt(planPath, exitCriteria, feedback, helpAnswers string, iteration int, repos []prompts.RepoView) string {
 	return prompts.MustRender(prompts.TemplateImplementUser, implementUserInput{
 		PlanPath:     planPath,
+		Repos:        repos,
 		ExitCriteria: exitCriteria,
 		Feedback:     feedback,
 		HelpAnswers:  helpAnswers,

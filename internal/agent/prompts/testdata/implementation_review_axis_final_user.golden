@@ -5,6 +5,12 @@ Review feedback output: /state/feat-x/run-1/review/iteration-03/functionality-ev
 Iteration under review: 3
 Iteration artifacts directory: /state/feat-x/run-1/review/iteration-03
 
+## Repositories Under Review
+
+The code under review is in these worktrees. Other checkouts of the same repositories exist and are off-limits: do not read or judge them.
+- **api**: /state/worktrees/feat-x/api
+- **web**: /state/worktrees/feat-x/web
+
 ## Approved Design Grounding
 
 Approved design: /state/feat-x/run-1/design/design.md

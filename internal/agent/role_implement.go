@@ -14,7 +14,10 @@
 
 package agent
 
-import "github.com/doordash-oss/agentic-orchestrator/internal/feature"
+import (
+	"github.com/doordash-oss/agentic-orchestrator/internal/agent/prompts"
+	"github.com/doordash-oss/agentic-orchestrator/internal/feature"
+)
 
 // roleImplementer is the phase implementer session.
 const roleImplementer Role = "implementer"
@@ -33,6 +36,7 @@ var implementRoleSpec = roleSpec{
 // implementUserInput is the data passed to implement.user.tmpl.
 type implementUserInput struct {
 	PlanPath     string
+	Repos        []prompts.RepoView
 	ExitCriteria string
 	Feedback     string
 	HelpAnswers  string

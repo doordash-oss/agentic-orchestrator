@@ -40,6 +40,7 @@ type finalFixUserInput struct {
 	VisualReferences prompts.VisualReferencesInput
 
 	Iteration        int
+	Repos            []prompts.RepoView
 	ExitCriteria     string
 	AcceptanceClause string
 	Feedback         string

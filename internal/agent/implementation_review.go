@@ -278,6 +278,7 @@ func runImplementationReviewAxis(cfg ImplementConfig, sm ports.SessionManager, i
 	reviewPrompt := buildImplementationReviewAxisPromptWithOpts(implementationReviewAxisPromptOpts{
 		Gate:                  implementationReviewGatePerPhase,
 		AxisLabel:             axis.Name,
+		Repos:                 featureRepoViews(cfg.Feature),
 		FeatureDescription:    intent.Description,
 		DesignArtifactPath:    designArtifactPathForImplementationReview(cfg.Feature),
 		LiveRunAxis:           axis.ExecutionPosture == reviewPostureLiveRun,

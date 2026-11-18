@@ -2,6 +2,12 @@
 
 This is fix iteration 3.
 
+## Repositories
+
+Make every change in these worktrees. Other checkouts of the same repositories exist and are off-limits.
+- **api**: /state/worktrees/feat-x/api
+- **web**: /state/worktrees/feat-x/web
+
 ## Handoff to the User
 
 Final Review stopped its automatic loop: The QA axis requested changes in 3 consecutive rounds.

@@ -133,20 +133,22 @@ func TestSupervisorOpenCodeRestartSeedsWithoutReply(t *testing.T) {
 	h.send("remember the blue door", "r1")
 	h.waitLifecycle(server.SupervisorLifecycleIdle)
 	h.send("continue "+testutil.FakeOpenCodePartial, "r2")
+	h.waitRecord("partial text", func(rec server.SupervisorRecord) bool {
+		return rec.Kind == server.SupervisorRecordKindAssistant && strings.Contains(recordText(rec), testutil.FakeSupervisorPartialText)
+	})
 	deadline := time.Now().Add(15 * time.Second)
 	for {
-		var sawChunk, sawTool bool
+		sawTool := false
 		for _, line := range testutil.FakeOpenCodeACP(t, h.script) {
-			if line.Dir == "out" && line.Method == "session/update" {
-				sawChunk = sawChunk || strings.Contains(string(line.Params), testutil.FakeSupervisorPartialText)
-				sawTool = sawTool || strings.Contains(string(line.Params), "tool_call")
+			if line.Dir == "out" && line.Method == "session/update" && strings.Contains(string(line.Params), "tool_call") {
+				sawTool = true
 			}
 		}
-		if sawChunk && sawTool {
+		if sawTool {
 			break
 		}
 		if time.Now().After(deadline) {
-			t.Fatalf("fake did not stream partial text and tool call: chunk=%t tool=%t", sawChunk, sawTool)
+			t.Fatal("fake did not start the partial tool call")
 		}
 		time.Sleep(20 * time.Millisecond)
 	}

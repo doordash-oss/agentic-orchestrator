@@ -2909,6 +2909,72 @@ func TestRewindWithRequest_MediumPlanWritesDescriptionReview(t *testing.T) {
 	}
 }
 
+// A rewind to a pipeline's first phase must resume at that phase, so a
+// restart from the rewind gate dispatches it instead of a phase the
+// pipeline never ran.
+func TestRewindWithRequest_FirstPhaseOfExecutedPipelineResumesAtTarget(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name         string
+		pipeline     feature.PipelineProfile
+		upgradedFrom feature.PipelineProfile
+	}{
+		{name: "medium", pipeline: feature.PipelineMedium},
+		{name: "upgraded from medium", pipeline: feature.PipelineLarge, upgradedFrom: feature.PipelineMedium},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			mgr := newTestManager(t)
+			f, err := mgr.Create("Plan First", "original description", []string{"test-repo"}, mgr.Config.Defaults.Models, "", "", nil)
+			if err != nil {
+				t.Fatalf("Create: %v", err)
+			}
+			_ = mgr.Store.Modify(f.ID, func(f *feature.Feature) error {
+				f.Pipeline = tt.pipeline
+				f.PipelineUpgradedFrom = tt.upgradedFrom
+				f.Status = feature.StatusImplementing
+				f.CurrentPhase = feature.PhaseImplement
+				return nil
+			})
+			request := feature.RewindRequest{TargetPhase: feature.PhasePlan}
+
+			loaded, err := mgr.Store.Load(f.ID)
+			if err != nil {
+				t.Fatalf("Load: %v", err)
+			}
+			preview := feature.RewindPreviewForFeature(loaded, mgr.Store.RunDir(f.ID, loaded.ActiveRun), request, "")
+			if len(preview.CarriedPhases) != 0 {
+				t.Errorf("preview CarriedPhases = %v, want none for phases the pipeline never ran", preview.CarriedPhases)
+			}
+
+			if _, _, err := mgr.RewindWithRequest(f.ID, request); err != nil {
+				t.Fatalf("RewindWithRequest: %v", err)
+			}
+
+			got, err := mgr.Store.Load(f.ID)
+			if err != nil {
+				t.Fatalf("Load: %v", err)
+			}
+			if got.CurrentPhase != feature.PhasePlan {
+				t.Errorf("CurrentPhase = %v, want %v", got.CurrentPhase, feature.PhasePlan)
+			}
+			if !got.IsRewind || got.PendingReviewPhase == nil || *got.PendingReviewPhase != feature.PhasePlan {
+				t.Errorf("rewind gate = IsRewind %v PendingReviewPhase %v, want a pending Plan rewind review", got.IsRewind, got.PendingReviewPhase)
+			}
+			if !got.RewindReviewsDescription(feature.PhasePlan) {
+				t.Error("RewindReviewsDescription(Plan) = false, want true")
+			}
+			if carried := got.Run().CarriedPhases; len(carried) != 0 {
+				t.Errorf("run CarriedPhases = %v, want none", carried)
+			}
+			if _, err := os.Stat(filepath.Join(mgr.Store.BaseDir, f.ID, "description-review.md")); err != nil {
+				t.Errorf("description-review.md not written: %v", err)
+			}
+		})
+	}
+}
+
 // TestRewindWithRequest_StandardPlanDoesNotWriteDescriptionReview ensures the
 // Medium-only carve-out does not leak into Large/Moonshot pipelines,
 // which still have a real design/research artifact for PhasePlan rewind

@@ -1033,12 +1033,9 @@ func (m *Manager) RewindWithRequest(featureID string, request RewindRequest) (wa
 		}
 	}
 
-	// Write description-review.md for the rewind review session whenever the
-	// target phase is the first phase of the feature's pipeline. Stays at
-	// feature root (NOT inside a run dir) — it is a transient rewind-review
-	// input, not a run artifact.
-	if targetPhase == PhaseInquire ||
-		(targetPhase == PhasePlan && f.EffectivePipeline() == PipelineMedium) {
+	// description-review.md stays at the feature root: it is a transient
+	// rewind-review input, not a run artifact.
+	if f.RewindReviewsDescription(targetPhase) {
 		descPath := filepath.Join(m.Store.BaseDir, featureID, "description-review.md")
 		_ = os.WriteFile(descPath, []byte(f.Description), 0o644)
 	}
@@ -1161,6 +1158,9 @@ func (m *Manager) RewindWithRequest(featureID string, request RewindRequest) (wa
 		}
 		f.IsRewind = true
 		f.CurrentPhase = phaseBeforeTarget(targetPhase)
+		if f.RewindReviewsDescription(targetPhase) {
+			f.CurrentPhase = targetPhase
+		}
 		return nil
 	})
 	_ = updated
@@ -1195,8 +1195,14 @@ func carryForwardDirs(target Phase) []string {
 // carryForwardSet returns the complete static and on-disk carry-forward set
 // shared by rewind preview and execution. A positive partialRoadmapPhase
 // selects the partial Implement rule; zero selects the full Implement rule.
-func carryForwardSet(target Phase, sealedRunDir string, partialRoadmapPhase int) ([]string, error) {
-	dirs := append([]string(nil), carryForwardDirs(target)...)
+func carryForwardSet(executed PipelineProfile, target Phase, sealedRunDir string, partialRoadmapPhase int) ([]string, error) {
+	var dirs []string
+	for _, dir := range carryForwardDirs(target) {
+		if phase, ok := ParsePhaseDirName(dir); ok && !executed.HasPhase(phase) {
+			continue
+		}
+		dirs = append(dirs, dir)
+	}
 	if target != PhaseImplement || sealedRunDir == "" {
 		return dirs, nil
 	}

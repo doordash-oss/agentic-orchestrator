@@ -345,6 +345,21 @@ func NeedsReviewForPhase(target Phase) Status {
 	}
 }
 
+// RewindReviewsDescription reports whether a rewind to target reviews the
+// feature description because no earlier phase produced an artifact.
+func (f *Feature) RewindReviewsDescription(target Phase) bool {
+	return target == f.executedPipeline().FirstPhase()
+}
+
+// executedPipeline is the pipeline whose phases the feature's runs executed:
+// an upgrade without a rewind never runs the phases it added.
+func (f *Feature) executedPipeline() PipelineProfile {
+	if f.PipelineUpgradedFrom != "" {
+		return f.PipelineUpgradedFrom
+	}
+	return f.EffectivePipeline()
+}
+
 // MarshalYAML serializes Status as a string for stable YAML representation.
 func (s Status) MarshalYAML() (interface{}, error) {
 	return s.String(), nil

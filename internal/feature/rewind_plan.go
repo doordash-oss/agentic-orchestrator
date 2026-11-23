@@ -55,7 +55,7 @@ func buildRewindPlan(f *Feature, sealedRunDir string, request RewindRequest, upg
 	}
 	plan.Partial = partial
 	plan.ValidRoadmapPhases = validRoadmapPhasesForFeature(f, request.TargetPhase)
-	plan.CarriedPhases, err = carryForwardSet(request.TargetPhase, sealedRunDir, partial.roadmapPhase)
+	plan.CarriedPhases, err = carryForwardSet(f.executedPipeline(), request.TargetPhase, sealedRunDir, partial.roadmapPhase)
 	if err != nil {
 		return plan, err
 	}

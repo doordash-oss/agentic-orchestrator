@@ -181,20 +181,14 @@ func (h *apiHandler) descriptionReviewArtifactPath(f *feature.Feature, run *feat
 	if h == nil || h.store == nil || f == nil || run == nil {
 		return "", false
 	}
-	return descriptionReviewArtifactPathForRun(f.ID, h.store.RunDir(f.ID, run.RunNumber), f.EffectivePipeline(), run)
+	return descriptionReviewArtifactPathForRun(f, h.store.RunDir(f.ID, run.RunNumber), run)
 }
 
-func descriptionReviewArtifactPathForRun(featureID, runDir string, pipeline feature.PipelineProfile, run *feature.Run) (string, bool) {
-	if strings.TrimSpace(featureID) == "" || strings.TrimSpace(runDir) == "" || run == nil || !run.IsRewind || run.PendingReviewPhase == nil {
+func descriptionReviewArtifactPathForRun(f *feature.Feature, runDir string, run *feature.Run) (string, bool) {
+	if f == nil || strings.TrimSpace(f.ID) == "" || strings.TrimSpace(runDir) == "" || run == nil || !run.IsRewind || run.PendingReviewPhase == nil {
 		return "", false
 	}
-	switch *run.PendingReviewPhase {
-	case feature.PhaseInquire:
-	case feature.PhasePlan:
-		if pipeline != feature.PipelineMedium {
-			return "", false
-		}
-	default:
+	if !f.RewindReviewsDescription(*run.PendingReviewPhase) {
 		return "", false
 	}
 	featureDir := filepath.Dir(filepath.Dir(runDir))

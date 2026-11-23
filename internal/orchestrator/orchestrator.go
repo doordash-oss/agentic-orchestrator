@@ -1408,13 +1408,9 @@ func (o *Orchestrator) proceedFromRewindReview(featureID string, target feature.
 		return err
 	}
 
-	// Read description-review.md and overwrite f.Description when the user
-	// proceeds from a rewind-to-first-phase review. Large/Moonshot write
-	// the file on PhaseInquire rewind; Medium writes it on PhasePlan rewind
-	// (Plan is Medium's first phase). feature/manager.go RewindWithRequest is
-	// the writer for both cases.
-	if target == feature.PhaseInquire ||
-		(target == feature.PhasePlan && f != nil && f.EffectivePipeline() == feature.PipelineMedium) {
+	// The user may have edited description-review.md (written by
+	// Manager.RewindWithRequest) during the review.
+	if f != nil && f.RewindReviewsDescription(target) {
 		if baseDir := o.stateDir(); baseDir != "" {
 			descPath := filepath.Join(baseDir, featureID, "description-review.md")
 			if data, err := os.ReadFile(descPath); err == nil && len(data) > 0 {

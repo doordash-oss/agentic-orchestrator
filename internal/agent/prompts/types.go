@@ -22,16 +22,6 @@ type RepoView struct {
 	Path string
 }
 
-// KBView is the per-knowledge-base projection used by the system prompt's
-// Useful Resources section.
-// Name is the repo this KB belongs to; rendered as the bullet label so the
-// agent can tell multi-repo KBs apart at a glance.
-type KBView struct {
-	Name      string
-	IndexPath string
-	RootDir   string
-}
-
 // SkillView is the per-skill projection used by the required and additional
 // skill sections in the system prompt. Name / Description / Topics come from
 // the SKILL.md frontmatter; Path is the absolute path the agent should read.
@@ -84,9 +74,8 @@ type RoleSystemInput struct {
 	SubagentsAvailable bool
 
 	// RetryOutcomeAllowed advertises the "retry" completion outcome. Only
-	// roles whose artifact contract carries a structured iteration state may
-	// see it; offering it to any other role invites a protocol violation the
-	// harness will reject at commit time.
+	// roles that allow retry may see it; offering it to any other role
+	// invites a protocol violation the harness will reject at commit time.
 	RetryOutcomeAllowed bool
 
 	AskingClause   string
@@ -106,20 +95,17 @@ type AutoReviewUserInput struct {
 
 // PreflightInput is the data passed to the RoleSpec system template's
 // "Useful Resources" section. It lists every orientation surface
-// (knowledge bases, language guidelines, additional skills) the agent has
-// access to for this assignment.
+// (language guidelines, additional skills) the agent has access to for this
+// assignment.
 //
-// HasKB / HasGuidelines / HasSkills gate their respective subsections; the
-// section as a whole is suppressed when none of the three is enabled.
+// HasGuidelines / HasSkills gate their respective subsections.
 // Guidelines, when non-empty, expands into per-language bullets listing
 // each language's index.md absolute path so the agent can browse the
 // catalog without guessing where guidelines live.
 type PreflightInput struct {
-	KBInfos    []KBView
 	Guidelines []GuidelineView
 	Skills     []SkillView
 
-	HasKB         bool
 	HasGuidelines bool
 	HasSkills     bool
 }
@@ -169,27 +155,6 @@ type AxisApprovalView struct {
 type PriorAxisApprovalsInput struct {
 	ArtifactName string
 	Approvals    []AxisApprovalView
-}
-
-// DeferralView is the per-deferral projection consumed by the deferrals_due
-// partial. RedeferralCount is the precomputed count from feature.Deferral.RedeferralCount().
-type DeferralView struct {
-	ID              string
-	Description     string
-	CreatedInPhase  int
-	CreatedInKind   string
-	DueByPhase      int
-	Reason          string
-	RedeferralCount int
-}
-
-// DeferralsDueInput is the data passed to the deferrals_due partial. Kind
-// is one of "plan", "implement", "review" — anything else suppresses the
-// per-kind preface (the entries themselves still render).
-type DeferralsDueInput struct {
-	Phase   int
-	Kind    string
-	Entries []DeferralView
 }
 
 // summaryUserInput is the data passed to summary.user.tmpl.

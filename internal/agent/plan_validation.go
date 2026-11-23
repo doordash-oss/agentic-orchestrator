@@ -20,7 +20,6 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
-	"log"
 	"os"
 	"path/filepath"
 	"sort"
@@ -452,7 +451,6 @@ type planLoopConfig struct {
 	// ResearchArtifactPath the initial planning research path.
 	DesignArtifactPath string
 	QAFilePaths        []string // paths to Q&A files from inquire/research/design
-	KBInfos            []KBInfo // repo knowledge base info
 	WorkDir            string   // repo working directory
 	AdditionalDirs     []string // additional directories for claude --add-dir
 
@@ -774,7 +772,8 @@ var axisFrozenHeading = map[string]string{
 // the same axis that cause the phase-planning loop to escalate to
 // needs_human_review. Three means: two retries past the first failure with no
 // material change — strong evidence the critic is drifting rather than the
-// planner producing a new artifact.
+// planner producing a new artifact. Final Review applies the same limit to
+// consecutive CHANGES_REQUESTED rounds from one axis.
 const axisStallLimit = 3
 
 // axisStallState tracks how many consecutive attempts each axis has failed
@@ -988,19 +987,18 @@ func buildSpecializedValidationPromptForArtifact(f *feature.Feature, planPath, r
 	intent := resolvePromptIntent(f)
 
 	return prompts.MustRender(prompts.TemplateValidateSpecializedUser, validateSpecializedUserInput{
-		Name:                      f.Name,
-		Description:               intent.Description,
-		ExitCriteria:              intent.ExitCriteria,
-		AcceptanceClause:          intent.AcceptanceClause,
-		RiskLevel:                 string(f.RiskLevel),
-		DomainName:                domain.Name,
-		PlanPath:                  planPath,
-		PriorPhasePlanPaths:       append([]string(nil), extras.PriorPhasePlanPaths...),
-		IsRoadmapKind:             kind == validationArtifactRoadmap,
-		ResearchPath:              researchPath,
-		FeedbackPath:              feedbackPath,
-		AxisLabel:                 domain.Axis,
-		AutomatedVerificationOnly: kind != validationArtifactRoadmap && !f.EffectivePipeline().ShouldContractAgentEvidence(),
+		Name:                f.Name,
+		Description:         intent.Description,
+		ExitCriteria:        intent.ExitCriteria,
+		AcceptanceClause:    intent.AcceptanceClause,
+		RiskLevel:           string(f.RiskLevel),
+		DomainName:          domain.Name,
+		PlanPath:            planPath,
+		PriorPhasePlanPaths: append([]string(nil), extras.PriorPhasePlanPaths...),
+		IsRoadmapKind:       kind == validationArtifactRoadmap,
+		ResearchPath:        researchPath,
+		FeedbackPath:        feedbackPath,
+		AxisLabel:           domain.Axis,
 	})
 }
 
@@ -1439,8 +1437,8 @@ type planArtifactKind struct {
 	validate       func(cfg planLoopConfig, sm ports.SessionManager, attempt int, attemptDir, planArtifactPath string) ([]validatorResult, reviewStatus, string, error)
 	// recordApproved records an approved plan on the feature.
 	recordApproved func(cfg planLoopConfig, planArtifactPath string) error
-	// phasePlanGates enables the evidence-mode check and the per-axis stall
-	// escalation, which only phase plans have.
+	// phasePlanGates enables the per-axis stall escalation, which only phase
+	// plans have.
 	phasePlanGates bool
 }
 
@@ -1632,7 +1630,6 @@ attemptLoop:
 				IterationDir:   attemptDir,
 				SkillsDir:      cfg.SkillsDir,
 				GuidelinesDir:  cfg.GuidelinesDir,
-				KBInfos:        cfg.KBInfos,
 				AskingClause:   cfg.AskingClause,
 				CompletionTool: cfg.CompletionTool,
 			})
@@ -1701,7 +1698,6 @@ attemptLoop:
 				}
 				cfg.Observer.SessionStarted(planSessionCtx, "plan", sessionID, providerName, cfg.Feature.Models.Planning, cfg.RepoName, string(cfg.EffectiveEffort), string(cfg.EffortSource))
 				(&contextReadTracker{
-					KBBaseDir:     filepath.Join(filepath.Dir(cfg.StateDir), "knowledge-base"),
 					SkillsDir:     cfg.SkillsDir,
 					GuidelinesDir: cfg.GuidelinesDir,
 					Observer:      cfg.Observer,
@@ -1716,6 +1712,12 @@ attemptLoop:
 
 				waitResult := WaitForPhaseOutcome(sess, PhaseOutcomeWaitOptions{
 					CommitOutcome: func(intent llm.CompletionIntent) ([]ProtocolViolation, error) {
+						if kind.phasePlanGates {
+							if violations := phasePlanStructureViolations(cfg.Feature, attemptDir); len(violations) > 0 {
+								_ = removeCompletionReceipt(attemptDir)
+								return violations, nil
+							}
+						}
 						_, _, violations, err := CommitPhaseOutcome(CompletionCommitInput{
 							Phase:       plannerSpec.Phase,
 							Role:        plannerSpec.Role,
@@ -1810,33 +1812,6 @@ attemptLoop:
 		if cfg.FeatureStore != nil {
 			if fresh, loadErr := cfg.FeatureStore.Load(cfg.Feature.ID); loadErr == nil {
 				cfg.Feature = fresh
-			}
-		}
-
-		// Deterministically enforce the profile-aware evidence mode:
-		// evidence-contracting profiles must give frontend phases real
-		// Visual Evidence rows; automated-only profiles must never declare
-		// agent-owned evidence rows at all.
-		if kind.phasePlanGates {
-			planArtifactPath := resolvePlanArtifactPath(cfg.FeatureStore, cfg.Feature.ID, artifactDir)
-			if planText, readErr := os.ReadFile(planArtifactPath); readErr != nil {
-				log.Printf("plan evidence-mode check skipped: read %s: %v", planArtifactPath, readErr)
-			} else {
-				contractAgentEvidence := cfg.Feature.EffectivePipeline().ShouldContractAgentEvidence()
-				if violations := phasePlanEvidenceModeViolations(string(planText), contractAgentEvidence); len(violations) > 0 {
-					lastErr := formatProtocolViolationError(plannerRole, attemptDir, violations)
-					criticFeedback = formatPlanContractViolationFeedback(plannerRole, violations)
-					_ = os.WriteFile(filepath.Join(attemptDir, "validation-feedback.md"), []byte(criticFeedback), 0o644)
-					_ = WritePlanAttemptMeta(artifactDir, PlanAttemptMeta{
-						Attempt:      attempt,
-						AgentStatus:  agentStatusSuccess,
-						ReviewStatus: agentStatusChangesRequested,
-					})
-					if attempt >= maxAttempts {
-						return &PlanLoopResult{FinalStatus: BoundedHelperStatusProtocolViolation, Iterations: attempt, LastError: lastErr}, nil
-					}
-					continue
-				}
 			}
 		}
 
@@ -2093,6 +2068,33 @@ func setValidatingPlan(cfg planLoopConfig, validating bool) {
 		f.ValidatingPlan = validating
 		return nil
 	})
+}
+
+// phasePlanStructureViolations reports Task repo tags the harness cannot
+// resolve. Only multi-repo plans are checked: a single-repo phase is scoped
+// to its one repo whatever the plan says. A plan without Task headings is
+// not a violation: the phase then covers every repo.
+func phasePlanStructureViolations(f *feature.Feature, attemptDir string) []ProtocolViolation {
+	if f == nil || len(f.Repos) < 2 {
+		return nil
+	}
+	path := resolvePlanMarkdownRoleArtifact("phase-plan.md")(roleRuntime{IterationDir: attemptDir}, roleArtifactSpec{})
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return nil
+	}
+	var violations []ProtocolViolation
+	for _, issue := range phaseScopeFromText(f, string(data)).Issues {
+		if issue.Code == phaseScopeNoTasks {
+			continue
+		}
+		reason := issue.Message
+		if issue.Task != "" {
+			reason = issue.Task + ": " + reason
+		}
+		violations = append(violations, ProtocolViolation{Artifact: "phase plan markdown", Reason: reason})
+	}
+	return violations
 }
 
 func formatPlanContractViolationFeedback(role Role, violations []ProtocolViolation) string {

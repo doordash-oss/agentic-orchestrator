@@ -46,12 +46,6 @@ var testSkillFixtures = map[string]SkillView{
 		Topics:      "UI, UX, frontend, design, components",
 		Path:        "/skills/frontend-design/SKILL.md",
 	},
-	"knowledge-reader": {
-		Name:        "knowledge-reader",
-		Description: "Skim a repo's knowledge-base index and read leaves on demand.",
-		Topics:      "knowledge base, KB, architecture, conventions",
-		Path:        "/skills/knowledge-reader/SKILL.md",
-	},
 	"guideline-reader": {
 		Name:        "guideline-reader",
 		Description: "Navigate the language-specific coding guidelines to follow best practices, idioms, and conventions when writing or reviewing code.",
@@ -103,15 +97,6 @@ type InquireUserInput struct {
 type ResearchFromQuestionsUserInput struct {
 	QuestionsPath string
 	Repos         []RepoView
-}
-
-type KBBuildUserInput struct {
-	RepoName       string
-	RepoPath       string
-	KBRootDir      string
-	KBIndexPath    string
-	ExistingKBPath string
-	LastCommit     string
 }
 
 type DesignUserInput struct {
@@ -178,8 +163,6 @@ type PhasePlanUserInput struct {
 	QAFiles QAFilesInput
 
 	Inquireness GrillMeInquirenessInput
-
-	AutomatedVerificationOnly bool
 }
 
 type PhasePlanRevisionUserInput struct {
@@ -194,28 +177,22 @@ type PhasePlanRevisionUserInput struct {
 	PhasePlanFormatPath string
 
 	Inquireness AutonomousInquirenessInput
-
-	AutomatedVerificationOnly bool
-}
-
-type VerificationItemView struct {
-	Name        string
-	Requirement string
 }
 
 type ImplementUserInput struct {
-	PlanPath             string
-	ExitCriteria         string
-	Feedback             string
-	PlanRevisionFeedback string
-	HelpAnswers          string
-	Iteration            int
+	PlanPath     string
+	Repos        []RepoView
+	ExitCriteria string
+	Feedback     string
+	HelpAnswers  string
+	Iteration    int
 }
 
 type ReviewUserInput struct {
 	Iteration int
 	IterDir   string
 	AxisLabel string
+	Repos     []RepoView
 
 	GateLabel             string
 	FinalGate             bool
@@ -223,21 +200,12 @@ type ReviewUserInput struct {
 	DiffBase              string
 	FeatureDescription    string
 	DesignArtifactPath    string
-	PreviousFeedback      string
 	RefactorPassForkPoint string
 
-	RoadmapPath            string
-	PlanPath               string
-	ExitCriteria           string
-	AcceptanceClause       string
-	VerificationReportPath string
-
-	ContractPath         string
-	RequiredVerification []VerificationItemView
-
-	PriorImplementationReportPaths       []string
-	PriorImplementationEvidenceRootDirs  []string
-	PriorImplementationEvidenceArtifacts []string
+	RoadmapPath      string
+	PlanPath         string
+	ExitCriteria     string
+	AcceptanceClause string
 
 	ProgressPath string
 	PhaseType    string
@@ -249,14 +217,56 @@ type FinalFixUserInput struct {
 	VisualReferences VisualReferencesInput
 
 	Iteration        int
+	Repos            []RepoView
 	ExitCriteria     string
 	AcceptanceClause string
 	Feedback         string
 	FeedbackPath     string
 
-	IncludeManualVerificationOutcomes bool
-	Publishable                       bool
-	RefactorPassForkPoint             string
+	Publishable           bool
+	RefactorPassForkPoint string
+
+	RoadmapPath     string
+	UserAnswerPaths []string
+	DecisionsPath   string
+	Handoff         *FinalFixHandoffInput
+}
+
+type FinalFixHandoffInput struct {
+	GateLabel     string
+	AcceptOutcome string
+	Reason        string
+	Question      string
+	NotePath      string
+	ContinueLabel string
+	AcceptLabel   string
+	StopLabel     string
+	Answer        string
+}
+
+type ImplementReviewUserInput struct {
+	Handoff       *FinalFixHandoffInput
+	DecisionsPath string
+}
+
+type ReviewRoundUserInput struct {
+	GateLabel         string
+	AcceptanceSource  string
+	Mode              string
+	LiveRun           bool
+	Since             int
+	PriorFeedbackPath string
+	Deltas            []ReviewRoundDelta
+	FixNotePaths      []string
+	RoadmapPath       string
+	UserAnswerPaths   []string
+	DecisionsPath     string
+}
+
+type ReviewRoundDelta struct {
+	Repo string
+	Path string
+	Base string
 }
 
 type ValidateSpecializedUserInput struct {
@@ -278,8 +288,6 @@ type ValidateSpecializedUserInput struct {
 
 	FeedbackPath string
 	AxisLabel    string
-
-	AutomatedVerificationOnly bool
 }
 
 // TestGoldenSnapshots exercises each user-facing template with realistic
@@ -297,7 +305,7 @@ func TestGoldenSnapshots(t *testing.T) {
 		{
 			// The Inquire user prompt stays limited to invocation inputs;
 			// RoleSpec system prompts own resource discovery.
-			name: "inquire_user_high_with_kb",
+			name: "inquire_user_high",
 			render: func() string {
 				in := InquireUserInput{
 					Name:         "Add OAuth login",
@@ -324,17 +332,6 @@ func TestGoldenSnapshots(t *testing.T) {
 					},
 				}
 				return MustRender(TemplateResearchFromQuestionsUser, in)
-			},
-		},
-		{
-			name: "kb_build_full",
-			render: func() string {
-				return MustRender(TemplateKBBuildUser, KBBuildUserInput{
-					RepoName:    "myrepo",
-					RepoPath:    "/repos/myrepo",
-					KBRootDir:   "/state/kb/myrepo",
-					KBIndexPath: "/state/kb/myrepo/index.md",
-				})
 			},
 		},
 		{
@@ -471,35 +468,6 @@ func TestGoldenSnapshots(t *testing.T) {
 			},
 		},
 		{
-			name: "phase_plan_user_automated_verification_only",
-			render: func() string {
-				in := PhasePlanUserInput{
-					Phase: PhasePlanView{
-						Number: 2, Name: "Wire up auth UI", Type: "tdd-fill-in",
-						Goal: "Make the login button work.",
-					},
-					RoadmapPath:               "/state/feat-x/run-1/roadmap/plan.md",
-					Inquireness:               GrillMeInquirenessInput{Level: "none"},
-					AutomatedVerificationOnly: true,
-				}
-				return MustRender(TemplatePhasePlanUser, in)
-			},
-		},
-		{
-			name: "phase_plan_revision_user_automated_verification_only",
-			render: func() string {
-				return MustRender(TemplatePhasePlanRevisionUser, PhasePlanRevisionUserInput{
-					Attempt:                   2,
-					Phase:                     PhasePlanView{Number: 2, Name: "Wire up auth UI", Type: "tdd-fill-in"},
-					Feedback:                  "Plan groundwork is fine but missing PKCE.",
-					PhasePlanPath:             "/state/feat-x/run-1/phase-2/plan.md",
-					PhasePlanFormatPath:       "/skills/plan-phase/format.md",
-					Inquireness:               AutonomousInquirenessInput{},
-					AutomatedVerificationOnly: true,
-				})
-			},
-		},
-		{
 			name: "implement_system_rolespec",
 			render: func() string {
 				return MustRender(TemplateSystem, RoleSystemInput{
@@ -509,12 +477,8 @@ func TestGoldenSnapshots(t *testing.T) {
 					},
 					SkillPath: "/skills/implement/SKILL.md",
 					Preflight: PreflightInput{
-						KBInfos: []KBView{
-							{Name: "agentic", IndexPath: "/state/kb/agentic/index.md", RootDir: "/state/kb/agentic"},
-						},
 						Guidelines:    testGuidelines(),
 						Skills:        testSkills(feature.PhaseImplement),
-						HasKB:         true,
 						HasGuidelines: true,
 						HasSkills:     true,
 					},
@@ -532,13 +496,8 @@ func TestGoldenSnapshots(t *testing.T) {
 					},
 					SkillPath: "/skills/design/SKILL.md",
 					Preflight: PreflightInput{
-						KBInfos: []KBView{
-							{Name: "web", IndexPath: "/state/kb/web/index.md", RootDir: "/state/kb/web"},
-							{Name: "api", IndexPath: "/state/kb/api/index.md", RootDir: "/state/kb/api"},
-						},
 						Guidelines:    testGuidelines(),
 						Skills:        testSkills(feature.PhaseDesign),
-						HasKB:         true,
 						HasGuidelines: true,
 						HasSkills:     true,
 					},
@@ -609,17 +568,17 @@ func TestGoldenSnapshots(t *testing.T) {
 			name: "implementation_review_axis_user",
 			render: func() string {
 				return ImplementationReviewAxisUserPrompt(ReviewUserInput{
-					Iteration:              2,
-					IterDir:                "/state/feat-x/run-1/phase-1/implement/iteration-02",
-					AxisLabel:              "Functionality/Evidence",
-					RoadmapPath:            "/state/feat-x/run-1/roadmap/plan.md",
-					PlanPath:               "/state/feat-x/run-1/phase-1/plan.md",
-					ExitCriteria:           "Relevant tests pass.",
-					VerificationReportPath: "/state/feat-x/run-1/phase-1/implement/iteration-02/verification-report.yaml",
-					ContractPath:           "/state/feat-x/run-1/testing-contract.yaml",
-					ProgressPath:           "/state/feat-x/run-1/phase-1/implement/progress.md",
-					PhaseType:              "tdd-fill-in",
-					FeedbackPath:           "/state/feat-x/run-1/phase-1/implement/iteration-02/review/functionality-evidence/review-feedback.md",
+					Iteration:    2,
+					IterDir:      "/state/feat-x/run-1/phase-1/implement/iteration-02",
+					AxisLabel:    "Functionality/Evidence",
+					Repos:        []RepoView{{Name: "api", Path: "/state/worktrees/feat-x/api"}, {Name: "web", Path: "/state/worktrees/feat-x/web"}},
+					LiveRunAxis:  true,
+					RoadmapPath:  "/state/feat-x/run-1/roadmap/plan.md",
+					PlanPath:     "/state/feat-x/run-1/phase-1/plan.md",
+					ExitCriteria: "Relevant tests pass.",
+					ProgressPath: "/state/feat-x/run-1/phase-1/implement/progress.md",
+					PhaseType:    "tdd-fill-in",
+					FeedbackPath: "/state/feat-x/run-1/phase-1/implement/iteration-02/review/functionality-evidence/review-feedback.md",
 				})
 			},
 		},
@@ -627,19 +586,18 @@ func TestGoldenSnapshots(t *testing.T) {
 			name: "implementation_review_axis_live_run_user",
 			render: func() string {
 				return ImplementationReviewAxisUserPrompt(ReviewUserInput{
-					Iteration:              1,
-					IterDir:                "/state/feat-x/run-1/phase-2/implement/iteration-01",
-					AxisLabel:              "Design",
-					LiveRunAxis:            true,
-					FeatureDescription:     "Launch a polished settings dashboard.",
-					DesignArtifactPath:     "/state/feat-x/run-1/design/design.md",
-					RoadmapPath:            "/state/feat-x/run-1/roadmap/plan.md",
-					PlanPath:               "/state/feat-x/run-1/phase-2/plan.md",
-					ExitCriteria:           "Settings dashboard matches the approved design.",
-					VerificationReportPath: "/state/feat-x/run-1/phase-2/implement/iteration-01/verification-report.yaml",
-					ProgressPath:           "/state/feat-x/run-1/phase-2/implement/progress.md",
-					PhaseType:              "tdd-fill-in",
-					FeedbackPath:           "/state/feat-x/run-1/phase-2/implement/iteration-01/review/design/review-feedback.md",
+					Iteration:          1,
+					IterDir:            "/state/feat-x/run-1/phase-2/implement/iteration-01",
+					AxisLabel:          "Design",
+					LiveRunAxis:        true,
+					FeatureDescription: "Launch a polished settings dashboard.",
+					DesignArtifactPath: "/state/feat-x/run-1/design/design.md",
+					RoadmapPath:        "/state/feat-x/run-1/roadmap/plan.md",
+					PlanPath:           "/state/feat-x/run-1/phase-2/plan.md",
+					ExitCriteria:       "Settings dashboard matches the approved design.",
+					ProgressPath:       "/state/feat-x/run-1/phase-2/implement/progress.md",
+					PhaseType:          "tdd-fill-in",
+					FeedbackPath:       "/state/feat-x/run-1/phase-2/implement/iteration-01/review/design/review-feedback.md",
 				})
 			},
 		},
@@ -647,23 +605,165 @@ func TestGoldenSnapshots(t *testing.T) {
 			name: "implementation_review_axis_final_user",
 			render: func() string {
 				return ImplementationReviewAxisUserPrompt(ReviewUserInput{
-					Iteration:                            3,
-					IterDir:                              "/state/feat-x/run-1/review/iteration-03",
-					AxisLabel:                            "Functionality/Evidence",
-					GateLabel:                            "Final Review",
-					FinalGate:                            true,
-					DiffBase:                             "main",
-					FeatureDescription:                   "Sign in with Google.",
-					DesignArtifactPath:                   "/state/feat-x/run-1/design/design.md",
-					PreviousFeedback:                     "## Findings\n### Craft\n- Tighten error handling.",
-					RoadmapPath:                          "/state/feat-x/run-1/roadmap/plan.md",
-					PlanPath:                             "/state/feat-x/run-1/phase-2/plan.md",
-					PhaseType:                            "tdd-fill-in",
-					AcceptanceClause:                     "Feature acceptance is defined by the `## Acceptance Criteria` section of the approved design at /state/feat-x/run-1/design/design.md. Judge acceptance against that section, not against any restatement of it.",
-					PriorImplementationReportPaths:       []string{"/state/feat-x/run-1/phase-1/implement/iteration-02/verification-report.yaml"},
-					PriorImplementationEvidenceRootDirs:  []string{"/state/feat-x/run-1/phase-1/implement/iteration-02"},
-					PriorImplementationEvidenceArtifacts: []string{"/state/feat-x/run-1/phase-1/implement/iteration-02/screenshots/login.png"},
-					FeedbackPath:                         "/state/feat-x/run-1/review/iteration-03/functionality-evidence/review-feedback.md",
+					Iteration:          3,
+					IterDir:            "/state/feat-x/run-1/review/iteration-03",
+					Repos:              []RepoView{{Name: "api", Path: "/state/worktrees/feat-x/api"}, {Name: "web", Path: "/state/worktrees/feat-x/web"}},
+					AxisLabel:          "Functionality/Evidence",
+					GateLabel:          "Final Review",
+					FinalGate:          true,
+					DiffBase:           "main",
+					FeatureDescription: "Sign in with Google.",
+					DesignArtifactPath: "/state/feat-x/run-1/design/design.md",
+					RoadmapPath:        "/state/feat-x/run-1/roadmap/plan.md",
+					PlanPath:           "/state/feat-x/run-1/phase-2/plan.md",
+					PhaseType:          "tdd-fill-in",
+					AcceptanceClause:   "Feature acceptance is defined by the `## Acceptance Criteria` section of the approved design at /state/feat-x/run-1/design/design.md. Judge acceptance against that section, not against any restatement of it.",
+					FeedbackPath:       "/state/feat-x/run-1/review/iteration-03/functionality-evidence/review-feedback.md",
+				})
+			},
+		},
+		{
+			name: "implement_user_fix_round",
+			render: func() string {
+				return MustRender(TemplateImplementUser, ImplementUserInput{
+					PlanPath:     "/state/feat-x/run-1/phase-1/plan.md",
+					Repos:        []RepoView{{Name: "api", Path: "/state/worktrees/feat-x/api"}, {Name: "web", Path: "/state/worktrees/feat-x/web"}},
+					ExitCriteria: "Relevant tests pass.",
+					Feedback:     "## Findings\n- **High**: retry loop has no backoff.",
+					Iteration:    2,
+				})
+			},
+		},
+		{
+			name: "review_round_user_full",
+			render: func() string {
+				return MustRender(TemplateReviewRoundUser, ReviewRoundUserInput{
+					GateLabel:        "Final Review",
+					AcceptanceSource: "the design's acceptance criteria",
+					Mode:             "full",
+					RoadmapPath:      "/state/feat-x/run-1/roadmap/plan.md",
+					UserAnswerPaths:  []string{"/state/feat-x/run-1/design/qa-answers.md"},
+				})
+			},
+		},
+		{
+			name: "review_round_user_follow_up",
+			render: func() string {
+				return MustRender(TemplateReviewRoundUser, ReviewRoundUserInput{
+					GateLabel:         "Final Review",
+					AcceptanceSource:  "the design's acceptance criteria",
+					Mode:              "follow_up",
+					Since:             2,
+					PriorFeedbackPath: "/state/feat-x/run-1/review/iteration-02/craft/review-feedback.md",
+					Deltas: []ReviewRoundDelta{
+						{Repo: "api", Path: "/state/wt/api", Base: "1111111"},
+						{Repo: "web", Path: "/state/wt/web", Base: "2222222"},
+					},
+					FixNotePaths:    []string{"/state/feat-x/run-1/review/iteration-02/fix-notes.md"},
+					RoadmapPath:     "/state/feat-x/run-1/roadmap/plan.md",
+					UserAnswerPaths: []string{"/state/feat-x/run-1/design/qa-answers.md", "/state/feat-x/run-1/roadmap/qa-answers.md"},
+					DecisionsPath:   "/state/feat-x/run-1/review/review-decisions.md",
+				})
+			},
+		},
+		{
+			name: "review_round_user_confirm_live_run",
+			render: func() string {
+				return MustRender(TemplateReviewRoundUser, ReviewRoundUserInput{
+					GateLabel:         "Final Review",
+					AcceptanceSource:  "the design's acceptance criteria",
+					Mode:              "confirm",
+					LiveRun:           true,
+					Since:             1,
+					PriorFeedbackPath: "/state/feat-x/run-1/review/iteration-01/qa/review-feedback.md",
+					DecisionsPath:     "/state/feat-x/run-1/review/review-decisions.md",
+				})
+			},
+		},
+		{
+			name: "final_fix_user_handoff",
+			render: func() string {
+				return MustRender(TemplateFinalFixUser, FinalFixUserInput{
+					Iteration:        3,
+					Repos:            []RepoView{{Name: "api", Path: "/state/worktrees/feat-x/api"}, {Name: "web", Path: "/state/worktrees/feat-x/web"}},
+					AcceptanceClause: "Feature acceptance is defined by the `## Acceptance Criteria` section of the approved design at /state/feat-x/run-1/design/design.md. Judge acceptance against that section, not against any restatement of it.",
+					Feedback:         "## Findings\n### QA\n- **High**: export button stays disabled.",
+					FeedbackPath:     "/state/feat-x/run-1/review/iteration-03/review-feedback.md",
+					Publishable:      true,
+					RoadmapPath:      "/state/feat-x/run-1/roadmap/plan.md",
+					UserAnswerPaths:  []string{"/state/feat-x/run-1/design/qa-answers.md"},
+					DecisionsPath:    "/state/feat-x/run-1/review/review-decisions.md",
+					Handoff: &FinalFixHandoffInput{
+						GateLabel:     "Final Review",
+						AcceptOutcome: "the feature moves on to Publish",
+						Reason:        "The QA axis requested changes in 3 consecutive rounds.",
+						Question:      "Final Review needs your decision. The QA axis requested changes in 3 consecutive rounds.\n\nOpen findings:\n- QA: **High**: export button stays disabled.\n\nDetails: /state/feat-x/run-1/review/iteration-03/handoff/handoff.md\n\nHow should Final Review proceed?",
+						NotePath:      "/state/feat-x/run-1/review/iteration-03/handoff/handoff.md",
+						ContinueLabel: "Continue with guidance",
+						AcceptLabel:   "Accept and proceed to Publish",
+						StopLabel:     "Stop",
+					},
+				})
+			},
+		},
+		{
+			name: "implement_review_user_handoff",
+			render: func() string {
+				return MustRender(TemplateImplementReviewUser, ImplementReviewUserInput{
+					DecisionsPath: "/state/feat-x/run-1/phase-02/implement/review-decisions.md",
+					Handoff: &FinalFixHandoffInput{
+						GateLabel:     "Phase 2 review",
+						AcceptOutcome: "the phase passes",
+						Reason:        "Fix iteration 3 made no code changes, so another review round would repeat the same findings.",
+						Question:      "Phase 2 review needs your decision. Fix iteration 3 made no code changes, so another review round would repeat the same findings.\n\nOpen findings:\n- Craft: **High**: retry loop has no backoff.\n\nDetails: /state/feat-x/run-1/phase-02/implement/iteration-03/handoff/handoff.md\n\nHow should Phase 2 review proceed?",
+						NotePath:      "/state/feat-x/run-1/phase-02/implement/iteration-03/handoff/handoff.md",
+						ContinueLabel: "Continue with guidance",
+						AcceptLabel:   "Accept and finish the phase",
+						StopLabel:     "Stop",
+					},
+				})
+			},
+		},
+		{
+			name: "implement_review_user_handoff_answered",
+			render: func() string {
+				return MustRender(TemplateImplementReviewUser, ImplementReviewUserInput{
+					Handoff: &FinalFixHandoffInput{
+						GateLabel:     "Phase 2 review",
+						AcceptOutcome: "the phase passes",
+						Reason:        "The Craft axis requested changes in 3 consecutive rounds.",
+						Question:      "Phase 2 review needs your decision.\n\nHow should Phase 2 review proceed?",
+						NotePath:      "/state/feat-x/run-1/phase-02/implement/iteration-03/handoff/handoff.md",
+						ContinueLabel: "Continue with guidance",
+						AcceptLabel:   "Accept and finish the phase",
+						StopLabel:     "Stop",
+						Answer:        "Use exponential backoff with jitter.",
+					},
+				})
+			},
+		},
+		{
+			name: "implement_review_user_decisions",
+			render: func() string {
+				return MustRender(TemplateImplementReviewUser, ImplementReviewUserInput{
+					DecisionsPath: "/state/feat-x/run-1/phase-02/implement/review-decisions.md",
+				})
+			},
+		},
+		{
+			name: "review_round_user_per_phase_follow_up",
+			render: func() string {
+				return MustRender(TemplateReviewRoundUser, ReviewRoundUserInput{
+					GateLabel:         "Per-Phase Implementation Review",
+					AcceptanceSource:  "the acceptance criteria in the design and the phase plan",
+					Mode:              "follow_up",
+					LiveRun:           true,
+					Since:             2,
+					PriorFeedbackPath: "/state/feat-x/run-1/phase-02/implement/iteration-02/review/functionality-evidence/review-feedback.md",
+					Deltas:            []ReviewRoundDelta{{Repo: "api", Path: "/state/wt/api", Base: "1111111"}},
+					FixNotePaths:      []string{"/state/feat-x/run-1/phase-02/implement/iteration-03/fix-notes.md"},
+					RoadmapPath:       "/state/feat-x/run-1/roadmap/plan.md",
+					DecisionsPath:     "/state/feat-x/run-1/phase-02/implement/review-decisions.md",
 				})
 			},
 		},
@@ -676,20 +776,6 @@ func TestGoldenSnapshots(t *testing.T) {
 					Roadmap:            "Phase 1: scaffolding.\nPhase 2: PKCE.",
 					CommitBodies:       "feat: add login route\n---commit---\nfeat: wire PKCE",
 					DiffStat:           " 5 files changed, 100 insertions(+), 4 deletions(-)",
-				})
-			},
-		},
-		{
-			name: "final_fix_user_with_manual",
-			render: func() string {
-				return MustRender(TemplateFinalFixUser, FinalFixUserInput{
-					VisualReferences:                  VisualReferencesInput{Images: []string{"/tmp/login.png"}, Label: "applying this fix"},
-					Iteration:                         2,
-					AcceptanceClause:                  "Feature acceptance is defined by the `## Acceptance Criteria` section of the approved design at /state/feat-x/run-1/design/design.md. Judge acceptance against that section, not against any restatement of it.",
-					Feedback:                          "Manual verification bullet 'Inspect login UI' is unattested.",
-					FeedbackPath:                      "/state/feat-x/run-1/review/iteration-2/review-feedback.md",
-					IncludeManualVerificationOutcomes: true,
-					Publishable:                       true,
 				})
 			},
 		},
@@ -720,20 +806,6 @@ func TestGoldenSnapshots(t *testing.T) {
 				})
 			},
 		},
-		{
-			name: "validate_specialized_automated_verification_only",
-			render: func() string {
-				return MustRender(TemplateValidateSpecializedUser, ValidateSpecializedUserInput{
-					Name:                      "OAuth login",
-					Description:               "Sign in with Google.",
-					ExitCriteria:              "Relevant tests pass.",
-					RiskLevel:                 "medium",
-					DomainName:                "scope",
-					PlanPath:                  "/state/feat-x/run-1/phase-2/plan.md",
-					AutomatedVerificationOnly: true,
-				})
-			},
-		},
 	}
 
 	for _, tc := range tcs {
@@ -760,36 +832,6 @@ func TestGoldenSnapshots(t *testing.T) {
 					golden, string(want), got)
 			}
 		})
-	}
-}
-
-func TestImplementUserPromptDoesNotRenderRequiredVerification(t *testing.T) {
-	got := MustRender(TemplateImplementUser, ImplementUserInput{
-		PlanPath:     "/state/feat-x/run-1/phase-1/plan.md",
-		ExitCriteria: "Relevant tests pass.",
-		Iteration:    3,
-	})
-
-	for _, unwanted := range []string{
-		"Required verification items for this iteration",
-		"auth-flow",
-		"Run e2e.",
-	} {
-		if strings.Contains(got, unwanted) {
-			t.Fatalf("implement.user rendered static verification %q in:\n%s", unwanted, got)
-		}
-	}
-}
-
-func TestRoleSystemPromptSuppressesUsefulResourcesWhenEmpty(t *testing.T) {
-	got := MustRender(TemplateSystem, RoleSystemInput{
-		OutputRoots: []OutputRootView{
-			{Name: "phase_dir", Path: "/state/feat-x/inquire"},
-		},
-		SkillPath: "/skills/inquire/SKILL.md",
-	})
-	if strings.Contains(got, "# Useful Resources") {
-		t.Fatalf("system template rendered empty Useful Resources section:\n%s", got)
 	}
 }
 
@@ -858,6 +900,8 @@ func TestLegacyPromptSurfacesAreRemoved(t *testing.T) {
 		filepath.Join("testdata", "skill_instruction.golden"),
 		filepath.Join("testdata", "preflight_kb_and_skills.golden"),
 		filepath.Join("testdata", "preflight_all_three.golden"),
+		filepath.Join("templates", "kb_build.user.tmpl"),
+		filepath.Join("testdata", "kb_build_full.golden"),
 	}
 	for _, path := range removedPaths {
 		if _, err := os.Stat(path); err == nil {

@@ -42,7 +42,6 @@ import {
   type AttentionItem,
   type AutoApproveScope,
   type CanonicalError,
-  type VerificationGateAction,
 } from '../../../shared/ipc';
 import { BellIcon, ChevronDownIcon } from '../components/icons';
 import { parseIpcError } from '../wizard/ipcError';
@@ -50,14 +49,7 @@ import { ErrorSurface } from '../components/ErrorSurface';
 import { useRegisteredErrorCard } from '../components/errorCardRegistry';
 import { ToolbarPopover, ToolbarPopoverAnchor } from '../components/ToolbarPopover';
 import { useDetailsDismiss } from '../components/useDetailsDismiss';
-import {
-  hasStructuredVerificationDecision,
-  isVerificationGateAction,
-  NeedUserInputVerificationDecision,
-  verificationResumeLabel,
-} from './NeedUserInputVerificationDecision';
 import { formatWaitingDuration } from './phaseRail';
-import { useAttentionDraftSaves } from './useAttentionDraftSaves';
 import { defined } from '../../../shared/defined';
 
 interface QuestionAnswerDraft {
@@ -69,7 +61,6 @@ export interface AttentionDrafts {
   /** Per attention item, the answer drafts keyed by each question's one-based index. */
   questions: Record<string, Record<number, QuestionAnswerDraft>>;
   help: Record<string, string>;
-  gates: Record<string, Record<number, string>>;
 }
 
 /** Omits a projected error when its owning card is already mounted in this view. */
@@ -92,7 +83,7 @@ export function OwnerAwareAttention({
 export const SUPERVISOR_ATTENTION_ROUTE = SUPERVISOR_FEATURE_ID;
 
 export function emptyAttentionDrafts(): AttentionDrafts {
-  return { questions: {}, help: {}, gates: {} };
+  return { questions: {}, help: {} };
 }
 
 interface AttentionInboxProps {
@@ -162,7 +153,7 @@ export function attentionError(error: unknown): CanonicalError {
 /**
  * Global, snapshot-only blocking-input inbox, presented as a transient popover
  * anchored under the toolbar bell. Draft text stays in renderer session state
- * until submitted; server-owned gate drafts are persisted on blur.
+ * until submitted.
  */
 export function AttentionInbox({
   items: allItems,
@@ -283,20 +274,6 @@ export function AttentionInbox({
       setBusy(null);
     }
   };
-
-  const saveDraft = useAttentionDraftSaves({
-    notify: (result, options) => {
-      setNoticeError(null);
-      setNotice(attentionActionNotice(result, options));
-    },
-    notifyError: (error) => {
-      setNotice('');
-      setNoticeError(attentionError(error));
-    },
-    onAlreadyResolved: async () => {
-      await refresh();
-    },
-  });
 
   const focusRelativeItem = (currentId: string, direction: 1 | -1) => {
     const index = items.findIndex((item) => item.id === currentId);
@@ -423,7 +400,6 @@ export function AttentionInbox({
                     item={item}
                     busy={busy === item.id}
                     submit={(action, options) => submit(item.id, action, options)}
-                    saveDraft={(action, options) => saveDraft(item.id, action, options)}
                     onJump={(featureId, attentionId) => {
                       setExpanded(null);
                       setOpen(false);
@@ -525,7 +501,6 @@ export function AttentionDetail({
   item,
   busy,
   submit,
-  saveDraft,
   onJump,
   drafts,
   setDrafts,
@@ -533,7 +508,6 @@ export function AttentionDetail({
   item: AttentionItem;
   busy: boolean;
   submit(action: AttentionAction, options?: AttentionSubmitOptions): void;
-  saveDraft?(action: AttentionAction, options?: AttentionSubmitOptions): Promise<void>;
   /** Jumps to the feature, optionally carrying the attention item id. */
   onJump?: (featureId: string, attentionId?: string) => void;
   drafts: AttentionDrafts;
@@ -878,114 +852,6 @@ export function AttentionDetail({
     );
   }
 
-  if (item.kind === 'gate') {
-    const gateDraft = gateDraftFor(item, drafts.gates[detailKey]);
-    const structuredVerification = hasStructuredVerificationDecision(item);
-    const verificationQuestion = structuredVerification ? item.questions[0] : undefined;
-    const selectedVerificationAction =
-      verificationQuestion === undefined
-        ? ''
-        : ((gateDraft[verificationQuestion.index] ?? '') as VerificationGateAction | '');
-    const complete = structuredVerification
-      ? isVerificationGateAction(selectedVerificationAction)
-      : item.questions.every((q) => (gateDraft[q.index] ?? '').trim() !== '');
-    return (
-      <div className="attention-detail">
-        <AttentionContextMeta item={item} />
-        <p className="attention-detail__summary">{item.summary ?? 'Input required'}</p>
-        {structuredVerification && verificationQuestion !== undefined ? (
-          <NeedUserInputVerificationDecision
-            item={item}
-            selectedAction={selectedVerificationAction}
-            idPrefix={detailKey}
-            onSelect={(action) => {
-              const nextDraft = {
-                ...gateDraft,
-                [verificationQuestion.index]: action,
-              };
-              setDrafts((current) => ({
-                ...current,
-                gates: {
-                  ...current.gates,
-                  [detailKey]: nextDraft,
-                },
-              }));
-              void saveDraft?.(() => saveGateDraftForItem(item, nextDraft), {
-                successNotice: 'Draft saved.',
-              }).catch(() => undefined);
-            }}
-          />
-        ) : (
-          item.questions.map((question) => (
-            <label key={question.index} className="attention-gate-question">
-              <span>
-                {question.index}. {question.prompt}
-              </span>
-              <textarea
-                value={gateDraft[question.index] ?? ''}
-                onChange={(event) => {
-                  const value = event.target.value;
-                  setDrafts((current) => ({
-                    ...current,
-                    gates: {
-                      ...current.gates,
-                      [detailKey]: {
-                        ...gateDraftFor(item, current.gates[detailKey]),
-                        [question.index]: value,
-                      },
-                    },
-                  }));
-                }}
-                onBlur={() => {
-                  void saveDraft?.(() => saveGateDraftForItem(item, gateDraft), {
-                    successNotice: 'Draft saved.',
-                  }).catch(() => undefined);
-                }}
-              />
-            </label>
-          ))
-        )}
-        {!structuredVerification && !complete ? (
-          <p className="attention-detail__hint" id={`${detailKey}-resume-hint`}>
-            Answer every question before resuming.
-          </p>
-        ) : null}
-        <div className="attention-detail__actions">
-          <button
-            className="attention-button attention-button--primary"
-            data-tone={
-              structuredVerification && selectedVerificationAction === 'WAIVE'
-                ? 'warning'
-                : undefined
-            }
-            disabled={busy || !complete}
-            aria-describedby={
-              !structuredVerification && !complete ? `${detailKey}-resume-hint` : undefined
-            }
-            onClick={() =>
-              submit(async () => {
-                if (saveDraft !== undefined) {
-                  await saveDraft(() => saveGateDraftForItem(item, gateDraft), {
-                    successNotice: 'Draft saved.',
-                  });
-                }
-                return window.agentico.resolveGate({
-                  featureId: item.featureId,
-                  ...defined('repoName', item.repoName),
-                });
-              })
-            }
-          >
-            {structuredVerification
-              ? verificationResumeLabel(selectedVerificationAction)
-              : 'Resume'}
-          </button>
-          <AttentionJumpAction item={item} onJump={onJump} />
-        </div>
-      </div>
-    );
-  }
-
   if (item.kind === 'review')
     return (
       <div className="attention-detail">
@@ -1071,10 +937,6 @@ function AttentionContextMeta({ item }: { item: AttentionItem }) {
   if ('phase' in item && item.phase !== undefined && !isSupervisorAttentionItem(item)) {
     entries.push(item.phase);
   }
-  if (item.kind === 'gate') {
-    if (item.iteration !== undefined) entries.push(`iteration ${item.iteration}`);
-    if (item.repoName !== undefined) entries.push(item.repoName);
-  }
   entries.push(formatWaitingSince(item.waitingSince));
   return (
     <header className="attention-ask">
@@ -1107,8 +969,6 @@ function attentionAskLabel(item: Exclude<AttentionItem, { kind: 'recovery' }>): 
       return 'Permission request';
     case 'help':
       return item.waitingKind === 'question' ? 'Help request' : 'Agent waiting';
-    case 'gate':
-      return 'Input needed';
     case 'review':
       return 'Review waiting';
     case 'error':
@@ -1159,8 +1019,6 @@ function attentionKindLabel(item: AttentionItem): string {
   switch (item.kind) {
     case 'questions':
       return 'Questions';
-    case 'gate':
-      return 'Input gate';
     case 'help':
       return item.waitingKind === 'question' ? 'Help request' : 'Agent waiting';
     case 'permission':
@@ -1223,32 +1081,4 @@ export function questionAnswer(draft: QuestionAnswerDraft | undefined): string |
       ? draft.selected
       : ''
     : draft.freeText;
-}
-
-function gateDraftFor(
-  item: Extract<AttentionItem, { kind: 'gate' }>,
-  draft: Record<number, string> | undefined,
-): Record<number, string> {
-  if (draft !== undefined) return draft;
-  return Object.fromEntries(item.questions.map((question) => [question.index, question.answer]));
-}
-
-function gateAnswersForSubmit(
-  item: Extract<AttentionItem, { kind: 'gate' }>,
-  draft: Record<number, string>,
-): Record<string, string> {
-  return Object.fromEntries(
-    item.questions.map((question) => [String(question.index), draft[question.index] ?? '']),
-  );
-}
-
-function saveGateDraftForItem(
-  item: Extract<AttentionItem, { kind: 'gate' }>,
-  draft: Record<number, string>,
-): Promise<AttentionActionResult> {
-  return window.agentico.saveGateDraft({
-    featureId: item.featureId,
-    ...defined('repoName', item.repoName),
-    answers: gateAnswersForSubmit(item, draft),
-  });
 }

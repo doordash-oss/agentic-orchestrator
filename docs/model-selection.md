@@ -22,7 +22,7 @@ model_recommendations:
 
 Replace these example IDs with models discovered on the machine running Agentico.
 Available roles are `inquiry`, `research`, `planning`, `implementation`, `review`,
-`chat`, and `kb_build`. Unknown roles and malformed selectors fail configuration
+and `chat`. Unknown roles and malformed selectors fail configuration
 validation. Unavailable model IDs are allowed: they are skipped until discovery
 makes them available. Recommendations are loaded at server startup.
 

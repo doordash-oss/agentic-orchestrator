@@ -37,8 +37,7 @@ import (
 // callback/prompt flow. Edge-case decorator coverage (variants, defers,
 // timeout, malformed output, provider failure, existing allow/deny, control
 // requests, error results) lives in internal/agent/autoreview_internal_test.go
-// alongside the code it exercises. The test name is retained for
-// testing-contract compatibility.
+// alongside the code it exercises.
 func TestDefaultOffClaudeTracerJourney(t *testing.T) {
 	if testing.Short() {
 		t.Skip("journey test launches fake Claude subprocesses")

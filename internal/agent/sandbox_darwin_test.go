@@ -25,8 +25,8 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/doordash-oss/agentic-orchestrator/internal/feature"
 	"github.com/doordash-oss/agentic-orchestrator/internal/ports"
-	"github.com/doordash-oss/agentic-orchestrator/test/testutil"
 )
 
 func TestReadOnlySandboxProfile_DeniesWorktreeWritesAllowsRest(t *testing.T) {
@@ -43,8 +43,13 @@ func TestMaybeWrapHelperSandbox_EnabledWrapsWithSandboxExec(t *testing.T) {
 	if !sandboxExecAvailable() {
 		t.Skip("sandbox-exec not available on this host")
 	}
+	stateRoot := filepath.Join(t.TempDir(), "features")
+	wt := feature.WorktreesDir(stateRoot)
+	if err := os.MkdirAll(wt, 0o755); err != nil {
+		t.Fatalf("mkdir worktrees: %v", err)
+	}
 	cmd := []string{"helper", "run"}
-	got, sandboxed, cleanup := maybeWrapHelperSandbox(cmd, true, "/Users/x/.agentic-workflow/features")
+	got, sandboxed, _, cleanup := maybeWrapHelperSandbox(cmd, true, stateRoot)
 	defer cleanup()
 	if !sandboxed {
 		t.Fatalf("sandboxed=false, want true on darwin")
@@ -52,51 +57,33 @@ func TestMaybeWrapHelperSandbox_EnabledWrapsWithSandboxExec(t *testing.T) {
 	if len(got) < 4 || got[0] != sandboxExecPath || got[1] != "-f" || got[len(got)-2] != "helper" || got[len(got)-1] != "run" {
 		t.Fatalf("wrapped argv = %v, want [sandbox-exec -f <profile> helper run]", got)
 	}
-	if _, err := os.Stat(got[2]); err != nil {
-		t.Fatalf("sandbox profile %q not written: %v", got[2], err)
+	real, err := filepath.EvalSymlinks(wt)
+	if err != nil {
+		t.Fatalf("resolve worktrees dir: %v", err)
+	}
+	if dirs, _ := helperSandboxDenyDirs(t, got); len(dirs) != 1 || dirs[0] != real {
+		t.Fatalf("profile deny dirs = %v, want [%s]", dirs, real)
 	}
 }
 
-func TestWriteRestrictedSandboxProfile_DeniesWritesOutsideRoots(t *testing.T) {
-	prof := writeRestrictedSandboxProfile([]string{"/Users/x/worktree"})
-	for _, want := range []string{
-		"(allow default)",
-		"(deny file-write*)",
-		`(allow file-write* (subpath "/dev"))`,
-		`(allow file-write* (subpath "/Users/x/worktree"))`,
-	} {
-		if !strings.Contains(prof, want) {
-			t.Errorf("profile missing %q:\n%s", want, prof)
+func helperSandboxExpected() bool { return sandboxExecAvailable() }
+
+func helperSandboxDenyDirs(t *testing.T, command []string) ([]string, bool) {
+	t.Helper()
+	if len(command) < 3 || command[0] != sandboxExecPath || command[1] != "-f" {
+		return nil, false
+	}
+	profile, err := os.ReadFile(command[2])
+	if err != nil {
+		t.Fatalf("read sandbox profile: %v", err)
+	}
+	var dirs []string
+	for _, line := range strings.Split(string(profile), "\n") {
+		if _, rest, ok := strings.Cut(line, `(deny file-write* (subpath "`); ok {
+			dirs = append(dirs, strings.TrimSuffix(rest, `"))`))
 		}
 	}
-}
-
-func TestWrapVerificationSandbox_BlocksWritesOutsideRoots(t *testing.T) {
-	testutil.RequireSandboxExec(t)
-	if !sandboxExecAvailable() {
-		t.Skip("sandbox-exec not available on this host")
-	}
-	writable := t.TempDir()
-	protected := t.TempDir()
-
-	run := func(command string) error {
-		argv, sandboxed, cleanup := wrapVerificationSandbox([]string{"/bin/sh", "-c", command}, []string{writable})
-		defer cleanup()
-		if !sandboxed {
-			t.Fatal("sandboxed = false, want true")
-		}
-		_, err := NewExecCommandRunner().Run(context.Background(), argv[0], argv[1:], ports.CommandOpts{})
-		return err
-	}
-
-	if err := run("touch " + filepath.Join(writable, "inside")); err != nil {
-		t.Fatalf("write inside writable root failed: %v", err)
-	}
-	// protected shares the temp base with writable, but only writable was
-	// allow-listed — the deny-by-default must still block it.
-	if err := run("touch " + filepath.Join(protected, "outside")); err == nil {
-		t.Fatalf("write outside writable roots succeeded, want denial")
-	}
+	return dirs, true
 }
 
 type sandboxProbeRunner struct {
@@ -143,16 +130,15 @@ func TestProbeSandboxExecClassifiesOutcomes(t *testing.T) {
 	}
 }
 
-func TestWrapSandboxesPassThroughWhenProbeFails(t *testing.T) {
+func TestWrapHelperSandboxPassesThroughWhenProbeFails(t *testing.T) {
 	stubSandboxUnavailable(t, "nested")
 	command := []string{"/bin/echo", "hi"}
-	if got, sandboxed, cleanup := wrapVerificationSandbox(command, []string{t.TempDir()}); sandboxed || got[0] != "/bin/echo" {
-		t.Fatalf("wrapVerificationSandbox = (%v, %v); want passthrough", got, sandboxed)
-	} else {
-		cleanup()
+	stateRoot := filepath.Join(t.TempDir(), "state")
+	if err := os.MkdirAll(feature.WorktreesDir(stateRoot), 0o755); err != nil {
+		t.Fatalf("mkdir worktrees: %v", err)
 	}
-	if got, sandboxed, cleanup := maybeWrapHelperSandbox(command, true, filepath.Join(t.TempDir(), "state")); sandboxed || got[0] != "/bin/echo" {
-		t.Fatalf("maybeWrapHelperSandbox = (%v, %v); want passthrough", got, sandboxed)
+	if got, sandboxed, reason, cleanup := maybeWrapHelperSandbox(command, true, stateRoot); sandboxed || got[0] != "/bin/echo" || reason != "nested" {
+		t.Fatalf("maybeWrapHelperSandbox = (%v, %v, %q); want passthrough with the probe reason", got, sandboxed, reason)
 	} else {
 		cleanup()
 	}

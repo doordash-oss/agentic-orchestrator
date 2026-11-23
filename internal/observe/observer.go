@@ -227,16 +227,6 @@ func (o *Observer) FeatureMutated(m feature.Mutation) {
 			}
 		}
 	}
-	beforeItems := make(map[string]string, len(m.Before.VerificationItems))
-	for _, item := range m.Before.VerificationItems {
-		beforeItems[item.Name] = item.State
-	}
-	for _, item := range m.After.VerificationItems {
-		if beforeItems[item.Name] == item.State || item.State == "" || item.State == "pending" || item.State == "running" {
-			continue
-		}
-		emit("verification.item_completed", item.State, map[string]any{"verification_type": "testing_contract", "item_name": item.Name})
-	}
 	for phase, total := range m.After.PhaseTimings {
 		if delta := total - m.Before.PhaseTimings[phase]; delta > 0 {
 			emit("phase.duration_recorded", "recorded", map[string]any{"phase": phase, "_duration_ms": delta.Milliseconds()})
@@ -594,6 +584,23 @@ type SessionUsage struct {
 	Truncated                bool
 }
 
+// CostSourceUnavailable marks usage whose provider reported no price.
+const CostSourceUnavailable = "unavailable"
+
+// addCostData omits total_cost_usd when the price is unknown, so readers see
+// a missing cost rather than $0.
+func addCostData(data map[string]any, usage SessionUsage) {
+	if usage.CostSource != CostSourceUnavailable {
+		data["total_cost_usd"] = usage.TotalCostUSD
+	}
+	if usage.CostSource != "" {
+		data["cost_source"] = usage.CostSource
+	}
+	if usage.CostCreditsMicros != nil {
+		data["cost_credits_micros"] = *usage.CostCreditsMicros
+	}
+}
+
 // ErrSessionInterrupted marks a session ended by a user stop or a cancelled
 // context. SessionEnded records it with status "interrupted" rather than as
 // a successful or failed session.
@@ -621,7 +628,6 @@ func (o *Observer) SessionEnded(sc SpanContext, phase, sessionID, repoName strin
 		DurationMs:   duration.Milliseconds(),
 		Status:       "ok",
 		Data: map[string]any{
-			"total_cost_usd":              usage.TotalCostUSD,
 			"input_tokens":                usage.InputTokens,
 			"output_tokens":               usage.OutputTokens,
 			"cache_read_input_tokens":     usage.CacheReadInputTokens,
@@ -630,12 +636,7 @@ func (o *Observer) SessionEnded(sc SpanContext, phase, sessionID, repoName strin
 			"context_total_tokens":        usage.ContextTotalTokens,
 		},
 	}
-	if usage.CostSource != "" {
-		evt.Data["cost_source"] = usage.CostSource
-	}
-	if usage.CostCreditsMicros != nil {
-		evt.Data["cost_credits_micros"] = *usage.CostCreditsMicros
-	}
+	addCostData(evt.Data, usage)
 
 	if err != nil {
 		evt.Status = "error"
@@ -703,6 +704,13 @@ func (o *Observer) IterationEnded(sc SpanContext, iteration int, usage SessionUs
 	if o == nil || !o.enabled {
 		return
 	}
+	data := map[string]any{
+		"input_tokens":                usage.InputTokens,
+		"output_tokens":               usage.OutputTokens,
+		"cache_read_input_tokens":     usage.CacheReadInputTokens,
+		"cache_creation_input_tokens": usage.CacheCreationInputTokens,
+	}
+	addCostData(data, usage)
 	o.emit(sc, Event{
 		Timestamp:    time.Now(),
 		TraceID:      sc.TraceID,
@@ -713,13 +721,7 @@ func (o *Observer) IterationEnded(sc SpanContext, iteration int, usage SessionUs
 		Iteration:    iteration,
 		DurationMs:   duration.Milliseconds(),
 		Status:       status,
-		Data: map[string]any{
-			"total_cost_usd":              usage.TotalCostUSD,
-			"input_tokens":                usage.InputTokens,
-			"output_tokens":               usage.OutputTokens,
-			"cache_read_input_tokens":     usage.CacheReadInputTokens,
-			"cache_creation_input_tokens": usage.CacheCreationInputTokens,
-		},
+		Data:         data,
 	})
 	o.otel.EndSpan(sc.SpanID, status, map[string]string{
 		"iteration": fmt.Sprintf("%d", iteration),
@@ -1295,8 +1297,8 @@ func (o *Observer) RecoveryAction(sc SpanContext, action string, phase string, p
 }
 
 // ContextFileRead emits a context.file_read event when an agent reads a
-// KB leaf file, skill SKILL.md, or guideline file during its session.
-// category is one of "kb", "skill", or "guideline".
+// skill SKILL.md or guideline file during its session.
+// category is "skill" or "guideline".
 func (o *Observer) ContextFileRead(sc SpanContext, phase, sessionID, category, filePath string, metas ...ContextFileReadMeta) {
 	if o == nil || !o.enabled {
 		return
@@ -1743,7 +1745,6 @@ func configSnapshotAttrs(s feature.ConfigSnapshot) map[string]any {
 			"implementation": s.Models.Implementation,
 			"review":         s.Models.Review,
 			"utilities":      s.Models.Utilities,
-			"kb_build":       s.Models.KBBuild,
 		},
 		"inquireness":         string(s.Inquireness),
 		"input_notifications": string(feature.NormalizeInputNotificationsMode(s.InputNotifications)),

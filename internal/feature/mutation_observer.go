@@ -32,27 +32,26 @@ const (
 // MutationSnapshot is an immutable view captured at the persistence boundary.
 // OutputRepos paths are for local Git inspection only and must not be exported.
 type MutationSnapshot struct {
-	ID                string
-	Name              string
-	Created           time.Time
-	Status            Status
-	Phase             Phase
-	ActiveRun         int
-	RunCount          int
-	Pipeline          PipelineProfile
-	Risk              RiskLevel
-	FeatureKind       string
-	RepositoryNames   []string
-	TraceID           string
-	FeatureSpanID     string
-	ErrorCode         string
-	ErrorClass        string
-	VerificationItems []VerificationItemStatus
-	OutputRepos       []MutationOutputRepo
-	StartedAt         *time.Time
-	OutputReadyAt     *time.Time
-	DeliveredAt       *time.Time
-	PhaseTimings      map[string]time.Duration
+	ID              string
+	Name            string
+	Created         time.Time
+	Status          Status
+	Phase           Phase
+	ActiveRun       int
+	RunCount        int
+	Pipeline        PipelineProfile
+	Risk            RiskLevel
+	FeatureKind     string
+	RepositoryNames []string
+	TraceID         string
+	FeatureSpanID   string
+	ErrorCode       string
+	ErrorClass      string
+	OutputRepos     []MutationOutputRepo
+	StartedAt       *time.Time
+	OutputReadyAt   *time.Time
+	DeliveredAt     *time.Time
+	PhaseTimings    map[string]time.Duration
 }
 
 type MutationOutputRepo struct{ Name, Path, WorktreePath, BaseBranch string }
@@ -84,7 +83,7 @@ func mutationSnapshot(f *Feature) *MutationSnapshot {
 	return &MutationSnapshot{ID: f.ID, Name: f.Name, Created: f.Created, Status: f.Status, Phase: f.CurrentPhase,
 		ActiveRun: f.ActiveRun, RunCount: f.RunCount, Pipeline: f.Pipeline, Risk: f.RiskLevel, FeatureKind: kind,
 		RepositoryNames: repos, TraceID: f.TraceID, FeatureSpanID: f.FeatureSpanID, ErrorCode: string(f.FailureCode()), ErrorClass: string(entry.Class),
-		VerificationItems: append([]VerificationItemStatus(nil), f.VerificationItems...), OutputRepos: outputRepos, StartedAt: cloneTime(f.StartedAt), OutputReadyAt: cloneTime(f.Run().OutputReadyAt), DeliveredAt: cloneTime(f.Run().DeliveredAt), PhaseTimings: cloneDurations(f.PhaseTimings)}
+		OutputRepos: outputRepos, StartedAt: cloneTime(f.StartedAt), OutputReadyAt: cloneTime(f.Run().OutputReadyAt), DeliveredAt: cloneTime(f.Run().DeliveredAt), PhaseTimings: cloneDurations(f.PhaseTimings)}
 }
 
 func cloneTime(value *time.Time) *time.Time {

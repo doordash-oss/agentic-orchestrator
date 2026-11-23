@@ -66,7 +66,7 @@ func (o *Orchestrator) now() time.Time {
 // a cancel can park as Interrupted for a later Resume.
 func autoResumeEligiblePhase(phase feature.Phase) bool {
 	switch phase {
-	case feature.PhaseKnowledgeBase, feature.PhaseInquire, feature.PhaseResearch,
+	case feature.PhaseInquire, feature.PhaseResearch,
 		feature.PhaseDesign, feature.PhasePlan, feature.PhaseImplement,
 		feature.PhaseReview, feature.PhaseFinalReview:
 		return true

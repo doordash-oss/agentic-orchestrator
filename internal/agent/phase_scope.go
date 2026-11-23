@@ -35,7 +35,7 @@ type PhaseScopeResult struct {
 	// Feature.Repos[0] in that case.
 	Repos []string
 	// Tasks is the parsed Tasks section, returned for convenience so callers
-	// (testing-contract compiler, implement loop) don't re-parse the plan.
+	// (implement loop) don't re-parse the plan.
 	Tasks []PlanTask
 	// Issues lists structural validation problems. Non-empty means the plan
 	// is malformed; ScopeOK is false.
@@ -55,6 +55,9 @@ type phaseScopeIssue struct {
 // plan failed structural validation; the caller must render the issues and
 // abort whatever workflow asked for the scope.
 func (r PhaseScopeResult) ScopeOK() bool { return len(r.Issues) == 0 }
+
+// phaseScopeNoTasks is the issue code for a plan without Task headings.
+const phaseScopeNoTasks = "no-tasks"
 
 // PhaseScope computes the per-phase repo set and validates the plan's
 // `**Repo:** <name>` tagging structure. This is the unified-flow replacement
@@ -99,7 +102,7 @@ func phaseScopeFromText(feat *feature.Feature, planText string) PhaseScopeResult
 	var issues []phaseScopeIssue
 	if len(tasks) == 0 {
 		issues = append(issues, phaseScopeIssue{
-			Code:    "no-tasks",
+			Code:    phaseScopeNoTasks,
 			Message: "phase plan has no '## Tasks' section or no '### Task N:' headings",
 		})
 	}
@@ -110,7 +113,7 @@ func phaseScopeFromText(feat *feature.Feature, planText string) PhaseScopeResult
 			if multiRepo {
 				issues = append(issues, phaseScopeIssue{
 					Code:    "untagged-task",
-					Message: "task missing required '**Repo:** <name>' tag (every task in a multi-repo phase must declare its repo)",
+					Message: "task missing required '**Repo:** <name>' tag, alone on its own line under the task heading (every task in a multi-repo phase must declare its repo)",
 					Task:    strings.TrimSpace(t.Heading),
 				})
 			}

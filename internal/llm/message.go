@@ -321,6 +321,7 @@ func (b ContentBlock) IsToolResult() bool { return b.Type == "tool_result" }
 func (b ContentBlock) IsThinking() bool { return b.Type == "thinking" }
 
 // Usage tracks token consumption.
+// InputTokens excludes cache reads and writes, which are reported separately.
 type Usage struct {
 	InputTokens              int `json:"input_tokens"`
 	OutputTokens             int `json:"output_tokens"`
@@ -370,9 +371,15 @@ type UserMessage struct {
 	SessionID   string          `json:"session_id,omitempty"`
 }
 
-// ModelUsageEntry holds per-model usage metadata from the result message.
+// ModelUsageEntry holds one model's cumulative session usage from the result
+// message.
 type ModelUsageEntry struct {
-	ContextWindow int `json:"contextWindow,omitempty"`
+	InputTokens              int     `json:"inputTokens,omitempty"`
+	OutputTokens             int     `json:"outputTokens,omitempty"`
+	CacheReadInputTokens     int     `json:"cacheReadInputTokens,omitempty"`
+	CacheCreationInputTokens int     `json:"cacheCreationInputTokens,omitempty"`
+	CostUSD                  float64 `json:"costUSD,omitempty"`
+	ContextWindow            int     `json:"contextWindow,omitempty"`
 }
 
 // ResultMessage is the final message with completion status and cost.

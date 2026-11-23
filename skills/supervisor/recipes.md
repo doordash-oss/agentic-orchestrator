@@ -61,16 +61,6 @@ Relay the question to the user and send only their answer. Never answer on the u
 2. `"$AGENTICO_BIN" api POST /api/v1/permissions/answer '{"request_id":"{request_id}","session_id":"{session_id}","decision":"allow_once"}'`
 3. Validate: `"$AGENTICO_BIN" api GET /api/v1/permissions` no longer lists the request.
 
-### A need-user-input gate
-
-1. `"$AGENTICO_BIN" api GET /api/v1/features/{feature_id}`
-   Read `need_user_input`: the `summary` and each question's `index` and `prompt`. If `verification.allowed_actions` is present the gate is a missing capability; explain the blockers and the allowed actions.
-2. Save the user's answers, keyed by question index:
-   `"$AGENTICO_BIN" api POST /api/v1/features/{feature_id}/actions/need-user-input-draft '{"answers":{"1":"Use the existing export service."}}'`
-3. Resume the feature:
-   `"$AGENTICO_BIN" api POST /api/v1/features/{feature_id}/actions/need-user-input '{}'`
-4. Validate: `"$AGENTICO_BIN" api GET /api/v1/features/{feature_id}` shows the gate closed (`need_user_input.open` false or absent) and the feature moving again.
-
 ### An artifact review gate
 
 1. Open the review session:
@@ -116,7 +106,9 @@ Report what needs the user (open questions, gates, permission requests, failures
    `"$AGENTICO_BIN" api GET /api/v1/features`
 2. Watch for a bounded window, starting after that sequence:
    `"$AGENTICO_BIN" api --timeout 120s --after 1520 GET /api/v1/events`
-   The call exits 0 when the window ends; no output beyond `connected` means nothing changed.
+   The call exits 0 when the window ends; no output beyond `connected` means nothing changed. To follow one feature, filter on the server with `--feature` and `--kind`:
+   `"$AGENTICO_BIN" api --timeout 120s --after 1520 --feature {feature_id} --kind lifecycle.updated,session.updated,prompt.updated,permission.updated,config.updated GET /api/v1/events`
+   Run that exact command on its own, also when a background monitor runs it. Never pipe the stream into another command such as `grep`: a filter later in the pipe can hold an event back until the next one arrives, so a lone question goes unseen, and a pipe makes the command wait for approval.
 3. For each `lifecycle.updated` or `session.updated` line, re-read the resource it names (for example `"$AGENTICO_BIN" api GET /api/v1/features/{feature_id}`) and report the change in one line. On `stream.reset`, go back to step 1.
 4. To keep watching, run another window with `--after` set to the last `seq` you saw. Stop when the user's condition is met or the user says stop, and tell the user each time something changed. Keep windows to a few minutes so you can report between them, and never fill the gap with `sleep`.
 

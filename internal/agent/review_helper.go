@@ -21,6 +21,7 @@ import (
 	"log"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"time"
 
@@ -73,6 +74,9 @@ type reviewHelperConfig struct {
 	Label string
 	// Posture selects the execution posture; empty is read-only.
 	Posture reviewExecutionPosture
+	// SharedCaches has a live-run helper build with the user's toolchain
+	// caches, as the implementer does, instead of a throwaway cache root.
+	SharedCaches bool
 	// OnRetry, when set, is called before each retried session attempt with
 	// the error that ended the previous attempt.
 	OnRetry func(nextAttempt int, err error)
@@ -179,7 +183,7 @@ func (pr *PhaseRunner) runReviewHelper(ctx context.Context, cfg reviewHelperConf
 	var scratch liveRunReviewScratch
 	if liveRun {
 		var err error
-		scratch, err = prepareLiveRunReviewScratch(cfg.HelperIterDir)
+		scratch, err = prepareLiveRunReviewScratch(cfg.HelperIterDir, cfg.SharedCaches)
 		if err != nil {
 			return nil, err
 		}
@@ -216,6 +220,9 @@ func (pr *PhaseRunner) runReviewHelper(ctx context.Context, cfg reviewHelperConf
 	var permHandler ports.PermissionHandler
 	if liveRun {
 		writableRoots = append(append([]string(nil), allowedPaths...), scratch.roots()...)
+		if cfg.SharedCaches {
+			writableRoots = append(writableRoots, sharedToolchainCacheRoots(append([]string{cfg.WorkDir}, cfg.AdditionalDirs...))...)
+		}
 		permHandler = permission.Guarded(&permission.LiveRunReviewHandler{
 			AllowedPaths:  allowedPaths,
 			ScratchRoots:  scratch.roots(),
@@ -271,13 +278,12 @@ func (pr *PhaseRunner) runReviewHelper(ctx context.Context, cfg reviewHelperConf
 	var sandboxCleanup func()
 	if sessOpts != nil {
 		var sandboxed bool
-		command, sandboxed, sandboxCleanup = maybeWrapHelperSandbox(command, sandboxRequested, pr.StateDir)
-		if sandboxRequested && !sandboxed {
+		var unavailable string
+		command, sandboxed, unavailable, sandboxCleanup = maybeWrapHelperSandbox(command, sandboxRequested, pr.StateDir)
+		if sandboxRequested && !sandboxed && unavailable != "" {
 			// Launch unconfined rather than fail to start; the bounded
 			// handler falls back to tool-level write denial.
-			if status := SandboxAvailability(); status.Unavailable {
-				recordSandboxUnavailable(pr.FeatureStore, cfg.FeatureID, status.Reason)
-			}
+			recordSandboxUnavailable(pr.FeatureStore, cfg.FeatureID, unavailable)
 		}
 		if boundedHandler != nil {
 			boundedHandler.Sandboxed = sandboxed
@@ -369,11 +375,15 @@ func newLiveRunReviewScratch(helperDir string) liveRunReviewScratch {
 
 // prepareLiveRunReviewScratch holds helperDir in the scratch registry until
 // release, so a concurrent prune cannot delete scratch a review is using.
-func prepareLiveRunReviewScratch(helperDir string) (liveRunReviewScratch, error) {
+// With sharedCaches there is no build cache root.
+func prepareLiveRunReviewScratch(helperDir string, sharedCaches bool) (liveRunReviewScratch, error) {
 	if err := os.MkdirAll(helperDir, 0o755); err != nil {
 		return liveRunReviewScratch{}, fmt.Errorf("preparing live-run review dir %s: %w", helperDir, err)
 	}
 	scratch := newLiveRunReviewScratch(helperDir)
+	if sharedCaches {
+		scratch.BuildCacheRoot = ""
+	}
 	scratch.registryKey = acquireLiveRunScratch(helperDir)
 	for _, dir := range append(scratch.roots(), scratch.cacheSubdirs()...) {
 		if err := os.MkdirAll(dir, 0o755); err != nil {
@@ -385,6 +395,9 @@ func prepareLiveRunReviewScratch(helperDir string) (liveRunReviewScratch, error)
 }
 
 func (s liveRunReviewScratch) roots() []string {
+	if s.BuildCacheRoot == "" {
+		return []string{s.EvidenceRoot, s.TempRoot}
+	}
 	return []string{s.EvidenceRoot, s.BuildCacheRoot, s.TempRoot}
 }
 
@@ -398,6 +411,9 @@ func (s liveRunReviewScratch) release() error {
 func (s liveRunReviewScratch) removeDisposableRoots() error {
 	var errs []error
 	for _, dir := range []string{s.BuildCacheRoot, s.TempRoot} {
+		if dir == "" {
+			continue
+		}
 		if err := feature.RemoveAllResilient(dir); err != nil {
 			errs = append(errs, fmt.Errorf("removing live-run review scratch %s: %w", dir, err))
 		}
@@ -406,6 +422,9 @@ func (s liveRunReviewScratch) removeDisposableRoots() error {
 }
 
 func (s liveRunReviewScratch) cacheSubdirs() []string {
+	if s.BuildCacheRoot == "" {
+		return nil
+	}
 	return []string{
 		filepath.Join(s.BuildCacheRoot, "go-build"),
 		filepath.Join(s.BuildCacheRoot, "go-mod"),
@@ -420,34 +439,94 @@ func (s liveRunReviewScratch) cacheSubdirs() []string {
 }
 
 func (s liveRunReviewScratch) env() []string {
-	return []string{
+	temp := []string{
 		"TMPDIR=" + s.TempRoot,
 		"TMP=" + s.TempRoot,
 		"TEMP=" + s.TempRoot,
-		"XDG_CACHE_HOME=" + filepath.Join(s.BuildCacheRoot, "xdg"),
-		"GOCACHE=" + filepath.Join(s.BuildCacheRoot, "go-build"),
-		"GOMODCACHE=" + filepath.Join(s.BuildCacheRoot, "go-mod"),
-		"npm_config_cache=" + filepath.Join(s.BuildCacheRoot, "npm"),
-		"YARN_CACHE_FOLDER=" + filepath.Join(s.BuildCacheRoot, "yarn"),
-		"PNPM_HOME=" + filepath.Join(s.BuildCacheRoot, "pnpm"),
-		"PIP_CACHE_DIR=" + filepath.Join(s.BuildCacheRoot, "pip"),
-		"CARGO_HOME=" + filepath.Join(s.BuildCacheRoot, "cargo"),
-		"RUSTUP_HOME=" + filepath.Join(s.BuildCacheRoot, "rustup"),
 	}
+	if s.BuildCacheRoot == "" {
+		return temp
+	}
+	return append(temp,
+		"XDG_CACHE_HOME="+filepath.Join(s.BuildCacheRoot, "xdg"),
+		"GOCACHE="+filepath.Join(s.BuildCacheRoot, "go-build"),
+		"GOMODCACHE="+filepath.Join(s.BuildCacheRoot, "go-mod"),
+		"npm_config_cache="+filepath.Join(s.BuildCacheRoot, "npm"),
+		"YARN_CACHE_FOLDER="+filepath.Join(s.BuildCacheRoot, "yarn"),
+		"PNPM_HOME="+filepath.Join(s.BuildCacheRoot, "pnpm"),
+		"PIP_CACHE_DIR="+filepath.Join(s.BuildCacheRoot, "pip"),
+		"CARGO_HOME="+filepath.Join(s.BuildCacheRoot, "cargo"),
+		"RUSTUP_HOME="+filepath.Join(s.BuildCacheRoot, "rustup"),
+	)
 }
 
 func liveRunReviewPrompt(prompt string, scratch liveRunReviewScratch) string {
 	var b strings.Builder
 	b.WriteString("## Live-Run Scratch Roots\n\n")
 	fmt.Fprintf(&b, "Evidence root: %s\n", scratch.EvidenceRoot)
-	fmt.Fprintf(&b, "Build cache root: %s\n", scratch.BuildCacheRoot)
+	if scratch.BuildCacheRoot != "" {
+		fmt.Fprintf(&b, "Build cache root: %s\n", scratch.BuildCacheRoot)
+	}
 	fmt.Fprintf(&b, "Temp root: %s\n\n", scratch.TempRoot)
-	b.WriteString("Cache and temp environment variables are already pointed at these roots. ")
-	b.WriteString("The build cache and temp roots are deleted when the review ends; only the evidence root is kept. ")
+	if scratch.BuildCacheRoot != "" {
+		b.WriteString("Cache and temp environment variables are already pointed at these roots. ")
+		b.WriteString("The build cache and temp roots are deleted when the review ends; only the evidence root is kept. ")
+	} else {
+		b.WriteString("Temp environment variables are already pointed at the temp root; builds use the shared toolchain caches. ")
+		b.WriteString("The temp root is deleted when the review ends; only the evidence root is kept. ")
+	}
 	b.WriteString("Write screenshots, recordings, command logs, and other QA evidence under the evidence root. ")
 	b.WriteString("Do not write into the reviewed source tree.\n\n")
 	b.WriteString(prompt)
 	return b.String()
+}
+
+// sharedToolchainCacheRoots lists the user's existing toolchain cache
+// directories, the ones an implementer's builds write, leaving out any that
+// overlaps a protected path. Only cache directories are listed, never a
+// tool's home, which can hold configuration.
+func sharedToolchainCacheRoots(protected []string) []string {
+	candidates := []string{os.Getenv("GOCACHE"), os.Getenv("GOMODCACHE")}
+	if cache, err := os.UserCacheDir(); err == nil {
+		for _, rel := range []string{"go-build", "pip", "Yarn", "yarn", "pnpm", "node-gyp", "ms-playwright", "Cypress", "bazel"} {
+			candidates = append(candidates, filepath.Join(cache, rel))
+		}
+	}
+	if home, err := os.UserHomeDir(); err == nil {
+		for _, rel := range []string{
+			filepath.Join("go", "pkg", "mod"),
+			".npm", ".pnpm-store", filepath.Join(".yarn", "berry", "cache"),
+			filepath.Join(".bun", "install", "cache"),
+			filepath.Join(".cargo", "registry"), filepath.Join(".cargo", "git"),
+			filepath.Join(".gradle", "caches"), filepath.Join(".gradle", "wrapper"),
+			filepath.Join(".m2", "repository"), filepath.Join(".nuget", "packages"),
+			filepath.Join(".ivy2", "cache"), filepath.Join(".pub-cache", "hosted"),
+		} {
+			candidates = append(candidates, filepath.Join(home, rel))
+		}
+		candidates = append(candidates, filepath.Join("/private/var/tmp", "_bazel_"+filepath.Base(home)))
+	}
+	var roots []string
+	for _, root := range candidates {
+		if root == "" {
+			continue
+		}
+		root = filepath.Clean(root)
+		if info, err := os.Stat(root); err != nil || !info.IsDir() || slices.Contains(roots, root) {
+			continue
+		}
+		if slices.ContainsFunc(protected, func(p string) bool { return p != "" && (pathWithin(root, p) || pathWithin(p, root)) }) {
+			continue
+		}
+		roots = append(roots, root)
+	}
+	return roots
+}
+
+// pathWithin reports whether path is dir or inside it.
+func pathWithin(dir, path string) bool {
+	dir, path = filepath.Clean(dir), filepath.Clean(path)
+	return path == dir || strings.HasPrefix(path, dir+string(filepath.Separator))
 }
 
 func mergeSessionEnv(env []string, overrides ...string) []string {

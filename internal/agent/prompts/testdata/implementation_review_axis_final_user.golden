@@ -5,6 +5,12 @@ Review feedback output: /state/feat-x/run-1/review/iteration-03/functionality-ev
 Iteration under review: 3
 Iteration artifacts directory: /state/feat-x/run-1/review/iteration-03
 
+## Repositories Under Review
+
+The code under review is in these worktrees. Other checkouts of the same repositories exist and are off-limits: do not read or judge them.
+- **api**: /state/worktrees/feat-x/api
+- **web**: /state/worktrees/feat-x/web
+
 ## Approved Design Grounding
 
 Approved design: /state/feat-x/run-1/design/design.md
@@ -24,28 +30,11 @@ Cumulative diff base: main
 Scope guidance:
 - Judge the whole assembled feature across all repositories in the workspace.
 - Use the approved roadmap as scope context for the completed feature, not as a reason to ignore feature-level gaps.
-- Do not apply per-phase deferral criteria; the full feature is in scope at Final Review.
+- The whole feature is in scope at Final Review, including work no single phase covered.
 Read the approved roadmap at: /state/feat-x/run-1/roadmap/plan.md
 
 Read the implementation plan at: /state/feat-x/run-1/phase-2/plan.md
 
-## Prior Aggregate Feedback
-
-## Findings
-### Craft
-- Tighten error handling.
-
-## Prior Implementation Evidence
-
-Implementation verification reports:
-- /state/feat-x/run-1/phase-1/implement/iteration-02/verification-report.yaml
-Evidence roots:
-- /state/feat-x/run-1/phase-1/implement/iteration-02
-Evidence artifacts:
-- /state/feat-x/run-1/phase-1/implement/iteration-02/screenshots/login.png
-
 ## Acceptance
 
 Feature acceptance is defined by the `## Acceptance Criteria` section of the approved design at /state/feat-x/run-1/design/design.md. Judge acceptance against that section, not against any restatement of it.
-
-Apply the "Review Rules (Without Verification Items)" section from the axis methodology.

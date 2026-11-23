@@ -65,13 +65,11 @@ func (o *Orchestrator) startMultiRepoImplementation(featureID string) error {
 		return fmt.Errorf("reset phase repos: %w", err)
 	}
 
-	kbInfos := o.computeKBInfos(f)
-
 	runFn := o.runMultiRepoImplFn
 	if runFn == nil {
 		return errors.New("runMultiRepoImplFn not configured")
 	}
-	resultCh, err := runFn(f, planPath, kbInfos...)
+	resultCh, err := runFn(f, planPath)
 	if err != nil {
 		return fmt.Errorf("run multi-repo implementation: %w", err)
 	}

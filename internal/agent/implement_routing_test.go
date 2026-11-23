@@ -15,6 +15,7 @@
 package agent
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -25,56 +26,72 @@ import (
 	"github.com/doordash-oss/agentic-orchestrator/test/testutil"
 )
 
-// TestImplementLoop_Routing_SUCCESS_RunsReviewGate locks in that an
-// iteration emitting `## Iteration State: SUCCESS` falls through to the
-// review gate (not directly to review_passed via SkipIterationReview).
-// The mock review approves immediately.
+// TestImplementLoop_Routing_SUCCESS_RunsReviewGate locks in that a success
+// outcome falls through to the review gate whatever the progress notes say,
+// including when there are none. The mock review approves immediately.
 func TestImplementLoop_Routing_SUCCESS_RunsReviewGate(t *testing.T) {
 	if testing.Short() {
 		t.Skip("skipping integration test in short mode")
 	}
-	tmpDir := t.TempDir()
-	workDir := filepath.Join(tmpDir, "work")
-	artifactDir := filepath.Join(tmpDir, "artifacts")
-	stateDir := filepath.Join(tmpDir, "state", "test-feat-001")
-	scriptsDir := filepath.Join(tmpDir, "scripts")
-	for _, d := range []string{workDir, artifactDir, stateDir, scriptsDir} {
-		_ = os.MkdirAll(d, 0o755)
+	tests := []struct {
+		name  string
+		notes string
+	}{
+		{name: "missing notes"},
+		{name: "free-form notes", notes: "Wired the endpoint; nothing left.\n"},
+		{name: "legacy retry state", notes: "## Iteration Handoff\n- chunk 1\n\n## Iteration State\n\nRETRY\n"},
 	}
+	for i, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			tmpDir := t.TempDir()
+			workDir := filepath.Join(tmpDir, "work")
+			artifactDir := filepath.Join(tmpDir, "artifacts")
+			stateDir := filepath.Join(tmpDir, "state", fmt.Sprintf("test-feat-success-%d", i))
+			scriptsDir := filepath.Join(tmpDir, "scripts")
+			for _, d := range []string{workDir, artifactDir, stateDir, scriptsDir} {
+				_ = os.MkdirAll(d, 0o755)
+			}
+			writeNotes := ""
+			if tt.notes != "" {
+				notesPath := filepath.Join(tmpDir, "notes.md")
+				if err := os.WriteFile(notesPath, []byte(tt.notes), 0o644); err != nil {
+					t.Fatal(err)
+				}
+				writeNotes = fmt.Sprintf("cp %q %q\n", notesPath, filepath.Join(artifactDir, "progress.md"))
+			}
 
-	agentScript := testutil.WriteScript(t, scriptsDir, "agent.sh",
-		testutil.JSONLInit+"\n"+testutil.WriteImplementSuccessArtifacts(artifactDir)+"\n"+testutil.JSONLSuccess+"\n")
-	reviewScript := testutil.WriteScript(t, scriptsDir, "review.sh",
-		testutil.JSONLInit+"\n"+testutil.WriteReviewApproved(artifactDir)+"\n"+testutil.JSONLSuccess+"\n")
+			agentScript := testutil.WriteScript(t, scriptsDir, "agent.sh",
+				testutil.JSONLInit+"\n"+writeNotes+testutil.JSONLSuccess+"\n")
+			reviewScript := testutil.WriteScript(t, scriptsDir, "review.sh",
+				testutil.JSONLInit+"\n"+testutil.WriteReviewApproved(artifactDir)+"\n"+testutil.JSONLSuccess+"\n")
 
-	eventCh := make(chan interface{}, 100)
-	sm := session.NewManager(eventCh)
-	defer sm.Shutdown()
+			eventCh := make(chan interface{}, 100)
+			sm := session.NewManager(eventCh)
+			defer sm.Shutdown()
 
-	f := newTestFeature(t, workDir)
-	planPath := writePlanFile(t, artifactDir, "Routing SUCCESS test")
-
-	cfg := ImplementConfig{
-		Feature: f, WorkDir: workDir, PlanPath: planPath, MaxIterations: 5,
-		MaxConsecFails: 3, MaxConsecNoProgress: 3, ExitCriteria: "Relevant tests pass",
-		Model: "agent", ReviewModel: "reviewer",
-		ArtifactDir: artifactDir, StateDir: stateDir,
-		BuildSession: mockBuildSession(agentScript, reviewScript),
-	}
-	result, err := runImplementationLoop(cfg, sm)
-	if err != nil {
-		t.Fatalf("loop error: %v", err)
-	}
-	if result.FinalStatus != finalStatusReviewPassed {
-		t.Errorf("FinalStatus = %q, want review_passed", result.FinalStatus)
-	}
-	if result.Iterations != 1 {
-		t.Errorf("Iterations = %d, want 1", result.Iterations)
+			cfg := ImplementConfig{
+				Feature: newTestFeature(t, workDir), WorkDir: workDir, PlanPath: writePlanFile(t, artifactDir, "Routing SUCCESS test"),
+				MaxIterations: 5, MaxConsecFails: 3, MaxConsecNoProgress: 3, ExitCriteria: "Relevant tests pass",
+				Model: "agent", ReviewModel: "reviewer",
+				ArtifactDir: artifactDir, StateDir: stateDir,
+				BuildSession: mockBuildSession(agentScript, reviewScript),
+			}
+			result, err := runImplementationLoop(cfg, sm)
+			if err != nil {
+				t.Fatalf("loop error: %v", err)
+			}
+			if result.FinalStatus != finalStatusReviewPassed {
+				t.Errorf("FinalStatus = %q, want review_passed", result.FinalStatus)
+			}
+			if result.Iterations != 1 {
+				t.Errorf("Iterations = %d, want 1", result.Iterations)
+			}
+		})
 	}
 }
 
-// TestImplementLoop_Routing_RETRY_SkipsReview locks in that an iteration
-// emitting `## Iteration State: RETRY` causes the harness to skip the
+// TestImplementLoop_Routing_RETRY_SkipsReview locks in that a retry outcome
+// causes the harness to skip the
 // review gate and start the next iteration with no reviewer feedback.
 // The mock review script would emit APPROVED if invoked; the test asserts
 // the loop reached MaxIterations (proving review never ran).
@@ -91,8 +108,7 @@ func TestImplementLoop_Routing_RETRY_SkipsReview(t *testing.T) {
 		_ = os.MkdirAll(d, 0o755)
 	}
 
-	// Agent always emits RETRY. The handoff narrative changes per iteration
-	// (we append the iteration number to "Completed this iteration") so the
+	// Agent always emits retry. The notes change per iteration so the
 	// no-progress fingerprint differs and the safety rail doesn't trip
 	// before MaxIterations.
 	agentScript := testutil.WriteScript(t, scriptsDir, "agent.sh", `
@@ -102,41 +118,7 @@ ITER=$((ITER+1))
 echo "$ITER" > "$ITER_FILE"
 for _d in "`+artifactDir+`"/iteration-*; do :; done
 mkdir -p "$_d"
-cat > "`+artifactDir+`/progress.md" <<PROGRESS_EOF
-# Iteration Progress
-
-## Iteration Handoff
-
-### Completed this iteration
-- chunk $ITER
-
-### Remaining from the plan
-- more
-
-### Where I stopped
-On chunk $ITER
-
-### Gotchas / blockers / in-flight decisions
-
-## Deferrals
-
-`+"~~~"+`yaml
-deferrals: []
-closed_deferrals: []
-`+"~~~"+`
-
-## Verification Report
-
-- **Path**: $_d/verification-report.yaml
-- **Summary**: 0 passed, 0 failed, 0 blocked, 1 not_run
-
-## Iteration State
-
-RETRY
-PROGRESS_EOF
-if [ ! -f "$_d/verification-report.yaml" ]; then
-  printf 'version: 1\nrequired_checks:\n  - name: Deferred check\n    requirement: go test ./...\n    status: not_run\n    evidence: pending retry iteration\n' > "$_d/verification-report.yaml"
-fi
+echo "Worked on chunk $ITER; more is left." > "`+artifactDir+`/progress.md"
 `+testutil.JSONLInit+`
 `+testutil.JSONLRetry+`
 `)
@@ -201,9 +183,9 @@ func TestImplementLoop_NextIterationUsesLatestSessionConfig(t *testing.T) {
 	}
 
 	oldModelScript := testutil.WriteScript(t, scriptsDir, "old-model.sh",
-		testutil.JSONLInit+"\n"+testutil.WriteImplementRetryArtifacts(artifactDir)+"\n"+testutil.JSONLRetry+"\n")
+		testutil.JSONLInit+"\n"+testutil.WriteImplementNotes(artifactDir)+"\n"+testutil.JSONLRetry+"\n")
 	newModelScript := testutil.WriteScript(t, scriptsDir, "new-model.sh",
-		testutil.JSONLInit+"\n"+testutil.WriteImplementSuccessArtifacts(artifactDir)+"\n"+testutil.JSONLSuccess+"\n")
+		testutil.JSONLInit+"\n"+testutil.WriteImplementNotes(artifactDir)+"\n"+testutil.JSONLSuccess+"\n")
 
 	buildSession, captured := capturingBuildSessionByModel(map[string]string{
 		"old-model": oldModelScript,
@@ -286,107 +268,8 @@ func padIter(n int) string {
 	return string(rune('0'+n/10)) + string(rune('0'+n%10))
 }
 
-// TestImplementLoop_Routing_LegacyQuestionsStayOnProtocolViolationPath locks
-// in that progress.md cannot create a user-input gate. Questions must use the
-// live root AskUserQuestion control; a legacy state/section stays on the
-// protocol-violation path and never persists a gate artifact.
-func TestImplementLoop_Routing_LegacyQuestionsStayOnProtocolViolationPath(t *testing.T) {
-	if testing.Short() {
-		t.Skip("skipping integration test in short mode")
-	}
-	tmpDir := t.TempDir()
-	workDir := filepath.Join(tmpDir, "work")
-	artifactDir := filepath.Join(tmpDir, "artifacts")
-	stateDir := filepath.Join(tmpDir, "state", "test-feat-questions-order")
-	scriptsDir := filepath.Join(tmpDir, "scripts")
-	for _, d := range []string{workDir, artifactDir, stateDir, scriptsDir} {
-		_ = os.MkdirAll(d, 0o755)
-	}
-
-	agentScript := testutil.WriteScript(t, scriptsDir, "agent.sh", `for _d in "`+artifactDir+`"/iteration-*; do :; done
-mkdir -p "$_d"
-cat > "`+artifactDir+`/progress.md" <<PROGRESS_EOF
-# Iteration Progress
-
-## Iteration Handoff
-
-### Completed this iteration
-- traced the blocker
-
-### Remaining from the plan
-
-### Where I stopped
-
-
-### Gotchas / blockers / in-flight decisions
-
-## Deferrals
-
-`+"~~~"+`yaml
-deferrals: []
-closed_deferrals: []
-`+"~~~"+`
-
-## Verification Report
-
-- **Path**: $_d/verification-report.yaml
-- **Summary**: 0 passed, 0 failed, 0 blocked, 0 not_run
-
-## Iteration State
-
-NEED_USER_INPUT
-Need a product choice before touching auth.
-
-## Questions for User
-
-1. Legacy auth path or new auth service?
-PROGRESS_EOF
-if [ ! -f "$_d/verification-report.yaml" ]; then
-  printf 'version: 1\nrequired_checks: []\n' > "$_d/verification-report.yaml"
-fi
-`+testutil.JSONLInit+`
-`+testutil.JSONLSuccess+`
-`)
-	reviewScript := testutil.WriteScript(t, scriptsDir, "review.sh",
-		testutil.JSONLInit+"\n"+testutil.WriteReviewApproved(artifactDir)+"\n"+testutil.JSONLSuccess+"\n")
-
-	eventCh := make(chan interface{}, 100)
-	sm := session.NewManager(eventCh)
-	defer sm.Shutdown()
-
-	f := newTestFeature(t, workDir)
-	planPath := writePlanFile(t, artifactDir, "Legacy questions routing test")
-
-	cfg := ImplementConfig{
-		Feature: f, WorkDir: workDir, PlanPath: planPath, MaxIterations: 1,
-		MaxConsecFails: 3, MaxConsecNoProgress: 3, ExitCriteria: "All tests pass",
-		Model: "agent", ReviewModel: "reviewer",
-		ArtifactDir: artifactDir, StateDir: stateDir,
-		BuildSession: mockBuildSession(agentScript, reviewScript),
-	}
-	result, err := runImplementationLoop(cfg, sm)
-	if err != nil {
-		t.Fatalf("loop error: %v", err)
-	}
-	if result.FinalStatus == "need_user_input" {
-		t.Fatalf("legacy progress questions must not open a gate: %+v", result)
-	}
-	feedbackPath := filepath.Join(artifactDir, "iteration-01", "review-feedback.md")
-	feedback, readErr := os.ReadFile(feedbackPath)
-	if readErr != nil {
-		t.Fatalf("read review-feedback.md: %v", readErr)
-	}
-	if !strings.Contains(string(feedback), "Questions for User") {
-		t.Fatalf("review-feedback.md = %s, want legacy question-section violation", feedback)
-	}
-	if _, statErr := os.Stat(filepath.Join(artifactDir, "iteration-01", "need-user-input.yaml")); !os.IsNotExist(statErr) {
-		t.Fatalf("legacy progress questions must not persist a gate artifact: stat err = %v", statErr)
-	}
-}
-
 // TestImplementLoop_Routing_ProtocolViolation_BypassesReview locks in
-// that a malformed progress.md (e.g., missing `## Iteration State`) is
-// rejected by the harness handoff parser and never reaches the review
+// that a turn ending without a completion outcome never reaches the review
 // gate. The mock review script would emit APPROVED if invoked.
 func TestImplementLoop_Routing_ProtocolViolation_BypassesReview(t *testing.T) {
 	if testing.Short() {
@@ -401,10 +284,10 @@ func TestImplementLoop_Routing_ProtocolViolation_BypassesReview(t *testing.T) {
 		_ = os.MkdirAll(d, 0o755)
 	}
 
-	// Agent script never writes progress.md. The harness should reject the
-	// artifact contract and never invoke review.
+	// Agent ends its turn without a completion outcome. The harness should
+	// record a protocol violation and never invoke review.
 	agentScript := testutil.WriteScript(t, scriptsDir, "agent.sh",
-		testutil.JSONLInit+"\n"+testutil.JSONLSuccess+"\n")
+		testutil.JSONLInit+"\n"+testutil.JSONLResult("All done.")+"\n")
 	reviewScript := testutil.WriteScript(t, scriptsDir, "review.sh",
 		testutil.JSONLInit+"\n"+testutil.WriteReviewApproved(artifactDir)+"\n"+testutil.JSONLSuccess+"\n")
 
@@ -429,8 +312,8 @@ func TestImplementLoop_Routing_ProtocolViolation_BypassesReview(t *testing.T) {
 	if result.FinalStatus != BoundedHelperStatusProtocolViolation {
 		t.Errorf("FinalStatus = %q, want protocol_violation (reviewer must not run on protocol violations)", result.FinalStatus)
 	}
-	if !strings.Contains(result.LastError, "protocol violation: implementer @") || !strings.Contains(result.LastError, "progress.md") {
-		t.Errorf("LastError = %q, want implementer progress.md protocol violation", result.LastError)
+	if !strings.Contains(result.LastError, "protocol violation: implementer @") {
+		t.Errorf("LastError = %q, want implementer protocol violation", result.LastError)
 	}
 	// Each iteration's meta should record CHANGES_REQUESTED from the
 	// deterministic protocol-violation gate.
@@ -484,7 +367,7 @@ func TestImplementLoop_Routing_ProtocolViolation_ResumesFailureBudget(t *testing
 	}
 
 	agentScript := testutil.WriteScript(t, scriptsDir, "agent.sh",
-		testutil.JSONLInit+"\n"+testutil.JSONLSuccess+"\n")
+		testutil.JSONLInit+"\n"+testutil.JSONLResult("All done.")+"\n")
 	reviewScript := testutil.WriteScript(t, scriptsDir, "review.sh",
 		testutil.JSONLInit+"\n"+testutil.WriteReviewApproved(artifactDir)+"\n"+testutil.JSONLSuccess+"\n")
 
@@ -517,5 +400,64 @@ func TestImplementLoop_Routing_ProtocolViolation_ResumesFailureBudget(t *testing
 	}
 	if _, err := os.Stat(filepath.Join(artifactDir, "iteration-04")); !os.IsNotExist(err) {
 		t.Fatalf("iteration-04 should not run after recovered protocol-violation budget trips: stat err = %v", err)
+	}
+}
+
+// TestImplementLoop_ResumesLegacyPlanAndProgress locks in that a run started
+// under the old plan and progress formats resumes: the old notes are read as
+// notes and the outcome alone decides the iteration.
+func TestImplementLoop_ResumesLegacyPlanAndProgress(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping integration test in short mode")
+	}
+	tmpDir := t.TempDir()
+	workDir := filepath.Join(tmpDir, "work")
+	artifactDir := filepath.Join(tmpDir, "artifacts")
+	stateDir := filepath.Join(tmpDir, "state", "test-feat-legacy-resume")
+	scriptsDir := filepath.Join(tmpDir, "scripts")
+	for _, d := range []string{workDir, artifactDir, stateDir, scriptsDir} {
+		_ = os.MkdirAll(d, 0o755)
+	}
+
+	am := newArtifactManager(artifactDir)
+	iterDir, err := am.createIterationDir(1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := am.writeMeta(iterDir, iterationMeta{Iteration: 1, AgentStatus: "RETRY", ReviewStatus: "skipped_retry"}); err != nil {
+		t.Fatal(err)
+	}
+	legacyProgress := "# Iteration Progress\n\n## Iteration Handoff\n\n### Completed this iteration\n- chunk 1\n\n" +
+		"### Where I stopped\nchunk 2\n\n## Deferrals\n\n```yaml\ndeferrals: []\nclosed_deferrals: []\n```\n\n## Iteration State\n\nRETRY\n"
+	if err := os.WriteFile(filepath.Join(artifactDir, "progress.md"), []byte(legacyProgress), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	planPath := filepath.Join(artifactDir, "plan.md")
+	if err := os.WriteFile(planPath, []byte(legacyPhasePlanText()), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	agentScript := testutil.WriteScript(t, scriptsDir, "agent.sh",
+		testutil.JSONLInit+"\n"+testutil.JSONLSuccess+"\n")
+	reviewScript := testutil.WriteScript(t, scriptsDir, "review.sh",
+		testutil.JSONLInit+"\n"+testutil.WriteReviewApproved(artifactDir)+"\n"+testutil.JSONLSuccess+"\n")
+
+	eventCh := make(chan interface{}, 100)
+	sm := session.NewManager(eventCh)
+	defer sm.Shutdown()
+
+	cfg := ImplementConfig{
+		Feature: newTestFeature(t, workDir), WorkDir: workDir, PlanPath: planPath,
+		MaxIterations: 5, MaxConsecFails: 3, MaxConsecNoProgress: 3, ExitCriteria: "Relevant tests pass",
+		Model: "agent", ReviewModel: "reviewer",
+		ArtifactDir: artifactDir, StateDir: stateDir,
+		BuildSession: mockBuildSession(agentScript, reviewScript),
+	}
+	result, err := runImplementationLoop(cfg, sm)
+	if err != nil {
+		t.Fatalf("loop error: %v", err)
+	}
+	if result.FinalStatus != finalStatusReviewPassed || result.Iterations != 2 {
+		t.Fatalf("result = %+v, want review_passed on iteration 2", result)
 	}
 }

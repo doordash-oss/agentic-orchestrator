@@ -1074,23 +1074,22 @@ func TestFeatureDetectFailHookFailsDetection(t *testing.T) {
 }
 
 // TestHandlerStopperProjectionAndOrdering proves the production stopper's
-// stop set uses the enabled pause-stop projection — running or
-// need-user-input features, active children included, closed-relationship
-// children and settled features excluded — and orders deepest children
-// first so parent/child relationship guards pass.
+// stop set uses the enabled pause-stop projection — running features, active
+// children included, closed-relationship children and settled features
+// excluded — and orders deepest children first so parent/child relationship
+// guards pass.
 func TestHandlerStopperProjectionAndOrdering(t *testing.T) {
 	t.Parallel()
 	parent := &feature.Feature{ID: "parent-1", Status: feature.StatusImplementing}
 	child := &feature.Feature{ID: "child-1", Status: feature.StatusImplementing,
 		Parent: &feature.ChildRelationship{ParentID: "parent-1"}}
-	grandchild := &feature.Feature{ID: "child-2", Status: feature.StatusNeedUserInput,
+	grandchild := &feature.Feature{ID: "child-2", Status: feature.StatusImplementing,
 		Parent: &feature.ChildRelationship{ParentID: "child-1"}}
 	closedChild := &feature.Feature{ID: "child-closed", Status: feature.StatusImplementing,
 		Parent: &feature.ChildRelationship{ParentID: "parent-1", CloseOutcome: "integrated"}}
 	settled := &feature.Feature{ID: "done-1", Status: feature.StatusDone}
-	parked := &feature.Feature{ID: "parked-1", Status: feature.StatusNeedUserInput}
 	lister := featureListerFunc(func() ([]*feature.Feature, error) {
-		return []*feature.Feature{parent, child, grandchild, closedChild, settled, parked}, nil
+		return []*feature.Feature{parent, child, grandchild, closedChild, settled}, nil
 	})
 	h := &apiHandler{features: lister}
 	stopper := handlerInstallStopper{handler: h}
@@ -1098,7 +1097,7 @@ func TestHandlerStopperProjectionAndOrdering(t *testing.T) {
 	if err != nil {
 		t.Fatalf("stoppable features: %v", err)
 	}
-	want := []string{"child-2", "child-1", "parent-1", "parked-1"}
+	want := []string{"child-2", "child-1", "parent-1"}
 	if len(ids) != len(want) {
 		t.Fatalf("stop set = %v, want %v", ids, want)
 	}

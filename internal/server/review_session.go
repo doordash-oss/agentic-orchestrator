@@ -344,7 +344,7 @@ func (s *reviewSessionService) resolveContext(featureID string) (reviewSessionCo
 	var path string
 	if ctx.artifactID == descriptionReviewArtifact {
 		var ok bool
-		path, ok = descriptionReviewArtifactPathForRun(f.ID, ctx.runDir, f.EffectivePipeline(), run)
+		path, ok = descriptionReviewArtifactPathForRun(f, ctx.runDir, run)
 		if !ok {
 			return reviewSessionContext{}, fmt.Errorf("review artifact %q not found", ctx.artifactID)
 		}
@@ -416,9 +416,10 @@ func reviewArtifactIDForContext(f *feature.Feature, mode string, target feature.
 		return feature.PhasePlan.DirName(), false, false
 	}
 	if mode == reviewModeRewind {
-		switch target {
-		case feature.PhaseInquire:
+		if f.RewindReviewsDescription(target) {
 			return descriptionReviewArtifact, false, false
+		}
+		switch target {
 		case feature.PhaseResearch:
 			return feature.PhaseInquire.DirName(), false, false
 		case feature.PhaseDesign:

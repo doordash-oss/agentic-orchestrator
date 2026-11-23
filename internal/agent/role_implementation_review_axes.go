@@ -19,7 +19,8 @@ import "github.com/doordash-oss/agentic-orchestrator/internal/feature"
 const (
 	// RoleImplementationReviewCraft reviews implementation craft.
 	RoleImplementationReviewCraft Role = "implementation_review_craft"
-	// roleImplementationReviewFunctionalityEvidence reviews functionality and evidence.
+	// roleImplementationReviewFunctionalityEvidence runs the phase plan's
+	// verification and judges its acceptance criteria.
 	roleImplementationReviewFunctionalityEvidence Role = "implementation_review_functionality_evidence"
 	// roleImplementationReviewCleanliness reviews change-set cleanliness.
 	roleImplementationReviewCleanliness Role = "implementation_review_cleanliness"

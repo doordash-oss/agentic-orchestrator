@@ -19,7 +19,7 @@ The harness has detected unaddressed PR review comments on one or more of this f
 
 Per-repo edits are delegated **by prompt**, not by `cwd`. Each Task sub-agent's prompt names exactly one repo and constrains file edits to that repo's worktree. Today's main-vs-sub split is preserved:
 
-- **Stays in main:** plan reading, deciding address/dismiss for each comment, sequencing across repos, reading the testing contract, emitting the handoff, writing the combined `review-resolutions.json`.
+- **Stays in main:** plan reading, deciding address/dismiss for each comment, sequencing across repos, emitting the handoff, writing the combined `review-resolutions.json`.
 - **Delegated to per-repo Task agents:** the actual code edits, focused development tests, commit + push.
 
 ## The Process
@@ -64,17 +64,16 @@ The orchestrator's post-cycle finalisation also runs a commit-all + pull-rebase 
 
 ### Step 5 — Iteration handoff
 
-Emit `progress.md` per the standard handoff contract (see [implement skill](../implement/SKILL.md) for the exact schema). Cycle-specific guidance:
+Write `progress.md` as the implement skill describes (see [implement skill](../implement/SKILL.md)): short notes a fresh session can pick up from. Cycle-specific guidance:
 
 - Standard handoff paths:
   - `progress.md`: `{phase_dir}/progress.md`
   - `phase_complete` is harness-owned; never create or edit it.
-- Do not place `progress.md` under `{iteration_dir}`; the harness reads the phase-level progress file before routing the next iteration.
-- `## Iteration Handoff → Completed this iteration` — one bullet per repo touched (e.g., `- api: addressed 3 comments, dismissed 1, force-pushed`).
-- `## Iteration Handoff → Remaining from the plan` — comments not yet decided (empty when every aggregated comment has a resolution entry).
-- `## Iteration State` — exactly one of:
-  - `SUCCESS` — every aggregated comment has a resolution entry, your focused development tests on the touched repos pass, and the combined `review-resolutions.json` is written.
-  - `RETRY` — partial progress (e.g., one comment fix broke a test; revisit on the next iteration with fresh context). The next iteration starts from your `progress.md`.
+- Do not place `progress.md` under `{iteration_dir}`; the next iteration reads the phase-level notes.
+- Say what was done per repo touched (e.g., `api: addressed 3 comments, dismissed 1, force-pushed`) and which comments are not yet decided.
+- Finish with exactly one structured outcome:
+  - `success` — every aggregated comment has a resolution entry, your focused development tests on the touched repos pass, and the combined `review-resolutions.json` is written.
+  - `retry` — partial progress (e.g., one comment fix broke a test; revisit on the next iteration with fresh context). The next iteration starts from your notes.
   - If a comment is fundamentally ambiguous, call the formal AskUserQuestion control and continue after the answer.
 
 ## Comment resolution heuristics

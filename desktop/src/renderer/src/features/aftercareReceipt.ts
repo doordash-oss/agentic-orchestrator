@@ -27,10 +27,8 @@ import type {
   FetchReviewFeedbackResult,
   RepositoryDiffResult,
   RunDetailView,
-  VerificationItemView,
 } from '../../../shared/ipc';
 import { spineStages } from './featureView';
-import { verificationTone } from './verificationModel';
 
 export interface ChangesFact {
   files: number;
@@ -87,29 +85,6 @@ function pendingCommitTotal(preflight: CompletionPreflightResult | null): number
     total += repo.pendingCommits;
   }
   return carried && total > 0 ? total : null;
-}
-
-interface VerificationFact {
-  summary: string;
-  /** Check names, in contract order; empty when the snapshot carries none. */
-  names: string[];
-}
-
-/**
- * The verification fact, or null when the snapshot carries no check states —
- * which is the common aftercare case, since the server clears the items the
- * moment harness verification finishes. The row itself always renders (it is
- * the run-record anchor); only this fact omits.
- */
-export function verificationFact(
-  items: readonly VerificationItemView[] | undefined,
-): VerificationFact | null {
-  if (items === undefined || items.length === 0) return null;
-  const passed = items.filter((item) => verificationTone(item.state) === 'passed').length;
-  return {
-    summary: `${passed} of ${items.length} check${items.length === 1 ? '' : 's'} passed`,
-    names: items.map((item) => item.name),
-  };
 }
 
 interface PullRequestRow {

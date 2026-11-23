@@ -22,7 +22,7 @@ import (
 )
 
 // SandboxStatus is the once-per-process result of functionally probing the
-// OS sandbox that wraps verification commands and bounded helpers. The zero
+// OS sandbox that wraps bounded helpers. The zero
 // value means usable (or not applicable on this platform). Unavailable is
 // reported only where a sandbox is expected but cannot be applied, e.g. a
 // nested macOS seatbelt.
@@ -59,7 +59,7 @@ func setSandboxProbeForTest(probe func() SandboxStatus) {
 }
 
 // recordSandboxUnavailable persists the run-level note that this run's
-// verification commands or review validators ran unconfined. The first
+// review validators ran unconfined. The first
 // record wins; later calls are no-ops.
 func recordSandboxUnavailable(store FeatureStore, featureID, reason string) {
 	if store == nil || strings.TrimSpace(featureID) == "" {

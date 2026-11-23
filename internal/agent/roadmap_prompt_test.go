@@ -49,9 +49,6 @@ func TestBuildRoadmapPrompt(t *testing.T) {
 	if !strings.Contains(prompt, "Ambiguity Resolution") {
 		t.Error("prompt should contain inquireness directive")
 	}
-	if strings.Contains(prompt, "/kb/") {
-		t.Error("prompt should not contain KB directory path; RoleSpec system prompt owns useful resources")
-	}
 	// Roadmap decomposition methodology is in SKILL.md, not in the prompt.
 }
 
@@ -99,7 +96,6 @@ func TestBuildRoadmapPromptLeavesRoleSpecOwnedContentToSystemPrompt(t *testing.T
 		"# Useful Resources",
 		"/skills/create-roadmap/SKILL.md",
 		"/guidelines/go/index.md",
-		"/kb/agentic/index.md",
 	} {
 		if strings.Contains(prompt, forbidden) {
 			t.Fatalf("BuildRoadmapPromptWithResearch() contains RoleSpec-owned content %q:\n%s", forbidden, prompt)
@@ -120,7 +116,6 @@ func TestBuildPhasePlanPromptLeavesRoleSpecOwnedContentToSystemPrompt(t *testing
 		"# Useful Resources",
 		"/skills/plan-phase/SKILL.md",
 		"/guidelines/go/index.md",
-		"/kb/agentic/index.md",
 	} {
 		if strings.Contains(prompt, forbidden) {
 			t.Fatalf("BuildPhasePlanPromptWithResearch() contains RoleSpec-owned content %q:\n%s", forbidden, prompt)
@@ -210,9 +205,6 @@ func TestBuildRoadmapPromptNoKB(t *testing.T) {
 
 	if !strings.Contains(prompt, "/path/to/design.md") {
 		t.Error("prompt should contain design path")
-	}
-	if strings.Contains(prompt, "Knowledge Base") {
-		t.Error("prompt should not contain KB section when no KBInfos")
 	}
 	if !strings.Contains(prompt, "## Ambiguity Resolution [grill-me]") {
 		t.Error("prompt should contain [grill-me] header for none inquireness")
@@ -597,37 +589,5 @@ func TestBuildPhasePlanRevisionPrompt_OmitsPriorPhaseContextForPhaseOne(t *testi
 
 	if strings.Contains(prompt, "## Prior Phase Context") {
 		t.Errorf("revision prompt should omit Prior Phase Context when no prior phases:\n%s", prompt)
-	}
-}
-
-func TestBuildPhasePlanPromptDeclaresAutomatedVerificationOnlyForNonMoonshotProfiles(t *testing.T) {
-	phase := RoadmapPhase{Number: 2, Name: "Preference persistence", Goal: "Persist selected theme"}
-
-	large := &feature.Feature{Name: "Dark Mode", Pipeline: feature.PipelineLarge}
-	largePrompt := buildPhasePlanPromptWithResearch(large, "/roadmap.md", "", phase, nil)
-	if !strings.Contains(largePrompt, "## Verification Contracting Mode") {
-		t.Errorf("large-profile phase plan prompt should declare automated-only verification mode:\n%s", largePrompt)
-	}
-
-	moonshot := &feature.Feature{Name: "Dark Mode", Pipeline: feature.PipelineMoonshot}
-	moonshotPrompt := buildPhasePlanPromptWithResearch(moonshot, "/roadmap.md", "", phase, nil)
-	if strings.Contains(moonshotPrompt, "## Verification Contracting Mode") {
-		t.Errorf("moonshot-profile phase plan prompt should not declare automated-only verification mode:\n%s", moonshotPrompt)
-	}
-}
-
-func TestBuildPhasePlanRevisionPromptDeclaresAutomatedVerificationOnlyForNonMoonshotProfiles(t *testing.T) {
-	phase := RoadmapPhase{Number: 2, Name: "Fill-in", Type: "tdd-fill-in"}
-
-	large := &feature.Feature{Name: "Dark Mode", Pipeline: feature.PipelineLarge}
-	largePrompt := buildPhasePlanRevisionPrompt(large, "", "/p.md", "feedback", phase, 2, nil)
-	if !strings.Contains(largePrompt, "## Verification Contracting Mode") {
-		t.Errorf("large-profile phase plan revision prompt should declare automated-only verification mode:\n%s", largePrompt)
-	}
-
-	moonshot := &feature.Feature{Name: "Dark Mode", Pipeline: feature.PipelineMoonshot}
-	moonshotPrompt := buildPhasePlanRevisionPrompt(moonshot, "", "/p.md", "feedback", phase, 2, nil)
-	if strings.Contains(moonshotPrompt, "## Verification Contracting Mode") {
-		t.Errorf("moonshot-profile phase plan revision prompt should not declare automated-only verification mode:\n%s", moonshotPrompt)
 	}
 }

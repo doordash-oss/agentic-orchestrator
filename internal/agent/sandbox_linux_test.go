@@ -17,8 +17,12 @@
 package agent
 
 import (
+	"os"
+	"path/filepath"
 	"reflect"
 	"testing"
+
+	"github.com/doordash-oss/agentic-orchestrator/internal/feature"
 )
 
 func TestWrapWithBwrap_RebindsWorktreesReadOnly(t *testing.T) {
@@ -34,5 +38,41 @@ func TestWrapWithBwrap_RebindsWorktreesReadOnly(t *testing.T) {
 	}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("wrapWithBwrap argv =\n%v\nwant\n%v", got, want)
+	}
+}
+
+func helperSandboxExpected() bool { return bwrapUsable() }
+
+func helperSandboxDenyDirs(t *testing.T, command []string) ([]string, bool) {
+	t.Helper()
+	if len(command) == 0 || command[0] != "bwrap" {
+		return nil, false
+	}
+	var dirs []string
+	for i := 0; i+2 < len(command) && command[i] != "--"; i++ {
+		if command[i] == "--ro-bind" {
+			dirs = append(dirs, command[i+1])
+		}
+	}
+	return dirs, true
+}
+
+func TestMaybeWrapHelperSandbox_BwrapNamesWorktreesDir(t *testing.T) {
+	if !bwrapUsable() {
+		t.Skip("bwrap not usable on this host")
+	}
+	stateRoot := filepath.Join(t.TempDir(), "features")
+	wt := feature.WorktreesDir(stateRoot)
+	if err := os.MkdirAll(wt, 0o755); err != nil {
+		t.Fatalf("mkdir worktrees: %v", err)
+	}
+	got, sandboxed, _, cleanup := maybeWrapHelperSandbox([]string{"helper"}, true, stateRoot)
+	defer cleanup()
+	real, err := filepath.EvalSymlinks(wt)
+	if err != nil {
+		t.Fatalf("resolve worktrees dir: %v", err)
+	}
+	if dirs, ok := helperSandboxDenyDirs(t, got); !sandboxed || !ok || !reflect.DeepEqual(dirs, []string{real}) {
+		t.Fatalf("wrapped argv = %v (sandboxed=%v), want --ro-bind %s", got, sandboxed, real)
 	}
 }

@@ -14,7 +14,13 @@
 
 package agent
 
-import "path/filepath"
+import (
+	"fmt"
+	"log"
+	"os"
+
+	"github.com/doordash-oss/agentic-orchestrator/internal/feature"
+)
 
 type boundedHelperSandboxProvider interface {
 	UsesBoundedHelperSandbox() bool
@@ -23,12 +29,28 @@ type boundedHelperSandboxProvider interface {
 // maybeWrapHelperSandbox wraps a bounded-helper command so the reviewed worktree
 // is read-only at the kernel layer while the helper's shell runs unrestricted —
 // a worktree write then fails as an ordinary shell error the model absorbs,
-// instead of a permission denial that aborts it. Returns the (possibly wrapped)
-// command, whether it was sandboxed, and a cleanup func (never nil).
-func maybeWrapHelperSandbox(command []string, enabled bool, stateDir string) ([]string, bool, func()) {
+// instead of a permission denial that aborts it. stateDir is the features
+// state root. Returns the (possibly wrapped) command, whether it was
+// sandboxed, why a requested sandbox was not applied ("" when it was, or when
+// the platform gave no reason), and a cleanup func (never nil).
+func maybeWrapHelperSandbox(command []string, enabled bool, stateDir string) ([]string, bool, string, func()) {
 	if !enabled || len(command) == 0 {
-		return command, false, func() {}
+		return command, false, "", func() {}
 	}
-	worktreesBase := filepath.Join(filepath.Dir(stateDir), "worktrees")
-	return wrapHelperSandbox(command, worktreesBase)
+	worktreesBase := feature.WorktreesDir(stateDir)
+	// A missing deny target makes the wrapper fail before the helper starts.
+	if info, err := os.Stat(worktreesBase); err != nil || !info.IsDir() {
+		reason := fmt.Sprintf("worktrees directory %s does not exist", worktreesBase)
+		log.Printf("helper sandbox: launching unsandboxed: %s", reason)
+		return command, false, reason, func() {}
+	}
+	wrapped, sandboxed, cleanup := wrapHelperSandbox(command, worktreesBase)
+	if sandboxed {
+		return wrapped, true, "", cleanup
+	}
+	reason := ""
+	if status := SandboxAvailability(); status.Unavailable {
+		reason = status.Reason
+	}
+	return wrapped, false, reason, cleanup
 }

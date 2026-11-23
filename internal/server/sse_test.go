@@ -44,24 +44,6 @@ const testEventEpoch = "epoch-test"
 // tests in this file and handler_test.go.
 const testEventKindFeatureState = "feature.state"
 
-func TestVerificationProgressEventInvalidatesFeatureSnapshot(t *testing.T) {
-	t.Parallel()
-
-	event := eventDTOFromDomain(ports.Event{
-		Type:      ports.VerificationProgress,
-		FeatureID: testFeatureID,
-	})
-	if event.Kind != sseEventLifecycleUpdated {
-		t.Errorf("event kind = %q, want %q", event.Kind, sseEventLifecycleUpdated)
-	}
-	if event.Resource.Type != entityFeature || event.Resource.FeatureID != testFeatureID {
-		t.Errorf("event resource = %+v, want feature %s", event.Resource, testFeatureID)
-	}
-	if !event.SnapshotRequired {
-		t.Error("verification progress must require a feature snapshot refresh")
-	}
-}
-
 func TestEventBrokerAssignsMonotonicEnvelopeFields(t *testing.T) {
 	t.Parallel()
 
@@ -283,6 +265,43 @@ func TestEventsResumeAfterRecentSeqReplaysMissedEvents(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+// TestEventsFilterByFeatureAndKind follows one feature without the
+// supervisor session's output activity, on replay and live.
+func TestEventsFilterByFeatureAndKind(t *testing.T) {
+	t.Parallel()
+
+	h := newAPIHandler(HandlerOptions{DisableHostValidation: true})
+	srv := httptest.NewServer(h)
+	defer srv.Close()
+	watched := Resource{Type: entityFeature, FeatureID: "F-watched"}
+	h.broker.publish(SSEEvent{Kind: sseEventSessionOutputActivity, Resource: Resource{Type: resourceTypeSession, ID: "sup", FeatureID: "__supervisor__"}})
+	h.broker.publish(SSEEvent{Kind: sseEventLifecycleUpdated, Resource: Resource{Type: entityFeature, FeatureID: "F-other"}})
+	h.broker.publish(SSEEvent{Kind: sseEventLifecycleUpdated, Resource: watched})
+	h.broker.publish(SSEEvent{Kind: sseEventSessionOutputActivity, Resource: Resource{Type: resourceTypeSession, ID: "s", FeatureID: "F-watched"}})
+
+	req, err := http.NewRequestWithContext(context.Background(), http.MethodGet,
+		srv.URL+"/api/v1/events?after=0&feature_id=F-watched&kind=lifecycle.updated,prompt.updated&kind=session.updated&heartbeat_ms=5000", nil)
+	if err != nil {
+		t.Fatalf("build request: %v", err)
+	}
+	resp, err := srv.Client().Do(req)
+	if err != nil {
+		t.Fatalf("connect: %v", err)
+	}
+	defer resp.Body.Close()
+	reader := bufio.NewReader(resp.Body)
+
+	if block := nextSSEBlock(t, reader); !strings.HasPrefix(block, "id: 3\nevent: "+sseEventLifecycleUpdated) {
+		t.Fatalf("replayed block = %q, want only the watched feature's lifecycle event (seq 3)", block)
+	}
+	h.broker.publish(SSEEvent{Kind: sseEventSessionOutputActivity, Resource: Resource{Type: resourceTypeSession, ID: "sup-2", FeatureID: "__supervisor__"}})
+	h.broker.publish(SSEEvent{Kind: sseEventSessionUpdated, Resource: Resource{Type: resourceTypeSession, ID: "s", FeatureID: "F-other"}})
+	h.broker.publish(SSEEvent{Kind: sseEventLifecycleUpdated, Resource: Resource{Type: resourceTypeRelationship, ParentID: "F-parent", ChildID: "F-watched"}})
+	if block := nextSSEBlock(t, reader); !strings.HasPrefix(block, "id: 7\nevent: "+sseEventLifecycleUpdated) {
+		t.Fatalf("live block = %q, want the watched feature's relationship event (seq 7)", block)
 	}
 }
 
@@ -662,7 +681,7 @@ func TestSessionStartedPublishesSnapshotRequiredSessionUpdate(t *testing.T) {
 	evt := eventDTOFromRuntime(session.SessionStartedMsg{
 		SessionID: fixtureSessionID,
 		FeatureID: fixtureFeatureID,
-		Phase:     feature.PhaseKnowledgeBase,
+		Phase:     feature.PhaseInquire,
 	})
 	if evt.Kind != sseEventSessionUpdated || !evt.SnapshotRequired {
 		t.Fatalf("eventDTOFromRuntime = %+v, want snapshot-required session.updated", evt)
@@ -670,8 +689,8 @@ func TestSessionStartedPublishesSnapshotRequiredSessionUpdate(t *testing.T) {
 	if evt.Resource.Type != resourceTypeSession || evt.Resource.ID != fixtureSessionID || evt.Resource.FeatureID != fixtureFeatureID {
 		t.Fatalf("event resource = %+v, want session resource for %q/%q", evt.Resource, fixtureFeatureID, fixtureSessionID)
 	}
-	if evt.Resource.Phase != feature.PhaseKnowledgeBase.String() {
-		t.Fatalf("event phase = %q, want %q", evt.Resource.Phase, feature.PhaseKnowledgeBase.String())
+	if evt.Resource.Phase != feature.PhaseInquire.String() {
+		t.Fatalf("event phase = %q, want %q", evt.Resource.Phase, feature.PhaseInquire.String())
 	}
 }
 

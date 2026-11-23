@@ -443,10 +443,6 @@ describe('AftercareWorkspace What shipped', () => {
           freshness: 'in sync',
         },
       ],
-      verificationItems: [
-        { name: 'npm run check', state: 'passed' },
-        { name: 'npm test', state: 'passed' },
-      ],
     });
 
   it('renders every carried fact and routes each row to its surface', async () => {
@@ -484,8 +480,7 @@ describe('AftercareWorkspace What shipped', () => {
     expect(within(shipped).getByText('+100')).toBeVisible();
     expect(within(shipped).getByText('−10')).toBeVisible();
     expect(within(shipped).getByText('2 commits not delivered yet')).toBeVisible();
-    expect(within(shipped).getByText('2 of 2 checks passed')).toBeVisible();
-    expect(within(shipped).getByText('npm run check · npm test')).toBeVisible();
+    expect(within(shipped).getByText('Check results stay in the run record')).toBeVisible();
     expect(within(shipped).getByText('#107')).toBeVisible();
     expect(
       within(shipped).getByText('Published from this run · in sync · 1 unresolved comment'),

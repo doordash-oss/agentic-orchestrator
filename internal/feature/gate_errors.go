@@ -21,11 +21,6 @@ import "errors"
 // a malformed request.
 var ErrInvalidTransition = errors.New("invalid transition")
 
-// ErrNeedUserInputGateOpen is returned when an execution verb (start/resume)
-// arrives while the feature is waiting on a need-user-input request. Answering
-// the request is the only way forward; anything else would silently bypass it.
-var ErrNeedUserInputGateOpen = errors.New("feature is waiting on a user input request")
-
 // ErrPhaseFinalizing is returned when an execution verb arrives while the
 // feature is inside the synchronous end-of-phase git boundary.
 var ErrPhaseFinalizing = errors.New("feature is finalizing the current phase")

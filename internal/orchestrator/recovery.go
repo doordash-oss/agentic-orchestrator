@@ -96,12 +96,6 @@ func (o *Orchestrator) ScanRecovery(ctx context.Context) ([]ports.RecoveryItem, 
 	if err := o.ReconcileIntegrationTransactions(); err != nil {
 		return nil, fmt.Errorf("reconcile integration transactions: %w", err)
 	}
-	// Reconcile pending promotion journals after integration so a merged
-	// child with an unfinished promotion can be recovered before ordinary
-	// session recovery observes or relaunches sessions.
-	if err := o.reconcilePromotions(); err != nil {
-		return nil, fmt.Errorf("reconcile promotions: %w", err)
-	}
 	items, err := o.deps.Recovery.ScanForRecovery(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("scan for recovery: %w", err)

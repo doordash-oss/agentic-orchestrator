@@ -537,8 +537,6 @@ func (m *Manager) Transition(id string, to Status) error {
 func (m *Manager) StartPhase(featureID string, phase Phase) error {
 	var status Status
 	switch phase {
-	case PhaseKnowledgeBase:
-		status = StatusBuildingKB
 	case PhaseInquire:
 		status = StatusInquiring
 	case PhaseResearch:
@@ -566,57 +564,6 @@ func stampPhaseStart(f *Feature) {
 	if f.StartedAt == nil {
 		f.StartedAt = &now
 	}
-}
-
-// InitKBStatus initializes the KBStatus map for all repos in the feature.
-func (m *Manager) InitKBStatus(featureID string) error {
-	return m.Store.Modify(featureID, func(f *Feature) error {
-		f.KBStatus = make(map[string]string)
-		for _, repo := range f.Repos {
-			f.KBStatus[repo.Name] = "pending"
-		}
-		return nil
-	})
-}
-
-// MarkRepoKBCompleted marks a single repo's KB as completed.
-func (m *Manager) MarkRepoKBCompleted(featureID, repoName string) error {
-	return m.Store.Modify(featureID, func(f *Feature) error {
-		if f.KBStatus == nil {
-			f.KBStatus = make(map[string]string)
-		}
-		f.KBStatus[repoName] = "completed"
-		return nil
-	})
-}
-
-// MarkRepoKBFailed marks a single repo's KB as failed with an error message.
-func (m *Manager) MarkRepoKBFailed(featureID, repoName, errMsg string) error {
-	return m.Store.Modify(featureID, func(f *Feature) error {
-		if f.KBStatus == nil {
-			f.KBStatus = make(map[string]string)
-		}
-		f.KBStatus[repoName] = "failed: " + errMsg
-		return nil
-	})
-}
-
-// AllKBsCompleted returns true if all repos in the feature have KBStatus == "completed".
-// Returns true if KBStatus is nil or empty (backward compat: no tracking = done).
-func (m *Manager) AllKBsCompleted(featureID string) (bool, error) {
-	f, err := m.Store.Load(featureID)
-	if err != nil {
-		return false, err
-	}
-	if len(f.KBStatus) == 0 {
-		return true, nil
-	}
-	for _, status := range f.KBStatus {
-		if status != "completed" {
-			return false, nil
-		}
-	}
-	return true, nil
 }
 
 // StartPlanning transitions a feature to Planning status and sets CurrentPhase.
@@ -855,11 +802,10 @@ func (m *Manager) MarkFailed(featureID string, failure errcat.FailureRecord) err
 	})
 }
 
-// phaseBeforeTarget returns the phase that precedes the target in logical order.
+// phaseBeforeTarget returns the phase that precedes the target in logical
+// order. Inquire, the first phase, and unknown targets yield Inquire.
 func phaseBeforeTarget(target Phase) Phase {
 	switch target {
-	case PhaseInquire:
-		return PhaseKnowledgeBase
 	case PhaseResearch:
 		return PhaseInquire
 	case PhaseDesign:
@@ -869,13 +815,13 @@ func phaseBeforeTarget(target Phase) Phase {
 	case PhaseImplement:
 		return PhasePlan
 	default:
-		return PhaseKnowledgeBase
+		return PhaseInquire
 	}
 }
 
 // completedPhaseFor determines the furthest phase completed by f based on its
 // current status. ok is false when the status has no completed phase (e.g.
-// StatusCreated, StatusBuildingKB).
+// StatusCreated).
 func completedPhaseFor(f *Feature) (completedUpTo Phase, ok bool) {
 	switch f.Status {
 	case StatusInquiring, StatusInquireReady, StatusPromptNeedsReview:
@@ -902,7 +848,7 @@ func completedPhaseFor(f *Feature) (completedUpTo Phase, ok bool) {
 			completedUpTo = PhaseImplement
 		}
 	default:
-		return 0, false // StatusCreated, StatusBuildingKB, etc.
+		return 0, false // StatusCreated, etc.
 	}
 	return completedUpTo, true
 }
@@ -911,7 +857,7 @@ func completedPhaseFor(f *Feature) (completedUpTo Phase, ok bool) {
 type RewindChoice struct {
 	Phase         Phase
 	EscalatesTo   PipelineProfile // empty if no escalation needed
-	OverridePhase Phase           // non-zero if the actual rewind target differs (e.g. KB Build)
+	OverridePhase Phase           // non-zero if the rewind restarts the pipeline from its first phase
 }
 
 // RewindChoicesForFeature computes rewind choices for phases within the current pipeline.
@@ -936,10 +882,8 @@ func RewindChoicesForFeature(f *Feature) []RewindChoice {
 			continue
 		}
 		choice := RewindChoice{Phase: p}
-		if f.PipelineUpgradedFrom == PipelineMedium && !PipelineMedium.HasPhase(p) {
-			// Feature was upgraded from medium without rewinding; KB was never built.
-			// Pre-plan phases still require KB Build on rewind.
-			choice.OverridePhase = PhaseKnowledgeBase
+		if rewindRestartsPipeline(f, p) {
+			choice.OverridePhase = profile.FirstPhase()
 		}
 		choices = append(choices, choice)
 	}
@@ -1089,12 +1033,9 @@ func (m *Manager) RewindWithRequest(featureID string, request RewindRequest) (wa
 		}
 	}
 
-	// Write description-review.md for the rewind review session whenever the
-	// target phase is the first phase of the feature's pipeline. Stays at
-	// feature root (NOT inside a run dir) — it is a transient rewind-review
-	// input, not a run artifact.
-	if targetPhase == PhaseInquire ||
-		(targetPhase == PhasePlan && f.EffectivePipeline() == PipelineMedium) {
+	// description-review.md stays at the feature root: it is a transient
+	// rewind-review input, not a run artifact.
+	if f.RewindReviewsDescription(targetPhase) {
 		descPath := filepath.Join(m.Store.BaseDir, featureID, "description-review.md")
 		_ = os.WriteFile(descPath, []byte(f.Description), 0o644)
 	}
@@ -1197,10 +1138,10 @@ func (m *Manager) RewindWithRequest(featureID string, request RewindRequest) (wa
 	// Stamp the new active run's lifecycle state. SealAndForkRun has already
 	// bumped ActiveRun/RunCount and zeroed shadow fields via syncRunToShadows.
 	modifyErr := m.Store.Modify(featureID, func(f *Feature) error {
-		if effectiveTarget == PhaseKnowledgeBase {
+		if plan.RestartsPipeline {
 			f.PipelineUpgradedFrom = ""
 			f.Status = StatusCreated
-			f.CurrentPhase = PhaseKnowledgeBase
+			f.CurrentPhase = effectiveTarget
 			f.PendingReviewPhase = nil
 			f.PendingRewindReviewRoadmapPhase = nil
 			f.IsRewind = false
@@ -1217,6 +1158,9 @@ func (m *Manager) RewindWithRequest(featureID string, request RewindRequest) (wa
 		}
 		f.IsRewind = true
 		f.CurrentPhase = phaseBeforeTarget(targetPhase)
+		if f.RewindReviewsDescription(targetPhase) {
+			f.CurrentPhase = targetPhase
+		}
 		return nil
 	})
 	_ = updated
@@ -1251,8 +1195,14 @@ func carryForwardDirs(target Phase) []string {
 // carryForwardSet returns the complete static and on-disk carry-forward set
 // shared by rewind preview and execution. A positive partialRoadmapPhase
 // selects the partial Implement rule; zero selects the full Implement rule.
-func carryForwardSet(target Phase, sealedRunDir string, partialRoadmapPhase int) ([]string, error) {
-	dirs := append([]string(nil), carryForwardDirs(target)...)
+func carryForwardSet(executed PipelineProfile, target Phase, sealedRunDir string, partialRoadmapPhase int) ([]string, error) {
+	var dirs []string
+	for _, dir := range carryForwardDirs(target) {
+		if phase, ok := ParsePhaseDirName(dir); ok && !executed.HasPhase(phase) {
+			continue
+		}
+		dirs = append(dirs, dir)
+	}
 	if target != PhaseImplement || sealedRunDir == "" {
 		return dirs, nil
 	}
@@ -1267,12 +1217,7 @@ func carryForwardSet(target Phase, sealedRunDir string, partialRoadmapPhase int)
 	if err != nil {
 		return nil, fmt.Errorf("discovering phase-NN plan dirs: %w", err)
 	}
-	phaseFiles, err := discoverCarriedPhaseFiles(sealedRunDir)
-	if err != nil {
-		return nil, fmt.Errorf("discovering phase-root history files: %w", err)
-	}
-	dirs = append(dirs, phaseDirs...)
-	return append(dirs, phaseFiles...), nil
+	return append(dirs, phaseDirs...), nil
 }
 
 // UpgradePipeline escalates a feature's pipeline profile without rewinding.
@@ -1290,7 +1235,7 @@ func (m *Manager) UpgradePipeline(featureID string, newProfile PipelineProfile) 
 		return fmt.Errorf("cannot upgrade from %s to %s: must be a higher profile", current, newProfile)
 	}
 	return m.Store.Modify(featureID, func(f *Feature) error {
-		// Record the original profile so KB restart can be enforced on rewind.
+		// Record the original profile so a pre-plan rewind restarts the pipeline.
 		// Only set once: medium→large→moonshot preserves the medium origin.
 		if f.PipelineUpgradedFrom == "" {
 			f.PipelineUpgradedFrom = current
@@ -1494,7 +1439,6 @@ func (m *Manager) RetryPhase(featureID string, repoNames []string) error {
 			state.Error = nil
 		}
 		f.Run().Failure = nil
-		f.PendingNeedUserInputPath = ""
 		f.CurrentPhaseStatus = ""
 		return nil
 	})

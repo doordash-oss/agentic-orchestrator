@@ -42,7 +42,7 @@ var metricCounterNames = []string{
 	"agentico.feature.repository.count", "agentico.phase.iteration.count", "agentico.session.outcome.count",
 	"agentico.session.token.usage", "agentico.session.turn.count", "agentico.session.retry.count",
 	"agentico.session.truncation.count", "agentico.session.context_handoff.count", "agentico.review.outcome.count",
-	"agentico.validation.outcome.count", "agentico.verification.item.count", "agentico.publish.outcome.count",
+	"agentico.validation.outcome.count", "agentico.publish.outcome.count",
 	"agentico.interaction.request.count", "agentico.automatic_review.outcome.count", "agentico.automatic_review.unavailable.count",
 	"agentico.recovery.action.count", "agentico.session.critical_message_dropped.count",
 }
@@ -320,8 +320,6 @@ func (m *telemetryMetrics) record(evt Event) {
 		add("agentico.automatic_review.unavailable.count", 1)
 	case "session.critical_message_dropped":
 		add("agentico.session.critical_message_dropped.count", 1)
-	case "verification.item_completed":
-		add("agentico.verification.item.count", 1)
 	case "permission.requested", "question.asked", "review_gate.requested":
 		add("agentico.interaction.request.count", 1)
 	case "permission.resolved", "question.answered", "review_gate.resolved":
@@ -344,7 +342,7 @@ func metricAttrs(evt Event) []attribute.KeyValue {
 	if evt.Status != "" {
 		attrs = append(attrs, attribute.String("outcome", metricEnum("outcome", evt.Status)))
 	}
-	for _, key := range []string{"pipeline", "feature_kind", "risk", "provider", "model", "effort", "error_code", "error_class", "publish_mode", "verification_type", "review_type", "validator_type", "interaction_kind", "decision", "automatic"} {
+	for _, key := range []string{"pipeline", "feature_kind", "risk", "provider", "model", "effort", "error_code", "error_class", "publish_mode", "review_type", "validator_type", "interaction_kind", "decision", "automatic"} {
 		if v, ok := evt.Data[key].(string); ok && v != "" {
 			attrs = append(attrs, attribute.String(key, metricEnum(key, v)))
 		}
@@ -367,20 +365,19 @@ func metricEnum(key, s string) string {
 		return "other"
 	}
 	allowed := map[string]map[string]bool{
-		"pipeline":          {"medium": true, "large": true, "moonshot": true},
-		"feature_kind":      {"parent": true, "child": true},
-		"risk":              {"low": true, "medium": true, "high": true},
-		"provider":          {"claude": true, "codex": true, "opencode": true},
-		"effort":            {"low": true, "medium": true, "high": true, "xhigh": true, "max": true, "ultra": true, "none": true},
-		"publish_mode":      {"published": true, "done": true, "manual": true, "automatic": true, "draft": true},
-		"verification_type": {"testing_contract": true, "validator": true, "plan": true},
-		"review_type":       {"automatic": true, "final": true, "manual": true},
-		"validator_type":    {"plan": true, "roadmap": true, "testing_contract": true},
-		"interaction_kind":  {"permission": true, "question": true, "review_gate": true},
-		"decision":          {"allow": true, "deny": true, "approved": true, "rejected": true, "answered": true, "waived": true},
-		"automatic":         {"true": true, "false": true},
-		"phase":             {"setup": true, "knowledgebase": true, "inquire": true, "research": true, "design": true, "plan": true, "implement": true, "review": true, "final_review": true, "publish": true},
-		"outcome":           {"created": true, "started": true, "completed": true, "passed": true, "failed": true, "error": true, "ok": true, "success": true, "interrupted": true, "needuserinput": true, "codeready": true, "published": true, "done": true, "delivered": true, "ready": true, "resolved": true, "requested": true, "recorded": true, "unavailable": true, "blocked": true, "waived": true, "regression": true, "inherited_failure": true, "unclassified_failure": true, "missing_capability": true, "contract_error": true, "environment_limited": true, "flaky_failure": true},
+		"pipeline":         {"medium": true, "large": true, "moonshot": true},
+		"feature_kind":     {"parent": true, "child": true},
+		"risk":             {"low": true, "medium": true, "high": true},
+		"provider":         {"claude": true, "codex": true, "opencode": true},
+		"effort":           {"low": true, "medium": true, "high": true, "xhigh": true, "max": true, "ultra": true, "none": true},
+		"publish_mode":     {"published": true, "done": true, "manual": true, "automatic": true, "draft": true},
+		"review_type":      {"automatic": true, "final": true, "manual": true},
+		"validator_type":   {"plan": true, "roadmap": true},
+		"interaction_kind": {"permission": true, "question": true, "review_gate": true},
+		"decision":         {"allow": true, "deny": true, "approved": true, "rejected": true, "answered": true},
+		"automatic":        {"true": true, "false": true},
+		"phase":            {"setup": true, "inquire": true, "research": true, "design": true, "plan": true, "implement": true, "review": true, "final_review": true, "publish": true},
+		"outcome":          {"created": true, "started": true, "completed": true, "passed": true, "failed": true, "error": true, "ok": true, "success": true, "interrupted": true, "codeready": true, "published": true, "done": true, "delivered": true, "ready": true, "resolved": true, "requested": true, "recorded": true, "unavailable": true, "blocked": true},
 	}
 	if key == "model" {
 		return normalizeMetricModel(v)

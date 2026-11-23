@@ -23,7 +23,6 @@ var roleSpecs = append(
 		roadmapReviserRoleSpec,
 		phasePlanCreatorRoleSpec,
 		phasePlanReviserRoleSpec,
-		knowledgeBaseBuilderRoleSpec,
 		inquirerRoleSpec,
 		researcherRoleSpec,
 		designerRoleSpec,

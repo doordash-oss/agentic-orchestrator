@@ -1719,11 +1719,11 @@ describe('WorkspaceShell ambient notices', () => {
         ],
       },
       {
-        kind: 'gate',
-        id: 'gate-1',
+        kind: 'permission',
+        id: 'perm-1',
         featureId: SECOND_FEATURE_ID,
         waitingSince: '2026-08-05T10:02:00Z',
-        questions: [{ index: 1, prompt: 'Window?', answer: '' }],
+        toolName: 'Bash',
       },
       {
         kind: 'recovery',
@@ -1743,7 +1743,7 @@ describe('WorkspaceShell ambient notices', () => {
     const waitingLane = within(sidebar).getByRole('group', { name: 'Waiting on you' });
     expect(within(waitingLane).getAllByRole('option')).toHaveLength(2);
     expect(within(sidebar).getByText('Answer 2 questions')).toBeVisible();
-    expect(within(sidebar).getByText('Resolve 1 gate')).toBeVisible();
+    expect(within(sidebar).getByText('Approve 1 request')).toBeVisible();
 
     // Everything clears together once the items resolve.
     view.rerender(<WorkspaceShell attentionItems={[]} />);

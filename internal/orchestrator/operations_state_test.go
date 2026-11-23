@@ -355,18 +355,3 @@ func TestAnswerQueuedHelp(t *testing.T) {
 		}
 	})
 }
-
-func TestPendingNeedUserInputGatePath(t *testing.T) {
-	gated := opFeature("nui-1", feature.StatusNeedUserInput, feature.PhaseImplement)
-	gated.PendingNeedUserInputPath = "/gates/need-user-input.md"
-	open := opFeature("nui-2", feature.StatusImplementing, feature.PhaseImplement)
-	fx := newOpFixture(t, gated, open)
-
-	path, err := fx.o.PendingNeedUserInputGatePath("nui-1")
-	if err != nil || path != "/gates/need-user-input.md" {
-		t.Fatalf("PendingNeedUserInputGatePath() = %q, %v; want the gate path", path, err)
-	}
-	if _, err := fx.o.PendingNeedUserInputGatePath("nui-2"); err == nil {
-		t.Fatal("PendingNeedUserInputGatePath() without an open gate error = nil")
-	}
-}

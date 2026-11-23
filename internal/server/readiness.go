@@ -555,15 +555,15 @@ func flattenReadinessIssues(resp ReadinessResponse) []Error {
 	return issues
 }
 
-// verificationSandboxStatus is the cached once-per-process sandbox probe;
+// reviewSandboxStatus is the cached once-per-process sandbox probe;
 // tests replace it.
-var verificationSandboxStatus = agent.SandboxAvailability
+var reviewSandboxStatus = agent.SandboxAvailability
 
-// sandboxReadinessIssue is the single machine-level warning that the
-// verification sandbox cannot be applied (only macOS reports this, e.g.
+// sandboxReadinessIssue is the single machine-level warning that the review
+// sandbox cannot be applied (only macOS reports this, e.g.
 // nested sandbox-exec). It never changes ready.
 func sandboxReadinessIssue() *Error {
-	status := verificationSandboxStatus()
+	status := reviewSandboxStatus()
 	if !status.Unavailable {
 		return nil
 	}

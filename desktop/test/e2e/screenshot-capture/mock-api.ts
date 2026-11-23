@@ -38,8 +38,6 @@ import type {
   RunDetailView,
   RunListResult,
   RunSessionsListResult,
-  TestingContractItem,
-  TestingContractSnapshot,
   RunSummaryView,
   RunTextContent,
   SessionDetail,
@@ -408,7 +406,7 @@ const OVERVIEW_LANE_FEATURES: FeatureSnapshot[] = [
   overviewLaneSnapshot(
     'updater-auto-1',
     'electron App auto-updater',
-    'NeedUserInput',
+    'Interrupted',
     'Review',
     ['agentic-orchestrator'],
     '2026-07-23T09:00:00Z',
@@ -896,22 +894,6 @@ const AFTERCARE_FEATURE_SNAPSHOT: FeatureSnapshot = {
   ],
 };
 
-/**
- * Published aftercare with the verification items still carried. The server
- * clears them the moment harness verification finishes, so this fixture
- * exercises the carried-items branch of the receipt's Verification row; the
- * `aftercare-bare` fixture below exercises the (commoner) cleared case.
- */
-const AFTERCARE_VERIFIED_SNAPSHOT: FeatureSnapshot = {
-  ...AFTERCARE_FEATURE_SNAPSHOT,
-  verificationItems: [
-    { name: 'lint', state: 'passed' },
-    { name: 'typecheck', state: 'passed' },
-    { name: 'unit', state: 'passed' },
-    { name: 'e2e', state: 'passed' },
-  ],
-};
-
 /** Published with nothing to show: no pull request, no reachable diff. */
 const AFTERCARE_BARE_SNAPSHOT: FeatureSnapshot = {
   ...AFTERCARE_FEATURE_SNAPSHOT,
@@ -951,7 +933,7 @@ const REFACTOR_PASS_CHILD_SNAPSHOT: FeatureSnapshot = {
   name: 'Slop removal pass',
   slug: 'slop-removal-pass',
   status: 'Created',
-  currentPhase: 'Knowledge Base',
+  currentPhase: 'Inquire',
   pipeline: 'large',
   description: 'Remove the redundancy the implementation run left behind.',
   activeRun: 1,
@@ -1495,47 +1477,24 @@ function backgroundAttentionItems(): AttentionSnapshot['items'] {
 
 /**
  * The mixed inbox the `attention-popover` scene shows, so the bell carries a
- * real count and the popover list holds several distinct kinds at once:
- *
- * - an ownerless verification gate, which is the only kind that expands inline
- *   inside the popover (owned items jump to their feature instead). It carries
- *   the structured verification branch — blockers plus exactly the WAIVE /
- *   RETRY_AFTER_AUTH pair against a single question — so the expanded row shows
- *   the decision radios rather than a free-text answer box.
- * - a feature-owned permission and a feature-owned review, so the list is
- *   genuinely mixed rather than three copies of one row.
- *
- * The gate deliberately has no `featureId`: that is what "ownerless" means to
- * `attentionOwnerFeatureId`, and the schema's required `featureId` is why the
- * literal is cast rather than annotated.
+ * real count and the popover list holds three distinct feature-owned kinds.
  */
 const ATTENTION_POPOVER_ITEMS: AttentionSnapshot['items'] = [
   {
-    kind: 'gate',
-    id: 'verification-gate-signal-lab',
+    kind: 'questions',
+    id: 'questions-signal-lab',
+    featureId: 'abcd1234ef567890',
     waitingSince: new Date(Date.now() - 9 * 60_000).toISOString(),
-    scope: 'repo',
-    repoName: 'signal-lab',
-    iteration: 3,
-    // One blocker, tersely worded: the decision radios are the point of this
-    // evidence, and the popover is only 34rem tall before it scrolls.
-    summary: 'Verification stopped: a check needs credentials this run does not hold.',
-    questions: [{ index: 1, prompt: 'How should Agentico continue?', answer: '' }],
-    verification: {
-      blockers: [
-        {
-          itemId: 'deploy-smoke',
-          name: 'Deployment smoke test',
-          repoName: 'signal-lab',
-          command: 'npm run smoke -- --stage=canary',
-          reason: 'The canary deploy token expired.',
-          capabilities: ['network', 'deploy-token'],
-          remediation: 'Refresh the token, then retry.',
-        },
-      ],
-      allowedActions: ['RETRY_AFTER_AUTH', 'WAIVE'],
-    },
-  } as AttentionSnapshot['items'][number],
+    questions: [
+      {
+        index: 1,
+        question: 'Which canary stage should the smoke test target?',
+        header: 'Canary stage',
+        multiSelect: false,
+        options: [{ label: 'Staging' }, { label: 'Production canary' }],
+      },
+    ],
+  },
   {
     kind: 'permission',
     id: 'perm-rewrite-preview',
@@ -1562,22 +1521,25 @@ const ATTENTION_POPOVER_ITEMS: AttentionSnapshot['items'] = [
  * The `update-popover` scene's inbox. That capture is about the update popover
  * and the footer dot, but it also shows the bell beside the Overview "Waiting on
  * you" lane, and those two read from different sources — the lane from the
- * feature summaries, the badge from this snapshot. One gate owned by the lane's
- * single waiting feature (`updater-auto-1`, whose display state is
- * NeedUserInput) keeps the two agreeing at 1 rather than photographing a zero
- * badge beside a populated lane.
+ * feature summaries, the badge from this snapshot. One question owned by the
+ * lane's single waiting feature (`updater-auto-1`) keeps the two agreeing at 1
+ * rather than photographing a zero badge beside a populated lane.
  */
 const UPDATE_POPOVER_ITEMS: AttentionSnapshot['items'] = [
   {
-    kind: 'gate',
-    id: 'gate-updater-auto-1',
+    kind: 'questions',
+    id: 'questions-updater-auto-1',
     featureId: 'updater-auto-1',
     waitingSince: new Date(Date.now() - 6 * 60_000).toISOString(),
-    scope: 'repo',
-    repoName: 'agentic-orchestrator',
-    iteration: 1,
-    summary: 'The updater needs a signing identity before it can publish.',
-    questions: [{ index: 1, prompt: 'Which signing identity should it use?', answer: '' }],
+    questions: [
+      {
+        index: 1,
+        question: 'Which signing identity should the updater use?',
+        header: 'Signing identity',
+        multiSelect: false,
+        options: [{ label: 'Developer ID' }, { label: 'Ad hoc' }],
+      },
+    ],
   },
 ];
 
@@ -1777,11 +1739,8 @@ function makeMockApi(
       if (scene === 'feature-question-bench') {
         return Promise.resolve({ ...FEATURE_SNAPSHOT, status: 'Implementing' });
       }
-      if (scene === 'gate-sheet-plain' || scene === 'gate-sheet-verification') {
-        return Promise.resolve({ ...FEATURE_SNAPSHOT, status: 'NeedUserInput' });
-      }
       if (scene === 'aftercare-verified' || scene === 'aftercare-inspector') {
-        return Promise.resolve(AFTERCARE_VERIFIED_SNAPSHOT);
+        return Promise.resolve(AFTERCARE_FEATURE_SNAPSHOT);
       }
       if (scene === 'aftercare-bare') {
         return Promise.resolve(AFTERCARE_BARE_SNAPSHOT);
@@ -1951,9 +1910,6 @@ function makeMockApi(
     answerPermission: () => Promise.resolve({ result: 'submitted' } as AttentionActionResult),
     answerQuestions: () => Promise.resolve({ result: 'submitted' } as AttentionActionResult),
     sendHelp: () => Promise.resolve({ result: 'submitted' } as AttentionActionResult),
-    saveGateDraft: () => Promise.resolve({ result: 'drafted' } as AttentionActionResult),
-    resolveGate: () => Promise.resolve({ result: 'resolved' } as AttentionActionResult),
-    ...testingContractFixture(),
     listSessions: () => Promise.resolve(SESSIONS),
     getSession: (sessionId) => {
       const summary = SESSIONS.find((s) => s.id === sessionId);
@@ -2873,120 +2829,6 @@ function diagnosticsSnapshotForScene(_scene: string): DiagnosticsSnapshot {
         context: 'exitCode=9',
       },
     ],
-  };
-}
-
-/**
- * The testing contract behind the Files tab's "Waive contract items" action,
- * shaped by the URL: `contract` picks the state (`normal`, `mixed`,
- * `multi-repo`, `empty`, `missing`, `error`, `loading`) and `count` the row
- * count; `waive=conflict` rejects every waiver as a stale contract and bumps
- * the revision. Waivers mutate the fixture so a reopened dialog shows them
- * recorded.
- */
-function testingContractFixture(): Pick<
-  AgenticoApi,
-  'getTestingContract' | 'waiveTestingContract'
-> {
-  const params = new URLSearchParams(window.location.search);
-  const mode = params.get('contract') ?? 'normal';
-  const count = Number(params.get('count') ?? 4);
-  const waiveMode = params.get('waive') ?? 'ok';
-  const names = [
-    'Desktop unit tests',
-    'Packaged desktop journey',
-    'Preview of the billing dashboard',
-    'Accessibility audit',
-    'API integration tests',
-    'Visual regression capture',
-    'Migration smoke test',
-    'Error recovery journey',
-    'Keyboard navigation checks',
-    'Deployment health check',
-    'Performance budget',
-    'Cross-repository smoke test',
-  ];
-  const commands = ['npm test', 'npm run test:e2e:packaged', 'Capture the billing dashboard'];
-  const hashes = ['abc12def900', 'dd034fab450', 'ea773cf3310', 'fe8712b6090'];
-  const items: TestingContractItem[] = Array.from({ length: count }, (_, i) => ({
-    itemId: `${i === 2 ? 'visual' : 'plan'}_${hashes[i % 4]}${String(i).padStart(2, '0')}`,
-    name: mode === 'multi-repo' ? 'Unit tests' : names[i % names.length]!,
-    source: i === 2 ? 'visual' : 'plan',
-    owner: i === 2 ? 'agent' : 'harness',
-    repo: mode === 'multi-repo' ? (i === 0 ? 'api' : 'web') : 'agentic-orchestrator',
-    command: mode === 'multi-repo' ? 'npm test' : commands[i % commands.length]!,
-    required: i !== 3,
-    allowSubstitution: i !== 2,
-    allowBlocked: true,
-    allowWaiver: mode !== 'mixed' || i !== 3,
-    capabilities: i === 2 ? ['billing-dashboard-access', 'browser'] : [],
-    ...(mode === 'mixed' && i === 1
-      ? {
-          disposition: {
-            status: 'waived',
-            reason: 'Covered by the nightly desktop matrix.',
-            changedBy: 'user',
-          },
-        }
-      : {}),
-  }));
-  let snapshot: TestingContractSnapshot = {
-    available: true,
-    featureId: 'abcd1234ef567890',
-    activeRun: 1,
-    roadmapPhase: 3,
-    revision: 4,
-    items,
-  };
-  return {
-    getTestingContract: ({ featureId }) => {
-      if (mode === 'loading') return new Promise(() => undefined);
-      if (mode === 'error') return Promise.reject(new Error('E_INTERNAL: contract read failed'));
-      if (mode === 'missing') return Promise.resolve({ available: false as const });
-      if (mode === 'empty') {
-        return Promise.resolve({
-          available: true,
-          featureId,
-          activeRun: 1,
-          roadmapPhase: 3,
-          revision: 4,
-          items: [],
-        });
-      }
-      return Promise.resolve({ ...snapshot, featureId });
-    },
-    waiveTestingContract: (request) => {
-      if (!snapshot.available) return Promise.reject(new Error('E_NOT_FOUND: no contract'));
-      if (waiveMode === 'conflict') {
-        snapshot = { ...snapshot, revision: snapshot.revision + 1 };
-        return Promise.reject(
-          canonicalRejection({
-            code: 'conflict',
-            class: 'blocking',
-            title: 'Conflict',
-            summary:
-              'The request conflicts with the current state of the feature. The testing contract changed since it was read: reload the contract and select again.',
-          }),
-        );
-      }
-      snapshot = {
-        ...snapshot,
-        revision: snapshot.revision + 1,
-        items: snapshot.items.map((item) =>
-          request.itemIds.includes(item.itemId)
-            ? {
-                ...item,
-                disposition: { status: 'waived', reason: request.reason, changedBy: 'user' },
-              }
-            : item,
-        ),
-      };
-      return Promise.resolve({
-        result: 'waived',
-        contractRevision: snapshot.revision,
-        waivedItems: request.itemIds,
-      });
-    },
   };
 }
 

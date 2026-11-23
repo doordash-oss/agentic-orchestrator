@@ -32,7 +32,6 @@ func TestNewDefault(t *testing.T) {
 		Implementation: "sonnet[200K]",
 		Review:         "gpt-5.4[272K]",
 		Utilities:      "sonnet[200K]",
-		KBBuild:        "sonnet[200K]",
 	}
 	if cfg.Defaults.Models != wantModels {
 		t.Errorf("default models = %+v, want %+v", cfg.Defaults.Models, wantModels)
@@ -117,7 +116,6 @@ func TestSaveAndLoad(t *testing.T) {
 				Planning:       "claude:haiku",
 				Implementation: "claude:sonnet",
 				Review:         "codex:gpt-5.4-mini",
-				KBBuild:        "claude:opus",
 			},
 			Inquireness: "none",
 		},
@@ -281,7 +279,6 @@ func TestModelConfigYAMLCurrentFieldsRoundTrip(t *testing.T) {
 		Implementation:  "codex:gpt-5.4",
 		Review:          "codex:gpt-5.4-mini",
 		Utilities:       "claude:haiku[200K]",
-		KBBuild:         "claude:sonnet[200K]",
 		AutomaticReview: "claude:haiku",
 	}
 
@@ -609,57 +606,12 @@ func TestUtilitiesModelRoundTrip(t *testing.T) {
 	}
 }
 
-// --- KBBuild field tests ---
-
-func TestNewDefaultKBBuild(t *testing.T) {
-	cfg := NewDefault()
-	if cfg.Defaults.Models.KBBuild != "sonnet[200K]" {
-		t.Errorf("expected KBBuild default sonnet[200K], got %s", cfg.Defaults.Models.KBBuild)
-	}
-}
-
-func TestApplyDefaultsFillsKBBuild(t *testing.T) {
-	cfg := &Config{}
-	applyDefaults(cfg)
-	if cfg.Defaults.Models.KBBuild != "sonnet[200K]" {
-		t.Errorf("expected KBBuild sonnet[200K] after applyDefaults, got %s", cfg.Defaults.Models.KBBuild)
-	}
-}
-
-func TestApplyDefaultsPreservesExistingKBBuild(t *testing.T) {
-	cfg := &Config{}
-	cfg.Defaults.Models.KBBuild = "sonnet"
-	applyDefaults(cfg)
-	if cfg.Defaults.Models.KBBuild != "sonnet" {
-		t.Errorf("expected KBBuild to be preserved as sonnet, got %s", cfg.Defaults.Models.KBBuild)
-	}
-}
-
-func TestKBBuildYAMLRoundTrip(t *testing.T) {
+func TestLoadConfigWithRetiredKBBuildRole(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "config.yaml")
 
-	original := NewDefault()
-	original.Defaults.Models.KBBuild = "sonnet"
-	if err := Save(path, original); err != nil {
-		t.Fatalf("save: %v", err)
-	}
-
-	loaded, err := Load(path)
-	if err != nil {
-		t.Fatalf("load: %v", err)
-	}
-	if loaded.Defaults.Models.KBBuild != "sonnet" {
-		t.Errorf("KBBuild mismatch after round-trip: got %s, want sonnet", loaded.Defaults.Models.KBBuild)
-	}
-}
-
-func TestLoadConfigWithoutKBBuildGetsDefault(t *testing.T) {
-	dir := t.TempDir()
-	path := filepath.Join(dir, "config.yaml")
-
-	// Legacy config without kb_build field.
-	content := []byte("defaults:\n  models:\n    research: opus\n    planning: opus\n    implementation: opus\n    review: codex\n    chat: sonnet\n")
+	content := []byte("model_recommendations:\n  research: [\"claude:opus\"]\n  kb_build: [\"claude:haiku\"]\n" +
+		"defaults:\n  models:\n    research: opus\n    kb_build: haiku\n  effort:\n    kb_build: high\n")
 	if err := os.WriteFile(path, content, 0o644); err != nil {
 		t.Fatal(err)
 	}
@@ -668,26 +620,14 @@ func TestLoadConfigWithoutKBBuildGetsDefault(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Load: %v", err)
 	}
-	if cfg.Defaults.Models.KBBuild != "sonnet[200K]" {
-		t.Errorf("expected KBBuild sonnet[200K] for config without kb_build, got %s", cfg.Defaults.Models.KBBuild)
+	if cfg.Defaults.Models.Research != "opus" {
+		t.Errorf("Research = %q, want opus", cfg.Defaults.Models.Research)
 	}
-}
-
-func TestKBBuildYAMLPresent(t *testing.T) {
-	dir := t.TempDir()
-	path := filepath.Join(dir, "config.yaml")
-
-	content := []byte("defaults:\n  models:\n    research: opus\n    kb_build: haiku\n")
-	if err := os.WriteFile(path, content, 0o644); err != nil {
-		t.Fatal(err)
+	if _, ok := cfg.ModelRecommendations["kb_build"]; ok {
+		t.Errorf("ModelRecommendations kept retired kb_build: %v", cfg.ModelRecommendations)
 	}
-
-	cfg, err := Load(path)
-	if err != nil {
-		t.Fatalf("Load: %v", err)
-	}
-	if cfg.Defaults.Models.KBBuild != "haiku" {
-		t.Errorf("expected KBBuild haiku, got %s", cfg.Defaults.Models.KBBuild)
+	if got := cfg.ModelRecommendations["research"]; len(got) != 1 || got[0] != "claude:opus" {
+		t.Errorf("ModelRecommendations research = %v, want [claude:opus]", got)
 	}
 }
 
@@ -701,7 +641,6 @@ func TestApplyProviderDefaults_FillsEmptyFields(t *testing.T) {
 		Implementation: "claude:opus",
 		Review:         "codex:codex",
 		Utilities:      "claude:sonnet",
-		KBBuild:        "claude:opus",
 	}
 	ApplyProviderDefaults(cfg, defaults)
 
@@ -721,16 +660,12 @@ func TestApplyProviderDefaults_FillsEmptyFields(t *testing.T) {
 	if m.Utilities != "claude:sonnet" {
 		t.Errorf("Utilities = %q, want claude:sonnet", m.Utilities)
 	}
-	if m.KBBuild != "claude:opus" {
-		t.Errorf("KBBuild = %q, want claude:opus", m.KBBuild)
-	}
 }
 
 func TestApplyProviderDefaults_PreservesUserSetValues(t *testing.T) {
 	cfg := &Config{}
 	cfg.Defaults.Models.Research = "haiku"
 	cfg.Defaults.Models.Utilities = "opus"
-	cfg.Defaults.Models.KBBuild = "sonnet"
 
 	defaults := ModelConfig{
 		Research:       "claude:opus",
@@ -738,7 +673,6 @@ func TestApplyProviderDefaults_PreservesUserSetValues(t *testing.T) {
 		Implementation: "claude:opus",
 		Review:         "codex:codex",
 		Utilities:      "claude:sonnet",
-		KBBuild:        "claude:opus",
 	}
 	ApplyProviderDefaults(cfg, defaults)
 
@@ -748,9 +682,6 @@ func TestApplyProviderDefaults_PreservesUserSetValues(t *testing.T) {
 	}
 	if m.Utilities != "opus" {
 		t.Errorf("Utilities = %q, want opus (user-set)", m.Utilities)
-	}
-	if m.KBBuild != "sonnet" {
-		t.Errorf("KBBuild = %q, want sonnet (user-set)", m.KBBuild)
 	}
 	// Non-user-set fields should be filled.
 	if m.Planning != "claude:opus" {
@@ -767,15 +698,11 @@ func TestApplyProviderDefaults_SingleProvider_BareNames(t *testing.T) {
 		Implementation: "opus",
 		Review:         "opus",
 		Utilities:      "sonnet",
-		KBBuild:        "opus",
 	}
 	ApplyProviderDefaults(cfg, defaults)
 
 	if cfg.Defaults.Models.Research != "opus" {
 		t.Errorf("Research = %q, want opus (bare name)", cfg.Defaults.Models.Research)
-	}
-	if cfg.Defaults.Models.KBBuild != "opus" {
-		t.Errorf("KBBuild = %q, want opus (bare name)", cfg.Defaults.Models.KBBuild)
 	}
 }
 
@@ -788,7 +715,6 @@ func TestApplyProviderDefaults_MultiProvider_PrefixedNames(t *testing.T) {
 		Implementation: "claude:opus",
 		Review:         "codex:codex",
 		Utilities:      "claude:sonnet",
-		KBBuild:        "claude:opus",
 	}
 	ApplyProviderDefaults(cfg, defaults)
 
@@ -797,9 +723,6 @@ func TestApplyProviderDefaults_MultiProvider_PrefixedNames(t *testing.T) {
 	}
 	if cfg.Defaults.Models.Review != "codex:codex" {
 		t.Errorf("Review = %q, want codex:codex", cfg.Defaults.Models.Review)
-	}
-	if cfg.Defaults.Models.KBBuild != "claude:opus" {
-		t.Errorf("KBBuild = %q, want claude:opus", cfg.Defaults.Models.KBBuild)
 	}
 }
 
@@ -822,7 +745,7 @@ func TestApplyProviderDefaults_FillsEmptyConfigInquiryDefault(t *testing.T) {
 	cfg := &Config{}
 	defaults := ModelConfig{
 		Inquiry: "sonnet", Research: "opus", Planning: "opus", Implementation: "opus",
-		Review: "gpt-5.4", Utilities: "sonnet", KBBuild: "opus",
+		Review: "gpt-5.4", Utilities: "sonnet",
 	}
 	if !ApplyProviderDefaults(cfg, defaults) {
 		t.Error("expected changed=true when filling empty config")
@@ -852,7 +775,7 @@ func TestApplyProviderDefaults_ReportsChangeWhenOtherFieldsFilled(t *testing.T) 
 	cfg.Defaults.Models.Research = "haiku"
 	defaults := ModelConfig{
 		Inquiry: "sonnet", Research: "opus", Planning: "opus", Implementation: "opus",
-		Review: "gpt-5.4", Utilities: "sonnet", KBBuild: "opus",
+		Review: "gpt-5.4", Utilities: "sonnet",
 	}
 	if !ApplyProviderDefaults(cfg, defaults) {
 		t.Error("expected changed=true since other fields were empty")
@@ -872,11 +795,11 @@ func TestApplyProviderDefaults_NoChange(t *testing.T) {
 	cfg := &Config{}
 	cfg.Defaults.Models = ModelConfig{
 		Inquiry: "z", Research: "a", Planning: "b", Implementation: "c",
-		Review: "d", Utilities: "e", KBBuild: "f",
+		Review: "d", Utilities: "e",
 	}
 	defaults := ModelConfig{
 		Inquiry: "sonnet", Research: "opus", Planning: "opus", Implementation: "opus",
-		Review: "codex", Utilities: "sonnet", KBBuild: "opus",
+		Review: "codex", Utilities: "sonnet",
 	}
 	if ApplyProviderDefaults(cfg, defaults) {
 		t.Error("expected changed=false when all fields already set")
@@ -1914,7 +1837,6 @@ func TestModelConfigIsEmpty(t *testing.T) {
 		"implementation":   {Implementation: "x"},
 		"review":           {Review: "x"},
 		"utilities":        {Utilities: "x"},
-		"kb build":         {KBBuild: "x"},
 		"automatic review": {AutomaticReview: "x"},
 	} {
 		if m.IsEmpty() {

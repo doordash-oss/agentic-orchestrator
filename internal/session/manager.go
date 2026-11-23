@@ -266,7 +266,23 @@ func (m *Manager) StartSession(id, featureID string, phase feature.Phase, comman
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), handshakeTimeout)
 	defer cancel()
+	// Done closes once stdout is drained, so nothing can still answer.
+	go func() {
+		select {
+		case <-s.Done():
+			cancel()
+		case <-ctx.Done():
+		}
+	}()
 	if err := s.protocol.Handshake(ctx); err != nil && !isChildExitedWriteError(err) {
+		select {
+		case <-m.stoppingCh:
+			s.Stop()
+			return nil, ErrShuttingDown
+		case <-s.Done():
+			err = s.earlyExitError()
+		default:
+		}
 		s.Stop()
 		return nil, fmt.Errorf("protocol handshake: %w", err)
 	}

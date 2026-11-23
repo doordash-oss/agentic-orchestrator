@@ -33,6 +33,8 @@ const (
 	PhaseImplement
 	PhasePublish
 	PhaseReview
+	// PhaseKnowledgeBase is retired: no profile schedules it. It remains so
+	// records persisted by older versions still load and display.
 	PhaseKnowledgeBase
 	PhaseInquire
 	PhaseDesign
@@ -235,7 +237,7 @@ const (
 	StatusFailed
 	StatusInterrupted
 	StatusDone
-	StatusBuildingKB
+	_ // retired BuildingKB; loads as StatusInterrupted
 	StatusPlanNeedsReview
 	StatusInquiring
 	StatusInquireReady
@@ -246,11 +248,6 @@ const (
 	StatusResearchNeedsReview
 	StatusDesignNeedsReview
 	statusReviewing
-	// StatusNeedUserInput marks a feature paused on a phase-implement
-	// need-user-input gate. The unified flow tracks NEED_USER_INPUT at the
-	// feature level via Feature.PendingNeedUserInputPath; per-repo pauses
-	// are no longer modelled separately.
-	StatusNeedUserInput
 	// StatusFinalReviewing marks a feature in the deferred end-of-feature
 	// final review pass. The orchestrator transitions
 	// StatusReviewPassed → StatusFinalReviewing on entry and
@@ -287,8 +284,6 @@ func (s Status) String() string {
 		return "Failed"
 	case StatusInterrupted:
 		return "Interrupted"
-	case StatusBuildingKB:
-		return "BuildingKB"
 	case StatusPlanNeedsReview:
 		return "PlanNeedsReview"
 	case StatusInquiring:
@@ -309,8 +304,6 @@ func (s Status) String() string {
 		return "DesignNeedsReview"
 	case statusReviewing:
 		return "Reviewing"
-	case StatusNeedUserInput:
-		return "NeedUserInput"
 	case StatusFinalReviewing:
 		return "FinalReviewing"
 	case StatusSettingUpWorktrees:
@@ -322,7 +315,7 @@ func (s Status) String() string {
 
 // IsRunning returns true if this status represents an actively executing phase.
 func (s Status) IsRunning() bool {
-	return s == StatusResearching || s == StatusPlanning || s == StatusImplementing || s == StatusBuildingKB || s == StatusInquiring || s == StatusDesigning || s == StatusFinalReviewing || s == StatusSettingUpWorktrees
+	return s == StatusResearching || s == StatusPlanning || s == StatusImplementing || s == StatusInquiring || s == StatusDesigning || s == StatusFinalReviewing || s == StatusSettingUpWorktrees
 }
 
 // IsNeedsReview returns true if this status represents a pending artifact review.
@@ -352,6 +345,21 @@ func NeedsReviewForPhase(target Phase) Status {
 	}
 }
 
+// RewindReviewsDescription reports whether a rewind to target reviews the
+// feature description because no earlier phase produced an artifact.
+func (f *Feature) RewindReviewsDescription(target Phase) bool {
+	return target == f.executedPipeline().FirstPhase()
+}
+
+// executedPipeline is the pipeline whose phases the feature's runs executed:
+// an upgrade without a rewind never runs the phases it added.
+func (f *Feature) executedPipeline() PipelineProfile {
+	if f.PipelineUpgradedFrom != "" {
+		return f.PipelineUpgradedFrom
+	}
+	return f.EffectivePipeline()
+}
+
 // MarshalYAML serializes Status as a string for stable YAML representation.
 func (s Status) MarshalYAML() (interface{}, error) {
 	return s.String(), nil
@@ -372,7 +380,7 @@ func (s *Status) UnmarshalYAML(unmarshal func(interface{}) error) error {
 		"Failed":              StatusFailed,
 		"Interrupted":         StatusInterrupted,
 		"Done":                StatusDone,
-		"BuildingKB":          StatusBuildingKB,
+		"BuildingKB":          StatusInterrupted,
 		"PlanNeedsReview":     StatusPlanNeedsReview,
 		"Inquiring":           StatusInquiring,
 		"InquireReady":        StatusInquireReady,
@@ -383,9 +391,11 @@ func (s *Status) UnmarshalYAML(unmarshal func(interface{}) error) error {
 		"ResearchNeedsReview": StatusResearchNeedsReview,
 		"DesignNeedsReview":   StatusDesignNeedsReview,
 		"Reviewing":           statusReviewing,
-		"NeedUserInput":       StatusNeedUserInput,
 		"FinalReviewing":      StatusFinalReviewing,
 		"SettingUpWorktrees":  StatusSettingUpWorktrees,
+		// A feature persisted while paused on the removed need-user-input
+		// gate resumes as an ordinary interrupted implement phase.
+		"NeedUserInput": StatusInterrupted,
 	}
 
 	var str string
@@ -600,7 +610,7 @@ type Feature struct {
 	MaxPlanIterations    int                 `yaml:"max_plan_iterations,omitempty"`
 	RiskLevel            RiskLevel           `yaml:"risk_level,omitempty"`
 	Pipeline             PipelineProfile     `yaml:"pipeline,omitempty"`
-	PipelineUpgradedFrom PipelineProfile     `yaml:"pipeline_upgraded_from,omitempty"` // original profile before UpgradePipeline; used to enforce KB restart on rewind
+	PipelineUpgradedFrom PipelineProfile     `yaml:"pipeline_upgraded_from,omitempty"` // original profile before UpgradePipeline; used to restart from the first phase on rewind
 	Checkpoints          Checkpoints         `yaml:"checkpoints,omitempty"`
 	LastAttachedRepo     string              `yaml:"last_attached_repo,omitempty"` // repo name for attach mode tab restoration
 	// InputNotifications overrides global notification behavior for this
@@ -665,12 +675,6 @@ type Feature struct {
 	// written before the stamp existed.
 	PersistSeq int64 `yaml:"persist_seq,omitempty"`
 
-	// PendingNeedUserInputPath is the absolute path of the persisted
-	// `need-user-input.yaml` gate artifact when the feature is paused on a
-	// single-repo NEED_USER_INPUT gate. Empty otherwise. The unified flow
-	// tracks NEED_USER_INPUT at the feature level only.
-	PendingNeedUserInputPath string `yaml:"-"`
-
 	// --- Transient per-run shadows (yaml:"-"; NOT persisted in feature.yaml) ---
 	// Store.saveUnlocked copies these into the companion Run before writing
 	// run.yaml; Store.loadUnlocked copies the loaded Run back into these fields
@@ -686,20 +690,14 @@ type Feature struct {
 	// ValidatorErrors holds the last error of a failed or retrying validator,
 	// keyed like ValidatorStatuses.
 	ValidatorErrors map[string]string `yaml:"-"`
-	// VerificationItems is the ordered live progress of harness-executed
-	// testing-contract commands while CurrentPhaseStatus is "verifying".
-	VerificationItems []VerificationItemStatus `yaml:"-"`
-	PlanIteration     int                      `yaml:"-"`
-	ReviewIteration   int                      `yaml:"-"`
-	Artifacts         map[string]string        `yaml:"-"`
+	PlanIteration   int               `yaml:"-"`
+	ReviewIteration int               `yaml:"-"`
+	Artifacts       map[string]string `yaml:"-"`
 	// RepoStates is the per-repo state map. agent.AtomicPhaseStamp writes it
 	// in a single FeatureStore.Modify call; orchestration readers consume it
 	// via Feature.AllReposPublished / Feature.TouchedRepos. Persisted on
 	// Run.RepoStates.
 	RepoStates                      map[string]*RepoState    `yaml:"-"`
-	KBWaitMessage                   string                   `yaml:"-"`
-	ForceKBRebuild                  bool                     `yaml:"-"`
-	KBStatus                        map[string]string        `yaml:"-"`
 	PhaseTimings                    map[string]time.Duration `yaml:"-"`
 	ActivePhaseStart                *time.Time               `yaml:"-"`
 	ActiveTimingKey                 string                   `yaml:"-"`
@@ -776,6 +774,10 @@ func (f *Feature) SetRun(r *Run) {
 	if r != nil {
 		f.syncRunToShadows()
 		f.reconcileTerminalRunFailure()
+		if f.CurrentPhase == PhaseKnowledgeBase {
+			f.accumulateActiveTime()
+			f.CurrentPhase = PhaseInquire
+		}
 	}
 }
 
@@ -794,7 +796,6 @@ func (f *Feature) syncShadowsToRun() {
 	r.ValidatingPlan = f.ValidatingPlan
 	r.ValidatorStatuses = f.ValidatorStatuses
 	r.ValidatorErrors = f.ValidatorErrors
-	r.VerificationItems = f.VerificationItems
 	r.PlanIteration = f.PlanIteration
 	r.ReviewIteration = f.ReviewIteration
 	r.Artifacts = f.Artifacts
@@ -804,9 +805,6 @@ func (f *Feature) syncShadowsToRun() {
 		f.RoadmapPhaseFrontendByPhase = r.RoadmapPhaseFrontendByPhase
 	}
 	r.RepoStates = f.RepoStates
-	r.KBWaitMessage = f.KBWaitMessage
-	r.ForceKBRebuild = f.ForceKBRebuild
-	r.KBStatus = f.KBStatus
 	r.PhaseTimings = f.PhaseTimings
 	r.ActivePhaseStart = f.ActivePhaseStart
 	r.ActiveTimingKey = f.ActiveTimingKey
@@ -819,7 +817,6 @@ func (f *Feature) syncShadowsToRun() {
 	r.TotalRoadmapPhases = f.TotalRoadmapPhases
 	r.RoadmapPhaseType = f.RoadmapPhaseType
 	r.MaxPlanIterations = f.MaxPlanIterations
-	r.PendingNeedUserInputPath = f.PendingNeedUserInputPath
 	r.CurrentPhaseStatus = f.CurrentPhaseStatus
 }
 
@@ -837,15 +834,11 @@ func (f *Feature) syncRunToShadows() {
 	f.ValidatingPlan = r.ValidatingPlan
 	f.ValidatorStatuses = r.ValidatorStatuses
 	f.ValidatorErrors = r.ValidatorErrors
-	f.VerificationItems = r.VerificationItems
 	f.PlanIteration = r.PlanIteration
 	f.ReviewIteration = r.ReviewIteration
 	f.Artifacts = r.Artifacts
 	f.RoadmapPhaseFrontendByPhase = r.RoadmapPhaseFrontendByPhase
 	f.RepoStates = r.RepoStates
-	f.KBWaitMessage = r.KBWaitMessage
-	f.ForceKBRebuild = r.ForceKBRebuild
-	f.KBStatus = r.KBStatus
 	f.PhaseTimings = r.PhaseTimings
 	f.ActivePhaseStart = r.ActivePhaseStart
 	f.ActiveTimingKey = r.ActiveTimingKey
@@ -858,7 +851,6 @@ func (f *Feature) syncRunToShadows() {
 	f.TotalRoadmapPhases = r.TotalRoadmapPhases
 	f.RoadmapPhaseType = r.RoadmapPhaseType
 	f.MaxPlanIterations = r.MaxPlanIterations
-	f.PendingNeedUserInputPath = r.PendingNeedUserInputPath
 	f.CurrentPhaseStatus = r.CurrentPhaseStatus
 }
 
@@ -933,9 +925,8 @@ func failureRecordNamesFinalReview(rec *errcat.FailureRecord) bool {
 
 // validTransitions maps each status to the set of statuses it can transition to.
 var validTransitions = map[Status][]Status{
-	StatusCreated:             {StatusInquiring, StatusResearching, StatusBuildingKB, StatusPlanReady, StatusFailed},
+	StatusCreated:             {StatusInquiring, StatusResearching, StatusPlanReady, StatusFailed},
 	StatusResearching:         {StatusDesignReady, StatusPlanReady, StatusFailed, StatusInterrupted},
-	StatusBuildingKB:          {StatusCreated, StatusFailed, StatusInterrupted},
 	StatusInquiring:           {StatusInquireReady, StatusFailed, StatusInterrupted},
 	StatusInquireReady:        {StatusResearching, StatusFailed},
 	StatusDesignReady:         {StatusDesigning, StatusFailed},
@@ -943,16 +934,15 @@ var validTransitions = map[Status][]Status{
 	StatusPlanReady:           {StatusPlanning, StatusFailed},
 	StatusPlanning:            {StatusImplementReady, StatusPlanNeedsReview, StatusFailed, StatusInterrupted},
 	StatusImplementReady:      {StatusImplementing, StatusFailed},
-	StatusImplementing:        {StatusReviewPassed, StatusImplementReady, StatusNeedUserInput, StatusFailed, StatusInterrupted},
-	StatusNeedUserInput:       {StatusImplementing, StatusFailed, StatusInterrupted},
+	StatusImplementing:        {StatusReviewPassed, StatusImplementReady, StatusFailed, StatusInterrupted},
 	StatusReviewPassed:        {StatusCodeReady, StatusDone, StatusImplementing, StatusImplementReady, StatusFailed, StatusPlanning, statusReviewing, StatusFinalReviewing},
 	StatusFinalReviewing:      {StatusCodeReady, StatusReviewPassed, StatusFailed, StatusInterrupted},
 	statusReviewing:           {StatusCodeReady, StatusFailed, StatusInterrupted},
 	StatusCodeReady:           {StatusPublished, StatusDone, StatusFailed, StatusImplementReady, StatusInquiring},
 	StatusPublished:           {StatusDone, StatusFailed, StatusImplementReady, StatusInquiring, StatusPlanReady, StatusCodeReady},
 	StatusDone:                {},
-	StatusFailed:              {StatusCreated, StatusBuildingKB, StatusInquiring, StatusResearching, StatusDesigning, StatusImplementReady, StatusCodeReady},
-	StatusInterrupted:         {StatusBuildingKB, StatusInquiring, StatusResearching, StatusDesigning, StatusPlanning, StatusImplementing, StatusFinalReviewing, StatusFailed},
+	StatusFailed:              {StatusCreated, StatusInquiring, StatusResearching, StatusDesigning, StatusImplementReady, StatusCodeReady},
+	StatusInterrupted:         {StatusInquiring, StatusResearching, StatusDesigning, StatusPlanning, StatusImplementing, StatusFinalReviewing, StatusFailed},
 	StatusPlanNeedsReview:     {StatusPlanning, StatusImplementReady, StatusFailed},
 	StatusPromptNeedsReview:   {StatusInquiring, StatusFailed},
 	StatusInquiryNeedsReview:  {StatusResearching, StatusFailed},

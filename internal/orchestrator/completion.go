@@ -21,7 +21,6 @@ import (
 	"log"
 	"os"
 	"path/filepath"
-	"sort"
 	"strings"
 	"unicode/utf8"
 
@@ -128,183 +127,6 @@ func (o *Orchestrator) markFailedWithEvent(featureID string, failure errcat.Fail
 		}
 	}
 	return nil
-}
-
-// ---------------------------------------------------------------------------
-// KB completion
-// ---------------------------------------------------------------------------
-
-// onKBCompleted handles a per-repo KB completion signal.
-//
-// Success path:
-//  1. Stale-completion guard on feature status != StatusBuildingKB.
-//  2. Consume the supervisor-committed outcome and validate the KnowledgeBase
-//     artifact contract.
-//  3. MarkKBFresh (best-effort).
-//  4. MarkRepoKBCompleted(featureID, repoName).
-//  5. When AllKBsCompleted → clear ForceKBRebuild, CompleteKnowledgeBase,
-//     emit PhaseCompleted, advance.
-//
-// Failure path:
-//  1. MarkRepoKBFailed(featureID, repoName, errMsg).
-//  2. Stop sibling KB sessions for this feature.
-//  3. emit PhaseCompleted with err.
-//  4. markFailedWithEvent(reported failure type, defaulting to session crash).
-func (o *Orchestrator) onKBCompleted(featureID string, input PhaseCompletionInput) error {
-	repoName := o.repoNameForKBSession(input.SessionID)
-
-	if !input.Success {
-		errMsg := input.ErrorDetail
-		if errMsg == "" {
-			errMsg = "knowledge base generation failed"
-		}
-		// When interruptFeature has already transitioned the feature to
-		// StatusInterrupted (user pressed Stop), the SessionDoneMsg from each
-		// killed session races into onKBCompleted and would otherwise mark
-		// the feature Failed with failure_type=session_crash, masking the
-		// interrupt. The session "error" in that case is the agent's last
-		// in-flight narration, not a real crash. Short-circuit here and let
-		// interruptFeature own the terminal transition. Still wake KB
-		// waiters since session cleanup released this feature's kb.lock.
-		if f, _ := o.deps.Store.Load(featureID); isTerminalForCompletion(f) {
-			o.wakeKBWaiters(featureID)
-			return nil
-		}
-		if repoName != "" {
-			_ = o.deps.Manager.MarkRepoKBFailed(featureID, repoName, errMsg)
-		}
-		// Stop any sibling sessions still running for this feature so the
-		// whole KB phase aborts cleanly.
-		if o.deps.Sessions != nil {
-			sessions := o.deps.Sessions.FeatureSessions(featureID)
-			for _, s := range sessions {
-				_ = o.deps.Sessions.StopSession(s.ID())
-			}
-		}
-		o.emitPhaseCompleted(featureID, feature.PhaseKnowledgeBase, errors.New(errMsg))
-		err := o.markFailedWithEvent(featureID, failureRecordWithRepos(singleShotFailureCode(input), feature.PhaseKnowledgeBase, []string{repoName}, errMsg))
-		// The session-cleanup func released this feature's kb.lock before
-		// onKBCompleted was dispatched. Wake any waiters parked on that lock
-		// regardless of whether the failure-mark itself succeeded.
-		o.wakeKBWaiters(featureID)
-		return err
-	}
-
-	f, err := o.deps.Store.Load(featureID)
-	if err != nil {
-		return fmt.Errorf("load feature: %w", err)
-	}
-	// Ignore late completion signals once the phase has already advanced.
-	if f.Status != feature.StatusBuildingKB {
-		return nil
-	}
-
-	_, kbDir, violations, err := o.validateKBCompletionContract(f, repoName)
-	if err != nil {
-		return err
-	}
-	if len(violations) > 0 {
-		errMsg := formatSingleShotProtocolViolationError(agent.RoleKnowledgeBaseBuilder, kbDir, violations)
-		if repoName != "" {
-			_ = o.deps.Manager.MarkRepoKBFailed(featureID, repoName, errMsg)
-		}
-		if o.deps.Sessions != nil {
-			for _, s := range o.deps.Sessions.FeatureSessions(featureID) {
-				_ = o.deps.Sessions.StopSession(s.ID())
-			}
-		}
-		o.emitPhaseCompleted(featureID, feature.PhaseKnowledgeBase, errors.New(errMsg))
-		err := o.markFailedWithEvent(featureID, failureRecordWithRepos(errcat.ProtocolViolation, feature.PhaseKnowledgeBase, []string{repoName}, errMsg))
-		o.wakeKBWaiters(featureID)
-		return err
-	}
-
-	// Mark KB fresh on disk — best-effort, failures don't block the phase.
-	// For child features, mark the disposable workspace fresh instead of the
-	// canonical KB.
-	if repoName != "" {
-		if repo, ok := findRepo(f, repoName); ok {
-			if baseDir := o.stateDir(); baseDir != "" {
-				repoPath := repo.Path
-				if repo.WorktreePath != "" {
-					repoPath = repo.WorktreePath
-				}
-				if f.IsChild() {
-					workspaceDir := feature.ChildKBWorkspaceDir(baseDir, featureID, repo.Name)
-					_ = agent.MarkWorkspaceFresh(context.Background(), o.deps.CmdRunner, workspaceDir, repoPath)
-				} else {
-					kbDir := agent.KBStateDir(baseDir, repo.Name)
-					_ = agent.MarkKBFresh(context.Background(), o.deps.CmdRunner, kbDir, repoPath)
-				}
-			}
-		}
-		if err := o.deps.Manager.MarkRepoKBCompleted(featureID, repoName); err != nil {
-			return fmt.Errorf("mark repo KB completed: %w", err)
-		}
-		// This repo's kb.lock was released by session cleanup before
-		// onKBCompleted ran. Wake any feature parked on that lock so it
-		// can retry its own KB build for this repo.
-		o.wakeKBWaiters(featureID)
-	}
-
-	allDone, err := o.deps.Manager.AllKBsCompleted(featureID)
-	if err != nil {
-		return fmt.Errorf("check all KBs completed: %w", err)
-	}
-	if !allDone {
-		return nil
-	}
-
-	if err := o.deps.Store.Modify(featureID, func(ff *feature.Feature) error {
-		ff.ForceKBRebuild = false
-		return nil
-	}); err != nil {
-		return fmt.Errorf("clear ForceKBRebuild: %w", err)
-	}
-	if err := o.deps.Manager.Transition(featureID, feature.StatusCreated); err != nil {
-		return fmt.Errorf("complete knowledge base: %w", err)
-	}
-	o.emitPhaseCompleted(featureID, feature.PhaseKnowledgeBase, nil)
-	return o.advanceToNextPhase(featureID, feature.PhaseKnowledgeBase)
-}
-
-func (o *Orchestrator) validateKBCompletionContract(f *feature.Feature, repoName string) (agent.Outcome, string, []agent.ProtocolViolation, error) {
-	var violations []agent.ProtocolViolation
-	var outcome agent.Outcome
-	kbDir := ""
-
-	baseDir := o.stateDir()
-	switch {
-	case repoName == "":
-		violations = append(violations, agent.ProtocolViolation{
-			Artifact: "knowledge-base",
-			Reason:   "repo name could not be resolved from session id",
-		})
-	case baseDir == "":
-		violations = append(violations, agent.ProtocolViolation{
-			Artifact: "knowledge-base",
-			Reason:   "state directory is empty",
-		})
-	default:
-		if f.IsChild() {
-			kbDir = feature.ChildKBWorkspaceDir(baseDir, f.ID, repoName)
-		} else {
-			kbDir = agent.KBStateDir(baseDir, repoName)
-		}
-		var contractViolations []agent.ProtocolViolation
-		var err error
-		outcome, contractViolations, err = agent.Validate(
-			feature.PhaseKnowledgeBase,
-			agent.RoleKnowledgeBaseBuilder,
-			kbDir,
-		)
-		if err != nil {
-			return agent.Outcome{}, kbDir, nil, fmt.Errorf("validating knowledge base contract: %w", err)
-		}
-		violations = append(violations, contractViolations...)
-	}
-
-	return outcome, kbDir, violations, nil
 }
 
 // findRepo returns the FeatureRepo with the given name.
@@ -669,17 +491,11 @@ func (o *Orchestrator) onPlanNeedsReview(featureID string) error {
 // ---------------------------------------------------------------------------
 
 // onImplementCompleted is the dispatch point for implement-phase completion.
-// Multi-repo aggregate results flow through MultiRepoResult; the single-repo
-// NEED_USER_INPUT pause flow still arrives as a single-repo LoopResult so the
-// orchestrator can transition the feature into StatusNeedUserInput before the
-// multi-repo aggregator collapses the result. Single-repo completions arrive
-// via per-repo Final Review result channels, never through HandlePhaseCompletion.
+// Single-repo completions arrive via per-repo Final Review result channels,
+// never through HandlePhaseCompletion.
 func (o *Orchestrator) onImplementCompleted(featureID string, input PhaseCompletionInput) error {
 	if input.MultiRepoResult != nil {
 		return o.onMultiRepoImplementDone(featureID, input.MultiRepoResult)
-	}
-	if input.ImplementResult != nil && input.ImplementResult.FinalStatus == finalStatusNeedUserInput {
-		return o.onSingleRepoNeedUserInput(featureID, input.ImplementResult)
 	}
 	errMsg := "implement completion missing multi-repo result"
 	o.emitPhaseCompleted(featureID, feature.PhaseImplement, errors.New(errMsg))
@@ -708,56 +524,8 @@ func (o *Orchestrator) onMultiRepoImplementDone(featureID string, result *agent.
 		// Graceful shutdown — shutdownFeatures will transition the feature to
 		// StatusInterrupted. We must NOT mark the feature Failed here.
 		return nil
-	case finalStatusNeedUserInput:
-		// Under SchemaVersionCurrent = 4 the NEED_USER_INPUT gate is
-		// feature-scoped (Feature.PendingNeedUserInputPath). Persist the
-		// gate path and transition the feature into StatusNeedUserInput so
-		// the resume dispatcher (resumeFeatureNeedUserInput)
-		// finds it paused. Do NOT emit PhaseCompleted — the phase is
-		// paused, not done — and surface NeedUserInputRequired so clients can
-		// open the questionnaire.
-		if result.NeedUserInputPath != "" {
-			if err := o.deps.Store.Modify(featureID, func(ff *feature.Feature) error {
-				ff.PendingNeedUserInputPath = result.NeedUserInputPath
-				if ff.Status == feature.StatusImplementing {
-					if tErr := ff.Transition(feature.StatusNeedUserInput); tErr != nil {
-						return fmt.Errorf("transition to StatusNeedUserInput: %w", tErr)
-					}
-				}
-				return nil
-			}); err != nil {
-				return err
-			}
-		}
-		summary := strings.TrimSpace(result.LastError)
-		if summary == "" {
-			var paused []string
-			for repoName, status := range result.RepoStatuses {
-				if status == finalStatusNeedUserInput {
-					paused = append(paused, repoName)
-				}
-			}
-			if len(paused) == 0 {
-				for _, r := range f.Repos {
-					paused = append(paused, r.Name)
-				}
-			}
-			sort.Strings(paused)
-			if len(paused) > 0 {
-				summary = fmt.Sprintf("implementation is waiting for user input from: %s", strings.Join(paused, ", "))
-			} else {
-				summary = "implementation is waiting for user input"
-			}
-		}
-		o.emitEventBlocking(ports.Event{
-			Type:      ports.NeedUserInputRequired,
-			FeatureID: featureID,
-			Phase:     feature.PhaseImplement,
-			Message:   summary,
-		})
-		return nil
-	case finalStatusPlanRevisionRequired:
-		return o.routePlanRevision(featureID, f, result.PlanRevisionFeedback)
+	case finalStatusStopped:
+		return o.parkStoppedAtHandoff(featureID, feature.PhaseImplement, result.LastError)
 	case "failed":
 		errMsg := result.LastError
 		if errMsg == "" {
@@ -779,122 +547,6 @@ func (o *Orchestrator) onMultiRepoImplementDone(featureID string, result *agent.
 		o.emitPhaseCompleted(featureID, feature.PhaseImplement, errors.New(errMsg))
 		return o.markFailedWithEvent(featureID, failureRecord(errcat.InfrastructureFailure, feature.PhaseImplement, errMsg))
 	}
-}
-
-func (o *Orchestrator) routePlanRevision(featureID string, f *feature.Feature, feedback string) error {
-	if f == nil {
-		var err error
-		f, err = o.deps.Store.Load(featureID)
-		if err != nil {
-			return fmt.Errorf("load feature for plan revision: %w", err)
-		}
-	}
-	if strings.TrimSpace(feedback) == "" {
-		feedback = "## Plan Revision Required\n\nImplementation cannot resume until the phase plan is corrected.\n"
-	}
-	targetRoadmapPhase := f.CurrentRoadmapPhase
-	if f.TotalRoadmapPhases > 0 && targetRoadmapPhase > f.TotalRoadmapPhases {
-		targetRoadmapPhase = f.CurrentRoadmapPhase
-	}
-	feedbackAttempt, err := o.writePlanRevisionFeedback(f, feedback, targetRoadmapPhase)
-	if err != nil {
-		return err
-	}
-	if err := o.moveFeatureToPlanningForPlanRevision(featureID, targetRoadmapPhase, feedbackAttempt+1); err != nil {
-		return err
-	}
-	startedPhase, started, err := o.startPhase(featureID, feature.PhasePlan)
-	if err != nil {
-		return err
-	}
-	if started {
-		o.emitEvent(ports.Event{Type: ports.FeatureAdvanced, FeatureID: featureID, Phase: startedPhase})
-	}
-	return nil
-}
-
-func (o *Orchestrator) writePlanRevisionFeedback(f *feature.Feature, feedback string, roadmapPhase int) (int, error) {
-	baseDir := o.stateDir()
-	if baseDir == "" || f == nil {
-		return 0, nil
-	}
-	planDir := ""
-	if roadmapPhase > 0 {
-		planDir = o.phasePlanDirForFeature(f, roadmapPhase)
-	} else {
-		planDir = filepath.Join(agent.ActiveRunDir(baseDir, f), "plan")
-	}
-	latestAttempt := agent.LatestCompletedPlanAttempt(planDir)
-	if latestAttempt <= 0 {
-		latestAttempt = 1
-	}
-	attemptDir := filepath.Join(planDir, fmt.Sprintf("attempt-%02d", latestAttempt))
-	if err := os.MkdirAll(attemptDir, 0o755); err != nil {
-		return 0, fmt.Errorf("create plan revision feedback dir: %w", err)
-	}
-	if err := os.WriteFile(filepath.Join(attemptDir, "validation-feedback.md"), []byte(feedback), 0o644); err != nil {
-		return 0, fmt.Errorf("write plan revision feedback: %w", err)
-	}
-	if err := agent.WritePlanAttemptMeta(planDir, agent.PlanAttemptMeta{
-		Attempt:      latestAttempt,
-		ReviewStatus: "CHANGES_REQUESTED",
-	}); err != nil {
-		return 0, fmt.Errorf("write plan revision attempt meta: %w", err)
-	}
-	return latestAttempt, nil
-}
-
-func (o *Orchestrator) moveFeatureToPlanningForPlanRevision(featureID string, roadmapPhase, minPlanAttempts int) error {
-	return o.deps.Store.Modify(featureID, func(ff *feature.Feature) error {
-		switch ff.Status {
-		case feature.StatusPlanning:
-		case feature.StatusPlanNeedsReview:
-			if err := ff.Transition(feature.StatusPlanning); err != nil {
-				return err
-			}
-		case feature.StatusImplementing:
-			if err := ff.Transition(feature.StatusReviewPassed); err != nil {
-				return err
-			}
-			if err := ff.Transition(feature.StatusPlanning); err != nil {
-				return err
-			}
-		case feature.StatusFinalReviewing:
-			if err := ff.Transition(feature.StatusReviewPassed); err != nil {
-				return err
-			}
-			if err := ff.Transition(feature.StatusPlanning); err != nil {
-				return err
-			}
-		case feature.StatusReviewPassed:
-			if err := ff.Transition(feature.StatusPlanning); err != nil {
-				return err
-			}
-		default:
-			if err := ff.Transition(feature.StatusPlanning); err != nil {
-				return err
-			}
-		}
-		ff.CurrentPhase = feature.PhasePlan
-		if roadmapPhase > 0 {
-			ff.CurrentRoadmapPhase = roadmapPhase
-		}
-		ff.CurrentPhaseStatus = ""
-		ff.CurrentIteration = 0
-		ff.PlanIteration = 0
-		ff.ValidatingPlan = false
-		ff.ValidatorStatuses = nil
-		ff.ValidatorErrors = nil
-		if ff.MaxPlanIterations < minPlanAttempts {
-			ff.MaxPlanIterations = minPlanAttempts
-		}
-		ff.PendingReviewPhase = nil
-		ff.PendingRewindReviewRoadmapPhase = nil
-		if ff.Artifacts != nil {
-			delete(ff.Artifacts, "plan")
-		}
-		return nil
-	})
 }
 
 // onMultiReposPassed handles the success branch of multi-repo implement.
@@ -1292,7 +944,7 @@ func (o *Orchestrator) startDeferredFinalReview(featureID string) (chan *agent.O
 		o.emitPhaseCompleted(featureID, feature.PhaseFinalReview, errors.New(errMsg))
 		return nil, o.markFinalReviewFailedWithEvent(featureID, failureRecord(errcat.InfrastructureFailure, feature.PhaseFinalReview, errMsg))
 	}
-	resultCh, err := runFn(f, o.computeKBInfos(f)...)
+	resultCh, err := runFn(f)
 	if err != nil {
 		errMsg := fmt.Sprintf("dispatch final review: %v", err)
 		o.emitPhaseCompleted(featureID, feature.PhaseFinalReview, errors.New(errMsg))
@@ -1345,6 +997,11 @@ func (o *Orchestrator) finishDeferredFinalReviewResult(featureID string, res *ag
 		// on the Interrupted feature or surface as a spurious "Failed" with
 		// failure_type=infrastructure.
 		o.emitPhaseCompleted(featureID, feature.PhaseFinalReview, nil)
+		return errFinalReviewInterrupted
+	case finalStatusStopped:
+		if err := o.parkStoppedAtHandoff(featureID, feature.PhaseFinalReview, res.LastError); err != nil {
+			return err
+		}
 		return errFinalReviewInterrupted
 	case "failed":
 		errMsg := res.LastError
@@ -1711,4 +1368,22 @@ func safeCompletionTruncate(s string, max int) string {
 		max--
 	}
 	return s[:max]
+}
+
+// parkStoppedAtHandoff parks a feature whose user chose to stop at a review
+// handoff, or whose handoff still waits for an answer, the way a pause-stop
+// does, so resuming re-enters the phase. reason says why and how to go on.
+func (o *Orchestrator) parkStoppedAtHandoff(featureID string, phase feature.Phase, reason string) error {
+	if err := o.deps.Manager.Transition(featureID, feature.StatusInterrupted); err != nil {
+		return fmt.Errorf("stop after %s review handoff: %w", phase, err)
+	}
+	o.emitPhaseCompleted(featureID, phase, nil)
+	if o.hooks.OnFeatureInterrupted != nil {
+		o.hooks.OnFeatureInterrupted(featureID)
+	}
+	if reason != "" {
+		log.Printf("feature %s parked at the %s review handoff: %s", featureID, phase, reason)
+	}
+	o.emitEvent(ports.Event{Type: ports.FeatureInterrupted, FeatureID: featureID, Message: reason})
+	return nil
 }

@@ -24,8 +24,8 @@ import (
 // Client filesystem (fs/*) surface. OpenCode performs in-workspace file I/O with
 // its own tools but delegates I/O for paths outside its session workspace to the
 // ACP client; Agentico advertises fs.read/writeTextFile (see ClientCapabilities)
-// and hosts those requests here so out-of-workspace artifacts — knowledge-base
-// graphs, phase artifacts under the feature state dir — can be written. Each
+// and hosts those requests here so out-of-workspace artifacts — phase
+// artifacts under the feature state dir — can be written. Each
 // handler replies with a JSON-RPC result or a per-request error and never seals
 // the turn: an out-of-bounds write or an I/O failure is reported to OpenCode so
 // it unblocks gracefully rather than crashing the session.

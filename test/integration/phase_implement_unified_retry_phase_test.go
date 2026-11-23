@@ -46,8 +46,8 @@ import (
 //
 //   - Failed → Pending → AwaitingFinalReview transition for every declared
 //     repo (phase atomicity holds across the failure recovery boundary).
-//   - feature.Manager.RetryPhase clears the run's failure record and
-//     PendingNeedUserInputPath alongside the per-repo reset.
+//   - feature.Manager.RetryPhase clears the run's failure record alongside
+//     the per-repo reset.
 //   - Repos outside repoNames are NOT touched (preservation guarantee).
 func TestPhaseImplementUnified_RetryPhaseRecovery(t *testing.T) {
 	if testing.Short() {
@@ -179,7 +179,6 @@ func TestPhaseImplementUnified_RetryPhaseRecovery(t *testing.T) {
 			},
 			Diagnostics: "something went wrong",
 		}
-		ff.PendingNeedUserInputPath = "/some/leftover/path.yaml"
 		for _, name := range wantPhaseRepos {
 			if st := ff.RepoStates[name]; st != nil {
 				st.Error = &errcat.FailureRecord{Code: errcat.InfrastructureFailure, Diagnostics: "stale record"}
@@ -220,9 +219,6 @@ func TestPhaseImplementUnified_RetryPhaseRecovery(t *testing.T) {
 	}
 	if rec := got.FailureRecord(); rec != nil {
 		t.Errorf("failure record = %+v, want cleared by RetryPhase", rec)
-	}
-	if got.PendingNeedUserInputPath != "" {
-		t.Errorf("PendingNeedUserInputPath = %q, want cleared", got.PendingNeedUserInputPath)
 	}
 
 	// --- Second invocation: phase re-runs from iteration 1 and succeeds. ---

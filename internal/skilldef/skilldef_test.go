@@ -27,7 +27,7 @@ import (
 	skillsFS "github.com/doordash-oss/agentic-orchestrator/skills"
 )
 
-const expectedEmbeddedSkillCount = 27
+const expectedEmbeddedSkillCount = 25
 
 func TestParseSkillFile(t *testing.T) {
 	tests := []struct {
@@ -628,16 +628,18 @@ func TestReconcileSkills_DoesNotWriteMultiRepo(t *testing.T) {
 	}
 }
 
-// TestReconcileSkills_RemovesStaleChatSkill proves an upgrade from a binary
-// that shipped the retired chat skill deletes its reconciled tree, writes the
+// TestReconcileSkills_RemovesRetiredSkills proves an upgrade from a binary
+// that shipped retired skills deletes their reconciled trees, writes the
 // supervisor tree, and leaves a user-authored sibling skill untouched.
-func TestReconcileSkills_RemovesStaleChatSkill(t *testing.T) {
+func TestReconcileSkills_RemovesRetiredSkills(t *testing.T) {
 	skillsDir := filepath.Join(t.TempDir(), "skills")
 	stale := map[string]string{
-		filepath.Join("chat", "SKILL.md"):                "---\ndescription: old chat\n---\n",
-		filepath.Join("chat", "user-guide", "index.md"):  "old guide",
-		filepath.Join("my-skill", "SKILL.md"):            "---\ndescription: mine\n---\nbody\n",
-		filepath.Join("my-skill", "notes", "private.md"): "user notes",
+		filepath.Join("chat", "SKILL.md"):                 "---\ndescription: old chat\n---\n",
+		filepath.Join("chat", "user-guide", "index.md"):   "old guide",
+		filepath.Join("knowledge-reader", "SKILL.md"):     "---\ndescription: old\n---\n",
+		filepath.Join("build-knowledge-base", "SKILL.md"): "---\ndescription: old\n---\n",
+		filepath.Join("my-skill", "SKILL.md"):             "---\ndescription: mine\n---\nbody\n",
+		filepath.Join("my-skill", "notes", "private.md"):  "user notes",
 	}
 	for rel, content := range stale {
 		p := filepath.Join(skillsDir, rel)
@@ -653,8 +655,10 @@ func TestReconcileSkills_RemovesStaleChatSkill(t *testing.T) {
 		t.Fatalf("ReconcileSkills() error: %v", err)
 	}
 
-	if _, err := os.Lstat(filepath.Join(skillsDir, "chat")); !os.IsNotExist(err) {
-		t.Fatalf("stale chat skill should be removed, stat err = %v", err)
+	for _, name := range []string{"chat", "knowledge-reader", "build-knowledge-base"} {
+		if _, err := os.Lstat(filepath.Join(skillsDir, name)); !os.IsNotExist(err) {
+			t.Fatalf("retired %s skill should be removed, stat err = %v", name, err)
+		}
 	}
 	for _, rel := range []string{"SKILL.md", "api-reference.md", "recipes.md", "slack-monitoring.md", "environment.md", filepath.Join("user-guide", "index.md")} {
 		if _, err := os.Stat(filepath.Join(skillsDir, "supervisor", rel)); err != nil {

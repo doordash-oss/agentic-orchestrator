@@ -128,8 +128,8 @@ describe('evaluateCompatibility', () => {
   });
 
   it('pins the desktop support tables so widening is a conscious change', () => {
-    expect(DESKTOP_SCHEMA_VERSION).toBe(5);
-    expect(SUPPORTED_SERVER_SCHEMA_VERSIONS).toEqual([5]);
+    expect(DESKTOP_SCHEMA_VERSION).toBe(6);
+    expect(SUPPORTED_SERVER_SCHEMA_VERSIONS).toEqual([6]);
     expect(SUPPORTED_RUNTIME_POLICIES).toEqual(['loopback-bearer-v1', 'network-bearer-v1']);
   });
 });

@@ -1,8 +1,7 @@
 {{- /*
   phase_plan.user: the per-phase plan-creation user prompt. Inputs:
   approved roadmap path, phase metadata (number/name/type/goal), prior
-  phase plans, upstream Q&A files, stubs to retire, deferrals due this
-  phase.
+  phase plans, upstream Q&A files, and stubs to retire.
 
   Visual references live with the design/roadmap — they are NOT
   re-injected here. Q&A files (inquire/research/design/roadmap
@@ -26,17 +25,9 @@ Research Document: {{ .ResearchArtifactPath }}
 
 {{ .Phase.Goal }}
 
-{{ end }}{{ if .AutomatedVerificationOnly }}## Verification Contracting Mode
-
-This feature verifies through automated tests only.
-
-- Put every verification command — unit, integration, build, lint, and packaged end-to-end journeys — under `### Automated Verification`.
-- `### Manual Verification`, `### Visual Evidence`, and `### Behavioral Evidence` must each contain exactly one item: `- [ ] None required: automated-only verification for this feature`.
-- Do not contract screenshots, manual observations, or any other agent-captured evidence artifacts.
-
 {{ end }}{{ template "qa_files" .QAFiles }}{{ if .Phase.StubsToRetire }}## Roadmap-Assigned Phase Commitments
 
-Include these roadmap-assigned commitments in `## Tasks` acceptance criteria or `## Success Criteria`; do not create a separate stubs section in the plan:
+Include these roadmap-assigned commitments in `## Tasks` acceptance criteria or `## Verification`; do not create a separate stubs section in the plan:
 {{ range .Phase.StubsToRetire }}- {{ . }}
 {{ end }}
 {{ end }}{{ template "grillme_inquireness" .Inquireness }}

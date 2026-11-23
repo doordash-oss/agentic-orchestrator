@@ -19,6 +19,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/doordash-oss/agentic-orchestrator/internal/feature"
@@ -114,4 +115,57 @@ func assertRepoMutationFileContent(t *testing.T, path, want string) {
 	if string(data) != want {
 		t.Fatalf("%s content = %q, want %q", path, data, want)
 	}
+}
+
+// A read-only role that commits or switches branches leaves a clean tree;
+// the guard still catches it.
+func TestEnforceReadOnlyRepoMutationsCatchesMovedHead(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		mutate   [][]string
+		restored bool
+	}{
+		{"commit", [][]string{{"commit", "--allow-empty", "-m", "reviewer"}}, true},
+		{"branch", [][]string{{"checkout", "-b", "reviewer"}, {"commit", "--allow-empty", "-m", "reviewer"}}, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			repoDir := t.TempDir()
+			for _, args := range [][]string{{"init", "-b", "main"}, {"config", "user.email", "test@example.com"}, {"config", "user.name", "Test User"}, {"commit", "--allow-empty", "-m", "baseline"}} {
+				runRepoMutationGit(t, repoDir, args...)
+			}
+			baseline := repoMutationHead(t, repoDir)
+			f := &feature.Feature{Repos: []feature.FeatureRepo{{Name: "repo", WorktreePath: repoDir}}}
+			phaseDir := t.TempDir()
+			if err := RecordReadOnlyRepoBaseline(context.Background(), nil, f, phaseDir); err != nil {
+				t.Fatal(err)
+			}
+			for _, args := range tc.mutate {
+				runRepoMutationGit(t, repoDir, args...)
+			}
+			moved := repoMutationHead(t, repoDir)
+			violations, err := EnforceReadOnlyRepoMutations(context.Background(), nil, f, feature.PhaseReview, phaseDir)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(violations) != 1 {
+				t.Fatalf("violations = %+v, want one", violations)
+			}
+			want := moved
+			if tc.restored {
+				want = baseline
+			}
+			if got := repoMutationHead(t, repoDir); got != want {
+				t.Fatalf("HEAD after the guard = %s, want %s (restored=%v)", got, want, tc.restored)
+			}
+		})
+	}
+}
+
+func repoMutationHead(t *testing.T, dir string) string {
+	t.Helper()
+	out, err := exec.Command("git", "-C", dir, "rev-parse", "HEAD").Output()
+	if err != nil {
+		t.Fatalf("git rev-parse: %v", err)
+	}
+	return strings.TrimSpace(string(out))
 }

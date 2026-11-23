@@ -22,13 +22,6 @@ func wrapHelperSandbox(command []string, _ string) ([]string, bool, func()) {
 	return command, false, func() {}
 }
 
-// wrapVerificationSandbox is a no-op on platforms without a supported
-// sandbox: verification commands run unsandboxed, and the run record marks
-// them as such.
-func wrapVerificationSandbox(command []string, _ []string) ([]string, bool, func()) {
-	return command, false, func() {}
-}
-
 // platformSandboxProbe reports no sandbox-unavailable condition: only macOS
 // sandbox-exec has the nested-sandbox failure the probe exists to detect.
 func platformSandboxProbe() SandboxStatus { return SandboxStatus{} }

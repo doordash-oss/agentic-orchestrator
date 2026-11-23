@@ -58,7 +58,7 @@ func TestNormalizePermissionInput_EditFilepathLowercase(t *testing.T) {
 // from mounted context roots are auto-approved and not displayed as opaque
 // "other" prompts.
 func TestNormalizePermissionInput_OtherExternalDirectory(t *testing.T) {
-	parent := "/Users/x/.agentic-workflow/knowledge-base/repo"
+	parent := "/Users/x/.agentic-workflow/features/feat-1"
 	tc := permissionToolCall{
 		Kind:     ToolKindOther,
 		Title:    parent,
@@ -151,7 +151,7 @@ func TestParseLine_PermissionRequestsSurfaceAsControl(t *testing.T) {
 		{"web fetch", ToolKindFetch, "Fetch docs", map[string]any{"url": "https://example.com"}, "WebFetch", "url", "https://example.com"},
 		{"web search", ToolKindSearch, "Search", map[string]any{"query": "golang acp"}, "WebSearch", "query", "golang acp"},
 		{"external dir", ToolKindRead, "Read /etc", map[string]any{"path": "/etc/hosts"}, "ExternalDirectory", "path", "/etc/hosts"},
-		{"subagent spawn", ToolKindThink, "Research api-surface", map[string]any{"subagent_type": "api-surface-researcher", "description": "Research api-surface"}, "Agent", "subagent_type", "api-surface-researcher"},
+		{"subagent spawn", ToolKindThink, "Research the web", map[string]any{"subagent_type": "web-search-researcher", "description": "Research the web"}, "Agent", "subagent_type", "web-search-researcher"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

@@ -44,16 +44,6 @@ var registry = map[string]entry{
 			feature.PhaseReview,
 		},
 	},
-	"knowledge-reader": {
-		phases: []feature.Phase{
-			feature.PhaseInquire,
-			feature.PhaseResearch,
-			feature.PhaseDesign,
-			feature.PhasePlan,
-			feature.PhaseImplement,
-			feature.PhaseReview,
-		},
-	},
 	"guideline-reader": {
 		// Excluded from Inquire and Research: those phases only ask
 		// clarifying questions or explore the codebase to answer them,
@@ -66,7 +56,6 @@ var registry = map[string]entry{
 			feature.PhasePlan,
 			feature.PhaseImplement,
 			feature.PhaseReview,
-			feature.PhaseKnowledgeBase,
 		},
 	},
 }

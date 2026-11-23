@@ -133,7 +133,7 @@ func opParentWithChild() (*feature.Feature, *feature.Feature) {
 }
 
 func setupFeature(id string, status feature.SetupStatus) *feature.Feature {
-	f := opFeature(id, feature.StatusSettingUpWorktrees, feature.PhaseKnowledgeBase)
+	f := opFeature(id, feature.StatusSettingUpWorktrees, feature.PhaseInquire)
 	f.Run().Setup = &feature.SetupState{Status: status, Attempt: 1}
 	if status == feature.SetupStatusFailed {
 		f.Status = feature.StatusFailed
@@ -392,7 +392,7 @@ func TestDispatchSetupOrdering(t *testing.T) {
 		},
 		{
 			name:    "no setup work is refused",
-			feature: opFeature("op-1", feature.StatusCreated, feature.PhaseKnowledgeBase),
+			feature: opFeature("op-1", feature.StatusCreated, feature.PhaseInquire),
 			wantErr: ErrNoSetupWork,
 		},
 		{
@@ -563,7 +563,7 @@ func TestAutoResume_StopWhileTimerHasTakenSchedule(t *testing.T) {
 		}
 	}
 	resultCh := make(chan *agent.OrchestratorResult, 1)
-	fx.o.SetRunMultiRepoImplFn(func(*feature.Feature, string, ...agent.KBInfo) (chan *agent.OrchestratorResult, error) {
+	fx.o.SetRunMultiRepoImplFn(func(*feature.Feature, string) (chan *agent.OrchestratorResult, error) {
 		return resultCh, nil
 	})
 	defer func() { resultCh <- &agent.OrchestratorResult{FinalStatus: "interrupted"} }()
@@ -606,14 +606,13 @@ func TestAutoResume_StopWhileTimerHasTakenSchedule(t *testing.T) {
 
 func TestAutoResume_ReviewFailureDiagnosticsScheduleAcrossAgentPhases(t *testing.T) {
 	for phase, status := range map[feature.Phase]feature.Status{
-		feature.PhaseKnowledgeBase: feature.StatusBuildingKB,
-		feature.PhaseInquire:       feature.StatusInquiring,
-		feature.PhaseResearch:      feature.StatusResearching,
-		feature.PhaseDesign:        feature.StatusDesigning,
-		feature.PhasePlan:          feature.StatusPlanning,
-		feature.PhaseImplement:     feature.StatusImplementing,
-		feature.PhaseReview:        feature.StatusFinalReviewing,
-		feature.PhaseFinalReview:   feature.StatusFinalReviewing,
+		feature.PhaseInquire:     feature.StatusInquiring,
+		feature.PhaseResearch:    feature.StatusResearching,
+		feature.PhaseDesign:      feature.StatusDesigning,
+		feature.PhasePlan:        feature.StatusPlanning,
+		feature.PhaseImplement:   feature.StatusImplementing,
+		feature.PhaseReview:      feature.StatusFinalReviewing,
+		feature.PhaseFinalReview: feature.StatusFinalReviewing,
 	} {
 		t.Run(phase.String(), func(t *testing.T) {
 			f := opFeature("quota-phase", status, phase)

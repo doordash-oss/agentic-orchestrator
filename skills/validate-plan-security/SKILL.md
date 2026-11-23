@@ -32,7 +32,7 @@ For roadmaps:
 - **DO NOT evaluate**: Whether every possible input validation or edge case is enumerated. The per-phase planner handles implementation-level security details
 - **Calibrate severity to the project context**: A local CLI/terminal interface tool has a fundamentally different threat model than a web service. The "attacker" for a local tool is the same user running it on their own machine. Flag genuine risks, not theoretical attack vectors that require the user to attack themselves
 
-For per-phase plans using `skills/plan-phase/format.md`, review only `## Overview`, `## Tasks`, task acceptance criteria, and `## Success Criteria`. Do NOT require a separate threat model, security section, middleware chain, or implementation-level file list. Reject only when a high-impact security risk created by the phase is invisible from the task/criteria model.
+For per-phase plans using `skills/plan-phase/format.md`, review only `## Overview`, `## Tasks`, task acceptance criteria, and `## Verification`. Do NOT require a separate threat model, security section, middleware chain, or implementation-level file list. Reject only when a high-impact security risk created by the phase is invisible from the task/criteria model.
 
 ## Human Decisions Are Authoritative
 

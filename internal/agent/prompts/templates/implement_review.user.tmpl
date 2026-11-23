@@ -1,0 +1,15 @@
+{{- /*
+  implement_review.user: prepended to a Moonshot implement prompt once the
+  phase review has asked the user something. Carries a pending review
+  handoff and the phase's recorded review decisions.
+*/ -}}
+{{- define "implement_review.user" -}}
+{{ with .Handoff }}{{ template "review_handoff" . }}{{ end -}}
+{{ if .DecisionsPath }}## Approved Review Decisions
+
+The user's review decisions for this phase: {{ .DecisionsPath }}
+
+They override the phase plan's acceptance criteria and earlier reviewer findings where they conflict. Follow them, and leave a finding accepted as is alone.
+
+{{ end -}}
+{{- end -}}

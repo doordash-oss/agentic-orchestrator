@@ -160,18 +160,17 @@ func runSummaryFromRun(run *feature.Run) RunSummary {
 		return RunSummary{}
 	}
 	dto := RunSummary{
-		RunNumber:       run.RunNumber,
-		StartedAt:       run.StartedAt,
-		SealedAt:        run.SealedAt,
-		SealReason:      string(run.SealReason),
-		CurrentPhase:    runPhaseLabel(run),
-		PhaseStatus:     run.CurrentPhaseStatus,
-		Iteration:       run.CurrentIteration,
-		RoadmapPhase:    run.CurrentRoadmapPhase,
-		RoadmapTotal:    run.TotalRoadmapPhases,
-		ArtifactCount:   len(run.Artifacts),
-		HasNeedUserGate: run.PendingNeedUserInputPath != "",
-		Setup:           setupDTO(run.Setup),
+		RunNumber:     run.RunNumber,
+		StartedAt:     run.StartedAt,
+		SealedAt:      run.SealedAt,
+		SealReason:    string(run.SealReason),
+		CurrentPhase:  runPhaseLabel(run),
+		PhaseStatus:   run.CurrentPhaseStatus,
+		Iteration:     run.CurrentIteration,
+		RoadmapPhase:  run.CurrentRoadmapPhase,
+		RoadmapTotal:  run.TotalRoadmapPhases,
+		ArtifactCount: len(run.Artifacts),
+		Setup:         setupDTO(run.Setup),
 	}
 	if run.PendingReviewPhase != nil {
 		dto.PendingReviewPhase = run.PendingReviewPhase.DirName()
@@ -190,7 +189,6 @@ func runDetailFromRun(run *feature.Run) RunDetail {
 	dto := RunDetail{
 		ArtifactCount:                   summary.ArtifactCount,
 		CurrentPhase:                    summary.CurrentPhase,
-		HasNeedUserGate:                 summary.HasNeedUserGate,
 		IsRewind:                        summary.IsRewind,
 		Iteration:                       summary.Iteration,
 		PendingReviewPhase:              summary.PendingReviewPhase,

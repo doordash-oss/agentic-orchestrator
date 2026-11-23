@@ -41,6 +41,8 @@ type readOnlyRepoBaseline struct {
 type readOnlyRepoSnapshot struct {
 	Name         string                  `json:"name"`
 	WorktreePath string                  `json:"worktree_path"`
+	Head         string                  `json:"head,omitempty"`
+	Branch       string                  `json:"branch,omitempty"`
 	Status       string                  `json:"status"`
 	Diff         string                  `json:"diff"`
 	Untracked    []readOnlyUntrackedFile `json:"untracked,omitempty"`
@@ -63,11 +65,11 @@ const (
 
 // RecordReadOnlyRepoBaseline snapshots managed repo worktrees before a
 // read-only role runs so mutations can be detected and restored later.
-func RecordReadOnlyRepoBaseline(ctx context.Context, runner ports.CommandRunner, f *feature.Feature, phaseDir string, repoNames ...string) error {
+func RecordReadOnlyRepoBaseline(ctx context.Context, runner ports.CommandRunner, f *feature.Feature, phaseDir string) error {
 	if f == nil || phaseDir == "" {
 		return nil
 	}
-	snapshots, err := captureReadOnlyRepoSnapshots(ctx, runner, f, repoNames...)
+	snapshots, err := captureReadOnlyRepoSnapshots(ctx, runner, f)
 	if err != nil {
 		return err
 	}
@@ -92,11 +94,11 @@ func RecordReadOnlyRepoBaseline(ctx context.Context, runner ports.CommandRunner,
 
 // EnforceReadOnlyRepoMutations detects changes made by a read-only role,
 // saves the attempted diff, restores the baseline, and returns violations.
-func EnforceReadOnlyRepoMutations(ctx context.Context, runner ports.CommandRunner, f *feature.Feature, phase feature.Phase, phaseDir string, repoNames ...string) ([]ProtocolViolation, error) {
+func EnforceReadOnlyRepoMutations(ctx context.Context, runner ports.CommandRunner, f *feature.Feature, phase feature.Phase, phaseDir string) ([]ProtocolViolation, error) {
 	if f == nil || phaseDir == "" || phase == feature.PhaseImplement {
 		return nil, nil
 	}
-	current, err := captureReadOnlyRepoSnapshots(ctx, runner, f, repoNames...)
+	current, err := captureReadOnlyRepoSnapshots(ctx, runner, f)
 	if err != nil {
 		return nil, err
 	}
@@ -119,9 +121,23 @@ func EnforceReadOnlyRepoMutations(ctx context.Context, runner ports.CommandRunne
 		if readOnlyRepoSnapshotsEqual(base, snap) {
 			continue
 		}
-		patchPath, err := writeReadOnlyRepoMutationPatch(phaseDir, phase, base, snap)
+		patchPath, err := writeReadOnlyRepoMutationPatch(ctx, runner, phaseDir, phase, base, snap)
 		if err != nil {
 			return nil, err
+		}
+		// A switched branch, or commits on an unborn one, is reported but
+		// not restored: there is no baseline commit to reset to safely.
+		if base.refsKnown() && (base.Branch != snap.Branch || base.Head == "" && snap.Head != "") {
+			violations = append(violations, ProtocolViolation{
+				Artifact: fmt.Sprintf("target repo %s", snap.Name),
+				Reason:   fmt.Sprintf("read-only %s phase moved target repo %s from %s to %s; saved attempted changes to %s and left the worktree as is", phase.String(), snap.Name, base.ref(), snap.ref(), patchPath),
+			})
+			continue
+		}
+		if base.refsKnown() && base.Head != snap.Head {
+			if _, err := gitOutput(ctx, runner, snap.WorktreePath, "reset", "--hard", base.Head); err != nil {
+				return nil, fmt.Errorf("reset read-only repo %s to its baseline commit: %w", snap.Name, err)
+			}
 		}
 		if err := restoreReadOnlyRepoBaseline(ctx, runner, snap, base); err != nil {
 			return nil, err
@@ -134,24 +150,13 @@ func EnforceReadOnlyRepoMutations(ctx context.Context, runner ports.CommandRunne
 	return violations, nil
 }
 
-func captureReadOnlyRepoSnapshots(ctx context.Context, runner ports.CommandRunner, f *feature.Feature, repoNames ...string) ([]readOnlyRepoSnapshot, error) {
+func captureReadOnlyRepoSnapshots(ctx context.Context, runner ports.CommandRunner, f *feature.Feature) ([]readOnlyRepoSnapshot, error) {
 	if f == nil {
 		return nil, nil
-	}
-	filter := make(map[string]struct{}, len(repoNames))
-	for _, name := range repoNames {
-		if strings.TrimSpace(name) != "" {
-			filter[name] = struct{}{}
-		}
 	}
 
 	var snapshots []readOnlyRepoSnapshot
 	for _, repo := range f.Repos {
-		if len(filter) > 0 {
-			if _, ok := filter[repo.Name]; !ok {
-				continue
-			}
-		}
 		if strings.TrimSpace(repo.WorktreePath) == "" {
 			continue
 		}
@@ -193,6 +198,9 @@ func captureReadOnlyRepoSnapshot(ctx context.Context, runner ports.CommandRunner
 	if err != nil {
 		return readOnlyRepoSnapshot{}, false, fmt.Errorf("capture untracked files for %s: %w", repo.Name, err)
 	}
+	// An unborn branch has no HEAD commit; a detached HEAD has no branch.
+	head, _ := gitOutput(ctx, runner, worktreePath, "rev-parse", "-q", "--verify", "HEAD")
+	branch, _ := gitOutput(ctx, runner, worktreePath, "symbolic-ref", "-q", "HEAD")
 	name := repo.Name
 	if name == "" {
 		name = filepath.Base(worktreePath)
@@ -200,6 +208,8 @@ func captureReadOnlyRepoSnapshot(ctx context.Context, runner ports.CommandRunner
 	return readOnlyRepoSnapshot{
 		Name:         name,
 		WorktreePath: worktreePath,
+		Head:         strings.TrimSpace(string(head)),
+		Branch:       strings.TrimSpace(string(branch)),
 		Status:       strings.TrimSpace(string(status)),
 		Diff:         string(diff),
 		Untracked:    untracked,
@@ -362,7 +372,7 @@ func replaceWithSymlink(path, target string) error {
 	return os.Symlink(target, path)
 }
 
-func writeReadOnlyRepoMutationPatch(phaseDir string, phase feature.Phase, baseline, current readOnlyRepoSnapshot) (string, error) {
+func writeReadOnlyRepoMutationPatch(ctx context.Context, runner ports.CommandRunner, phaseDir string, phase feature.Phase, baseline, current readOnlyRepoSnapshot) (string, error) {
 	violationsDir := filepath.Join(phaseDir, "violations")
 	if err := os.MkdirAll(violationsDir, 0o755); err != nil {
 		return "", fmt.Errorf("create read-only repo violations dir: %w", err)
@@ -377,6 +387,14 @@ func writeReadOnlyRepoMutationPatch(phaseDir string, phase feature.Phase, baseli
 	fmt.Fprintf(&b, "# phase: %s\n", phase.String())
 	fmt.Fprintf(&b, "# repo: %s\n", current.Name)
 	fmt.Fprintf(&b, "# worktree: %s\n\n", current.WorktreePath)
+	if baseline.Head != current.Head || baseline.Branch != current.Branch {
+		fmt.Fprintf(&b, "# baseline HEAD %s on %s\n# current HEAD %s on %s\n\n", baseline.Head, baseline.Branch, current.Head, current.Branch)
+		if baseline.Head != "" && current.Head != "" {
+			if commits, err := gitOutput(ctx, runner, current.WorktreePath, "diff", "--binary", baseline.Head, current.Head, "--"); err == nil && len(commits) > 0 {
+				fmt.Fprintf(&b, "# committed diff from baseline HEAD\n%s\n", commits)
+			}
+		}
+	}
 	if baseline.Status != "" {
 		fmt.Fprintf(&b, "# baseline status\n%s\n\n", baseline.Status)
 	}
@@ -414,8 +432,20 @@ func readReadOnlyRepoBaseline(phaseDir string) (readOnlyRepoBaseline, error) {
 	return baseline, nil
 }
 
+// refsKnown reports a snapshot that recorded its commit or branch; older
+// baselines did not.
+func (s readOnlyRepoSnapshot) refsKnown() bool { return s.Head != "" || s.Branch != "" }
+
+func (s readOnlyRepoSnapshot) ref() string {
+	branch := strings.TrimPrefix(s.Branch, "refs/heads/")
+	if branch == "" {
+		branch = "a detached HEAD"
+	}
+	return fmt.Sprintf("%s at %q", branch, s.Head)
+}
+
 func readOnlyRepoSnapshotsEqual(a, b readOnlyRepoSnapshot) bool {
-	if strings.TrimSpace(a.Status) != strings.TrimSpace(b.Status) || a.Diff != b.Diff {
+	if (a.refsKnown() && (a.Head != b.Head || a.Branch != b.Branch)) || strings.TrimSpace(a.Status) != strings.TrimSpace(b.Status) || a.Diff != b.Diff {
 		return false
 	}
 	if len(a.Untracked) != len(b.Untracked) {

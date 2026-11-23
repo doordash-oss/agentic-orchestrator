@@ -55,22 +55,14 @@ Write the plan to `{artifact_dir}/phase-plan.md` — the shared artifact root, n
 
 For multi-repo features, every `### Task N:` heading **must** be followed by a `**Repo:** <name>` tag whose value is in `Feature.Repos`. The unified phase implementer reads these tags as the single source of truth for which repos this phase touches and which sub-agent gets each Task. Single-repo features may omit tags (every Task implicitly belongs to the only repo); a single-repo plan may still tag Tasks for clarity but must not mix tagged and untagged Tasks. There is no separate `execution-order.yaml`.
 
-Set the mandatory plan metadata field `**Frontend:** true` when the phase adds or changes any user-facing UI surface. Otherwise set it to `false`. A `true` frontend flag must be paired with at least one real checklist item under the top-level `### Visual Evidence` section; never use `None required` for Visual Evidence when `**Frontend:** true` — unless the prompt declares automated-only verification mode (below), which mandates `None required: automated-only verification for this feature` there instead.
+Set the plan metadata field `**Frontend:** true` when the phase adds or changes any user-facing UI surface. Otherwise set it to `false`.
 
 Do not add a grounding table, file inventory, stub inventory, testing strategy section, or deferrals section. Exact file selection, code-level grounding, and implementation ceremony belong to the implementer.
 
-Derive verification from the phase and repository instead of interviewing the user about bookkeeping choices. Do not ask whether to include automated verification, how many manual checkboxes to create, whether an already-sequenced phase depends on its predecessor, or whether a fully specified task is AFK/HITL. Ask only when an unresolved product or scope decision would materially change the plan.
+Derive verification from the phase and repository instead of interviewing the user about bookkeeping choices. Do not ask whether to include verification, whether an already-sequenced phase depends on its predecessor, or whether a fully specified task is AFK/HITL. Ask only when an unresolved product or scope decision would materially change the plan.
 
-Keep verification minimal and non-overlapping:
-
-- Put every deterministic invariant in an executable command. The harness captures its exit code, stdout, stderr, and run metadata automatically.
-- Repo-scoped commands run from that repository root. In multi-repo phases, prefix every automated-verification description with `[repo: <name>]`; single-repo phases may omit it. Use paths such as `README.md` or `./internal/...`; never add `cd <repo>` or prefix paths with the repo name.
-- Use one consolidated Manual Verification item only for irreducible semantic judgment that commands, visual evidence, and behavioral evidence cannot prove. Do not restate automated checks.
-- Enumerate visual evidence as one checklist item per capture cell — surface/state/theme in prose plus a `[size: WxH]` tag (e.g. `- [ ] Home populated, dark theme [size: 1440x900]`). The harness validates each cell's file dimensions deterministically; a single item describing a whole capture matrix cannot be verified and will be rejected at review.
-- End every Behavioral Evidence item with its packaged executable command in backticks (e.g. `` - [ ] Primary journey trace bundle: `npx playwright test e2e/journey.spec.ts` ``). Command-backed items are executed by the harness, which exports `AGENTICO_EVIDENCE_DIR` for the spec to write its trace and named screenshots into. Multiple journey items are allowed when every item carries a command; prose-only behavioral evidence must stay a single consolidated item.
-
-**Verification contracting mode.** Your prompt may declare `## Verification Contracting Mode` stating the feature verifies through automated tests only. In that mode, put every verification command (including packaged end-to-end journeys) under `### Automated Verification`, and give `### Manual Verification`, `### Visual Evidence`, and `### Behavioral Evidence` exactly one `- [ ] None required: automated-only verification for this feature` item each. The full evidence-matrix rules in this section and in format.md apply only when the prompt does not declare this mode.
+Write the `## Verification` section for the person who will check the phase: the commands to run and what to look at to confirm the acceptance criteria. Prefer commands for anything deterministic, and describe what to look at for behavior a command cannot show, such as a rendered screen or a user journey. When the phase spans several repos, say which repo each command runs in. Keep it short and do not restate checks.
 
 ## Plan Template
 
-The plan's output shape is defined in [format.md](format.md). Read it before writing the plan and conform to its template exactly. Every section is mandatory unless its heading is annotated conditional; never drop, reorder, or rename a section.
+The plan's output shape is defined in [format.md](format.md). Read it before writing the plan and follow its template.

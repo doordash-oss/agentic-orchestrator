@@ -55,6 +55,7 @@ type ImplementConfig struct {
 	ResolveSessionConfig func(llm.PhaseRole) (sessionRuntimeConfig, error)
 	ArtifactDir          string // base dir for iteration artifacts
 	StateDir             string // feature state directory for PID files
+	StateRoot            string // features state root; empty derives from StateDir
 	RunDir               string // active run directory granted to the agent; empty derives from Feature.ActiveRun
 
 	// AdditionalDirs are extra directories to pass as --add-dir flags to the
@@ -63,9 +64,6 @@ type ImplementConfig struct {
 	// Feature.Repos beyond the cwd state dir; the per-stage upstream context
 	// injection of the legacy per-repo flow is gone.
 	AdditionalDirs []string
-
-	// KBInfos are repo knowledge base paths to include in prompts.
-	KBInfos []KBInfo
 
 	// PhaseType is the roadmap phase type ("tracer-bullet", "tdd-fill-in", "collapsed", or "").
 	// Used to inject phase-aware review criteria.
@@ -83,14 +81,8 @@ type ImplementConfig struct {
 	// previously remembered tool requests. Nil means no caching.
 	PermissionCache *permission.Cache
 
-	// CommandRunner executes harness-owned verification commands declared in
-	// the testing contract. It is required whenever the contract contains a
-	// harness-owned command.
+	// CommandRunner runs the git probes that fingerprint worktree progress.
 	CommandRunner ports.CommandRunner
-
-	// CapabilityPolicy configures built-in capability probes (browser state
-	// location and remote-server restrictions). Nil uses the local default.
-	CapabilityPolicy *CapabilityPolicy
 
 	// BuildSession creates CLI command args, env vars, and session opts
 	// by routing through the provider registry. In tests, provide a mock
@@ -99,10 +91,6 @@ type ImplementConfig struct {
 
 	// Observer is the observability facade for lifecycle event emission (nil = no-op).
 	Observer *observe.Observer
-
-	// OnVerificationProgress is called after each persisted harness
-	// verification status transition.
-	OnVerificationProgress func(featureID string)
 
 	// RepoName is the repo name for session ID namespacing in multi-repo features.
 	RepoName string
@@ -183,6 +171,15 @@ type ImplementConfig struct {
 	PhaseExitGate PhaseExitGate
 }
 
+// stateRoot is the features state root helper sessions resolve shared
+// directories (worktrees, PID files) from; StateDir is <root>/<featureID>.
+func (cfg ImplementConfig) stateRoot() string {
+	if cfg.StateRoot != "" {
+		return cfg.StateRoot
+	}
+	return filepath.Dir(cfg.StateDir)
+}
+
 // PhaseExitGate reports mechanical phase-exit violations as fix-round
 // feedback; "" means all checks passed. The implementation loop invokes it at
 // every success exit.
@@ -243,27 +240,13 @@ func resolveImplementSessionConfig(cfg ImplementConfig, role llm.PhaseRole) (ses
 //
 // FinalStatus values:
 //   - "review_passed":     iteration emitted SUCCESS and the review gate APPROVED.
-//   - "plan_revision_required": implementation found a phase-plan contract
-//     defect with structured requirements that must go through phase-plan
-//     revision.
 //   - "max_iterations":    hit cfg.MaxIterations without a passing review.
 //   - "safety_rail":       no-progress / consecutive-failure rail tripped.
 //   - "interrupted":       shutdown / feature stopped while running.
-//   - "need_user_input":   harness verification found a capability-protected
-//     check that requires a user decision. NeedUserInputPath points to the
-//     harness-owned gate artifact and Iterations identifies its iteration.
 type LoopResult struct {
 	FinalStatus string
 	Iterations  int
 	LastError   string
-
-	// PlanRevisionFeedback carries phase-plan repair requirements when
-	// FinalStatus == "plan_revision_required".
-	PlanRevisionFeedback string
-
-	// NeedUserInputPath is the absolute path of the harness-owned gate artifact
-	// written when FinalStatus == "need_user_input". Empty otherwise.
-	NeedUserInputPath string
 }
 
 // runImplementationLoop manages the iterative agent loop.
@@ -273,7 +256,6 @@ type LoopResult struct {
 func runImplementationLoop(cfg ImplementConfig, sm ports.SessionManager) (result *LoopResult, err error) {
 	am := newArtifactManager(cfg.ArtifactDir)
 	pt := newProgressTracker()
-	progressPath := filepath.Join(cfg.ArtifactDir, "progress.md")
 	summaryPath := filepath.Join(cfg.ArtifactDir, "summary.log")
 	aggregateLogPath := filepath.Join(cfg.ArtifactDir, "output.txt")
 
@@ -309,11 +291,8 @@ func runImplementationLoop(cfg ImplementConfig, sm ports.SessionManager) (result
 	// would have advanced past it), the implement phase finished before the
 	// prior run was interrupted — likely during the review gate. Skip the
 	// implement session and jump straight to the review for that iteration.
-	skipImplement := false
-	if nextIter := startIter + 1; nextIter <= cfg.MaxIterations {
-		nextIterDir := filepath.Join(cfg.ArtifactDir, fmt.Sprintf("iteration-%02d", nextIter))
-		skipImplement = hasCommittedPhaseOutcome(nextIterDir, feature.PhaseImplement, roleImplementer)
-	}
+	nextIterDir := filepath.Join(cfg.ArtifactDir, fmt.Sprintf("iteration-%02d", startIter+1))
+	skipImplement := hasCommittedPhaseOutcome(nextIterDir, feature.PhaseImplement, roleImplementer)
 
 	if startIter > 0 {
 		// Recover consecutiveFailures: count trailing iterations that
@@ -365,7 +344,20 @@ func runImplementationLoop(cfg ImplementConfig, sm ports.SessionManager) (result
 	// a crash-resumed loop labels rounds identically to the interrupted run.
 	roundCommits := newImplementRoundCommitTracker(am, cfg.ArtifactDir, startIter)
 
-	for i := startIter + 1; i <= cfg.MaxIterations; i++ {
+	// Moonshot's per-phase review narrows its rounds and hands off to the
+	// user when it stops converging; its state is replayed from the metas. A
+	// pending handoff is asked again by a fresh session.
+	var gate *phaseReviewGate
+	// MaxIterations caps the fixes, never a round the review owes: the
+	// review of a finished iteration, the round after a stop, and a pending
+	// handoff run past it.
+	owedRound := false
+	if !cfg.SkipIterationReview {
+		gate = newPhaseReviewGate(cfg, am, startIter)
+		owedRound = skipImplement || gate.stoppedAt == startIter && startIter > 0
+	}
+
+	for i := startIter + 1; i <= cfg.MaxIterations || gate.owes(i == startIter+1 && owedRound); i++ {
 		iterStart := time.Now()
 		iterCtx := phaseCtx.Child()
 		cfg.Observer.IterationStarted(iterCtx, i)
@@ -398,40 +390,26 @@ func runImplementationLoop(cfg ImplementConfig, sm ports.SessionManager) (result
 		}
 
 		var (
-			iterDir             string
-			sessionID           string
-			agentStatus         string
-			duration            time.Duration
-			cost                sessionCost
-			madeProgress        bool
-			exitCode            int
-			sess                ports.SessionHandle
-			waitResult          PhaseOutcomeWaitResult
-			testingContractPath string
-			contractFingerprint string
+			iterDir      string
+			sessionID    string
+			agentStatus  string
+			duration     time.Duration
+			cost         sessionCost
+			madeProgress bool
+			exitCode     int
+			sess         ports.SessionHandle
+			waitResult   PhaseOutcomeWaitResult
+			// The implementer's closing note, kept by the review gate.
+			implementerNote string
 		)
-		planContent := readPlanContent(cfg.PlanPath)
-		if violations := verificationScopeViolations(planContent); len(violations) > 0 {
-			cfg.Observer.IterationEnded(iterCtx, i, observe.SessionUsage{}, time.Since(iterStart), "plan_revision_required")
-			return &LoopResult{
-				FinalStatus:          "plan_revision_required",
-				Iterations:           i,
-				PlanRevisionFeedback: verificationScopePlanRevisionFeedback(violations),
-			}, nil
-		}
-
-		if skipImplement {
-			// Resume point: implement phase already finished in the prior run.
+		if skipImplement || gate.resolvesWithoutSession() {
+			// Resume point: implement phase already finished in the prior run,
+			// or the user's saved handoff answer needs no session.
 			// Skip session creation and jump to the review gate. Cost was
 			// already accounted at that run's line ~430, so leave zero here.
 			skipImplement = false
 			iterDir = filepath.Join(cfg.ArtifactDir, fmt.Sprintf("iteration-%02d", i))
 			agentStatus = agentStatusSuccess
-			var prepareErr error
-			testingContractPath, contractFingerprint, prepareErr = prepareImplementationTestingContract(cfg, planContent)
-			if prepareErr != nil {
-				return nil, prepareErr
-			}
 		} else {
 			sessionConfig, resolveErr := resolveImplementSessionConfig(cfg, llm.PhaseImplementation)
 			if resolveErr != nil {
@@ -452,24 +430,11 @@ func runImplementationLoop(cfg ImplementConfig, sm ports.SessionManager) (result
 			if createErr != nil {
 				return nil, fmt.Errorf("creating iteration dir: %w", createErr)
 			}
-			testingContractPath, contractFingerprint, createErr = prepareImplementationTestingContract(cfg, planContent)
-			if createErr != nil {
-				return nil, createErr
-			}
-			// Probe declared capabilities before the implementer starts so a
-			// missing login or environment feature opens the user gate now
-			// instead of after a spent iteration.
-			var capabilityEnv []string
-			if strings.TrimSpace(testingContractPath) != "" && cfg.CommandRunner != nil {
-				gated, env, probeErr := preIterationCapabilityGate(cfg, testingContractPath, iterDir, i)
-				if probeErr != nil {
-					return nil, probeErr
+			// Verdicts from an earlier attempt at this iteration saw other code.
+			if gate != nil {
+				if err := os.RemoveAll(filepath.Join(iterDir, "review")); err != nil {
+					return nil, fmt.Errorf("clearing stale review of iteration %d: %w", i, err)
 				}
-				if gated != nil {
-					cfg.Observer.IterationEnded(iterCtx, i, observe.SessionUsage{}, time.Since(iterStart), gated.FinalStatus)
-					return gated, nil
-				}
-				capabilityEnv = env
 			}
 			// Build prompt
 			prompt := buildImplementPrompt(
@@ -478,6 +443,7 @@ func runImplementationLoop(cfg ImplementConfig, sm ports.SessionManager) (result
 				reviewerFeedback,
 				helpAnswers,
 				i,
+				featureRepoViews(cfg.Feature),
 			)
 			// Re-inject user-attached visual references (mockups, design
 			// comps, desired-state screenshots) on every implement
@@ -488,17 +454,8 @@ func runImplementationLoop(cfg ImplementConfig, sm ports.SessionManager) (result
 					prompt = block + prompt
 				}
 			}
-			// Surface cross-phase deferrals owed by the current phase so
-			// the agent cannot silently drop prior-phase commitments.
-			// Closing or re-deferring is enforced by the Report Integrity
-			// Gate (see internal/agent/report_integrity.go).
-			if cfg.Feature != nil {
-				if run := cfg.Feature.Run(); run != nil {
-					currentPhase := cfg.Feature.CurrentRoadmapPhase
-					if block := deferralsDueThisPhaseSection(run.Deferrals, currentPhase, deferralPromptKindImplement, cfg.RepoName); block != "" {
-						prompt = block + prompt
-					}
-				}
+			if gate != nil {
+				prompt = gate.implementContext() + prompt
 			}
 			// Remove a stale harness receipt before starting a new root turn.
 			removeCompletionReceipt(iterDir)
@@ -509,7 +466,6 @@ func runImplementationLoop(cfg ImplementConfig, sm ports.SessionManager) (result
 				IterationDir:   iterDir,
 				SkillsDir:      cfg.SkillsDir,
 				GuidelinesDir:  cfg.GuidelinesDir,
-				KBInfos:        cfg.KBInfos,
 				AskingClause:   sessionConfig.AskingClause,
 				CompletionTool: sessionConfig.CompletionTool,
 				Frontend:       cfg.Feature != nil && cfg.Feature.RoadmapPhaseFrontend(cfg.Feature.CurrentRoadmapPhase),
@@ -558,10 +514,6 @@ func runImplementationLoop(cfg ImplementConfig, sm ports.SessionManager) (result
 			if buildErr != nil {
 				return nil, fmt.Errorf("building session for iteration %d: %w", i, buildErr)
 			}
-			// Passing capability probes hand their state to the implementer
-			// (e.g. AGENTICO_BROWSER_STATE_<HOST>) so it never hunts for
-			// credentials itself.
-			env = append(env, capabilityEnv...)
 			// Copy the auto-review snapshot from sessOpts into implBuildOpts
 			// so crash-resume reuses the original values rather than reading
 			// the current (possibly edited) workspace config.
@@ -616,7 +568,6 @@ func runImplementationLoop(cfg ImplementConfig, sm ports.SessionManager) (result
 			}
 			cfg.Observer.SessionStarted(implSessionCtx, "implement", sessionID, implProvider, sessionConfig.Model, cfg.RepoName, string(sessionConfig.EffectiveEffort), string(sessionConfig.EffortSource))
 			implTracker := &contextReadTracker{
-				KBBaseDir:     filepath.Join(filepath.Dir(cfg.StateDir), "knowledge-base"),
 				SkillsDir:     cfg.SkillsDir,
 				GuidelinesDir: cfg.GuidelinesDir,
 				Observer:      cfg.Observer,
@@ -646,7 +597,6 @@ func runImplementationLoop(cfg ImplementConfig, sm ports.SessionManager) (result
 						})
 						return violations, err
 					},
-					MissingArtifacts:     []string{"progress.md"},
 					RetryOutcomeAllowed:  true,
 					EnableContextHandoff: true,
 					OnContextHandoff: func(snap contextSnapshot) {
@@ -673,6 +623,11 @@ func runImplementationLoop(cfg ImplementConfig, sm ports.SessionManager) (result
 			// phase completion.
 			waitResult = WaitForPhaseOutcome(sess, implWaitOptions(sess, implSessionCtx, sessionID))
 			agentStatus = waitResult.Status
+			// Review decisions are recorded before any interrupt check, so a
+			// stop right after the user answers keeps the answer.
+			if gate != nil {
+				implementerNote = gate.recordSession(i, iterDir, sess)
+			}
 
 			// App shutdown should not serialize an in-flight iteration as FAILED.
 			// Leaving the iteration incomplete (no meta.yaml) allows restart to replay
@@ -725,6 +680,9 @@ func runImplementationLoop(cfg ImplementConfig, sm ports.SessionManager) (result
 
 						waitResult = WaitForPhaseOutcome(sess, implWaitOptions(sess, implSessionCtx, sessionID))
 						agentStatus = waitResult.Status
+						if gate != nil {
+							implementerNote = gate.recordSession(i, iterDir, sess)
+						}
 						if agentStatus == agentStatusFailed && sm != nil && waitForShutdownIntent(sm, shutdownDetectionGrace) {
 							return &LoopResult{FinalStatus: "interrupted", Iterations: i - 1}, nil
 						}
@@ -773,6 +731,11 @@ func runImplementationLoop(cfg ImplementConfig, sm ports.SessionManager) (result
 		// uncommitted changes into its own commit. FAILED and
 		// protocol-violation rounds do not commit; their partial work is
 		// absorbed by the next round, mirroring the crash-recovery policy.
+		// An accepted handoff ends the round whatever the session's outcome,
+		// so its edits commit and reach the review the gate may still owe.
+		if asked := gatePending(gate); asked != nil && classifyHandoffAnswer(asked.Answer) == handoffAccept {
+			agentStatus, waitResult.Err = agentStatusSuccess, nil
+		}
 		if agentStatus == agentStatusSuccess {
 			roundCommits.semanticSessions = true
 			if cfg.RoundCommitHook != nil {
@@ -814,6 +777,37 @@ func runImplementationLoop(cfg ImplementConfig, sm ports.SessionManager) (result
 			RepoName:      cfg.RepoName,
 		})
 
+		// A pending handoff is settled by the user's answer, whatever the
+		// asking session's outcome; without one it stays pending.
+		if asked := gatePending(gate); asked != nil {
+			switch choice := classifyHandoffAnswer(asked.Answer); {
+			case choice == handoffAccept && !gate.changedSinceReview():
+				gate.resolveHandoff(handoffAccept)
+				meta.Handoff = reviewHandoffAccepted
+			case choice == handoffStop:
+				gate.resolveHandoff(handoffStop)
+				meta.Handoff = reviewHandoffStopped
+				meta.ReviewStatus = reviewChangesRequested.String()
+				carryOpenFindings(iterDir, gate.openFindings(reviewerFeedback))
+				_ = am.writeMeta(iterDir, meta)
+				_ = am.writeSummary(summaryPath, meta)
+				cfg.Observer.IterationEnded(iterCtx, i, toSessionUsage(cost), time.Since(iterStart), finalStatusStopped)
+				return &LoopResult{FinalStatus: finalStatusStopped, Iterations: i, LastError: asked.Reason}, nil
+			// Accepted code that changed since the last review is reviewed
+			// first, as after guidance.
+			case choice == handoffAccept, choice == handoffContinue && agentStatus == agentStatusSuccess && waitResult.Err == nil:
+				gate.resolveHandoff(handoffContinue)
+				meta.Handoff = reviewHandoffContinued
+			default:
+				meta.ReviewStatus = reviewChangesRequested.String()
+				carryOpenFindings(iterDir, gate.openFindings(reviewerFeedback))
+				_ = am.writeMeta(iterDir, meta)
+				_ = am.writeSummary(summaryPath, meta)
+				cfg.Observer.IterationEnded(iterCtx, i, toSessionUsage(cost), time.Since(iterStart), finalStatusStopped)
+				return &LoopResult{FinalStatus: finalStatusStopped, Iterations: i, LastError: gate.parkReason(asked, agentStatus, waitResult.Err)}, nil
+			}
+		}
+
 		// Handle based on agent status
 		if waitResult.Err != nil {
 			_ = am.writeMeta(iterDir, meta)
@@ -824,7 +818,7 @@ func runImplementationLoop(cfg ImplementConfig, sm ports.SessionManager) (result
 		if agentStatus == agentStatusProtocolViolation {
 			violations := waitResult.ProtocolViolations
 			if len(violations) == 0 {
-				violations = completionIntentViolations(rootCompletionIntent(sess), []string{"progress.md"})
+				violations = completionIntentViolations(rootCompletionIntent(sess), nil)
 			}
 			lastErr := formatProtocolViolationError(roleImplementer, iterDir, violations)
 			if done := recordProtocolViolationIteration(am, summaryPath, iterDir, aggregateLogPath, &meta, i, cfg, iterCtx, cost, iterStart, violations, lastErr, &consecutiveFailures, &reviewerFeedback, roundCommits); done != nil {
@@ -834,174 +828,21 @@ func runImplementationLoop(cfg ImplementConfig, sm ports.SessionManager) (result
 		}
 
 		if agentStatus == agentStatusSuccess {
-			var harnessVerification *verificationExecutionOutcome
-			var verificationContract *TestingContract
-			preliminaryProgress, _ := parseProgressMd(progressPath)
-			if preliminaryProgress != nil && preliminaryProgress.State == stateSuccess && strings.TrimSpace(testingContractPath) != "" {
-				if contractFingerprint != "" {
-					currentFingerprint, fingerprintErr := fingerprint(testingContractPath)
-					if fingerprintErr != nil {
-						return nil, fmt.Errorf("verifying testing contract after implementation: %w", fingerprintErr)
-					}
-					if currentFingerprint != contractFingerprint {
-						// Agent writes to the contract are denied at the
-						// permission layer, so a changed fingerprint is an
-						// external amendment: record it and re-anchor instead
-						// of charging the implementer.
-						appendIterationLog(aggregateLogPath, i,
-							"testing-contract.yaml was amended outside the session (external amendment); re-anchoring the harness fingerprint")
-						contractFingerprint = currentFingerprint
-					}
-				}
-				contract, readErr := ReadTestingContract(testingContractPath)
-				if readErr != nil {
-					return nil, fmt.Errorf("reading testing contract for harness verification: %w", readErr)
-				}
-				verificationContract = contract
-				reportPath := filepath.Join(iterDir, "verification-report.yaml")
-				report := buildContractVerificationReportStub(contract, testingContractPath)
-				verificationRepos := cfg.Feature.Repos
-				if strings.TrimSpace(cfg.RepoName) != "" {
-					verificationRepos = nil
-					for _, repo := range cfg.Feature.Repos {
-						if repo.Name == cfg.RepoName {
-							verificationRepos = append(verificationRepos, repo)
-						}
-					}
-				}
-				if cached, cacheErr := readVerificationReport(reportPath); cacheErr == nil && cached != nil &&
-					cached.ContractRevision == contract.Revision && !verificationReportHasBlockedResults(cached) {
-					// Stop/restart resume: the harness already executed this
-					// iteration's contract and persisted the report. Reuse
-					// it so resuming mid-review never re-runs the commands.
-					// Blocked results never replay — they are environment-
-					// derived and must be re-probed after the user retries.
-					harnessVerification = reconstructVerificationOutcome(cached)
-				} else {
-					verifyCtx, cancelVerify := verificationContext(cfg.FeatureStore, cfg.Feature.ID)
-					verifyCtx = withConfiguredCapabilityPolicy(verifyCtx, cfg)
-					beginVerificationStatuses(cfg.FeatureStore, cfg.Feature.ID, contract, cfg.OnVerificationProgress)
-					verifyCtx = withVerificationProgress(verifyCtx, func(name, state string) {
-						updateVerificationStatus(cfg.FeatureStore, cfg.Feature.ID, name, state, cfg.OnVerificationProgress)
-					})
-					if reason, unavailable := verificationSandboxUnavailable(cfg.CommandRunner); unavailable {
-						recordSandboxUnavailable(cfg.FeatureStore, cfg.Feature.ID, reason)
-					}
-					harnessVerification, readErr = executeTestingContract(verifyCtx, cfg.CommandRunner, contract, &report, testingContractPath, iterDir, cfg.WorkDir, verificationRepos)
-					cancelVerify()
-					clearVerificationStatuses(cfg.FeatureStore, cfg.Feature.ID, cfg.OnVerificationProgress)
-					if readErr != nil {
-						if isFeatureInterrupted(cfg.FeatureStore, cfg.Feature.ID) {
-							cfg.Observer.IterationEnded(iterCtx, i, toSessionUsage(cost), time.Since(iterStart), "interrupted")
-							return &LoopResult{FinalStatus: "interrupted", Iterations: i - 1}, nil
-						}
-						return nil, fmt.Errorf("executing testing contract: %w", readErr)
-					}
-					if readErr = writeVerificationReport(reportPath, *harnessVerification.Report); readErr != nil {
-						return nil, fmt.Errorf("writing harness verification report: %w", readErr)
-					}
-				}
-			}
-			outcome, violations, validateErr := Validate(feature.PhaseImplement, roleImplementer, iterDir)
-			if validateErr != nil {
-				return nil, fmt.Errorf("validating implementer contract: %w", validateErr)
-			}
-			if !outcome.OK {
-				lastErr := formatProtocolViolationError(roleImplementer, iterDir, violations)
-				if done := recordProtocolViolationIteration(am, summaryPath, iterDir, aggregateLogPath, &meta, i, cfg, iterCtx, cost, iterStart, violations, lastErr, &consecutiveFailures, &reviewerFeedback, roundCommits); done != nil {
-					return done, nil
-				}
-				continue
-			}
-			parsed := outcome.Progress
-			if harnessVerification != nil && len(harnessVerification.ContractErrors) > 0 {
-				consecutiveFailures = 0
-				cfg.Observer.IterationEnded(iterCtx, i, toSessionUsage(cost), time.Since(iterStart), "plan_revision_required")
-				return &LoopResult{
-					FinalStatus:          "plan_revision_required",
-					Iterations:           i,
-					PlanRevisionFeedback: verificationContractPlanRevisionFeedback(harnessVerification.ContractErrors),
-				}, nil
-			}
-			if harnessVerification != nil {
-				validation := verificationReportValidationContext{
-					IterationDir: iterDir,
-					Contract:     verificationContract,
-				}
-				waivable, _ := unauthorizedWaiverItemIDs(harnessVerification.Report, verificationContract)
-				if len(waivable) > 0 {
-					validation.DeclinedWaiverItemIDs = declinedUnauthorizedWaiverItems(cfg.ArtifactDir, i)
-				}
-				gate := validateVerificationReportWithContext(harnessVerification.Report, nil, true, validation)
-				if gate.Rejected {
-					// Only the user can authorize a waiver, so a waived row the
-					// contract does not back is unresolvable by the implementer.
-					// Ask the user once, like a capability gate: no meta is
-					// written, and resume re-verifies this same iteration
-					// against the decided contract. Items the user already
-					// declined fall through to the implementer finding.
-					if pending := undeclinedItemIDs(waivable, validation.DeclinedWaiverItemIDs); len(pending) > 0 {
-						gatePath := NeedUserInputPath(iterDir)
-						rec := synthesizeUnauthorizedWaiverGate(testingContractPath, verificationContract, pending, i)
-						if err := WriteNeedUserInputRecord(gatePath, rec); err != nil {
-							return nil, fmt.Errorf("persisting unauthorized waiver gate: %w", err)
-						}
-						consecutiveFailures = 0
-						cfg.Observer.IterationEnded(iterCtx, i, toSessionUsage(cost), time.Since(iterStart), "need_user_input")
-						return &LoopResult{FinalStatus: "need_user_input", Iterations: i, LastError: rec.Summary, NeedUserInputPath: gatePath}, nil
-					}
-					gateViolations := reportGateViolations(gate)
-					lastErr := formatProtocolViolationError(roleImplementer, iterDir, gateViolations)
-					if done := recordProtocolViolationIteration(am, summaryPath, iterDir, aggregateLogPath, &meta, i, cfg, iterCtx, cost, iterStart, gateViolations, lastErr, &consecutiveFailures, &reviewerFeedback, roundCommits); done != nil {
-						return done, nil
-					}
-					continue
-				}
-			}
-
-			if harnessVerification != nil && len(harnessVerification.BlockedItems) > 0 {
-				gatePath := NeedUserInputPath(iterDir)
-				rec := synthesizeVerificationNeedUserInputGateWithContext(
-					testingContractPath,
-					verificationContract,
-					harnessVerification.Report,
-					harnessVerification.BlockedItems,
-					i,
-				)
-				if err := WriteNeedUserInputRecord(gatePath, rec); err != nil {
-					return nil, fmt.Errorf("persisting verification capability gate: %w", err)
-				}
-				consecutiveFailures = 0
-				cfg.Observer.IterationEnded(iterCtx, i, toSessionUsage(cost), time.Since(iterStart), "need_user_input")
-				return &LoopResult{FinalStatus: "need_user_input", Iterations: i, LastError: rec.Summary, NeedUserInputPath: gatePath}, nil
-			}
-
-			// RETRY: skip the review gate entirely; the agent is telling
-			// us the iteration is intentionally partial. The next loop
-			// iteration starts fresh against the just-emitted progress.md
-			// (no reviewer feedback — RETRY is not a rejection).
-			if parsed.State == stateRetry {
-				if gated, gateErr := agentReportedBlockerGate(iterDir, testingContractPath, i); gateErr != nil {
-					return nil, gateErr
-				} else if gated != nil {
-					meta.ReviewStatus = "skipped_need_user_input"
-					meta.AgentStatus = "RETRY"
-					_ = am.writeMeta(iterDir, meta)
-					_ = am.writeSummary(summaryPath, meta)
-					consecutiveFailures = 0
-					cfg.Observer.IterationEnded(iterCtx, i, toSessionUsage(cost), time.Since(iterStart), "need_user_input")
-					return gated, nil
-				}
-				madeProgress = pt.observeRetryOutcome(retryProgressFingerprints(progressPath, cfg))
+			// RETRY: skip the review gate entirely; the committed outcome
+			// says the iteration is intentionally partial. The next loop
+			// iteration starts fresh from the progress notes (no reviewer
+			// feedback — RETRY is not a rejection).
+			if committedRetry(iterDir) {
+				madeProgress = pt.observeRetryOutcome(worktreeStateFingerprint(context.Background(), cfg.CommandRunner, implementWorktreePaths(cfg)))
 				meta.ReviewStatus = "skipped_retry"
 				meta.AgentStatus = "RETRY"
 				meta.MadeProgress = madeProgress
 				_ = am.writeMeta(iterDir, meta)
 				_ = am.writeSummary(summaryPath, meta)
 				consecutiveFailures = 0
-				// Don't re-inject the full feedback (the RETRY handoff may
+				// Don't re-inject the full feedback (the RETRY iteration may
 				// have partially addressed it), but don't drop it either —
-				// the progress.md handoff is not guaranteed to carry every
+				// the progress notes are not guaranteed to carry every
 				// finding. Point the next iteration at the on-disk feedback
 				// so it re-verifies what remains.
 				reviewerFeedback = retryReviewFeedbackReminder(cfg.ArtifactDir, lastChangesRequestedIter)
@@ -1019,8 +860,8 @@ func runImplementationLoop(cfg ImplementConfig, sm ports.SessionManager) (result
 
 			// Phase-exit gate: mechanical exit facts re-verified at every
 			// success exit before the loop returns review_passed. Violations
-			// route back to the implementer exactly like a deterministic
-			// harness regression; nil result means the gate passed.
+			// route back to the implementer as a fix round; nil result means
+			// the gate passed.
 			gateFixRound := func(gateFeedback string) *LoopResult {
 				meta.MadeProgress = observeVerifiedImplementationOutcome(pt, phaseExitGateBlockers(gateFeedback), cfg)
 				meta.ReviewStatus = reviewChangesRequested.String()
@@ -1043,30 +884,6 @@ func runImplementationLoop(cfg ImplementConfig, sm ports.SessionManager) (result
 			// Fall through: SUCCESS — run the review gate.
 			if cfg.SkipIterationReview {
 				// Medium/Large: skip per-iteration review, rely on Final Review.
-				// Deterministically classified regressions still route back to
-				// the implementer — with no per-iteration reviewer there is
-				// nobody else to act on a red harness report.
-				if harnessVerification != nil && len(harnessVerification.RegressionItems) > 0 {
-					meta.MadeProgress = observeVerifiedImplementationOutcome(pt, countOpenVerificationOutcomeBlockers(harnessVerification), cfg)
-					meta.ReviewStatus = reviewChangesRequested.String()
-					_ = am.writeMeta(iterDir, meta)
-					_ = am.writeSummary(summaryPath, meta)
-					consecutiveFailures = 0
-					reviewerFeedback = fmt.Sprintf(
-						"Harness verification detected regressions: %s. These commands pass at the contract base commit but fail with your changes. See verification-report.yaml in the iteration directory for evidence; fix the regressions before declaring SUCCESS.",
-						strings.Join(harnessVerification.RegressionItems, ", "))
-					roundCommits.changesRequested++
-					if pt.consecutiveNoProgress() >= cfg.MaxConsecNoProgress {
-						cfg.Observer.IterationEnded(iterCtx, i, toSessionUsage(cost), time.Since(iterStart), "harness_regression")
-						return &LoopResult{
-							FinalStatus: "safety_rail",
-							Iterations:  i,
-							LastError:   fmt.Sprintf("no progress for %d consecutive iterations", pt.consecutiveNoProgress()),
-						}, nil
-					}
-					cfg.Observer.IterationEnded(iterCtx, i, toSessionUsage(cost), time.Since(iterStart), "harness_regression")
-					continue
-				}
 				if gateFeedback := phaseExitGateFeedback(cfg); gateFeedback != "" {
 					if rail := gateFixRound(gateFeedback); rail != nil {
 						return rail, nil
@@ -1082,6 +899,30 @@ func runImplementationLoop(cfg ImplementConfig, sm ports.SessionManager) (result
 					FinalStatus: finalStatusReviewPassed,
 					Iterations:  i,
 				}, nil
+			}
+
+			// A fix iteration that changed nothing and recorded no decision
+			// would only repeat the open findings: ask the user instead.
+			if gate.awaitingFix() && !gate.decided() && !gate.changedSinceReview() {
+				findings := gate.openFindings(reviewerFeedback)
+				h := reviewHandoff{
+					Reason:    fmt.Sprintf("Fix iteration %d made no code changes, so another review round would repeat the same findings.", i),
+					Findings:  findings,
+					FixerNote: implementerNote,
+				}
+				if err := gate.raiseHandoff(i, iterDir, h); err != nil {
+					return nil, err
+				}
+				carryOpenFindings(iterDir, findings)
+				meta.Handoff = reviewHandoffAsked
+				meta.ReviewStatus = reviewChangesRequested.String()
+				_ = am.writeMeta(iterDir, meta)
+				_ = am.writeSummary(summaryPath, meta)
+				consecutiveFailures = 0
+				lastChangesRequestedIter = i
+				roundCommits.changesRequested++
+				cfg.Observer.IterationEnded(iterCtx, i, toSessionUsage(cost), time.Since(iterStart), "review_handoff")
+				continue
 			}
 
 			// Moonshot: run per-iteration review gate.
@@ -1122,7 +963,9 @@ func runImplementationLoop(cfg ImplementConfig, sm ports.SessionManager) (result
 			reviewCfg.ReviewEffortSource = reviewSessionConfig.EffortSource
 			reviewCfg.AskingClause = reviewSessionConfig.AskingClause
 			reviewCfg.CompletionTool = reviewSessionConfig.CompletionTool
-			reviewStatus, feedback, reviewErr := runReviewGate(reviewCfg, sm, i, iterDir, parsed, reviewCtx)
+			reviewState := currentRepoState(gate.repos)
+			codeChanged := gate.changedSinceReview()
+			reviewStatus, feedback, verdicts, reviewErr := runReviewGate(reviewCfg, sm, i, iterDir, reviewCtx, gate, reviewState, codeChanged)
 			cfg.Observer.ReviewCompleted(reviewCtx, i, reviewStatus.String(), time.Since(reviewStart))
 
 			// Clear the reviewing flag
@@ -1184,6 +1027,9 @@ func runImplementationLoop(cfg ImplementConfig, sm ports.SessionManager) (result
 				}, nil
 			}
 
+			gate.recordReview(i, verdicts, reviewState, codeChanged)
+			meta.AxisVerdicts, meta.ReviewHeads, meta.ReviewDirt, meta.CodeChanged = verdicts, reviewState.Heads, reviewState.Dirt, codeChanged
+
 			switch reviewStatus {
 			case ReviewApproved:
 				// Phase-exit gate: an approving review does not override
@@ -1207,27 +1053,31 @@ func runImplementationLoop(cfg ImplementConfig, sm ports.SessionManager) (result
 					Iterations:  i,
 				}, nil
 			case reviewChangesRequested:
-				meta.MadeProgress = observeVerifiedImplementationOutcome(pt, countBlockingReviewFindings(feedback)+countOpenVerificationOutcomeBlockers(harnessVerification), cfg)
+				meta.MadeProgress = observeVerifiedImplementationOutcome(pt, countBlockingReviewFindings(feedback), cfg)
 				meta.ReviewStatus = reviewStatus.String()
+				// An axis that keeps requesting changes hands off to the user;
+				// the next implement session asks. The no-progress rail, when
+				// it trips in the same round, still wins.
+				railTripped := pt.consecutiveNoProgress() >= cfg.MaxConsecNoProgress
+				if axis, stalled := gate.history.stalledAxis(gate.axes); stalled && !railTripped {
+					h := reviewHandoff{
+						Reason:    fmt.Sprintf("The %s axis requested changes in %d consecutive rounds.", axis.Name, axisStallLimit),
+						Findings:  feedback,
+						FixerNote: gate.latestNote(i),
+					}
+					if err := gate.raiseHandoff(i, iterDir, h); err != nil {
+						return nil, err
+					}
+					meta.Handoff = reviewHandoffAsked
+				}
 				_ = am.writeMeta(iterDir, meta)
 				_ = am.writeSummary(summaryPath, meta)
-				missingReqs := missingEvidenceRequirements(feedback)
-				insufficientReqs := insufficientEvidenceRequirements(feedback)
-				if len(missingReqs) > 0 || len(insufficientReqs) > 0 {
-					consecutiveFailures = 0
-					cfg.Observer.IterationEnded(iterCtx, i, toSessionUsage(cost), time.Since(iterStart), "plan_revision_required")
-					return &LoopResult{
-						FinalStatus:          "plan_revision_required",
-						Iterations:           i,
-						PlanRevisionFeedback: evidencePlanRevisionFeedback(missingReqs, insufficientReqs),
-					}, nil
-				}
 				consecutiveFailures = 0
 				reviewerFeedback = feedback
 				lastChangesRequestedIter = i
 				roundCommits.changesRequested++
 				// Check no-progress safety rail
-				if pt.consecutiveNoProgress() >= cfg.MaxConsecNoProgress {
+				if railTripped {
 					cfg.Observer.IterationEnded(iterCtx, i, toSessionUsage(cost), time.Since(iterStart), "changes_requested")
 					return &LoopResult{
 						FinalStatus: "safety_rail",
@@ -1286,7 +1136,7 @@ const crashResumeMessageFragment = "process terminated unexpectedly mid-turn"
 // the process boundary and re-anchors the completion protocol.
 const crashResumeMessage = "Your previous process terminated unexpectedly mid-turn; this session resumes that conversation. " +
 	"Reassess the repository and your artifacts: if the iteration's work is already complete, write any missing " +
-	"required artifacts, run the artifact preflight, and request completion using the phase's declared protocol; otherwise update progress " +
+	"required artifacts, run the artifact preflight if your instructions include one, and request completion using the phase's declared protocol; otherwise update progress " +
 	"and continue from where you left off."
 
 // providerSessionID returns the provider-native session identifier for a
@@ -1419,8 +1269,8 @@ func recordProtocolViolationIteration(
 // retryReviewFeedbackReminder builds the reviewer-feedback text carried into
 // iterations that follow a RETRY. Re-injecting the full CHANGES_REQUESTED
 // feedback every iteration is wasteful — some findings may already be
-// addressed — but dropping it entirely trusts the RETRY handoff in
-// progress.md to have captured every finding, which is not guaranteed.
+// addressed — but dropping it entirely trusts the progress notes to have
+// captured every finding, which is not guaranteed.
 // Instead, point the implementer at the on-disk feedback so it re-reads and
 // re-verifies what remains in its own context. Returns "" when no reviewed
 // iteration precedes the RETRY or its feedback file is gone.
@@ -1432,15 +1282,14 @@ func retryReviewFeedbackReminder(artifactDir string, reviewedIter int) string {
 	if _, err := os.Stat(path); err != nil {
 		return ""
 	}
-	return fmt.Sprintf("The iteration %d review requested changes, and the intervening RETRY iteration(s) may not have addressed every finding. Re-read the full feedback at %s and verify each finding against the current tree; progress.md alone is not authoritative for what remains. Do not declare SUCCESS while any finding is unaddressed.", reviewedIter, path)
+	return fmt.Sprintf("The iteration %d review requested changes, and the intervening RETRY iteration(s) may not have addressed every finding. Re-read the full feedback at %s and verify each finding against the current tree; the progress notes alone are not authoritative for what remains. Do not declare SUCCESS while any finding is unaddressed.", reviewedIter, path)
 }
 
-// retryProgressFingerprints gathers the stall-evidence signals for a RETRY
-// iteration: the progress.md handoff-narrative fingerprint and a hash of
-// every feature worktree's uncommitted state.
-func retryProgressFingerprints(progressPath string, cfg ImplementConfig) (string, string) {
-	narrativeFP, _ := progressFingerprint(progressPath)
-	return narrativeFP, worktreeStateFingerprint(context.Background(), cfg.CommandRunner, implementWorktreePaths(cfg))
+// committedRetry reports whether the iteration's committed outcome asks
+// for another pass.
+func committedRetry(iterDir string) bool {
+	receipt, err := readCompletionReceipt(iterDir)
+	return err == nil && receipt.Status == llm.CompletionIntentRetry
 }
 
 func observeVerifiedImplementationOutcome(pt *progressTracker, blockers int, cfg ImplementConfig) bool {
@@ -1491,258 +1340,59 @@ func sessionErrFromLogicalAgentStatus(status string, sess ports.SessionView) err
 	return sessionErrFromAgentStatus(status)
 }
 
-// runReviewGate spawns a review agent to evaluate the implementation.
-// The reviewer inspects the repository and iteration artifacts directly
-// using its own tools rather than receiving the full diff inline.
-//
-// Before invoking the LLM reviewer, a deterministic Report Integrity Gate
-// validates the harness-generated verification report against its contract.
-// The deferral ledger gate runs against the parsed
-// progress.md (passed in by the caller after harness routing), since
-// deferrals now live in `## Deferrals` rather than the YAML report.
-// When either gate rejects, the LLM is skipped entirely and a structured
-// CHANGES_REQUESTED is returned.
-func runReviewGate(cfg ImplementConfig, sm ports.SessionManager, iteration int, iterDir string, parsed *parsedProgress, reviewCtx observe.SpanContext) (reviewStatus, string, error) {
-	progressPath := filepath.Join(cfg.ArtifactDir, "progress.md")
-	verificationReportPath := filepath.Join(iterDir, "verification-report.yaml")
-	contractPath := ""
-	var contract *TestingContract
-	if path, ok := resolveImplementationContractPath(filepath.Dir(cfg.StateDir), cfg.Feature, cfg.RepoName); ok {
-		contractPath = path
-		if loaded, err := ReadTestingContract(contractPath); err == nil {
-			contract = loaded
-		}
+// runReviewGate runs the iteration's planned review round against the
+// iteration. When it approves while earlier approvals predate later changes,
+// those axes confirm once in a second round. The reviewers inspect the
+// repository and iteration artifacts with their own tools rather than
+// receiving the diff inline. The returned verdicts cover every axis that ran.
+func runReviewGate(cfg ImplementConfig, sm ports.SessionManager, iteration int, iterDir string, reviewCtx observe.SpanContext, gate *phaseReviewGate, state repoState, changed bool) (reviewStatus, string, map[string]string, error) {
+	plan := gate.plan(state)
+	if len(plan) == 0 {
+		return ReviewApproved, formatStructuredReviewFeedback("Implementation Review", "", "", ReviewApproved), nil, nil
 	}
-
-	// Pull the deferral ledger context up front; both the gate and the
-	// post-gate ingestion need it.
-	var ledger []feature.Deferral
-	currentPhase := 0
-	if cfg.Feature != nil {
-		currentPhase = cfg.Feature.CurrentRoadmapPhase
-		if run := cfg.Feature.Run(); run != nil {
-			ledger = run.Deferrals
-		}
-	}
-	var parsedDeferrals []feature.IncomingDeferral
-	var parsedClosedDeferrals []string
-	if parsed != nil {
-		parsedDeferrals = parsed.Deferrals
-		parsedClosedDeferrals = parsed.ClosedDeferrals
-	}
-
-	// Report Integrity Gate: deterministic pre-review. The harness generates
-	// verification-report.yaml, so a missing or malformed report rejects the
-	// iteration before any review axis runs. The gate runs two passes —
-	// schema against verification-report.yaml, and deferral-ledger against
-	// the parsed progress.md — merged into a single Rejected verdict so the
-	// agent sees all failure modes at once.
-	var gateResult reportGateResult
-	if report, err := readVerificationReport(verificationReportPath); err == nil {
-		boundContract := contract
-		var schemaResult reportGateResult
-		if loaded, err := readBoundTestingContract(report); err != nil {
-			schemaResult.Findings = append(schemaResult.Findings, reportGateFinding{
-				Category: gateCategorySchema,
-				Kind:     kindMissingRequired,
-				Detail:   fmt.Sprintf("testing contract referenced by verification-report.yaml is unreadable: %v", err),
-			})
-			schemaResult.Rejected = true
-		} else if loaded != nil {
-			boundContract = loaded
-		}
-		schemaResult = mergeGateResults(schemaResult, validateVerificationReportWithContext(report, nil, true, verificationReportValidationContext{
-			IterationDir: iterDir,
-			Contract:     boundContract,
-		}))
-		deferralResult := validateDeferralLedger(parsedDeferrals, parsedClosedDeferrals, ledger, currentPhase, cfg.RepoName)
-		gateResult = mergeGateResults(schemaResult, deferralResult)
-		if gateResult.Rejected {
-			feedback := formatGateFeedback(gateResult)
-			_ = os.WriteFile(filepath.Join(iterDir, "review-feedback.md"), []byte(feedback), 0o644)
-			cfg.Observer.ReviewCompleted(reviewCtx, iteration, "CHANGES_REQUESTED_GATE", 0)
-			return reviewChangesRequested, feedback, nil
-		}
-	} else {
-		// A SUCCESS handoff must have a harness-generated report before review.
-		gateResult.Findings = append(gateResult.Findings, reportGateFinding{
-			Category: gateCategorySchema,
-			Kind:     kindMissingRequired,
-			Detail:   "harness-generated verification-report.yaml is missing",
-		})
-		gateResult.Rejected = true
-		deferralResult := validateDeferralLedger(parsedDeferrals, parsedClosedDeferrals, ledger, currentPhase, cfg.RepoName)
-		gateResult = mergeGateResults(gateResult, deferralResult)
-		if gateResult.Rejected {
-			feedback := formatGateFeedback(gateResult)
-			_ = os.WriteFile(filepath.Join(iterDir, "review-feedback.md"), []byte(feedback), 0o644)
-			cfg.Observer.ReviewCompleted(reviewCtx, iteration, "CHANGES_REQUESTED_GATE", 0)
-			return reviewChangesRequested, feedback, nil
-		}
-	}
-
-	// Ingest the deferrals ledger from the parsed progress.md. New
-	// entries are merged idempotently (stable IDs); closures transition
-	// matching ledger entries to Status==closed. The deferral gate above
-	// has already rejected reason-less entries and unclosed-due-this-phase
-	// commitments, so any deferrals reaching this point are intentional.
-	if cfg.FeatureStore != nil && (len(parsedDeferrals) > 0 || len(parsedClosedDeferrals) > 0) {
-		now := time.Now()
-		_ = cfg.FeatureStore.Modify(cfg.Feature.ID, func(f *feature.Feature) error {
-			run := f.Run()
-			if run == nil {
-				return nil
-			}
-			run.Deferrals = feature.MergeDeferrals(run.Deferrals, parsedDeferrals, currentPhase, now)
-			feature.CloseDeferrals(run.Deferrals, parsedClosedDeferrals, currentPhase, "implement", now)
-			return nil
-		})
-	}
-
 	reviewDir := filepath.Join(iterDir, "review")
 	if err := os.MkdirAll(reviewDir, 0o755); err != nil {
-		return reviewFailed, "", fmt.Errorf("creating review helper directory: %w", err)
+		return reviewFailed, "", nil, fmt.Errorf("creating review helper directory: %w", err)
 	}
 	removeCompletionReceipt(reviewDir)
 
 	parentFeedbackPath := filepath.Join(iterDir, "review-feedback.md")
-	reviewStatus, feedback, err := runImplementationReviewAxes(cfg, sm, iteration, iterDir, reviewDir, reviewCtx, implementationReviewInput{
-		ProgressPath:           progressPath,
-		ContractPath:           contractPath,
-		VerificationReportPath: verificationReportPath,
-		KnownCaveatsGateResult: gateResult,
-	})
-	if err != nil {
-		if strings.TrimSpace(feedback) != "" {
-			_ = os.WriteFile(parentFeedbackPath, []byte(feedback), 0o644)
+	reviewStatus, feedback, verdicts, err := runImplementationReviewAxes(cfg, sm, iteration, iterDir, reviewDir, reviewCtx, gate.reviewInput(iteration, plan))
+	if err == nil && reviewStatus == ReviewApproved {
+		if confirm := gate.confirmPlan(iteration, verdicts, state, changed); len(confirm) > 0 {
+			confirmDir := filepath.Join(reviewDir, confirmRoundDir)
+			if mkErr := os.MkdirAll(confirmDir, 0o755); mkErr != nil {
+				return reviewFailed, "", nil, fmt.Errorf("creating confirmation review directory: %w", mkErr)
+			}
+			var confirmVerdicts map[string]string
+			reviewStatus, feedback, confirmVerdicts, err = runImplementationReviewAxes(cfg, sm, iteration, iterDir, confirmDir, reviewCtx, gate.reviewInput(iteration, confirm))
+			for slug, verdict := range confirmVerdicts {
+				verdicts[slug] = verdict
+			}
 		}
-		return reviewStatus, feedback, fmt.Errorf("running review gate: %w", err)
 	}
-
 	if strings.TrimSpace(feedback) != "" {
 		_ = os.WriteFile(parentFeedbackPath, []byte(feedback), 0o644)
 	}
-	return reviewStatus, feedback, nil
-}
-
-func resolveImplementationContractPath(stateDir string, f *feature.Feature, repoName string) (string, bool) {
-	if f == nil {
-		return "", false
-	}
-	if f.CurrentRoadmapPhase > 0 {
-		return PhaseTestingContractPath(stateDir, f, f.CurrentRoadmapPhase), true
-	}
-	return "", false
-}
-
-func prepareImplementationTestingContract(cfg ImplementConfig, planContent string) (string, string, error) {
-	contractPath, ok := resolveImplementationContractPath(filepath.Dir(cfg.StateDir), cfg.Feature, cfg.RepoName)
-	if !ok {
-		return "", "", nil
-	}
-	if !cfg.Feature.EffectivePipeline().ShouldRunImplementationHarness() {
-		// Medium/Large roadmap phases run no per-iteration harness; the
-		// plan's automated verification is the implementer's to run and is
-		// re-exercised live at Final Review. Remove any stale contract left
-		// by a prior run/profile so the implementer's presence check sees none.
-		if err := os.Remove(contractPath); err != nil && !os.IsNotExist(err) {
-			return "", "", fmt.Errorf("removing stale testing contract: %w", err)
-		}
-		return "", "", nil
-	}
-	contract := compileImplementationTestingContract(cfg, planContent)
-	if existing, err := ReadTestingContract(contractPath); err == nil {
-		contract = reconcileTestingContract(existing, contract)
-	} else if !os.IsNotExist(err) {
-		return "", "", fmt.Errorf("reading existing testing contract: %w", err)
-	}
-	if testingContractRequiresCommandRunner(&contract) && cfg.CommandRunner == nil {
-		return "", "", errors.New("implementation testing contract contains harness-owned commands but CommandRunner is not configured")
-	}
-	if cfg.CommandRunner != nil && cfg.Feature != nil {
-		resolver := func(worktreePath string) (string, error) {
-			return resolveTestingContractWorktreeHEADWithRunner(cfg.CommandRunner, worktreePath)
-		}
-		if err := ensureTestingContractBaseCommits(&contract, cfg.Feature.Repos, resolver); err != nil {
-			return "", "", fmt.Errorf("anchoring testing contract baseline: %w", err)
-		}
-	}
-	if err := WriteTestingContract(contractPath, contract); err != nil {
-		return "", "", fmt.Errorf("writing testing contract: %w", err)
-	}
-	contractFingerprint, err := fingerprint(contractPath)
 	if err != nil {
-		return "", "", fmt.Errorf("fingerprinting testing contract: %w", err)
+		return reviewStatus, feedback, nil, fmt.Errorf("running review gate: %w", err)
 	}
-	return contractPath, contractFingerprint, nil
-}
-
-func verificationScopePlanRevisionFeedback(violations []ProtocolViolation) string {
-	var b strings.Builder
-	b.WriteString("## Verification Scope Errors\n\n")
-	b.WriteString("Repair the phase plan's verification declarations without changing implementation scope. Multi-repo commands require `[repo: <name>]` and run from that repository root; evidence that reaches an external host must declare the capability that reaches it.\n")
-	for _, violation := range violations {
-		fmt.Fprintf(&b, "\n- %s\n", violation.Reason)
-	}
-	return b.String()
-}
-
-func compileImplementationTestingContract(cfg ImplementConfig, planContent string) TestingContract {
-	if cfg.Feature != nil && cfg.RepoName == "" &&
-		cfg.Feature.CurrentRoadmapPhase > 0 {
-		repos := phaseReposForImplementationContract(cfg.Feature, cfg.PlanPath)
-		return CompileTestingContractMultiRepo(MultiRepoContractInput{
-			Repos:     repos,
-			PlanText:  planContent,
-			PlanPath:  cfg.PlanPath,
-			PhaseType: cfg.PhaseType,
-		})
-	}
-	return CompileTestingContract(planContent, cfg.PlanPath, cfg.PhaseType)
-}
-
-func phaseReposForImplementationContract(f *feature.Feature, planPath string) []string {
-	if scope, err := PhaseScope(f, planPath); err == nil && scope.ScopeOK() && len(scope.Repos) > 0 {
-		return scope.Repos
-	}
-	repos := make([]string, 0, len(f.Repos))
-	for _, r := range f.Repos {
-		repos = append(repos, r.Name)
-	}
-	return repos
+	return reviewStatus, feedback, verdicts, nil
 }
 
 // buildImplementPrompt constructs the per-call prompt for an implementation
 // iteration. Role-internal artifact paths, resource catalogs, and static
-// verification discovery live in the RoleSpec-backed system prompt, the
-// pre-seeded verification report, and skills/implement/SKILL.md.
-func buildImplementPrompt(planPath, exitCriteria, feedback, helpAnswers string, iteration int) string {
+// verification discovery live in the RoleSpec-backed system prompt and
+// skills/implement/SKILL.md.
+func buildImplementPrompt(planPath, exitCriteria, feedback, helpAnswers string, iteration int, repos []prompts.RepoView) string {
 	return prompts.MustRender(prompts.TemplateImplementUser, implementUserInput{
-		PlanPath:             planPath,
-		ExitCriteria:         exitCriteria,
-		Feedback:             feedback,
-		PlanRevisionFeedback: implementationPlanRevisionFeedback(planPath, iteration),
-		HelpAnswers:          helpAnswers,
-		Iteration:            iteration,
+		PlanPath:     planPath,
+		Repos:        repos,
+		ExitCriteria: exitCriteria,
+		Feedback:     feedback,
+		HelpAnswers:  helpAnswers,
+		Iteration:    iteration,
 	})
-}
-
-func implementationPlanRevisionFeedback(planPath string, iteration int) string {
-	if iteration <= 1 || strings.TrimSpace(planPath) == "" {
-		return ""
-	}
-	planDir := filepath.Dir(planPath)
-	feedbackAttempt, feedback := latestPlanRevisionFeedbackAttempt(planDir)
-	if feedbackAttempt == 0 || strings.TrimSpace(feedback) == "" {
-		return ""
-	}
-	if len(missingEvidenceRequirements(feedback)) == 0 && len(insufficientEvidenceRequirements(feedback)) == 0 {
-		return ""
-	}
-	if LatestCompletedPlanAttempt(planDir) <= feedbackAttempt {
-		return ""
-	}
-	return feedback
 }
 
 // buildHelpAnswers formats answered help requests into a string for the prompt.
@@ -1763,11 +1413,11 @@ const maxAutoResumeAttempts = 3
 // autoResumeMessage is the user-facing continuation sent to the session
 // when the CLI truncated an invocation mid-work. It reminds the agent of
 // the completion protocol so a genuinely-finished agent can exit cleanly.
-const autoResumeMessage = `Continue where you left off. If the task is complete, validate the required artifacts and finish with exactly one <agentico-outcome>{"status":"success"}</agentico-outcome> or <agentico-outcome>{"status":"retry"}</agentico-outcome> tag.`
+const autoResumeMessage = `Continue where you left off. If the task is complete, validate any required artifacts and finish with exactly one <agentico-outcome>{"status":"success"}</agentico-outcome> or <agentico-outcome>{"status":"retry"}</agentico-outcome> tag.`
 
 func autoResumeMessageForSession(sess ports.SessionView) string {
 	if phaseCompletionRequests(sess) != nil {
-		return "Continue where you left off. Validate the required artifacts before calling `" + llm.CompletePhaseToolName +
+		return "Continue where you left off. Validate any required artifacts before calling `" + llm.CompletePhaseToolName +
 			"` with an outcome allowed by your role contract. Ask any unresolved user question through `" + llm.AskUserToolName + "` and wait for the answer."
 	}
 	return autoResumeMessage
@@ -2002,9 +1652,9 @@ const finishOrViolateNudgeFragment = "do not re-investigate"
 // session ended its turn without a committable root outcome.
 func formatFinishOrViolateNudge(missing []string) string {
 	if len(missing) == 0 {
-		return `You ended your turn without a valid completion outcome. Finish the required artifacts, run the artifact preflight, then emit exactly one <agentico-outcome>{"status":"success"}</agentico-outcome> or <agentico-outcome>{"status":"retry"}</agentico-outcome> tag. Do not start new work, ` + finishOrViolateNudgeFragment + ", and use AskUserQuestion only if the task is genuinely blocked on the user."
+		return `You ended your turn without a valid completion outcome. Finish any required artifacts, run the artifact preflight if your instructions include one, then emit exactly one <agentico-outcome>{"status":"success"}</agentico-outcome> or <agentico-outcome>{"status":"retry"}</agentico-outcome> tag. Do not start new work, ` + finishOrViolateNudgeFragment + ", and use AskUserQuestion only if the task is genuinely blocked on the user."
 	}
-	return fmt.Sprintf(`You ended your turn without a committable completion outcome. Still invalid or missing: %s. Fix only those artifacts, rerun the artifact preflight, then emit exactly one <agentico-outcome>{"status":"success"}</agentico-outcome> or <agentico-outcome>{"status":"retry"}</agentico-outcome> tag. Do not start new work, %s, and use AskUserQuestion only if the task is genuinely blocked on the user.`,
+	return fmt.Sprintf(`You ended your turn without a committable completion outcome. Still invalid or missing: %s. Fix only those artifacts, rerun the artifact preflight if your instructions include one, then emit exactly one <agentico-outcome>{"status":"success"}</agentico-outcome> or <agentico-outcome>{"status":"retry"}</agentico-outcome> tag. Do not start new work, %s, and use AskUserQuestion only if the task is genuinely blocked on the user.`,
 		strings.Join(missing, ", "), finishOrViolateNudgeFragment)
 }
 
@@ -2034,8 +1684,8 @@ func sendCompletionNudge(sess ports.SessionView, nudges *int, message string) bo
 // formatCommitViolationNudge builds the correction sent when a parsed root
 // outcome was rejected at commit time. Unlike the missing-outcome nudge it
 // carries the rejection reasons verbatim and offers only the outcome verbs the
-// role may actually use — re-offering "retry" to a role without iteration
-// state would invite the same violation again.
+// role may actually use — re-offering "retry" to a role that cannot ask for
+// another pass would invite the same violation again.
 func formatCommitViolationNudge(violations []ProtocolViolation, retryAllowed bool) string {
 	var reasons strings.Builder
 	for _, violation := range violations {
@@ -2053,7 +1703,7 @@ func formatCommitViolationNudge(violations []ProtocolViolation, retryAllowed boo
 	}
 	return fmt.Sprintf(`Your completion outcome was rejected:
 %s
-Fix only what is listed, rerun the artifact preflight, then emit exactly one %s tag.%s Do not start new work, %s, and use AskUserQuestion only if the task is genuinely blocked on the user.`,
+Fix only what is listed, rerun the artifact preflight if your instructions include one, then emit exactly one %s tag.%s Do not start new work, %s, and use AskUserQuestion only if the task is genuinely blocked on the user.`,
 		strings.TrimRight(reasons.String(), "\n"), verbs, roleNote, finishOrViolateNudgeFragment)
 }
 
@@ -2088,20 +1738,17 @@ var contextHandoffPollInterval = 2 * time.Second
 
 // contextHandoffMessageBody is the instruction template injected when the
 // session's context utilization first crosses its provider-specific threshold.
-// A fresh iteration will pick up from the updated progress.md with a clean
-// context, so the agent should stop taking new work and leave a good handoff
-// — and emit `## Iteration State: RETRY` so the harness skips the review
+// A fresh iteration will pick up from the updated progress notes with a
+// clean context, so the agent should stop taking new work, leave a good
+// handoff, and end with the retry outcome so the harness skips the review
 // gate and routes straight to the next iteration.
-const contextHandoffMessageBody = `Wind this iteration down now so the next iteration can resume with a fresh context; the outer loop will spawn a new session seeded with progress.md.
+const contextHandoffMessageBody = `Wind this iteration down now so the next iteration can resume with a fresh context; the outer loop will spawn a new session that reads your progress notes.
 
 Do this, in order:
 
 1. Do NOT start new implementation work or new substantial tool calls.
-2. Write progress.md per skills/implement/SKILL.md's section schema:
-   - ` + "`" + `## Iteration Handoff` + "`" + ` (Completed / Remaining / Where I stopped / Gotchas).
-   - ` + "`" + `## Deferrals` + "`" + ` (a fenced YAML block; ` + "`" + `deferrals: []` + "`" + ` and ` + "`" + `closed_deferrals: []` + "`" + ` if you have nothing to declare).
-   - ` + "`" + `## Iteration State` + "`" + ` set to ` + "`" + `RETRY` + "`" + ` so the harness skips review and starts the next iteration with no reviewer feedback.
-3. %s. Do not create or edit ` + "`" + `phase_complete` + "`" + `; the harness writes the receipt after validation.`
+2. Update progress.md with short notes a fresh session can pick up from: what was done, what is left, and anything surprising.
+3. %s so the harness skips review and starts the next iteration with no reviewer feedback. Do not create or edit ` + "`" + `phase_complete` + "`" + `; the harness writes the receipt after validation.`
 
 type contextSnapshot struct {
 	Pct            int
@@ -2118,12 +1765,11 @@ type PhaseOutcomeWaitOptions struct {
 	// writes the harness-owned completion receipt. A nil callback is a
 	// protocol error for a completed autonomous turn.
 	CommitOutcome func(llm.CompletionIntent) ([]ProtocolViolation, error)
-	// RetryOutcomeAllowed mirrors the role's iteration-state capability so a
+	// RetryOutcomeAllowed mirrors the role's AllowsRetry so a
 	// commit-rejection nudge offers only the outcome verbs the role may use.
-	// Leave false for every role without a progress artifact.
 	RetryOutcomeAllowed bool
 	// EnableContextHandoff arms the context-utilization wind-down nudge.
-	// The handoff message references the implement progress.md schema, so
+	// The handoff message references the implement progress notes, so
 	// only Implementation-phase sessions should set this true. Plan,
 	// roadmap, and final-review sessions produce different
 	// artifacts and have heavy required-reading loads that would trip the
@@ -2253,7 +1899,7 @@ func WaitForPhaseOutcome(sess ports.SessionHandle, opts PhaseOutcomeWaitOptions)
 	// Periodically sample the session's context-window utilization and, on
 	// first crossing of the provider-specific threshold, nudge the agent to
 	// wrap up cleanly. Sending once is enough — the outer loop will restart
-	// a fresh iteration from the updated progress.md.
+	// a fresh iteration from the updated progress notes.
 	//
 	// Gated on EnableContextHandoff: only Implementation-phase sessions
 	// arm the nudge. When disabled, handoffSent starts true so the ticker
@@ -2771,17 +2417,6 @@ func parseLargeCodexCommandOutput(line []byte, threshold int) (largeCodexCommand
 	}, true
 }
 
-func readPlanContent(planPath string) string {
-	if planPath == "" {
-		return ""
-	}
-	data, err := os.ReadFile(planPath)
-	if err != nil {
-		return ""
-	}
-	return strings.TrimSpace(string(data))
-}
-
 // setReviewingGate persists the ReviewingGate flag on the feature so the
 // desktop app dashboard can reflect that the review gate is currently running.
 func setReviewingGate(cfg ImplementConfig, reviewing bool) {
@@ -2836,12 +2471,8 @@ func waitForShutdownIntent(sm shutdownChecker, grace time.Duration) bool {
 	return false
 }
 
-// isFeatureInterrupted checks the feature store to determine if the feature
-// has been stopped by the user. Loops call this before starting new sessions
-// to avoid zombie iterations after the user presses 's' to stop.
 // verificationContext returns a context that cancels once the feature is
-// interrupted or failed, so a hung verification command cannot outlive a user
-// interrupt by its full declared timeout. The caller must call cancel.
+// interrupted or failed. The caller must call cancel.
 func verificationContext(store FeatureStore, featureID string) (context.Context, context.CancelFunc) {
 	ctx, cancel := context.WithCancel(context.Background())
 	if store == nil {
@@ -2865,6 +2496,9 @@ func verificationContext(store FeatureStore, featureID string) (context.Context,
 	return ctx, cancel
 }
 
+// isFeatureInterrupted checks the feature store to determine if the feature
+// has been stopped by the user. Loops call this before starting new sessions
+// to avoid zombie iterations after the user presses 's' to stop.
 func isFeatureInterrupted(store FeatureStore, featureID string) bool {
 	if store == nil {
 		return false
@@ -2874,117 +2508,4 @@ func isFeatureInterrupted(store FeatureStore, featureID string) bool {
 		return false
 	}
 	return f.Status == feature.StatusInterrupted || f.Status == feature.StatusFailed
-}
-
-func withConfiguredCapabilityPolicy(ctx context.Context, cfg ImplementConfig) context.Context {
-	if cfg.CapabilityPolicy == nil {
-		return ctx
-	}
-	return WithCapabilityPolicy(ctx, *cfg.CapabilityPolicy)
-}
-
-// preIterationCapabilityGate probes every declared capability in the bound
-// contract. A planner defect routes to plan revision; a missing capability
-// writes the harness gate into iterDir and returns the need_user_input
-// result; nil means the iteration may start.
-func preIterationCapabilityGate(cfg ImplementConfig, contractPath, iterDir string, iteration int) (*LoopResult, []string, error) {
-	contract, err := ReadTestingContract(contractPath)
-	if err != nil {
-		return nil, nil, fmt.Errorf("reading testing contract for capability probes: %w", err)
-	}
-	hasCapabilities := false
-	for _, item := range contract.Items {
-		if capabilityProbesApply(item) && item.Policy.Required && !IsTestingContractItemWaived(item) {
-			hasCapabilities = true
-			break
-		}
-	}
-	if !hasCapabilities {
-		return nil, nil, nil
-	}
-	var repos []feature.FeatureRepo
-	if cfg.Feature != nil {
-		repos = cfg.Feature.Repos
-		if strings.TrimSpace(cfg.RepoName) != "" {
-			repos = nil
-			for _, repo := range cfg.Feature.Repos {
-				if repo.Name == cfg.RepoName {
-					repos = append(repos, repo)
-				}
-			}
-		}
-	}
-	featureID := ""
-	if cfg.Feature != nil {
-		featureID = cfg.Feature.ID
-	}
-	ctx, cancel := verificationContext(cfg.FeatureStore, featureID)
-	defer cancel()
-	outcome, err := probeTestingContractCapabilities(withConfiguredCapabilityPolicy(ctx, cfg), cfg.CommandRunner, contract, contractPath, cfg.WorkDir, repos)
-	if err != nil {
-		return nil, nil, fmt.Errorf("probing testing contract capabilities: %w", err)
-	}
-	if len(outcome.ContractErrors) > 0 {
-		return &LoopResult{
-			FinalStatus:          "plan_revision_required",
-			Iterations:           iteration,
-			PlanRevisionFeedback: verificationContractPlanRevisionFeedback(outcome.ContractErrors),
-		}, nil, nil
-	}
-	if len(outcome.BlockedItems) == 0 {
-		return nil, outcome.CapabilityEnv, nil
-	}
-	gatePath := NeedUserInputPath(iterDir)
-	rec := synthesizeVerificationNeedUserInputGateWithContext(contractPath, contract, outcome.Report, outcome.BlockedItems, iteration)
-	if err := WriteNeedUserInputRecord(gatePath, rec); err != nil {
-		return nil, nil, fmt.Errorf("persisting pre-iteration capability gate: %w", err)
-	}
-	return &LoopResult{FinalStatus: "need_user_input", Iterations: iteration, LastError: rec.Summary, NeedUserInputPath: gatePath}, nil, nil
-}
-
-// undeclinedItemIDs returns the ids in itemIDs that declined does not name.
-func undeclinedItemIDs(itemIDs []string, declined map[string]bool) []string {
-	var out []string
-	for _, itemID := range itemIDs {
-		if !declined[itemID] {
-			out = append(out, itemID)
-		}
-	}
-	return out
-}
-
-// agentReportedBlockerGate routes a RETRY handoff to the user gate when the
-// implementer wrote a valid `agentico report-blocker` artifact into iterDir.
-// An invalid artifact is removed and ignored so a malformed escalation
-// degrades to an ordinary RETRY rather than pausing on a gate the user
-// cannot trust.
-func agentReportedBlockerGate(iterDir, contractPath string, iteration int) (*LoopResult, error) {
-	gatePath := NeedUserInputPath(iterDir)
-	rec, err := ReadNeedUserInputRecord(gatePath)
-	if err != nil {
-		if os.IsNotExist(err) {
-			return nil, nil
-		}
-		return nil, fmt.Errorf("reading implementer blocker gate: %w", err)
-	}
-	if rec.Source != NeedUserInputSourceAgent {
-		return nil, nil
-	}
-	if strings.TrimSpace(contractPath) == "" {
-		_ = os.Remove(gatePath)
-		return nil, nil
-	}
-	contract, err := ReadTestingContract(contractPath)
-	if err != nil {
-		return nil, fmt.Errorf("reading testing contract for implementer blocker gate: %w", err)
-	}
-	if err := validateAgentReportedBlockerGate(rec, contractPath, contract); err != nil {
-		_ = os.Remove(gatePath)
-		return nil, nil
-	}
-	rec.Iteration = iteration
-	if err := WriteNeedUserInputRecord(gatePath, rec); err != nil {
-		return nil, fmt.Errorf("persisting implementer blocker gate: %w", err)
-	}
-	return &LoopResult{FinalStatus: "need_user_input", Iterations: iteration, LastError: rec.Summary, NeedUserInputPath: gatePath}, nil
 }

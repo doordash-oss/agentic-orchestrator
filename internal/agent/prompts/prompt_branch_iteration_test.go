@@ -37,10 +37,8 @@ func TestImplementPromptBranchBehavior(t *testing.T) {
 			},
 			wantContains: []string{"# Implementation Context", "**Plan**: /plan.md", "**Exit criteria**: Relevant tests pass."},
 			wantOmit: []string{
-				"Required verification items for this iteration",
 				"Reviewer feedback from previous iteration",
 				"Answers to NEED_HELP questions",
-				"Testing contract",
 			},
 		},
 		{
@@ -77,15 +75,13 @@ func TestImplementPromptBranchBehavior(t *testing.T) {
 
 func TestReviewPromptBranchBehavior(t *testing.T) {
 	base := ReviewUserInput{
-		Iteration:              2,
-		IterDir:                "/iter",
-		RoadmapPath:            "/roadmap.md",
-		PlanPath:               "/plan.md",
-		ExitCriteria:           "Relevant tests pass.",
-		VerificationReportPath: "/iter/verification-report.yaml",
-		ContractPath:           "/phase/testing-contract.yaml",
-		ProgressPath:           "/iter/progress.md",
-		PhaseType:              "tdd-fill-in",
+		Iteration:    2,
+		IterDir:      "/iter",
+		RoadmapPath:  "/roadmap.md",
+		PlanPath:     "/plan.md",
+		ExitCriteria: "Relevant tests pass.",
+		ProgressPath: "/iter/progress.md",
+		PhaseType:    "tdd-fill-in",
 	}
 
 	tests := []struct {
@@ -123,25 +119,22 @@ func TestFinalFixPromptBranches(t *testing.T) {
 		wantOmit     []string
 	}{
 		{
-			name: "manual_verification_and_publishable_sections_emitted_when_enabled",
+			name: "local_only_note_omitted_when_publishable",
 			input: FinalFixUserInput{
-				Iteration:                         2,
-				Feedback:                          "Manual verification is missing.",
-				IncludeManualVerificationOutcomes: true,
-				Publishable:                       true,
+				Iteration:   2,
+				Feedback:    "Tighten wording.",
+				Publishable: true,
 			},
-			wantContains: []string{"## Manual Verification Outcomes", "describe in your fix output what you actually observed"},
-			wantOmit:     []string{"NOTE: Local-only repository"},
+			wantOmit: []string{"NOTE: Local-only repository"},
 		},
 		{
-			name: "manual_verification_omitted_and_local_only_note_emitted_when_not_publishable",
+			name: "local_only_note_emitted_when_not_publishable",
 			input: FinalFixUserInput{
 				Iteration:   1,
 				Feedback:    "Tighten wording.",
 				Publishable: false,
 			},
 			wantContains: []string{"NOTE: Local-only repository"},
-			wantOmit:     []string{"## Manual Verification Outcomes"},
 		},
 	}
 
@@ -233,25 +226,6 @@ func TestValidateSpecializedPromptBranches(t *testing.T) {
 			wantContains: []string{"## Plan to Evaluate", "/roadmap.md"},
 			wantOmit:     []string{"## Feature Under Review", "## Prior Phase Context", "## Research Findings"},
 		},
-		{
-			name: "automated_verification_only_adds_note_and_omits_it_by_default",
-			input: ValidateSpecializedUserInput{
-				Name:                      "OAuth login",
-				DomainName:                "scope",
-				PlanPath:                  "/phase-plan.md",
-				AutomatedVerificationOnly: true,
-			},
-			wantContains: []string{"this feature verifies through automated tests only", "do not request evidence matrices, screenshots, or manual observation steps"},
-		},
-		{
-			name: "automated_verification_only_note_omitted_when_false",
-			input: ValidateSpecializedUserInput{
-				Name:       "OAuth login",
-				DomainName: "scope",
-				PlanPath:   "/phase-plan.md",
-			},
-			wantOmit: []string{"this feature verifies through automated tests only"},
-		},
 	}
 
 	for _, tt := range tests {
@@ -269,34 +243,38 @@ func TestValidateSpecializedPromptBranches(t *testing.T) {
 
 func TestGoldenSnapshotsNoOrphanFiles(t *testing.T) {
 	retained := map[string]bool{
-		"codex_design_system_rolespec":                         true,
-		"codex_implement_system_rolespec":                      true,
-		"autoreview_user":                                      true,
-		"autoreview_format_retry":                              true,
-		"design_system_rolespec":                               true,
-		"design_user_multi_repo":                               true,
-		"final_fix_user_with_manual":                           true,
-		"implement_system_rolespec":                            true,
-		"implementation_review_axis_final_user":                true,
-		"implementation_review_axis_live_run_user":             true,
-		"implementation_review_axis_user":                      true,
-		"inquire_user_high_with_kb":                            true,
-		"kb_build_full":                                        true,
-		"phase_plan_revision_user":                             true,
-		"phase_plan_revision_user_automated_verification_only": true,
-		"phase_plan_user_autonomous":                           true,
-		"phase_plan_user_automated_verification_only":          true,
-		"pr_description_user_full":                             true,
-		"research_from_questions_user":                         true,
-		"roadmap_revision_user":                                true,
-		"roadmap_user_multi_repo":                              true,
-		"roadmap_user_no_design":                               true,
-		"roadmap_user_refactor_pass":                           true,
-		"scout_user":                                           true,
-		"summary_user":                                         true,
-		"supervisor_system":                                    true,
-		"validate_specialized_grounding":                       true,
-		"validate_specialized_automated_verification_only":     true,
+		"codex_design_system_rolespec":             true,
+		"codex_implement_system_rolespec":          true,
+		"autoreview_user":                          true,
+		"autoreview_format_retry":                  true,
+		"design_system_rolespec":                   true,
+		"design_user_multi_repo":                   true,
+		"final_fix_user_handoff":                   true,
+		"implement_review_user_decisions":          true,
+		"implement_review_user_handoff":            true,
+		"implement_review_user_handoff_answered":   true,
+		"implement_system_rolespec":                true,
+		"implement_user_fix_round":                 true,
+		"implementation_review_axis_final_user":    true,
+		"implementation_review_axis_live_run_user": true,
+		"implementation_review_axis_user":          true,
+		"inquire_user_high":                        true,
+		"phase_plan_revision_user":                 true,
+		"phase_plan_user_autonomous":               true,
+		"pr_description_user_full":                 true,
+		"research_from_questions_user":             true,
+		"review_round_user_confirm_live_run":       true,
+		"review_round_user_follow_up":              true,
+		"review_round_user_per_phase_follow_up":    true,
+		"review_round_user_full":                   true,
+		"roadmap_revision_user":                    true,
+		"roadmap_user_multi_repo":                  true,
+		"roadmap_user_no_design":                   true,
+		"roadmap_user_refactor_pass":               true,
+		"scout_user":                               true,
+		"summary_user":                             true,
+		"supervisor_system":                        true,
+		"validate_specialized_grounding":           true,
 	}
 
 	files, err := filepath.Glob(filepath.Join("testdata", "*.golden"))

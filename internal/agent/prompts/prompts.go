@@ -56,12 +56,13 @@ const (
 	TemplateImplementUser                templateKey = "implement.user"
 	templateImplementationReviewAxisUser templateKey = "implementation_review_axis.user"
 	TemplateInquireUser                  templateKey = "inquire.user"
-	TemplateKBBuildUser                  templateKey = "kb_build.user"
 	TemplatePhasePlanUser                templateKey = "phase_plan.user"
 	TemplatePhasePlanRevisionUser        templateKey = "phase_plan_revision.user"
 	TemplatePRDescriptionUser            templateKey = "pr_description.user"
 	TemplateResearchFromQuestionsUser    templateKey = "research_from_questions.user"
 	templateReviewUser                   templateKey = "review.user"
+	TemplateReviewRoundUser              templateKey = "review_round.user"
+	TemplateImplementReviewUser          templateKey = "implement_review.user"
 	TemplateRoadmapUser                  templateKey = "roadmap.user"
 	TemplateRoadmapRevisionUser          templateKey = "roadmap_revision.user"
 	templateScoutUser                    templateKey = "scout.user"
@@ -72,7 +73,6 @@ const (
 
 	// Partials rendered directly from Go.
 	TemplateAutonomousInquireness templateKey = "autonomous_inquireness"
-	TemplateDeferralsDue          templateKey = "deferrals_due"
 	TemplateGrillMeInquireness    templateKey = "grillme_inquireness"
 	TemplateVisualReferences      templateKey = "visual_references"
 )

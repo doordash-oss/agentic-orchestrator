@@ -123,8 +123,6 @@ function previewSummary(item: ActionableAttentionItem): string {
       return item.toolName === '' ? '' : ` · ${item.toolName}`;
     case 'questions':
       return item.questions[0]?.header === undefined ? '' : ` · ${item.questions[0].header}`;
-    case 'gate':
-      return item.summary === undefined ? '' : ` · ${item.summary}`;
     case 'help':
       // Synthetic ('coordinating') items are filtered before notifying.
       return ' · Help request';
@@ -145,8 +143,6 @@ function attentionTypeLabel(item: ActionableAttentionItem): string {
       return 'Permission';
     case 'questions':
       return 'Questions';
-    case 'gate':
-      return 'Input gate';
     case 'help':
       return 'Help';
     case 'review':

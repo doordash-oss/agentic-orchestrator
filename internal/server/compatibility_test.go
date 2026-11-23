@@ -101,14 +101,16 @@ func TestCompatibilityDeclarationFallbackBuildVersion(t *testing.T) {
 // Series 5 shares the flat feature-action and child-launch response shapes,
 // removes the unused action union and static rebase declaration, drops
 // never-consumed start and restart fields, and declares the routed selection
-// subaction and delete retry indicator.
+// subaction and delete retry indicator. Series 6 removes the testing-contract
+// route, the need-user-input gate and its actions, and the required
+// need_user_inputs prompt-snapshot field.
 func TestCompatibilityPins(t *testing.T) {
 	t.Parallel()
-	if CompatibilitySchemaVersion != 5 {
-		t.Fatalf("CompatibilitySchemaVersion = %d; want 5", CompatibilitySchemaVersion)
+	if CompatibilitySchemaVersion != 6 {
+		t.Fatalf("CompatibilitySchemaVersion = %d; want 6", CompatibilitySchemaVersion)
 	}
-	if CompatibilityMinClientSchema != 5 {
-		t.Fatalf("CompatibilityMinClientSchema = %d; want 5", CompatibilityMinClientSchema)
+	if CompatibilityMinClientSchema != 6 {
+		t.Fatalf("CompatibilityMinClientSchema = %d; want 6", CompatibilityMinClientSchema)
 	}
 	if CompatibilityRuntimePolicy != "loopback-bearer-v1" {
 		t.Fatalf("CompatibilityRuntimePolicy = %q; want loopback-bearer-v1", CompatibilityRuntimePolicy)

@@ -52,10 +52,7 @@ const (
 	CascadeResourceCopiedInput cascadeResourceKind = "copied_input"
 	CascadeResourceWorktree    cascadeResourceKind = "worktree"
 	CascadeResourceBranch      cascadeResourceKind = "branch"
-	CascadeResourceOverlay     cascadeResourceKind = "overlay"
 	CascadeResourceRecord      cascadeResourceKind = "record"
-	CascadeResourceKBWorkspace cascadeResourceKind = "kb_workspace"
-	CascadeResourcePromotion   cascadeResourceKind = "promotion"
 )
 
 // CascadeResource is one independently retryable manifest item.
@@ -122,12 +119,6 @@ type CascadeDeleteResult struct {
 	ParentID    string              `json:"feature_id"`
 	Status      CascadeDeleteStatus `json:"status"`
 	Diagnostics []CascadeDiagnostic `json:"diagnostics,omitempty"`
-}
-
-// ParentOverlayPath returns the stable parent/repository overlay namespace.
-// Cascade cleanup owns this path even when the overlay has not been seeded.
-func ParentOverlayPath(stateDir, parentID, repoName string) string {
-	return filepath.Join(filepath.Dir(stateDir), "overlays", parentID, repoName)
 }
 
 // CanonicalPath resolves symlinks in path so journaled paths and later guard
@@ -208,10 +199,10 @@ func (s *Store) BeginCascadeDelete(parentID string, now time.Time) (*CascadeDele
 	}
 	stateDir := CanonicalPath(s.BaseDir)
 	for _, child := range children {
-		appendFeatureCascadeManifest(intent, stateDir, child, false)
+		appendFeatureCascadeManifest(intent, stateDir, child)
 		appendCascadeRefs(intent, parent, child)
 	}
-	appendFeatureCascadeManifest(intent, stateDir, parent, true)
+	appendFeatureCascadeManifest(intent, stateDir, parent)
 
 	if err := s.saveCascadeDeleteUnlocked(intent); err != nil {
 		return nil, err
@@ -219,7 +210,7 @@ func (s *Store) BeginCascadeDelete(parentID string, now time.Time) (*CascadeDele
 	return intent, nil
 }
 
-func appendFeatureCascadeManifest(intent *CascadeDeleteIntent, stateDir string, f *Feature, parent bool) {
+func appendFeatureCascadeManifest(intent *CascadeDeleteIntent, stateDir string, f *Feature) {
 	if setup := f.Run().Setup; setup != nil {
 		keys := make([]string, 0, len(setup.Tasks))
 		for key := range setup.Tasks {
@@ -250,26 +241,6 @@ func appendFeatureCascadeManifest(intent *CascadeDeleteIntent, stateDir string, 
 				OwnerID: f.ID, Repo: repo.Name, RepoPath: repo.Path, Branch: repo.Branch,
 			})
 		}
-		if parent {
-			intent.Resources = append(intent.Resources, CascadeResource{
-				ID: "overlay:" + f.ID + ":" + repo.Name, Kind: CascadeResourceOverlay,
-				OwnerID: f.ID, Repo: repo.Name, Path: ParentOverlayPath(stateDir, f.ID, repo.Name),
-			})
-		} else {
-			// Child KB workspaces are disposable resources that cascade
-			// cleanup must remove.
-			intent.Resources = append(intent.Resources, CascadeResource{
-				ID: "kb-workspace:" + f.ID + ":" + repo.Name, Kind: CascadeResourceKBWorkspace,
-				OwnerID: f.ID, Repo: repo.Name, Path: ChildKBWorkspaceDir(stateDir, f.ID, repo.Name),
-			})
-		}
-	}
-	// Children may have a promotion journal file.
-	if !parent {
-		intent.Resources = append(intent.Resources, CascadeResource{
-			ID: "promotion:" + f.ID, Kind: CascadeResourcePromotion,
-			OwnerID: f.ID, Path: filepath.Join(stateDir, f.ID, "promotion.yaml"),
-		})
 	}
 	intent.Resources = append(intent.Resources, CascadeResource{
 		ID: "record:" + f.ID, Kind: CascadeResourceRecord, OwnerID: f.ID,

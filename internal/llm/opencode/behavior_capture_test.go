@@ -31,7 +31,7 @@ import (
 // paths and write redacted behavioral logs to the directory named by
 // AGENTICO_BEHAVIOR_DIR. They are skipped in normal/CI runs (no env var) so the
 // regular suite never writes artifacts, and are run on demand to regenerate the
-// behavioral evidence the phase testing contract requires. They use fake ACP
+// behavioral evidence the phase plan requires. They use fake ACP
 // streams rather than a live backend, matching the project's deterministic ACP
 // testing approach.
 

@@ -30,8 +30,8 @@ var finalReviewFixerRoleSpec = roleSpec{
 	OutputRoots: []outputRootSpec{
 		iterationOutputRoot("iteration_dir", "Final-review fix iteration artifact directory."),
 	},
-	// No required artifacts: no testing contract executes at Final Review;
-	// the next review iteration's live-run axes re-exercise the product.
+	// No required artifacts: the next review round's live-run axes
+	// re-exercise the product.
 	Artifacts: []roleArtifactSpec{},
 }
 
@@ -40,14 +40,19 @@ type finalFixUserInput struct {
 	VisualReferences prompts.VisualReferencesInput
 
 	Iteration        int
+	Repos            []prompts.RepoView
 	ExitCriteria     string
 	AcceptanceClause string
 	Feedback         string
 	FeedbackPath     string
 
-	IncludeManualVerificationOutcomes bool
-	Publishable                       bool
+	Publishable bool
 	// RefactorPassForkPoint resolves the spec's "fork point" references for a
 	// refactor child ("repo @ sha"). Empty for top-level features.
 	RefactorPassForkPoint string
+
+	RoadmapPath     string
+	UserAnswerPaths []string
+	DecisionsPath   string
+	Handoff         *reviewHandoffPromptInput
 }

@@ -4,9 +4,17 @@ Review feedback output: /state/feat-x/run-1/phase-1/implement/iteration-02/revie
 Iteration under review: 2
 Iteration artifacts directory: /state/feat-x/run-1/phase-1/implement/iteration-02
 
-## Review Posture
+## Repositories Under Review
 
-- Keep this axis read-only: inspect source and artifacts, then write only the required review-feedback.md file.
+The code under review is in these worktrees. Other checkouts of the same repositories exist and are off-limits: do not read or judge them.
+- **api**: /state/worktrees/feat-x/api
+- **web**: /state/worktrees/feat-x/web
+
+## Live-Run Posture
+
+- Use the live-run posture: build, launch, run, drive, screenshot, and record evidence as needed.
+- Treat the source tree as read-only. Write captured evidence only under the live-run evidence root named in this prompt.
+- For visual judgments, use the attached baseline images plus the screenshots captured for the plan's verification under the implementation iteration directories.
 
 ## Approved Roadmap
 
@@ -26,14 +34,6 @@ Read the implementation plan (source of truth) at: /state/feat-x/run-1/phase-1/p
 ## Exit Criteria
 
 Relevant tests pass.
-
-## Verification Report
-
-Read the verification report at: /state/feat-x/run-1/phase-1/implement/iteration-02/verification-report.yaml
-
-## Testing Contract
-
-Read the binding testing contract at: /state/feat-x/run-1/testing-contract.yaml
 
 ## Progress
 

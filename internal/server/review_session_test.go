@@ -166,7 +166,7 @@ func TestReviewSessionServiceCreateUsesFeatureRootDescriptionReviewForRewindToIn
 		ID:            "feat-rewind-description-review",
 		Name:          "Rewind description review",
 		Status:        feature.StatusPromptNeedsReview,
-		CurrentPhase:  feature.PhaseKnowledgeBase,
+		CurrentPhase:  feature.PhaseInquire,
 		ActiveRun:     1,
 		RunCount:      1,
 		Pipeline:      feature.PipelineMoonshot,
@@ -203,6 +203,48 @@ func TestReviewSessionServiceCreateUsesFeatureRootDescriptionReviewForRewindToIn
 	}
 	if resp.CanIterate {
 		t.Fatalf("CanIterate = true, want false for rewind review")
+	}
+}
+
+func TestReviewSessionServiceCreateUsesDescriptionReviewForMediumRewindToPlan(t *testing.T) {
+	store := feature.NewStore(t.TempDir())
+	target := feature.PhasePlan
+	f := &feature.Feature{
+		ID:            "feat-medium-rewind-plan",
+		Name:          "Medium rewind to plan",
+		Status:        feature.StatusDesignNeedsReview,
+		CurrentPhase:  feature.PhasePlan,
+		ActiveRun:     1,
+		RunCount:      1,
+		Pipeline:      feature.PipelineMedium,
+		SchemaVersion: feature.SchemaVersionCurrent,
+	}
+	f.SetRun(&feature.Run{
+		RunNumber:          1,
+		PendingReviewPhase: &target,
+		IsRewind:           true,
+		Artifacts:          map[string]string{},
+	})
+	if err := store.Save(f); err != nil {
+		t.Fatalf("save feature: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(store.BaseDir, f.ID, "description-review.md"), []byte("medium description\n"), 0o644); err != nil {
+		t.Fatalf("write description-review.md: %v", err)
+	}
+
+	resp, err := newReviewSessionService(store, nil).create(f.ID)
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+
+	if resp.ReviewMode != reviewModeRewind || resp.TargetPhase != feature.PhasePlan.DirName() {
+		t.Fatalf("review target = mode %q phase %q, want rewind plan", resp.ReviewMode, resp.TargetPhase)
+	}
+	if resp.ArtifactID != descriptionReviewArtifact {
+		t.Fatalf("ArtifactID = %q, want %q", resp.ArtifactID, descriptionReviewArtifact)
+	}
+	if resp.Text != "medium description\n" {
+		t.Fatalf("Text = %q, want description review content", resp.Text)
 	}
 }
 

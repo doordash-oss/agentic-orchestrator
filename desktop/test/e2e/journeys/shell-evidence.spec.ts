@@ -116,13 +116,13 @@ test('Bench shell evidence: five-lane sidebar, themes, inspector, collapse, mini
     // survive a relaunch — the server's own startup reconciliation detects
     // there is no live process actually running that phase and downgrades
     // it to "Interrupted" (still correctly bucketed under "Waiting on
-    // you", alongside the explicit NeedUserInput fixture below). That is
+    // you", alongside the explicit Interrupted fixture below). That is
     // sufficient to populate four of the five lanes without needing to
     // drive a real, long-running pipeline pass end to end.
     setFeatureStatus(world.stateDir, ids['Evidence Running']!, 'Implementing');
     setFeatureStatus(world.stateDir, ids['Evidence Published']!, 'Published');
     setFeatureStatus(world.stateDir, ids['Evidence Done']!, 'Done');
-    setFeatureStatus(world.stateDir, ids['Evidence Waiting']!, 'NeedUserInput');
+    setFeatureStatus(world.stateDir, ids['Evidence Waiting']!, 'Interrupted');
     // 'Evidence Selected' is left at CodeReady (At rest).
 
     handle = await launchApp(world, testInfo, { traceName: 'shell-evidence-relaunch' });

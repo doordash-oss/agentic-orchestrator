@@ -23,9 +23,13 @@ Own only intrinsic code quality:
 - code structure that is understandable and maintainable
 - tests as code quality when their structure obscures behavior
 
-Consult the relevant language guidelines and Knowledge Base before judging local conventions.
+Consult the relevant language guidelines and the repository's own instruction files before judging local conventions.
 
-At the Final gate, judge Craft over the whole assembled feature and cumulative cross-repo diff. Do not limit review to a single implementation iteration.
+At the Final gate, judge Craft over the whole assembled feature and cumulative cross-repo diff. Do not limit review to a single implementation iteration unless a Round Scope section narrows the round.
+
+## Review Rounds
+
+When your prompt has an Acceptance Authority section, the decisions it names outrank acceptance criteria, and a finding the decisions file records as accepted as is is not raised again. When it has a Round Scope section, that section narrows this skill's scope for the round: in a follow-up, judge your open findings and what the delta changed; in a confirmation, request changes only for a regression the delta introduced.
 
 ### Code Smells
 
@@ -47,8 +51,7 @@ Each smell reads *what it is* → *how to fix*; match it against the diff:
 
 ## Non-Goals
 
-- Do not audit whether every verification item passed.
-- Do not emit `MISSING_EVIDENCE_REQUIREMENT`.
+- Do not judge whether the plan's verification passes; Functionality/Evidence owns that.
 - Do not police cross-repo atomicity, stray files, or unrelated touched files.
 - Do not request changes for taste preferences unsupported by local conventions.
 

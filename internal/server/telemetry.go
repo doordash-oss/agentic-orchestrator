@@ -163,7 +163,7 @@ func telemetryRoute(r *http.Request) (string, bool) {
 
 func knownFeatureRouteSegment(segment string) bool {
 	switch segment {
-	case "actions", "completion", "config", "live-preview", "repositories", "reviews", "rewind", "runs", "testing-contract":
+	case "actions", "completion", "config", "live-preview", "repositories", "reviews", "rewind", "runs":
 		return true
 	default:
 		return false

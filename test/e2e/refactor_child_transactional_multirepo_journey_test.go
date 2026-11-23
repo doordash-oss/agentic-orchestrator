@@ -483,7 +483,7 @@ func TestRefactorChildTransactionalMultiRepoStagedConflictRestartAndReviewRenewa
 	// transition and before integration rebuilds the journal.
 	var frCalled int32
 	var childAtReview *feature.Feature
-	o.SetRunMultiRepoFinalReviewFn(func(f *feature.Feature, kbInfos ...agent.KBInfo) (chan *agent.OrchestratorResult, error) {
+	o.SetRunMultiRepoFinalReviewFn(func(f *feature.Feature) (chan *agent.OrchestratorResult, error) {
 		atomic.StoreInt32(&frCalled, 1)
 		_, childAtReview = fx.reload()
 		ch := make(chan *agent.OrchestratorResult, 1)

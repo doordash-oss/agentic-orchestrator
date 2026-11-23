@@ -131,24 +131,11 @@ test('secondary surfaces visual evidence', async ({ page }) => {
     'setup-wizard-shell-cards-and-status-labels-on-bench-tokens-and-system-faces-ligh-1440x900',
   );
 
-  // 5. Gate sheet: the eyebrow in sentence case, as the mock renders it. The
-  //    Recommended badge is not the sheet's — the sheet only ever asks free
-  //    text or a verification decision — so the badge is asserted on the
-  //    option branch that owns it, which the inline-question captures
-  //    photograph.
+  // 5. Recommended badge on the inline-question option branch.
   await open(page, 'feature-question-bench', 'dark', '.attention-option__recommended');
   await expectSentenceCase(page, '.attention-option__recommended');
   await expectSystemFaces(page, '.attention-option__recommended');
   await expectResolvedInk(page, '.attention-option__recommended');
-
-  await open(page, 'gate-sheet-plain', 'dark', '.need-input-sheet');
-  await expect(page.getByRole('button', { name: 'Resume agent' })).toBeDisabled();
-  await expectSentenceCase(page, '.need-input-sheet__eyebrow');
-  await expectSystemFaces(page, '.need-input-sheet__eyebrow');
-  await shoot(
-    page,
-    'gate-sheet-sentence-case-eyebrow-and-recommended-badge-matching-the-mock-dark-th-1440x900',
-  );
 
   // 6. Refactor pass workspace: station eyebrows and comment types restyled.
   //    A review-feedback pass is the branch that carries both — its selected

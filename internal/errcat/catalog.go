@@ -40,7 +40,6 @@ const (
 	PublishRemoteDiverged Code = "publish_remote_diverged"
 	PublishRemoteChanged  Code = "publish_remote_changed"
 	PipelineMismatch      Code = "pipeline_mismatch"
-	NeedUserInputOpen     Code = "need_user_input_open"
 	PhaseFinalizing       Code = "phase_finalizing"
 	InvalidTransition     Code = "invalid_transition"
 	InvalidWorkspaceRoot  Code = "invalid_workspace_root"
@@ -152,7 +151,6 @@ const (
 	NotReady                   Code = "not_ready"
 	ProviderNotFound           Code = "provider_not_found"
 	ProviderModelRefreshFailed Code = "provider_model_refresh_failed"
-	PromptSnapshotTooLarge     Code = "prompt_snapshot_too_large"
 )
 
 // Read-failure codes.
@@ -582,12 +580,6 @@ var catalog = map[Code]entry{
 		Title:       "Pipeline mismatch",
 		Summary:     "The submitted pipeline does not match the feature's pipeline.",
 		Remediation: "Refresh the feature and retry with its current pipeline.",
-	},
-	NeedUserInputOpen: {
-		Class:       ClassBlocking,
-		Title:       "Waiting on user input",
-		Summary:     "The feature is waiting on an open user input request.",
-		Remediation: "Answer the open input request to continue.",
 	},
 	PhaseFinalizing: {
 		Class:       ClassBlocking,
@@ -1103,12 +1095,6 @@ var catalog = map[Code]entry{
 		Summary:     "Refreshing the provider's model list failed.",
 		Remediation: "Check the provider's authentication, then retry.",
 	},
-	PromptSnapshotTooLarge: {
-		Class:   ClassBlocking,
-		Title:   "Prompt snapshot too large",
-		Summary: "The pending prompt snapshot exceeds the safe response limit.",
-	},
-
 	// --- Read-failure codes ------------------------------------------------------
 	RelationshipReadFailed: {
 		Class:       ClassBlocking,
@@ -1702,8 +1688,8 @@ var catalog = map[Code]entry{
 	},
 	VerificationSandboxUnavailable: {
 		Class:       classWarning,
-		Title:       "Verification sandbox unavailable",
-		Summary:     "Verification sandbox is unavailable on this machine; contract commands and review validators run unconfined.",
+		Title:       "Review sandbox unavailable",
+		Summary:     "The review sandbox is unavailable on this machine; review validators run unconfined.",
 		Remediation: "macOS cannot nest sandboxes: when Agentico itself runs inside a sandbox (hardened CI, an agent sandbox, or Agentico validating itself), sandbox-exec cannot apply its profile. Run Agentico outside the outer sandbox to restore write confinement, then restart the server.",
 	},
 

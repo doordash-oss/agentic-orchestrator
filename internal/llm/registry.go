@@ -301,7 +301,6 @@ func (r *Registry) CatalogDefaultModels() config.ModelConfig {
 		Implementation: selectModel(PhaseImplementation),
 		Review:         selectModel(PhaseReview),
 		Utilities:      selectModel(PhaseChat),
-		KBBuild:        selectModel(PhaseKBBuild),
 	}
 }
 

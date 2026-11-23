@@ -32,7 +32,7 @@ If the roadmap or plan references human decisions, those are **binding**.
 ### 1. Roadmap-To-Task Coverage
 
 - Identify what the approved roadmap assigns to this phase.
-- Confirm each roadmap-assigned deliverable is represented by one or more task descriptions, task acceptance criteria, or success criteria.
+- Confirm each roadmap-assigned deliverable is represented by one or more task descriptions or task acceptance criteria.
 - Silent omission is a FAIL.
 - Moving roadmap-assigned work to a later phase is a FAIL unless the roadmap already approved that move.
 - Made-up intermediate sub-phases (for example, "Phase 1b") are a FAIL.
@@ -42,18 +42,14 @@ If the roadmap or plan references human decisions, those are **binding**.
 - The plan must not pull in work assigned to later phases unless the roadmap explicitly allows it.
 - Extra work is acceptable only when it is necessary to complete a roadmap-assigned deliverable in this phase.
 
-### 3. Legacy Ledger Deferrals
-
-If the prompt lists deferrals already due this phase, the plan must incorporate them into tasks or success criteria. The plan must not create new plan-level deferrals. If a due deferral cannot be incorporated, request human input / roadmap revision rather than silently punting it again.
-
-### 4. Repo Scope Boundary
+### 3. Repo Scope Boundary
 
 The repo edit boundary is the feature's full repo set (`Feature.Repos`). Per-task `**Repo:** <name>` tags declare which repos this phase initially touches.
 
 Scope rules:
 
 - Every per-task `**Repo:** <name>` tag references a repo in `Feature.Repos`.
-- The plan does not invent repos in prose, task names, acceptance criteria, or success criteria.
+- The plan does not invent repos in prose, task names, acceptance criteria, or the Verification section.
 - The scope critic does not enforce a phase-specific repo subset beyond `Feature.Repos`.
 
 ## Handoff Contract
@@ -75,10 +71,10 @@ axis: scope
 frozen_sections:
 - ## Overview
 - ## Tasks
-- ## Success Criteria
+- ## Verification
 ```
 
-`frozen_sections` must enumerate only the top-level headings this axis actually inspected and would re-reject if changed. Prefer a minimal list, but scope usually depends on all three required sections.
+`frozen_sections` must enumerate only the top-level headings this axis actually inspected and would re-reject if changed. Prefer a minimal list, but scope usually depends on all three of these sections.
 
 Do NOT emit any other top-level `## ` heading.
 
@@ -87,15 +83,13 @@ Do NOT emit any other top-level `## ` heading.
 Only report high-severity issues.
 
 APPROVE if the plan:
-- Covers every roadmap-assigned deliverable for this phase through tasks or success criteria
+- Covers every roadmap-assigned deliverable for this phase through its tasks
 - Does not silently defer or re-slice the approved phase
 - Does not pull in later-phase work without roadmap approval
-- Incorporates any due legacy deferrals surfaced in the prompt
 - References only repos in `Feature.Repos`
 
 Only CHANGES_REQUESTED when:
 - A roadmap-assigned deliverable is omitted, deferred, or re-labeled
 - The plan invents a local sub-phase split
 - The plan creates new plan-level deferrals
-- A due legacy deferral is not represented in tasks or success criteria
 - A repo tag or repo reference is outside `Feature.Repos`

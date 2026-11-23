@@ -20,7 +20,7 @@ limitations under the License.
  * ModelConfig expects for per-phase model/effort choices.
  */
 import type { Checkpoints } from '../../../shared/ipc';
-import { GATE_FIELDS, applicableGates, type PhaseKey } from './ConfigEditor';
+import { GATE_FIELDS, applicableGates } from './ConfigEditor';
 
 export type Pipeline = 'medium' | 'large' | 'moonshot';
 
@@ -89,9 +89,4 @@ export function checkpointSummary(pipeline: Pipeline, checkpoints: CheckpointSta
 
 export function isPipeline(value: string | undefined): value is Pipeline {
   return value === 'medium' || value === 'large' || value === 'moonshot';
-}
-
-/** The authoritative server contract's ModelConfig JSON keys. */
-export function modelConfigKey(key: PhaseKey): string {
-  return key === 'kbBuild' ? 'kb_build' : key;
 }

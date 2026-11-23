@@ -15,7 +15,6 @@
 package agent
 
 import (
-	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -196,8 +195,7 @@ func TestRunFeatureFinalReviewLoop_SessionsCarryFinalReviewPhase(t *testing.T) {
 		iterDir := latestFinalReviewIterationDir(t, artDir)
 		switch {
 		case strings.Contains(id, "-fix-01"):
-			// No testing contract executes at Final Review; the fix session
-			// only emits its root outcome.
+			// The fix session only emits its root outcome.
 		case strings.HasSuffix(id, "-01"), strings.HasSuffix(id, "-02"):
 			iteration := 1
 			feedback := testutil.StructuredReviewFeedback("- **High**: needs final review fix", "", agentStatusChangesRequested)
@@ -275,84 +273,6 @@ func writeFinalReviewFeedbackFile(t *testing.T, iterDir, body string) {
 	if err := os.WriteFile(filepath.Join(iterDir, "review-feedback.md"), []byte(body), 0o644); err != nil {
 		t.Fatalf("write final review feedback: %v", err)
 	}
-}
-
-func TestPriorImplementationEvidenceContextForRunListsReferencedEvidenceArtifacts(t *testing.T) {
-	runDir := t.TempDir()
-	phaseDir := filepath.Join(runDir, "phase-01")
-	if err := os.MkdirAll(filepath.Join(phaseDir, "plan"), 0o755); err != nil {
-		t.Fatalf("mkdir plan dir: %v", err)
-	}
-	if err := os.WriteFile(filepath.Join(phaseDir, "plan", "phase-plan.md"), []byte("# Phase plan\n"), 0o644); err != nil {
-		t.Fatalf("write phase plan: %v", err)
-	}
-	if err := os.WriteFile(filepath.Join(phaseDir, "testing-contract.yaml"), []byte("version: 1\n"), 0o644); err != nil {
-		t.Fatalf("write testing contract: %v", err)
-	}
-	implementDir := filepath.Join(phaseDir, feature.PhaseImplement.DirName())
-	am := newArtifactManager(implementDir)
-	iterDir, err := am.createIterationDir(2)
-	if err != nil {
-		t.Fatalf("CreateIterationDir() error = %v", err)
-	}
-	if err := am.writeMeta(iterDir, iterationMeta{
-		Iteration:    2,
-		AgentStatus:  agentStatusSuccess,
-		ReviewStatus: ReviewApproved.String(),
-	}); err != nil {
-		t.Fatalf("WriteMeta() error = %v", err)
-	}
-	report := strings.Join([]string{
-		"version: 2",
-		"results:",
-		"  - item_id: visual_1",
-		"    name: Setup wizard",
-		"    mode: visual",
-		"    status: passed",
-		"    evidence:",
-		"      summary: Captured setup wizard",
-		"      primary: screenshots/setup.png",
-		"      attachments:",
-		"        - screenshots/setup-detail.png",
-	}, "\n")
-	if err := os.WriteFile(filepath.Join(iterDir, "verification-report.yaml"), []byte(report), 0o644); err != nil {
-		t.Fatalf("write verification report: %v", err)
-	}
-
-	ctx := priorImplementationEvidenceContextForRun(runDir)
-	for _, want := range []string{
-		filepath.Join(iterDir, "verification-report.yaml"),
-		iterDir,
-		filepath.Join(iterDir, "screenshots", "setup.png"),
-		filepath.Join(iterDir, "screenshots", "setup-detail.png"),
-	} {
-		if !containsPriorEvidencePath(ctx, want) {
-			t.Errorf("priorImplementationEvidenceContextForRun() missing %s: %+v", want, ctx)
-		}
-	}
-	for _, unwanted := range []string{
-		filepath.Join(phaseDir, "plan", "phase-plan.md"),
-		filepath.Join(phaseDir, "testing-contract.yaml"),
-	} {
-		if containsPriorEvidencePath(ctx, unwanted) {
-			t.Errorf("priorImplementationEvidenceContextForRun() includes phase-planning artifact %s: %+v", unwanted, ctx)
-		}
-	}
-}
-
-func containsPriorEvidencePath(ctx priorImplementationEvidenceContext, want string) bool {
-	for _, paths := range [][]string{
-		ctx.ReportPaths,
-		ctx.EvidenceRootDirs,
-		ctx.EvidenceArtifactPaths,
-	} {
-		for _, path := range paths {
-			if path == want {
-				return true
-			}
-		}
-	}
-	return false
 }
 
 func shellSingleQuoteForFRTest(s string) string {
@@ -646,92 +566,6 @@ fi`,
 	}
 }
 
-func TestRunFeatureFinalReviewLoop_ChangesRequestedWithMalformedReportStillRunsFix(t *testing.T) {
-	if testing.Short() {
-		t.Skip("skipping integration test in short mode")
-	}
-	env := newFRLoopEnv(t)
-	store, f, _ := newFRTestFeature(t, env.stateDir, "fr-malformed-report-fix", []string{testRepoNameAPI, testRepoNameWeb})
-
-	artDir := frArtifactDir(env.stateDir, f)
-	if err := os.MkdirAll(artDir, 0o755); err != nil {
-		t.Fatalf("mkdir artifact: %v", err)
-	}
-
-	malformedReport := fmt.Sprintf(`for _d in "%s"/iteration-*; do :; done
-cat > "$_d/verification-report.yaml" << 'REPORT'
-version: 2
-additional_checks:
-  - name: Source comparison spot-check
-    command: manual: compare translated README against English source
-    mode: manual
-    status: failed
-REPORT
-`, artDir)
-
-	reviewScript := testutil.WriteScript(t, env.scriptsDir, "review.sh",
-		fmt.Sprintf(`if [ -d "%s/iteration-02" ]; then
-%s
-%s
-%s
-else
-%s
-%s
-%s
-%s
-fi`,
-			artDir,
-			testutil.JSONLInit,
-			testutil.WriteFinalReviewApproved(artDir),
-			testutil.JSONLSuccess,
-			testutil.JSONLInit,
-			testutil.WriteFinalReviewChangesRequested(artDir, "- **High**: README still contains untranslated text"),
-			malformedReport,
-			testutil.JSONLSuccess))
-
-	fixScript := testutil.WriteScript(t, env.scriptsDir, "fix.sh",
-		fmt.Sprintf(`%s
-for _d in "%s"/iteration-*; do :; done
-if grep -q 'command: manual: compare' "$_d/verification-report.yaml" 2>/dev/null; then
-  echo "malformed reviewer verification report leaked to final fixer" >&2
-  exit 1
-fi
-%s
-`,
-			testutil.JSONLInit,
-			artDir,
-			testutil.JSONLSuccess))
-
-	eventCh := make(chan any, 100)
-	sm := session.NewManager(eventCh)
-	defer sm.Shutdown()
-
-	cfg := OrchestratorConfig{
-		Feature:        f,
-		FeatureStore:   store,
-		StateDir:       env.stateDir,
-		Model:          "agent",
-		ReviewModel:    "reviewer",
-		MaxIterations:  5,
-		MaxConsecFails: 3,
-		BuildSession: mockBuildSessionByModel(map[string]string{
-			"reviewer": reviewScript,
-			"agent":    fixScript,
-		}),
-	}
-
-	result, err := runFeatureFinalReviewLoop(cfg, sm)
-	if err != nil {
-		t.Fatalf("loop: %v", err)
-	}
-	if result.FinalStatus != finalStatusReviewPassed {
-		t.Fatalf("FinalStatus = %q, want review_passed; last error: %s", result.FinalStatus, result.LastError)
-	}
-	if result.Iterations != 2 {
-		t.Errorf("Iterations = %d, want 2", result.Iterations)
-	}
-}
-
 // TestRunFeatureFinalReviewLoop_FixAgentSeesAllReposInAddDir verifies that
 // when the fix agent runs after CHANGES_REQUESTED, BuildSessionOpts mounts
 // every Feature.Repos worktree via AdditionalDirs. Same workspace shape as
@@ -861,6 +695,11 @@ func TestRunFeatureFinalReviewLoop_FinalGateRunsAxesAndAggregates(t *testing.T) 
 	store, f, _ := newFRTestFeature(t, env.stateDir, "fr-multi-axis", []string{"api", "web"})
 	f.Pipeline = feature.PipelineMedium
 	f.TraceID = "trace-fr-multi-axis"
+	// Real repositories, so later rounds can name their fix delta.
+	for i := range f.Repos {
+		repo := testutil.InitGitRepo(t)
+		f.Repos[i].Path, f.Repos[i].WorktreePath = repo, repo
+	}
 	if err := store.Save(f); err != nil {
 		t.Fatalf("save feature: %v", err)
 	}
@@ -880,6 +719,7 @@ func TestRunFeatureFinalReviewLoop_FinalGateRunsAxesAndAggregates(t *testing.T) 
 			testutil.JSONLSuccess+"\n")
 	fixScript := testutil.WriteScript(t, env.scriptsDir, "fix.sh",
 		testutil.JSONLInit+"\n"+
+			frCommitChange(f.Repos[0].Path)+"\n"+
 			testutil.JSONLSuccess+"\n")
 
 	bs, captured := capturingBuildSessionByModel(map[string]string{
@@ -912,8 +752,43 @@ func TestRunFeatureFinalReviewLoop_FinalGateRunsAxesAndAggregates(t *testing.T) 
 	if result.FinalStatus != "review_passed" {
 		t.Fatalf("FinalStatus = %q, want review_passed; LastError=%q", result.FinalStatus, result.LastError)
 	}
-	if result.Iterations != 2 {
-		t.Fatalf("Iterations = %d, want 2 after changes-requested aggregate and fix", result.Iterations)
+	// QA requests changes in round 1; round 2 reruns only QA; round 3 is the
+	// one-time confirmation of the Craft and Cleanliness approvals that
+	// predate the fix.
+	if result.Iterations != 3 {
+		t.Fatalf("Iterations = %d, want 3 (changes requested, follow-up, confirmation)", result.Iterations)
+	}
+	for iteration, axes := range map[string][]string{
+		"iteration-01": {"craft", "cleanliness", "qa"},
+		"iteration-02": {"qa"},
+		"iteration-03": {"craft", "cleanliness"},
+	} {
+		for _, slug := range []string{"craft", "cleanliness", "qa"} {
+			_, err := os.Stat(filepath.Join(artDir, iteration, slug, "review-prompt.md"))
+			if ran := err == nil; ran != slices.Contains(axes, slug) {
+				t.Fatalf("%s %s ran = %v, want %v", iteration, slug, ran, slices.Contains(axes, slug))
+			}
+		}
+	}
+	followUp, err := os.ReadFile(filepath.Join(artDir, "iteration-02", "qa", "review-prompt.md"))
+	if err != nil {
+		t.Fatalf("read follow-up prompt: %v", err)
+	}
+	for _, want := range []string{
+		"## Round Scope: Follow-Up",
+		filepath.Join(artDir, "iteration-01", "qa", "review-feedback.md"),
+		"Rerun the checks behind your open findings on the current commit.",
+	} {
+		if !strings.Contains(string(followUp), want) {
+			t.Fatalf("follow-up prompt missing %q:\n%s", want, followUp)
+		}
+	}
+	confirm, err := os.ReadFile(filepath.Join(artDir, "iteration-03", "craft", "review-prompt.md"))
+	if err != nil {
+		t.Fatalf("read confirmation prompt: %v", err)
+	}
+	if !strings.Contains(string(confirm), "## Round Scope: Confirmation") {
+		t.Fatalf("confirmation prompt missing round scope:\n%s", confirm)
 	}
 
 	for _, axisSlug := range []string{"craft", "cleanliness", "qa"} {
@@ -954,26 +829,27 @@ func TestRunFeatureFinalReviewLoop_FinalGateRunsAxesAndAggregates(t *testing.T) 
 		}
 	}
 	if reviewerCalls != 6 {
-		t.Fatalf("reviewer BuildSession calls = %d, want 6 (three axes across two iterations)", reviewerCalls)
+		t.Fatalf("reviewer BuildSession calls = %d, want 6 (three axes, then QA, then two confirmations)", reviewerCalls)
 	}
 
 	events := readObserveEvents(t, observeDir, f.ID)
 	validationStarted := filterEventsByType(events, "validation.started")
-	if len(validationStarted) != 2 {
-		t.Fatalf("validation.started count = %d, want 2", len(validationStarted))
+	if len(validationStarted) != 3 {
+		t.Fatalf("validation.started count = %d, want 3", len(validationStarted))
 	}
-	if validationStarted[0].Phase != "final_review" || validationStarted[0].Data["validator_count"] != float64(3) {
-		t.Fatalf("first validation.started = %+v, want final_review with validator_count=3", validationStarted[0])
+	for i, want := range []float64{3, 1, 2} {
+		if validationStarted[i].Phase != "final_review" || validationStarted[i].Data["validator_count"] != want {
+			t.Fatalf("validation.started[%d] = %+v, want final_review with validator_count=%v", i, validationStarted[i], want)
+		}
 	}
 	validationCompleted := filterEventsByType(events, "validation.completed")
-	if len(validationCompleted) != 2 {
-		t.Fatalf("validation.completed count = %d, want 2", len(validationCompleted))
+	if len(validationCompleted) != 3 {
+		t.Fatalf("validation.completed count = %d, want 3", len(validationCompleted))
 	}
-	if validationCompleted[0].Phase != "final_review" || validationCompleted[0].Status != "CHANGES_REQUESTED" {
-		t.Fatalf("first validation.completed = %+v, want final_review CHANGES_REQUESTED", validationCompleted[0])
-	}
-	if validationCompleted[1].Phase != "final_review" || validationCompleted[1].Status != "APPROVED" {
-		t.Fatalf("second validation.completed = %+v, want final_review APPROVED", validationCompleted[1])
+	for i, want := range []string{"CHANGES_REQUESTED", "APPROVED", "APPROVED"} {
+		if validationCompleted[i].Phase != "final_review" || validationCompleted[i].Status != want {
+			t.Fatalf("validation.completed[%d] = %+v, want final_review %s", i, validationCompleted[i], want)
+		}
 	}
 	started := validatorNamesByEvent(events, "validator.started")
 	wantNames := []string{
@@ -1329,168 +1205,6 @@ func TestRunFeatureFinalReviewLoop_ConsecutiveFailuresSafetyRail(t *testing.T) {
 	}
 }
 
-func TestRunFeatureFinalReviewLoop_MissingEvidenceRunsFixAgent(t *testing.T) {
-	if testing.Short() {
-		t.Skip("skipping integration test in short mode")
-	}
-	env := newFRLoopEnv(t)
-	store, f, _ := newFRTestFeature(t, env.stateDir, "fr-missing-evidence-fix", []string{testRepoNameAPI, testRepoNameWeb})
-
-	artDir := frArtifactDir(env.stateDir, f)
-	if err := os.MkdirAll(artDir, 0o755); err != nil {
-		t.Fatalf("mkdir artifact: %v", err)
-	}
-
-	reviewScript := testutil.WriteScript(t, env.scriptsDir, "review.sh",
-		fmt.Sprintf(`if [ -d "%s/iteration-02" ]; then
-%s
-%s
-%s
-else
-%s
-%s
-%s
-fi`,
-			artDir,
-			testutil.JSONLInit,
-			testutil.WriteFinalReviewApproved(artDir),
-			testutil.JSONLSuccess,
-			testutil.JSONLInit,
-			testutil.WriteFinalReviewChangesRequested(artDir, "- **Critical**: MISSING_EVIDENCE_REQUIREMENT behavioral: Record the create-project CLI journey."),
-			testutil.JSONLSuccess))
-	fixMarker := filepath.Join(artDir, "fix-ran")
-	fixScript := testutil.WriteScript(t, env.scriptsDir, "fix.sh",
-		testutil.JSONLInit+"\n"+
-			fmt.Sprintf("touch %q\n", fixMarker)+
-			testutil.JSONLSuccess+"\n")
-
-	eventCh := make(chan any, 100)
-	sm := session.NewManager(eventCh)
-	defer sm.Shutdown()
-
-	cfg := OrchestratorConfig{
-		Feature:        f,
-		FeatureStore:   store,
-		StateDir:       env.stateDir,
-		Model:          "agent",
-		ReviewModel:    "reviewer",
-		MaxIterations:  3,
-		MaxConsecFails: 3,
-		BuildSession: mockBuildSessionByModel(map[string]string{
-			"reviewer": reviewScript,
-			"agent":    fixScript,
-		}),
-	}
-
-	result, err := runFeatureFinalReviewLoop(cfg, sm)
-	if err != nil {
-		t.Fatalf("RunFeatureFinalReviewLoop() error = %v", err)
-	}
-	if result.FinalStatus != finalStatusReviewPassed {
-		t.Fatalf("FinalStatus = %q, want review_passed", result.FinalStatus)
-	}
-	if result.Iterations != 2 {
-		t.Fatalf("Iterations = %d, want 2 after fix-agent iteration", result.Iterations)
-	}
-	if _, err := os.Stat(fixMarker); err != nil {
-		t.Fatalf("fix agent did not run: %v", err)
-	}
-	for _, dir := range []string{
-		filepath.Join(artDir, "iteration-01"),
-		filepath.Join(artDir, "iteration-01", "craft"),
-		filepath.Join(artDir, "iteration-01", "qa"),
-		filepath.Join(artDir, "iteration-01", "cleanliness"),
-		filepath.Join(artDir, "iteration-02", "craft"),
-		filepath.Join(artDir, "iteration-02", "qa"),
-		filepath.Join(artDir, "iteration-02", "cleanliness"),
-	} {
-		if _, err := readCompletionReceipt(dir); err != nil {
-			t.Fatalf("harness completion receipt missing from %q: %v", dir, err)
-		}
-	}
-	if _, err := readCompletionReceipt(filepath.Join(artDir, "iteration-02")); err == nil {
-		t.Fatal("approved review iteration unexpectedly has an aggregate fixer receipt")
-	}
-}
-
-func TestRunFeatureFinalReviewLoop_CoveredMissingEvidenceRunsFix(t *testing.T) {
-	if testing.Short() {
-		t.Skip("skipping integration test in short mode")
-	}
-	env := newFRLoopEnv(t)
-	store, f, _ := newFRTestFeature(t, env.stateDir, "fr-covered-evidence", []string{"app"})
-
-	requirement := "Capture actual rendered README output showing the translated top section, one translated mixed-content table, and one preserved code/flags section."
-	phaseDir := PhaseDir(env.stateDir, f, 1)
-	planDir := filepath.Join(phaseDir, "plan")
-	if err := os.MkdirAll(planDir, 0o755); err != nil {
-		t.Fatalf("mkdir phase plan dir: %v", err)
-	}
-	planPath := filepath.Join(planDir, "phase-plan.md")
-	plan := "# Phase 1\n\n### Visual Evidence\n\n- [ ] " + requirement + "\n"
-	if err := os.WriteFile(planPath, []byte(plan), 0o644); err != nil {
-		t.Fatalf("write phase plan: %v", err)
-	}
-	contract := CompileTestingContract(plan, planPath, "collapsed")
-	if err := WriteTestingContract(filepath.Join(phaseDir, "testing-contract.yaml"), contract); err != nil {
-		t.Fatalf("write phase testing contract: %v", err)
-	}
-
-	artDir := frArtifactDir(env.stateDir, f)
-	if err := os.MkdirAll(artDir, 0o755); err != nil {
-		t.Fatalf("mkdir artifact: %v", err)
-	}
-
-	reviewScript := testutil.WriteScript(t, env.scriptsDir, "review.sh",
-		fmt.Sprintf(`if [ -d "%s/iteration-02" ]; then
-%s
-%s
-else
-%s
-%s
-fi`,
-			artDir,
-			testutil.JSONLInit,
-			testutil.WriteFinalReviewApproved(artDir)+"\n"+testutil.JSONLSuccess,
-			testutil.JSONLInit,
-			testutil.WriteFinalReviewChangesRequested(artDir, "- **High**: MISSING_EVIDENCE_REQUIREMENT phase 1 visual: "+requirement)+"\n"+testutil.JSONLSuccess))
-
-	fixMarker := filepath.Join(artDir, "fix-ran")
-	fixScript := testutil.WriteScript(t, env.scriptsDir, "fix.sh",
-		testutil.JSONLInit+"\n"+
-			fmt.Sprintf("touch %q\n", fixMarker)+
-			testutil.JSONLSuccess+"\n")
-
-	eventCh := make(chan any, 100)
-	sm := session.NewManager(eventCh)
-	defer sm.Shutdown()
-
-	cfg := OrchestratorConfig{
-		Feature:        f,
-		FeatureStore:   store,
-		StateDir:       env.stateDir,
-		Model:          "agent",
-		ReviewModel:    "reviewer",
-		MaxIterations:  3,
-		MaxConsecFails: 3,
-		BuildSession: mockBuildSessionByModel(map[string]string{
-			"reviewer": reviewScript,
-			"agent":    fixScript,
-		}),
-	}
-
-	result, err := runFeatureFinalReviewLoop(cfg, sm)
-	if err != nil {
-		t.Fatalf("loop: %v", err)
-	}
-	if result.FinalStatus != finalStatusReviewPassed {
-		t.Fatalf("FinalStatus = %q, want review_passed; last error: %s", result.FinalStatus, result.LastError)
-	}
-	if _, err := os.Stat(fixMarker); err != nil {
-		t.Fatalf("fix marker was not written: %v", err)
-	}
-}
-
 func TestRunFeatureFinalReviewLoop_FixMissingRootOutcomeTripsProtocolViolation(t *testing.T) {
 	if testing.Short() {
 		t.Skip("skipping integration test in short mode")
@@ -1552,21 +1266,6 @@ func TestRunFeatureFinalReviewLoop_ReviewerMalformedVerdictTripsProtocolViolatio
 	if !strings.Contains(result.LastError, "implementation_review_") ||
 		!strings.Contains(result.LastError, "LGTM") {
 		t.Fatalf("LastError = %q, want malformed verdict violation", result.LastError)
-	}
-}
-
-func TestRunFeatureFinalReviewLoop_ReviewerApprovedWithoutVerificationReportPasses(t *testing.T) {
-	if testing.Short() {
-		t.Skip("skipping integration test in short mode")
-	}
-	result := runFinalReviewWithReviewScript(t, func(artDir string) string {
-		return fmt.Sprintf(`for _d in "%s"/iteration-*; do :; done
-rm -f "$_d/verification-report.yaml"
-%s`, artDir, testutil.WriteFinalReviewApproved(artDir))
-	})
-
-	if result.FinalStatus != finalStatusReviewPassed {
-		t.Fatalf("FinalStatus = %q, want review_passed", result.FinalStatus)
 	}
 }
 
@@ -1684,51 +1383,6 @@ func TestRunFeatureFinalReviewLoop_NoStagedReposShortCircuits(t *testing.T) {
 	}
 }
 
-// TestRunFeatureFinalReviewLoop_DoesNotPersistReviewerTestingContract verifies
-// Final Review is an autonomous product review whose only reviewer-authored
-// contract artifact is review-feedback.md.
-func TestRunFeatureFinalReviewLoop_DoesNotPersistReviewerTestingContract(t *testing.T) {
-	if testing.Short() {
-		t.Skip("skipping integration test in short mode")
-	}
-	env := newFRLoopEnv(t)
-	store, f, _ := newFRTestFeature(t, env.stateDir, "fr-contract", []string{testRepoNameAPI, testRepoNameWeb})
-
-	artDir := frArtifactDir(env.stateDir, f)
-	if err := os.MkdirAll(artDir, 0o755); err != nil {
-		t.Fatalf("mkdir: %v", err)
-	}
-
-	approveScript := testutil.WriteScript(t, env.scriptsDir, "review.sh",
-		testutil.JSONLInit+"\n"+
-			testutil.WriteFinalReviewApproved(artDir)+"\n"+
-			testutil.JSONLSuccess+"\n")
-
-	eventCh := make(chan any, 100)
-	sm := session.NewManager(eventCh)
-	defer sm.Shutdown()
-
-	cfg := OrchestratorConfig{
-		Feature:        f,
-		FeatureStore:   store,
-		StateDir:       env.stateDir,
-		Model:          "agent",
-		ReviewModel:    "reviewer",
-		MaxIterations:  3,
-		MaxConsecFails: 3,
-		BuildSession:   mockBuildSessionByModel(map[string]string{"reviewer": approveScript}),
-	}
-
-	if _, err := runFeatureFinalReviewLoop(cfg, sm); err != nil {
-		t.Fatalf("loop: %v", err)
-	}
-
-	contractPath := filepath.Join(artDir, "testing-contract.yaml")
-	if _, err := os.Stat(contractPath); !errors.Is(err, os.ErrNotExist) {
-		t.Fatalf("testing contract stat error = %v, want not exists", err)
-	}
-}
-
 // TestRunMultiRepoFinalReview_RunFinalReviewFnSeam asserts the
 // OrchestratorConfig.RunFinalReviewFn test seam short-circuits the FR
 // dispatch — production tests can replace the engine without launching real
@@ -1772,7 +1426,7 @@ func TestRunMultiRepoFinalReview_ProtocolViolationStatusPreserved(t *testing.T) 
 		RunFinalReviewFn: func(_ OrchestratorConfig, _ ports.SessionManager) (*FeatureFinalReviewResult, error) {
 			return &FeatureFinalReviewResult{
 				FinalStatus: BoundedHelperStatusProtocolViolation,
-				LastError:   "protocol violation: final_review_fixer @ /tmp/iter: verification-report.yaml is missing",
+				LastError:   "protocol violation: final_review_fixer @ /tmp/iter: review-feedback.md is missing",
 				Repos:       []string{testRepoNameAPI, testRepoNameWeb},
 			}, nil
 		},

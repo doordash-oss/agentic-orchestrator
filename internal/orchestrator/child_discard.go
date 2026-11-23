@@ -19,7 +19,6 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/doordash-oss/agentic-orchestrator/internal/agent"
 	"github.com/doordash-oss/agentic-orchestrator/internal/errcat"
 	"github.com/doordash-oss/agentic-orchestrator/internal/feature"
 	"github.com/doordash-oss/agentic-orchestrator/internal/ports"
@@ -193,27 +192,6 @@ func (o *Orchestrator) resumeDiscard(childID string) error {
 		// worktrees. Best-effort: capture failures never block the discard.
 		o.preserveChildDiffSummary(childID)
 		warnings := o.cleanupChildResourcesPerRepo(child)
-
-		// Remove disposable KB workspaces for discarded children. Discarded
-		// children never modify a parent overlay; their workspaces, markers,
-		// and locks are removed idempotently after session quiescence.
-		baseDir := o.stateDir()
-		if baseDir != "" && child.EffectivePipeline().HasPhase(feature.PhaseKnowledgeBase) {
-			for _, repo := range child.Repos {
-				workspaceDir := feature.ChildKBWorkspaceDir(baseDir, childID, repo.Name)
-				if err := agent.RemoveWorkspace(workspaceDir); err != nil {
-					warnings[repo.Name] = fmt.Sprintf("removing discarded child KB workspace for %s: %v", repo.Name, err)
-				}
-			}
-		}
-		// Delete any pending promotion journal (discarded children never
-		// promote). Release the journal's recorded overlay locks first so a
-		// discarded child with an interrupted promotion cannot strand a
-		// stable lock for every later child of this parent.
-		if journal, jerr := o.deps.Store.LoadPromotion(childID); jerr == nil && journal != nil {
-			_ = releaseJournalOverlayLocks(journal)
-		}
-		_ = o.deps.Store.DeletePromotion(childID)
 		// Durably record per-repo cleanup warnings on the transaction
 		// journal so they remain visible and retryable after restart.
 		if child.Parent.Transaction != nil {
@@ -282,7 +260,6 @@ func (o *Orchestrator) resolveChildAttention(childID string) error {
 	if err := o.deps.Store.Modify(childID, func(f *feature.Feature) error {
 		f.PermissionsQueue = nil
 		f.HelpQueue = nil
-		f.PendingNeedUserInputPath = ""
 		f.PendingReviewPhase = nil
 		f.PendingRewindReviewRoadmapPhase = nil
 		return nil

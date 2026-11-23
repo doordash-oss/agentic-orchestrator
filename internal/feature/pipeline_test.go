@@ -63,14 +63,14 @@ func TestPipelineProfilePhaseProgression(t *testing.T) {
 		{
 			name:       "large",
 			profile:    PipelineLarge,
-			wantPhases: []Phase{PhaseKnowledgeBase, PhaseInquire, PhaseResearch, PhaseDesign, PhasePlan, PhaseImplement, PhaseReview, PhasePublish},
+			wantPhases: []Phase{PhaseInquire, PhaseResearch, PhaseDesign, PhasePlan, PhaseImplement, PhaseReview, PhasePublish},
 			hasPhase:   PhaseResearch,
 			wantHas:    true,
 		},
 		{
 			name:       "moonshot",
 			profile:    PipelineMoonshot,
-			wantPhases: []Phase{PhaseKnowledgeBase, PhaseInquire, PhaseResearch, PhaseDesign, PhasePlan, PhaseImplement, PhaseReview, PhasePublish},
+			wantPhases: []Phase{PhaseInquire, PhaseResearch, PhaseDesign, PhasePlan, PhaseImplement, PhaseReview, PhasePublish},
 			hasPhase:   PhaseResearch,
 			wantHas:    true,
 		},
@@ -433,46 +433,6 @@ func TestFeatureCheckpointsToConfigCheckpoints(t *testing.T) {
 				got.ManualPublish != tt.want.ManualPublish ||
 				got.DraftPublish != tt.want.DraftPublish {
 				t.Errorf("FeatureCheckpointsToConfig(%+v) = %+v, want %+v", tt.input, got, tt.want)
-			}
-		})
-	}
-}
-
-func TestShouldRunImplementationHarness(t *testing.T) {
-	t.Parallel()
-	// parallel-candidate: pure value, table-driven, or per-test temp-dir assertions with no shared state.
-	tests := []struct {
-		profile PipelineProfile
-		want    bool
-	}{
-		{PipelineMoonshot, true},
-		{PipelineMedium, false},
-		{PipelineLarge, false},
-	}
-	for _, tt := range tests {
-		t.Run(string(tt.profile), func(t *testing.T) {
-			if got := tt.profile.ShouldRunImplementationHarness(); got != tt.want {
-				t.Errorf("%s.ShouldRunImplementationHarness() = %v, want %v", tt.profile, got, tt.want)
-			}
-		})
-	}
-}
-
-func TestShouldContractAgentEvidence(t *testing.T) {
-	t.Parallel()
-	// parallel-candidate: pure value, table-driven, or per-test temp-dir assertions with no shared state.
-	tests := []struct {
-		profile PipelineProfile
-		want    bool
-	}{
-		{PipelineMoonshot, true},
-		{PipelineMedium, false},
-		{PipelineLarge, false},
-	}
-	for _, tt := range tests {
-		t.Run(string(tt.profile), func(t *testing.T) {
-			if got := tt.profile.ShouldContractAgentEvidence(); got != tt.want {
-				t.Errorf("%s.ShouldContractAgentEvidence() = %v, want %v", tt.profile, got, tt.want)
 			}
 		})
 	}

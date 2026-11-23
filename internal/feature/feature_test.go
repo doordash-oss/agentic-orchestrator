@@ -35,16 +35,12 @@ func TestTransitionValid(t *testing.T) {
 	}{
 		{"Created->Inquiring", StatusCreated, StatusInquiring},
 		{"Created->Researching", StatusCreated, StatusResearching},
-		{"Created->BuildingKB", StatusCreated, StatusBuildingKB},
 		{"Created->PlanReady", StatusCreated, StatusPlanReady},
 		{"Created->Failed", StatusCreated, StatusFailed},
 		{"Researching->DesignReady", StatusResearching, StatusDesignReady},
 		{"Researching->PlanReady", StatusResearching, StatusPlanReady},
 		{"Researching->Failed", StatusResearching, StatusFailed},
 		{"Researching->Interrupted", StatusResearching, StatusInterrupted},
-		{"BuildingKB->Created", StatusBuildingKB, StatusCreated},
-		{"BuildingKB->Failed", StatusBuildingKB, StatusFailed},
-		{"BuildingKB->Interrupted", StatusBuildingKB, StatusInterrupted},
 		{"Inquiring->InquireReady", StatusInquiring, StatusInquireReady},
 		{"Inquiring->Failed", StatusInquiring, StatusFailed},
 		{"Inquiring->Interrupted", StatusInquiring, StatusInterrupted},
@@ -65,12 +61,8 @@ func TestTransitionValid(t *testing.T) {
 		{"ImplementReady->Failed", StatusImplementReady, StatusFailed},
 		{"Implementing->ReviewPassed", StatusImplementing, StatusReviewPassed},
 		{"Implementing->ImplementReady", StatusImplementing, StatusImplementReady},
-		{"Implementing->NeedUserInput", StatusImplementing, StatusNeedUserInput},
 		{"Implementing->Failed", StatusImplementing, StatusFailed},
 		{"Implementing->Interrupted", StatusImplementing, StatusInterrupted},
-		{"NeedUserInput->Implementing", StatusNeedUserInput, StatusImplementing},
-		{"NeedUserInput->Failed", StatusNeedUserInput, StatusFailed},
-		{"NeedUserInput->Interrupted", StatusNeedUserInput, StatusInterrupted},
 		{"ReviewPassed->CodeReady", StatusReviewPassed, StatusCodeReady},
 		{"ReviewPassed->Done", StatusReviewPassed, StatusDone},
 		{"ReviewPassed->Implementing", StatusReviewPassed, StatusImplementing},
@@ -97,13 +89,11 @@ func TestTransitionValid(t *testing.T) {
 		{"Published->Inquiring", StatusPublished, StatusInquiring},
 		{"Published->PlanReady", StatusPublished, StatusPlanReady},
 		{"Failed->Created", StatusFailed, StatusCreated},
-		{"Failed->BuildingKB", StatusFailed, StatusBuildingKB},
 		{"Failed->Inquiring", StatusFailed, StatusInquiring},
 		{"Failed->Researching", StatusFailed, StatusResearching},
 		{"Failed->Designing", StatusFailed, StatusDesigning},
 		{"Failed->ImplementReady", StatusFailed, StatusImplementReady},
 		{"Failed->CodeReady", StatusFailed, StatusCodeReady},
-		{"Interrupted->BuildingKB", StatusInterrupted, StatusBuildingKB},
 		{"Interrupted->Inquiring", StatusInterrupted, StatusInquiring},
 		{"Interrupted->Researching", StatusInterrupted, StatusResearching},
 		{"Interrupted->Designing", StatusInterrupted, StatusDesigning},
@@ -203,7 +193,6 @@ func TestPhaseRequiresGrilling(t *testing.T) {
 		{PhaseImplement, false},
 		{PhaseReview, false},
 		{PhaseFinalReview, false},
-		{PhaseKnowledgeBase, false},
 		{PhasePublish, false},
 	}
 	for _, tt := range tests {
@@ -311,9 +300,9 @@ func TestStatusYAMLRoundTrip(t *testing.T) {
 		StatusCreated, StatusResearching, StatusPlanReady, StatusPlanning,
 		StatusImplementReady, StatusImplementing, StatusReviewPassed,
 		StatusCodeReady, StatusPublished, StatusFailed, StatusInterrupted,
-		StatusDone, StatusBuildingKB,
+		StatusDone,
 		StatusPlanNeedsReview, StatusInquiring, StatusInquireReady,
-		StatusDesignReady, StatusDesigning, StatusNeedUserInput,
+		StatusDesignReady, StatusDesigning,
 	}
 	for _, s := range statuses {
 		data, err := yaml.Marshal(s)
@@ -445,7 +434,6 @@ func TestIsRunning(t *testing.T) {
 		{StatusDone, false},
 		{StatusFailed, false},
 		{StatusInterrupted, false},
-		{StatusBuildingKB, true},
 		{StatusInquiring, true},
 		{StatusInquireReady, false},
 		{StatusDesignReady, false},
@@ -856,19 +844,20 @@ func TestNormalFlowResetsTimingKeyForImplement(t *testing.T) {
 	}
 }
 
-func TestPhaseKnowledgeBase(t *testing.T) {
+func TestRetiredKnowledgeBasePhaseStillDisplays(t *testing.T) {
 	t.Parallel()
-	// parallel-candidate: pure value, table-driven, or per-test temp-dir assertions with no shared state.
-	t.Run("String", func(t *testing.T) {
-		if got := PhaseKnowledgeBase.String(); got != "Knowledge Base" {
-			t.Errorf("PhaseKnowledgeBase.String() = %q, want %q", got, "Knowledge Base")
+	// parallel-candidate: pure value assertions with no shared state.
+	if got := PhaseKnowledgeBase.String(); got != "Knowledge Base" {
+		t.Errorf("PhaseKnowledgeBase.String() = %q, want %q", got, "Knowledge Base")
+	}
+	if got := PhaseKnowledgeBase.DirName(); got != "knowledgebase" {
+		t.Errorf("PhaseKnowledgeBase.DirName() = %q, want %q", got, "knowledgebase")
+	}
+	for _, profile := range []PipelineProfile{PipelineMedium, PipelineLarge, PipelineMoonshot} {
+		if profile.HasPhase(PhaseKnowledgeBase) {
+			t.Errorf("%s schedules the retired Knowledge Base phase", profile)
 		}
-	})
-	t.Run("DirName", func(t *testing.T) {
-		if got := PhaseKnowledgeBase.DirName(); got != "knowledgebase" {
-			t.Errorf("PhaseKnowledgeBase.DirName() = %q, want %q", got, "knowledgebase")
-		}
-	})
+	}
 }
 
 func TestLogicalOrder(t *testing.T) {
@@ -878,7 +867,6 @@ func TestLogicalOrder(t *testing.T) {
 		phase Phase
 		order int
 	}{
-		{PhaseKnowledgeBase, 0},
 		{PhaseInquire, 1},
 		{PhaseResearch, 2},
 		{PhaseDesign, 3},
@@ -904,87 +892,16 @@ func TestLogicalOrder(t *testing.T) {
 	}
 }
 
-func TestStatusBuildingKB(t *testing.T) {
+func TestLegacyBuildingKBStatusLoadsAsInterrupted(t *testing.T) {
 	t.Parallel()
-	// parallel-candidate: pure value, table-driven, or per-test temp-dir assertions with no shared state.
-	t.Run("String", func(t *testing.T) {
-		if got := StatusBuildingKB.String(); got != "BuildingKB" {
-			t.Errorf("StatusBuildingKB.String() = %q, want %q", got, "BuildingKB")
-		}
-	})
-
-	t.Run("IsRunning", func(t *testing.T) {
-		if !StatusBuildingKB.IsRunning() {
-			t.Error("StatusBuildingKB.IsRunning() should be true")
-		}
-	})
-
-	t.Run("YAML round-trip", func(t *testing.T) {
-		data, err := yaml.Marshal(StatusBuildingKB)
-		if err != nil {
-			t.Fatalf("Marshal: %v", err)
-		}
-		var got Status
-		if err := yaml.Unmarshal(data, &got); err != nil {
-			t.Fatalf("Unmarshal: %v", err)
-		}
-		if got != StatusBuildingKB {
-			t.Errorf("round-trip: got %v, want %v", got, StatusBuildingKB)
-		}
-	})
-}
-
-func TestKBStatusPersistence(t *testing.T) {
-	t.Parallel()
-	// parallel-candidate: pure value, table-driven, or per-test temp-dir assertions with no shared state.
-	t.Run("round-trip with populated KBStatus", func(t *testing.T) {
-		store := NewStore(t.TempDir())
-		f := &Feature{
-			ID:            "kb-status-test",
-			Name:          "KB Status Test",
-			Status:        StatusBuildingKB,
-			ActiveRun:     1,
-			RunCount:      1,
-			SchemaVersion: SchemaVersionCurrent,
-			KBStatus: map[string]string{
-				"repo-a": "completed",
-				"repo-b": "pending",
-				"repo-c": "failed: timeout",
-			},
-		}
-		if err := store.Save(f); err != nil {
-			t.Fatalf("Save: %v", err)
-		}
-		got, err := store.Load(f.ID)
-		if err != nil {
-			t.Fatalf("Load: %v", err)
-		}
-		if len(got.KBStatus) != 3 {
-			t.Fatalf("expected 3 KBStatus entries, got %d", len(got.KBStatus))
-		}
-		for _, key := range []string{"repo-a", "repo-b", "repo-c"} {
-			if got.KBStatus[key] != f.KBStatus[key] {
-				t.Errorf("KBStatus[%q] = %q, want %q", key, got.KBStatus[key], f.KBStatus[key])
-			}
-		}
-	})
-
-	t.Run("empty KBStatus omitted from feature.yaml", func(t *testing.T) {
-		f := &Feature{
-			ID:     "kb-status-empty",
-			Name:   "KB Status Empty",
-			Status: StatusCreated,
-		}
-		data, err := yaml.Marshal(f)
-		if err != nil {
-			t.Fatalf("Marshal: %v", err)
-		}
-		// Under runs-first layout kb_status lives in run.yaml; the root-level
-		// feature.yaml must never mention it.
-		if containsBytes(data, []byte("kb_status")) {
-			t.Error("expected kb_status to be absent from feature.yaml (lives in run.yaml)")
-		}
-	})
+	// parallel-candidate: pure value assertions with no shared state.
+	var got Status
+	if err := yaml.Unmarshal([]byte("BuildingKB"), &got); err != nil {
+		t.Fatalf("Unmarshal: %v", err)
+	}
+	if got != StatusInterrupted {
+		t.Errorf("legacy BuildingKB loaded as %v, want %v", got, StatusInterrupted)
+	}
 }
 
 // TestInquireResearchDesignPlanProgression is a regression test ensuring the
@@ -1015,30 +932,6 @@ func TestInquireResearchDesignPlanProgression(t *testing.T) {
 	}
 }
 
-func TestKBTimingAccumulation(t *testing.T) {
-	t.Parallel()
-	// parallel-candidate: pure value, table-driven, or per-test temp-dir assertions with no shared state.
-	start := time.Now().Add(-2 * time.Minute)
-	f := &Feature{
-		Status:           StatusBuildingKB,
-		ActiveTimingKey:  "knowledgebase",
-		ActivePhaseStart: &start,
-	}
-
-	// Transition from BuildingKB (running) to Created (non-running) should accumulate
-	err := f.Transition(StatusCreated)
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if f.PhaseTimings == nil {
-		t.Fatal("expected PhaseTimings to be initialized")
-	}
-	d := f.PhaseTimings["knowledgebase"]
-	if d < 2*time.Minute {
-		t.Errorf("expected at least 2m accumulated, got %v", d)
-	}
-}
-
 func TestCheckpointsHasGateForPhase(t *testing.T) {
 	t.Parallel()
 	// parallel-candidate: pure value, table-driven, or per-test temp-dir assertions with no shared state.
@@ -1053,7 +946,6 @@ func TestCheckpointsHasGateForPhase(t *testing.T) {
 		{"design gate for plan", Checkpoints{DesignReview: true}, PhasePlan, true},
 		{"phase-plan gate for implement", Checkpoints{PhasePlanReview: true}, PhaseImplement, true},
 		{"no gate for publish", Checkpoints{ManualPublish: true}, PhasePublish, false},
-		{"no gate for KB", Checkpoints{InquiryReview: true}, PhaseKnowledgeBase, false},
 		{"zero value has no gates", Checkpoints{}, PhaseResearch, false},
 	}
 	for _, tc := range tests {

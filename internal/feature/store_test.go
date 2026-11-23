@@ -1082,40 +1082,83 @@ func TestStoreDelete(t *testing.T) {
 	}
 }
 
-// TestStoreNeedUserInputPathPersistence locks in that the run-scoped
-// PendingNeedUserInputPath survives a save/load round-trip via the run
-// shadow synchroniser.
-func TestStoreNeedUserInputPathPersistence(t *testing.T) {
+// TestStoreLoadsLegacyNeedUserInputFeatureAsInterrupted covers a feature
+// persisted while paused on the removed need-user-input gate: it loads as an
+// interrupted implement phase, and the run's retired gate, deferral and
+// verification fields are ignored.
+func TestStoreLoadsLegacyNeedUserInputFeatureAsInterrupted(t *testing.T) {
 	t.Parallel()
 	// parallel-candidate: per-test temp dirs and mocks isolate filesystem and collaborator state.
 	dir := t.TempDir()
 	store := NewStore(dir)
-
-	gatePath := "/tmp/feat-nui-001/runs/run-001/phase-01/implement/agentic/iteration-02/need-user-input.yaml"
 	f := &Feature{
-		ID:                       "feat-nui-001",
-		Name:                     "Need User Input pause",
-		Slug:                     "need-user-input-pause",
-		Status:                   StatusNeedUserInput,
-		PendingNeedUserInputPath: gatePath,
-		SchemaVersion:            SchemaVersionCurrent,
+		ID:               "feat-nui-001",
+		Name:             "Legacy gate",
+		Slug:             "legacy-gate",
+		Status:           StatusImplementing,
+		CurrentPhase:     PhaseImplement,
+		CurrentIteration: 2,
+		SchemaVersion:    SchemaVersionCurrent,
 	}
 	if err := store.Save(f); err != nil {
 		t.Fatalf("save: %v", err)
 	}
 
-	loaded, err := store.Load("feat-nui-001")
+	featurePath := filepath.Join(dir, f.ID, "feature.yaml")
+	data, err := os.ReadFile(featurePath)
+	if err != nil {
+		t.Fatalf("read feature.yaml: %v", err)
+	}
+	legacy := strings.Replace(string(data), "status: Implementing", "status: NeedUserInput", 1)
+	if legacy == string(data) {
+		t.Fatalf("feature.yaml has no Implementing status to rewrite:\n%s", data)
+	}
+	if err := os.WriteFile(featurePath, []byte(legacy), 0o644); err != nil {
+		t.Fatalf("write feature.yaml: %v", err)
+	}
+	runPath := filepath.Join(store.runDirUnlocked(f.ID, f.ActiveRun), "run.yaml")
+	runData, err := os.ReadFile(runPath)
+	if err != nil {
+		t.Fatalf("read run.yaml: %v", err)
+	}
+	legacyRun := string(runData) + `pending_need_user_input_path: /tmp/feat-nui-001/need-user-input.yaml
+deferrals:
+  - id: d-1
+    description: carried work
+    created_in_phase: 1
+    due_by_phase: 2
+    reason: later
+    status: open
+verification_items:
+  - name: go test ./...
+    state: running
+current_phase_status: verifying
+`
+	if err := os.WriteFile(runPath, []byte(legacyRun), 0o644); err != nil {
+		t.Fatalf("write run.yaml: %v", err)
+	}
+
+	loaded, err := store.Load(f.ID)
 	if err != nil {
 		t.Fatalf("load: %v", err)
 	}
-	if loaded.Status != StatusNeedUserInput {
-		t.Errorf("Status: got %v, want StatusNeedUserInput", loaded.Status)
+	if loaded.Status != StatusInterrupted {
+		t.Errorf("Status = %v, want Interrupted", loaded.Status)
 	}
-	if loaded.PendingNeedUserInputPath != gatePath {
-		t.Errorf("PendingNeedUserInputPath: got %q, want %q", loaded.PendingNeedUserInputPath, gatePath)
+	if loaded.CurrentPhase != PhaseImplement || loaded.CurrentIteration != 2 {
+		t.Errorf("phase/iteration = %v/%d, want implement/2", loaded.CurrentPhase, loaded.CurrentIteration)
 	}
-	if run := loaded.Run(); run == nil || run.PendingNeedUserInputPath != gatePath {
-		t.Errorf("run.PendingNeedUserInputPath: got %q, want %q", run.PendingNeedUserInputPath, gatePath)
+	if err := store.Save(loaded); err != nil {
+		t.Fatalf("re-save: %v", err)
+	}
+	resaved, err := os.ReadFile(runPath)
+	if err != nil {
+		t.Fatalf("read re-saved run.yaml: %v", err)
+	}
+	for _, key := range []string{"pending_need_user_input_path", "deferrals:", "verification_items"} {
+		if strings.Contains(string(resaved), key) {
+			t.Errorf("re-saved run.yaml still carries %q:\n%s", key, resaved)
+		}
 	}
 }
 
@@ -2093,7 +2136,7 @@ func TestStore_SealAndForkRun_IdempotentReseal(t *testing.T) {
 		Description:   "test",
 		Created:       time.Now(),
 		Status:        StatusInquiryNeedsReview,
-		CurrentPhase:  PhaseKnowledgeBase,
+		CurrentPhase:  PhaseInquire,
 		ActiveRun:     1,
 		RunCount:      1,
 		SchemaVersion: SchemaVersionCurrent,
@@ -2348,6 +2391,84 @@ artifacts: {}
 	}
 }
 
+// TestStoreLoadsFeatureInterruptedMidKnowledgeBase covers a record persisted
+// while the retired Knowledge Base phase was running: it loads interrupted at
+// Inquire, keeps the phase's timing and cost history, and ignores the
+// retired run fields.
+func TestStoreLoadsFeatureInterruptedMidKnowledgeBase(t *testing.T) {
+	t.Parallel()
+	// parallel-candidate: per-test temp dirs isolate filesystem state.
+	dir := t.TempDir()
+	store := NewStore(dir)
+
+	const featureID = "legacy-kb-001"
+	runDir := filepath.Join(dir, featureID, "runs", "run-001")
+	if err := os.MkdirAll(runDir, 0o755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	featureYAML := fmt.Sprintf(`id: %s
+name: Legacy KB
+slug: legacy-kb
+description: persisted mid knowledge base
+created: 2026-01-01T00:00:00Z
+status: BuildingKB
+current_phase: %d
+pipeline: large
+repos:
+  - name: repo-a
+    path: /tmp/a
+models:
+  kb_build: some-model
+effort:
+  kb_build: high
+inquireness: medium
+active_run: 1
+run_count: 1
+schema_version: %d
+`, featureID, int(PhaseKnowledgeBase), SchemaVersionCurrent)
+	if err := os.WriteFile(filepath.Join(dir, featureID, "feature.yaml"), []byte(featureYAML), 0o644); err != nil {
+		t.Fatalf("write feature.yaml: %v", err)
+	}
+	runYAML := `started_at: 2026-01-01T00:00:00Z
+active_timing_key: knowledgebase
+active_phase_start: 2026-01-01T00:00:00Z
+phase_timings:
+  knowledgebase: 1m0s
+phase_costs:
+  knowledgebase: 1.5
+kb_wait_message: waiting
+force_kb_rebuild: true
+kb_status:
+  repo-a: pending
+`
+	if err := os.WriteFile(filepath.Join(runDir, "run.yaml"), []byte(runYAML), 0o644); err != nil {
+		t.Fatalf("write run.yaml: %v", err)
+	}
+
+	loaded, err := store.Load(featureID)
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if loaded.Status != StatusInterrupted {
+		t.Errorf("Status = %v, want %v", loaded.Status, StatusInterrupted)
+	}
+	if loaded.CurrentPhase != PhaseInquire {
+		t.Errorf("CurrentPhase = %v, want %v", loaded.CurrentPhase, PhaseInquire)
+	}
+	if loaded.ActivePhaseStart != nil {
+		t.Errorf("ActivePhaseStart = %v, want accumulated and cleared", loaded.ActivePhaseStart)
+	}
+	if got := loaded.PhaseTimings["knowledgebase"]; got <= time.Minute {
+		t.Errorf("PhaseTimings[knowledgebase] = %v, want more than the persisted minute", got)
+	}
+	if got := loaded.PhaseCosts["knowledgebase"]; got != 1.5 {
+		t.Errorf("PhaseCosts[knowledgebase] = %v, want 1.5", got)
+	}
+	if err := loaded.Transition(StatusInquiring); err != nil {
+		t.Errorf("resume transition to Inquiring: %v", err)
+	}
+}
+
 func TestStoreSetupStateRoundTrip(t *testing.T) {
 	t.Parallel()
 	// parallel-candidate: per-test temp dirs and isolated store state.
@@ -2366,7 +2487,7 @@ func TestStoreSetupStateRoundTrip(t *testing.T) {
 		Description:   "setup serialization",
 		Created:       now,
 		Status:        StatusSettingUpWorktrees,
-		CurrentPhase:  PhaseKnowledgeBase,
+		CurrentPhase:  PhaseInquire,
 		Repos:         repos,
 		Models:        config.ModelConfig{},
 		ExitCriteria:  "",

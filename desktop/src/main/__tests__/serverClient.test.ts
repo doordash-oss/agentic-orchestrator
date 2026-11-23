@@ -16,7 +16,6 @@ limitations under the License.
 
 import { describe, expect, it } from 'vitest';
 import { CanonicalErrorException } from '../../shared/errors';
-import { PromptSnapshotResponseSchema } from '../../shared/api/parse';
 import type { HttpResult } from '../gateway/runtimeGateway';
 import { mapServerError, serverRequest, type ServerTransport } from '../serverClient';
 
@@ -63,40 +62,6 @@ describe('serverRequest', () => {
       { path: '/api/v1/x', init: undefined },
       { path: '/api/v1/y', init: { method: 'POST', body: {} } },
     ]);
-  });
-
-  it('accepts a parsed multi-gate snapshot within the response-wide gate budget', async () => {
-    const text = 'x'.repeat(64 * 1024);
-    const questionText = 'x'.repeat(32 * 1024);
-    const verification = {
-      blockers: Array.from({ length: 3 }, (_, index) => ({
-        item_id: `item-${index}`,
-        name: text,
-        command: text,
-        reason: text,
-        capabilities: [],
-        remediation: text,
-      })),
-      allowed_actions: ['WAIVE', 'RETRY_AFTER_AUTH'],
-    };
-    const body = {
-      api_version: 'v1',
-      ask_user_questions: [],
-      help_queue: [],
-      need_user_inputs: Array.from({ length: 6 }, (_, index) => ({
-        feature_id: `feature-${index}`,
-        open: true,
-        questions: [{ index: 1, prompt: questionText, answer: questionText }],
-        ...(index < 3 ? { verification } : {}),
-      })),
-    };
-    const bytes = new TextEncoder().encode(JSON.stringify(body)).byteLength;
-    expect(bytes).toBeLessThanOrEqual(3 * 1024 * 1024);
-    expect(PromptSnapshotResponseSchema.parse(body).need_user_inputs).toHaveLength(6);
-
-    await expect(
-      serverRequest(transportReturning({ status: 200, body }), '/api/v1/prompts', undefined),
-    ).resolves.toBe(body);
   });
 
   it('carries a canonical server body through as a CanonicalErrorException, intact', async () => {

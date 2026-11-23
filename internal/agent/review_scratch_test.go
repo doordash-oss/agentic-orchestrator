@@ -48,7 +48,7 @@ func TestPruneStaleReviewScratch_SkipsHeldReviewsAndBusyFeatures(t *testing.T) {
 		}
 		helperDir := writeLiveRunHelperLayout(t, reviewScratchHelperDir(store, tt.id))
 		if tt.held {
-			scratch, err := prepareLiveRunReviewScratch(helperDir)
+			scratch, err := prepareLiveRunReviewScratch(helperDir, false)
 			if err != nil {
 				t.Fatalf("prepareLiveRunReviewScratch() error = %v", err)
 			}
@@ -83,7 +83,7 @@ func TestPrepareLiveRunReviewScratch_WaitsForInFlightPrune(t *testing.T) {
 	}
 	prepared := make(chan liveRunReviewScratch)
 	go func() {
-		scratch, err := prepareLiveRunReviewScratch(helperDir)
+		scratch, err := prepareLiveRunReviewScratch(helperDir, false)
 		if err != nil {
 			t.Errorf("prepareLiveRunReviewScratch() error = %v", err)
 		}

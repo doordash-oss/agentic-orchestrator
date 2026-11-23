@@ -1,0 +1,12 @@
+## Handoff to the User
+
+Phase 2 review stopped its automatic loop: The Craft axis requested changes in 3 consecutive rounds.
+
+The user already answered the handoff question with this guidance:
+
+> Use exponential backoff with jitter.
+
+Do not ask it again. Apply the guidance as this round's fix, using the open findings as reviewer feedback where the guidance leaves something open, then finish. Ask no dispute questions this round.
+
+Open findings and the previous fixer's note: /state/feat-x/run-1/phase-02/implement/iteration-03/handoff/handoff.md
+

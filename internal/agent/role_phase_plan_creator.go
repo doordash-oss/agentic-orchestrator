@@ -55,6 +55,4 @@ type phasePlanUserInput struct {
 	QAFiles prompts.QAFilesInput
 
 	Inquireness prompts.GrillMeInquirenessInput
-
-	AutomatedVerificationOnly bool
 }

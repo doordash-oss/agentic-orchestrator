@@ -27,20 +27,17 @@ import (
 )
 
 // TestPhaseImplementUnified_3Repo_ScopedVerification is the acceptance test
-// for phase atomicity and explicitly scoped verification on a 3-repo phase:
+// for phase atomicity on a 3-repo phase:
 //
 //   - PhaseScope reads `**Repo:** repo-a/repo-b/repo-c` Task tags from a
 //     planned-mode plan and produces the deduplicated, sorted repo set.
-//   - CompileTestingContractMultiRepo emits each explicitly scoped plan
-//     command once in its declared repository.
 //   - RunPhaseImplementLoop dispatches the iteration successfully and
 //     AtomicPhaseStamp transitions all three repos atomically to
 //     "awaiting_final_review" in one Modify write (phase atomicity:
 //     no partial-phase shipment).
 //
-// The test uses real on-disk plan + state, real PhaseScope/contract
-// compiler, and a stub RunImplementFn (the loop kernel is unit-tested
-// elsewhere).
+// The test uses real on-disk plan + state, real PhaseScope, and a stub
+// RunImplementFn (the loop kernel is unit-tested elsewhere).
 func TestPhaseImplementUnified_3Repo_ScopedVerification(t *testing.T) {
 	if testing.Short() {
 		t.Skip("skipping integration test in short mode")
@@ -127,39 +124,7 @@ func TestPhaseImplementUnified_3Repo_ScopedVerification(t *testing.T) {
 		t.Errorf("PhaseScope.Repos = %v, want %v", scope.Repos, wantRepos)
 	}
 
-	// --- Part B: TestingContractCompiler emits each scoped command once. ---
-	contract := agent.CompileTestingContractMultiRepo(agent.MultiRepoContractInput{
-		Repos:     scope.Repos,
-		PlanText:  planText,
-		PlanPath:  planPath,
-		PhaseType: "tracer-bullet",
-	})
-
-	// Every item must carry a `repo:` field — the unification invariant.
-	for _, it := range contract.Items {
-		if it.Repo == "" {
-			t.Errorf("contract item missing repo tag: %+v", it)
-		}
-	}
-
-	// Per-repo plan-declared rows (one set per declared repo).
-	for _, name := range wantRepos {
-		hasPlan := false
-		for _, it := range contract.Items {
-			if it.Repo != name {
-				continue
-			}
-			switch it.Source {
-			case "plan":
-				hasPlan = true
-			}
-		}
-		if !hasPlan {
-			t.Errorf("contract missing plan-source row for repo %q (Task should contribute one)", name)
-		}
-	}
-
-	// --- Part C: RunPhaseImplementLoop dispatches and AtomicPhaseStamp
+	// --- Part B: RunPhaseImplementLoop dispatches and AtomicPhaseStamp
 	// transitions all three repos to "awaiting_final_review". ---
 	stubImpl := func(c agent.ImplementConfig, _ ports.SessionManager) (*agent.LoopResult, error) {
 		// The unified workspace must mount every Feature.Repos worktree

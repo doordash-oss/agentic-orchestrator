@@ -130,7 +130,6 @@ func TestSupervisorHandler_DefersOtherBashWithoutHelperReason(t *testing.T) {
 	t.Parallel()
 	for _, command := range []string{
 		`"$AGENTICO_BIN" validate-artifacts --phase review --role final_reviewer --dir /tmp/iteration-01`,
-		`"$AGENTICO_BIN" report-blocker --contract /work/testing-contract.yaml --dir /work/iter`,
 		`"$AGENTICO_BIN" server`,
 		`"$OTHER_BIN" api GET /api/v1/features`,
 		`curl -s http://127.0.0.1:7777/api/v1/features`,
@@ -154,37 +153,5 @@ func TestSupervisorHandler_HelperAllowanceIsBashOnly(t *testing.T) {
 	})
 	if err != nil || got.Behavior != "" {
 		t.Fatalf("non-Bash tool carrying a helper command = %+v, %v; want deferral", got, err)
-	}
-}
-
-func TestFeatureWorkerRecogniserDoesNotSanctionAPI(t *testing.T) {
-	t.Parallel()
-	if harnessCLISubcommands["api"] {
-		t.Fatal("feature-worker sanctioned subcommands must not include api")
-	}
-	if isHarnessCLIInvocation(`"$AGENTICO_BIN" api GET /api/v1/features`) {
-		t.Fatal("isHarnessCLIInvocation accepted the supervisor-only api subcommand")
-	}
-	if _, ok := attemptedHarnessCLISubcommand(`cd /x && "$AGENTICO_BIN" api GET /api/v1/features`); ok {
-		t.Fatal("attemptedHarnessCLISubcommand recognised api as a sanctioned feature-worker subcommand")
-	}
-	// A general phase handler behind the session guard still refuses api
-	// against the harness-owned contract as an unsanctioned subcommand.
-	handler := Guarded(&AcceptEditsHandler{})
-	got, err := handler.CanUseTool(ports.ToolPermissionRequest{
-		ToolName:     toolNameBash,
-		Input:        `{"command":` + strconv.Quote(`"$AGENTICO_BIN" api POST /api/v1/features /work/testing-contract.yaml`) + `}`,
-		ProviderName: providerNameClaude,
-	})
-	if err != nil || got.Behavior != decisionDeny || !strings.Contains(got.Reason, "testing-contract.yaml is harness-owned") {
-		t.Fatalf("guarded general handler on api = %+v, %v; want the generic harness-owned deny", got, err)
-	}
-	// And a general phase handler never auto-allows a bare helper call.
-	got, err = handler.CanUseTool(ports.ToolPermissionRequest{
-		ToolName: toolNameBash,
-		Input:    `{"command":` + strconv.Quote(`"$AGENTICO_BIN" api GET /api/v1/features`) + `}`,
-	})
-	if err != nil || got.Behavior != "" {
-		t.Fatalf("general handler on bare api call = %+v, %v; want deferral", got, err)
 	}
 }

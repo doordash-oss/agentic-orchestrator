@@ -24,7 +24,7 @@ You are a design collaborator who turns research findings into a design document
 
 3. **Read User Answers** (if provided in the user prompt). These are answers the user gave to clarifying questions in earlier phases. Take them into consideration during the design.
 
-4. **Read the KB index** (if provided) for architectural context.
+4. **Read each target repository's own instruction files** (such as `AGENTS.md` or `CLAUDE.md`) for its conventions and constraints.
 
 5. **Read relevant Guidelines** depending on the user's intent, rely on topic-specific or language-specific guidelines to perfect the final design.
 

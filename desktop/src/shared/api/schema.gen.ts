@@ -88,7 +88,10 @@ export interface paths {
         /** Read feature configuration. */
         get: operations["getFeatureConfig"];
         put?: never;
-        /** Update feature configuration. */
+        /**
+         * Update feature configuration.
+         * @description Replaces the feature's editable configuration. An omitted `checkpoints` keeps the feature's current gates; an explicit object, including one with every gate false, replaces them. Gates the pipeline does not support are always off.
+         */
         post: operations["updateFeatureConfig"];
         delete?: never;
         options?: never;
@@ -416,26 +419,6 @@ export interface paths {
         };
         /** List sessions belonging to one run, filtered by run number. */
         get: operations["listRunSessions"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/v1/features/{feature_id}/testing-contract": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /**
-         * Read the current roadmap phase's testing contract.
-         * @description Returns the harness-compiled testing contract for the feature's current roadmap phase: every row with its id, ownership, policy flags, recorded disposition, and declared capabilities. Clients use it to show which rows are waivable and to pick item ids for the testing-contract-waive action. 404 `not_found` when the phase has no contract yet.
-         */
-        get: operations["getTestingContract"];
         put?: never;
         post?: never;
         delete?: never;
@@ -1174,7 +1157,7 @@ export interface paths {
         };
         /**
          * Stream ordered runtime events as SSE.
-         * @description Emits envelope JSON under SSE `data:` lines. Every non-control event includes a monotonic `seq`, `epoch`, resource identity, and resource version. Clients resume with `Last-Event-ID` or `after` (for example a snapshot's `meta.as_of_seq`): retained events after the cursor replay in order. The server retains the most recent 4096 events; a cursor older than that window, beyond the head, or paired with an `epoch` that no longer matches yields one `stream.reset` with `snapshot_required`. A cursor without `epoch` is read in the current epoch, so pass the `epoch` from a previously received event to have a server restart detected. With no cursor the stream starts with `connected`.
+         * @description Emits envelope JSON under SSE `data:` lines. Every non-control event includes a monotonic `seq`, `epoch`, resource identity, and resource version. Clients resume with `Last-Event-ID` or `after` (for example a snapshot's `meta.as_of_seq`): retained events after the cursor replay in order. The server retains the most recent 4096 events; a cursor older than that window, beyond the head, or paired with an `epoch` that no longer matches yields one `stream.reset` with `snapshot_required`. A cursor without `epoch` is read in the current epoch, so pass the `epoch` from a previously received event to have a server restart detected. With no cursor the stream starts with `connected`. `feature_id` and `kind` narrow the stream; `connected`, `stream.reset` and `heartbeat` always pass, and `seq` keeps counting every event, so a filtered cursor resumes like an unfiltered one.
          */
         get: operations["streamEvents"];
         put?: never;
@@ -1421,7 +1404,7 @@ export interface components {
          * @description Feature lifecycle action identifier. `setup` dispatches a feature's queued durable setup (required after create unless the client dispatches `start`) or reruns only the unfinished tasks of a failed setup, asynchronously and without starting orchestration; the feature becomes `Created` when setup completes.
          * @enum {string}
          */
-        FeatureAction: "setup" | "start" | "resume" | "pause-stop" | "restart" | "publish" | "merge" | "rewind" | "retry" | "rebase" | "need-user-input" | "need-user-input-draft" | "testing-contract-waive" | "mark-done" | "cleanup" | "delete" | "refactor" | "review-feedback" | "discard";
+        FeatureAction: "setup" | "start" | "resume" | "pause-stop" | "restart" | "publish" | "merge" | "rewind" | "retry" | "rebase" | "mark-done" | "cleanup" | "delete" | "refactor" | "review-feedback" | "discard";
         /** @description Pending usage-limit auto-resume of a Failed feature. Present only while the run's failure is a Claude or Codex usage limit with a known reset time; the server retries the feature at `resume_at`. While it is pending, `pause-stop` is enabled and cancels it, parking the feature as Interrupted. */
         AutoResume: {
             /**
@@ -2061,41 +2044,9 @@ export interface components {
         PromptSnapshotResponse: components["schemas"]["JSONResponse"] & {
             ask_user_questions: components["schemas"]["ControlRequest"][];
             help_queue: components["schemas"]["HelpQueue"][];
-            need_user_inputs: components["schemas"]["NeedUserInputGate"][];
         };
         PermissionSnapshotResponse: components["schemas"]["JSONResponse"] & {
             requests: components["schemas"]["ControlRequest"][];
-        };
-        TestingContractResponse: components["schemas"]["JSONResponse"] & {
-            feature_id: string;
-            /** @description Run the contract belongs to; phase and revision numbers restart after a rewind. */
-            active_run: number;
-            roadmap_phase: number;
-            revision: number;
-            items: components["schemas"]["TestingContractItem"][];
-        };
-        /** @description One compiled testing-contract row. */
-        TestingContractItem: {
-            item_id: string;
-            /** @description plan, cross-repo, manual, visual, or behavioral. */
-            source: string;
-            /** @description harness or agent. */
-            owner: string;
-            repo?: string;
-            name: string;
-            command: string;
-            required: boolean;
-            allow_substitution: boolean;
-            allow_blocked: boolean;
-            allow_waiver: boolean;
-            disposition?: components["schemas"]["TestingContractDisposition"];
-            capabilities: string[];
-        };
-        TestingContractDisposition: {
-            /** @description waived is the only recorded status today. */
-            status: string;
-            reason?: string;
-            changed_by?: string;
         };
         ArtifactListResponse: components["schemas"]["JSONResponse"] & {
             artifacts: components["schemas"]["Artifact"][];
@@ -2207,6 +2158,7 @@ export interface components {
             attachment_uploads?: string[];
             use_current_branch?: boolean;
             repository_sources?: components["schemas"]["RepositorySource"][];
+            /** @description Review gates for the new feature. When omitted, the server applies the configured default checkpoints for the selected pipeline. An explicit object, including one with every gate false, is used as given. Gates the pipeline does not support are always off. */
             checkpoints?: components["schemas"]["Checkpoints"];
             /** @enum {string} */
             risk_level?: "low" | "medium" | "high";
@@ -2223,10 +2175,6 @@ export interface components {
             size: number;
         };
         FeatureActionResponse: components["schemas"]["ActionBaseResponse"] & components["schemas"]["FeatureActionResult"];
-        TestingContractWaiveResponse: components["schemas"]["ActionBaseResponse"] & components["schemas"]["FeatureActionResult"] & {
-            contract_revision: number;
-            waived_items: string[];
-        };
         PermissionAnswerResponse: components["schemas"]["ActionBaseResponse"] & {
             session_id: string;
             request_id: string;
@@ -2319,6 +2267,7 @@ export interface components {
             attachments?: string[];
             attachment_uploads?: string[];
             pipeline?: string;
+            /** @description Review gates committed to both the child and the parent. When omitted, the child inherits the parent's current gates. An explicit object, including one with every gate false, is used as given. */
             checkpoints?: unknown;
             effort?: components["schemas"]["EffortConfig"];
             models?: components["schemas"]["ModelDefaults"];
@@ -2582,7 +2531,6 @@ export interface components {
             implementation?: string;
             review?: string;
             utilities?: string;
-            kb_build?: string;
         };
         Publishability: {
             manual_publish: boolean;
@@ -3084,7 +3032,6 @@ export interface components {
             implementation?: string;
             review?: string;
             utilities?: string;
-            kb_build?: string;
             automatic_review?: string;
         };
         Timing: {
@@ -3101,10 +3048,6 @@ export interface components {
                 [key: string]: number;
             };
         };
-        VerificationItem: {
-            name: string;
-            state: string;
-        };
         ReviewGate: {
             reviewing_gate: boolean;
             review_fixing: boolean;
@@ -3117,42 +3060,6 @@ export interface components {
             validator_errors?: {
                 [key: string]: string;
             };
-        };
-        NeedUserInputGate: {
-            feature_id?: string;
-            open: boolean;
-            scope?: string;
-            repo_name?: string;
-            input_notifications?: string;
-            iteration?: number;
-            summary?: string;
-            /** Format: date-time */
-            waiting_since: string;
-            questions?: components["schemas"]["NeedUserInputQuestion"][];
-            verification?: components["schemas"]["NeedUserInputVerification"];
-        };
-        NeedUserInputVerification: {
-            blockers: components["schemas"]["NeedUserInputVerificationBlocker"][];
-            allowed_actions: components["schemas"]["NeedUserInputVerificationAction"][];
-        };
-        /**
-         * @description WAIVE records user-authorized waivers, RETRY_AFTER_AUTH re-probes after the user provides the missing capability, and ALLOW_SUBSTITUTE keeps the evidence requirement but authorizes a faithful substitute for blocked agent-owned evidence rows.
-         * @enum {string}
-         */
-        NeedUserInputVerificationAction: "WAIVE" | "RETRY_AFTER_AUTH" | "ALLOW_SUBSTITUTE";
-        NeedUserInputVerificationBlocker: {
-            item_id: string;
-            name: string;
-            repo_name?: string;
-            command: string;
-            reason: string;
-            capabilities: string[];
-            remediation: string;
-        };
-        NeedUserInputQuestion: {
-            index: number;
-            prompt?: string;
-            answer?: string;
         };
         RepoStatus: {
             name: string;
@@ -3182,7 +3089,6 @@ export interface components {
             pending_rewind_review_roadmap_phase?: number;
             is_rewind?: boolean;
             artifact_count: number;
-            has_need_user_gate?: boolean;
             setup?: components["schemas"]["Setup"];
         };
         RunDetail: components["schemas"]["RunSummary"] & {
@@ -3197,7 +3103,7 @@ export interface components {
             cost: components["schemas"]["Cost"];
             sandbox?: components["schemas"]["RunSandbox"];
         };
-        /** @description Present only when this run executed harness verification commands or launched review validators while the OS verification sandbox was unavailable (for example nested macOS sandbox-exec); those commands ran unconfined. */
+        /** @description Present only when this run launched review validators while the OS sandbox was unavailable (for example nested macOS sandbox-exec); those validators ran unconfined. */
         RunSandbox: {
             /** @description Always false when present. */
             available: boolean;
@@ -3251,7 +3157,7 @@ export interface components {
             /** @enum {string} */
             kind: "child_discard" | "parent_cascade_delete";
             subject: components["schemas"]["ActionImpactSubject"];
-            /** @description Fixed, always-complete impact breakdown for the kind. Absent categories are explicitly empty entries (an entry with an empty items array) rather than omitted, so the confirmation never implies hidden impact. child_discard uses sessions, worktrees, branches, knowledge; parent_cascade_delete uses children, sessions, worktrees, branches, history, knowledge. */
+            /** @description Fixed, always-complete impact breakdown for the kind. Absent categories are explicitly empty entries (an entry with an empty items array) rather than omitted, so the confirmation never implies hidden impact. child_discard uses sessions, worktrees, branches; parent_cascade_delete uses children, sessions, worktrees, branches, history. */
             categories: components["schemas"]["ActionImpactCategory"][];
             /** @description Statements of what the action deliberately keeps (the paired Review configuration and the immutable closed-child history record for child_discard). Empty for parent_cascade_delete. */
             retained: string[];
@@ -3270,7 +3176,6 @@ export interface components {
             child_history?: components["schemas"]["RelationshipChild"][];
             description?: string;
             summary?: string;
-            wait_reason?: string;
             pipeline?: string;
             models: components["schemas"]["ModelDefaults"];
             effort?: components["schemas"]["EffortConfig"];
@@ -3285,10 +3190,8 @@ export interface components {
             timing: components["schemas"]["Timing"];
             cost: components["schemas"]["Cost"];
             review_gate: components["schemas"]["ReviewGate"];
-            verification_items?: components["schemas"]["VerificationItem"][];
             failure?: components["schemas"]["Error"];
             auto_resume?: components["schemas"]["AutoResume"];
-            need_user_input?: components["schemas"]["NeedUserInputGate"];
             actions: components["schemas"]["Action"][];
             revision: string;
             cache_revalidate: string;
@@ -3711,16 +3614,6 @@ export interface components {
             };
             content: {
                 "application/json": components["schemas"]["ArtifactListResponse"];
-            };
-        };
-        /** @description Current phase testing contract. */
-        TestingContractResponse: {
-            headers: {
-                "X-Agentico-Seq": components["headers"]["Sequence"];
-                [name: string]: unknown;
-            };
-            content: {
-                "application/json": components["schemas"]["TestingContractResponse"];
             };
         };
         /** @description Bounded text content. */
@@ -4520,7 +4413,7 @@ export interface operations {
         requestBody: components["requestBodies"]["JSONMutation"];
         responses: {
             200: components["responses"]["FeatureActionResponse"];
-            /** @description Child launched. Refactor and review-feedback have typed static operations at their exact action URLs; rebase uses this generic route. The 200 response is the flat feature-action shape for lifecycle actions. RewindFeatureResponse, TestingContractWaiveResponse, CleanupFeatureResponse, DeleteFeatureResponse, and PublishDescriptionResponse describe action-specific bodies. */
+            /** @description Child launched. Refactor and review-feedback have typed static operations at their exact action URLs; rebase uses this generic route. The 200 response is the flat feature-action shape for lifecycle actions. RewindFeatureResponse, CleanupFeatureResponse, DeleteFeatureResponse, and PublishDescriptionResponse describe action-specific bodies. */
             201: {
                 headers: {
                     [name: string]: unknown;
@@ -4734,22 +4627,6 @@ export interface operations {
         responses: {
             200: components["responses"]["RunSessionListResponse"];
             401: components["responses"]["Unauthorized"];
-        };
-    };
-    getTestingContract: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                feature_id: components["parameters"]["FeatureID"];
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            200: components["responses"]["TestingContractResponse"];
-            401: components["responses"]["Unauthorized"];
-            404: components["responses"]["ErrorResponse"];
         };
     };
     listArtifacts: {
@@ -5506,6 +5383,10 @@ export interface operations {
                 after?: number;
                 epoch?: string;
                 heartbeat_ms?: number;
+                /** @description Only events whose resource names this feature as `feature_id`, `parent_id` or `child_id`. */
+                feature_id?: string;
+                /** @description Only events of these kinds, comma-separated or repeated, for example `lifecycle.updated,prompt.updated,permission.updated`. */
+                kind?: string[];
             };
             header?: never;
             path?: never;

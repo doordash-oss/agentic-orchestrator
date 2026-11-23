@@ -671,6 +671,27 @@ describe('registerIpcHandlers', () => {
     expect(services.refreshProviderModels).not.toHaveBeenCalled();
   });
 
+  it('accepts a model catalogue with hundreds of models for one provider', async () => {
+    const ids = Array.from({ length: 300 }, (_, i) => `gateway/model-${i}`);
+    const services = makeServices();
+    services.getModelCatalogue = vi.fn(() =>
+      Promise.resolve({
+        providerOrder: ['opencode'],
+        providerModels: { opencode: ids.map((id) => ({ id })) },
+        phaseDefaults: {},
+        phaseProviderModels: { chat: { opencode: ids } },
+      }),
+    );
+    const { handlers } = register(services);
+    const result = (await handlers.get(IPC_CHANNELS.getModelCatalogue)!(goodEvent)) as {
+      ok: boolean;
+      value?: { providerModels: Record<string, unknown[]> };
+    };
+
+    expect(result.ok).toBe(true);
+    expect(result.value?.providerModels.opencode).toHaveLength(300);
+  });
+
   it('validates local draft requests before calling the owner-only store', async () => {
     const { handlers, services } = register();
     const result = (await handlers.get(IPC_CHANNELS.saveLocalReviewDraft)!(goodEvent, {

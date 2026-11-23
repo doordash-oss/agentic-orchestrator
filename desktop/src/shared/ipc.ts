@@ -4140,16 +4140,25 @@ const CatalogueModelSchema = z.strictObject({
 });
 export type CatalogueModel = z.output<typeof CatalogueModelSchema>;
 
+/** OpenCode behind a model gateway lists every model the gateway serves. */
+const MAX_CATALOGUE_MODELS_PER_PROVIDER = 2000;
+
 const ModelCatalogueSchema = z.strictObject({
   providerOrder: z.array(z.string().max(100)).max(20),
   chatDefaultEffort: z.record(z.string().max(100), EffortLevelSchema).optional(),
-  providerModels: z.record(z.string().max(100), z.array(CatalogueModelSchema).max(200)),
+  providerModels: z.record(
+    z.string().max(100),
+    z.array(CatalogueModelSchema).max(MAX_CATALOGUE_MODELS_PER_PROVIDER),
+  ),
   /** Recommended model per phase field (keys match PhaseModels). */
   phaseDefaults: PhaseModelsSchema,
   /** Phase field -> provider -> eligible model ids. */
   phaseProviderModels: z.record(
     z.string().max(50),
-    z.record(z.string().max(100), z.array(z.string().max(200)).max(200)),
+    z.record(
+      z.string().max(100),
+      z.array(z.string().max(200)).max(MAX_CATALOGUE_MODELS_PER_PROVIDER),
+    ),
   ),
 });
 export type ModelCatalogue = z.output<typeof ModelCatalogueSchema>;

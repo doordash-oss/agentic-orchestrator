@@ -23,6 +23,7 @@ import (
 	"github.com/doordash-oss/agentic-orchestrator/internal/llm"
 	"github.com/doordash-oss/agentic-orchestrator/internal/ports"
 	"github.com/doordash-oss/agentic-orchestrator/internal/session"
+	"github.com/doordash-oss/agentic-orchestrator/test/testutil"
 )
 
 type runNumberTestSession struct {
@@ -187,5 +188,68 @@ func TestAccumulateSessionCostToFeature_TargetsSessionRun(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+// A resumed iteration starts a fresh native session, so providers whose usage
+// is cumulative per native session report only the resumed segment.
+func TestImplementLoop_PauseResumeCountsEachSegmentOnce(t *testing.T) {
+	featureID := "interrupt-cost-resume"
+	artifactDir, stateDir, workDir, observeDir := crashResumeTestDirs(t, featureID)
+	cfg := newCrashResumeLoopConfig(t, artifactDir, stateDir, workDir, observeDir, featureID)
+	store := feature.NewStore(filepath.Join(t.TempDir(), "features"))
+	f := seedInterruptFeature(t, store, featureID)
+	f.Repos = cfg.Feature.Repos
+	cfg.Feature = f
+	cfg.FeatureStore = store
+
+	var resumeIDs []string
+	cfg.BuildSession = func(opts BuildSessionOpts) ([]string, []string, *session.SessionOpts, error) {
+		resumeIDs = append(resumeIDs, opts.ResumeSessionID)
+		return []string{"mock-agent"}, nil, &session.SessionOpts{}, nil
+	}
+	var startIDs []string
+	cfg.SessionStartFunc = func(id, featureID string, phase feature.Phase, command []string, workdir string, env []string, opts ...*session.SessionOpts) (ports.SessionHandle, error) {
+		startIDs = append(startIDs, id)
+		sess := &runNumberTestSession{utilityTestSession: newUtilityTestSession(), runNumber: opts[0].RunNumber}
+		if len(startIDs) == 1 {
+			sess.AccumulatedUsageVal = llm.Usage{InputTokens: 100, OutputTokens: 10, CostUSD: 0.098}
+			setFeatureStatus(t, store, featureID, feature.StatusInterrupted)
+			sess.StatusChVal <- agentStatusFailed
+			return sess, nil
+		}
+		testutil.WriteImplementHandoffFiles(t, artifactDir, filepath.Join(artifactDir, "iteration-01"))
+		sess.AccumulatedUsageVal = llm.Usage{InputTokens: 50, OutputTokens: 5, CostUSD: 0.05}
+		sess.setRootIntent(validSuccessCompletionIntent())
+		sess.CostVal = &llm.ResultMessage{Subtype: testResultSuccessValue, StopReason: "end_turn", TotalCostUSD: 0.05}
+		sess.StatusChVal <- agentStatusSuccess
+		return sess, nil
+	}
+
+	if result, err := runImplementationLoop(cfg, nil); err != nil || result.FinalStatus != "interrupted" {
+		t.Fatalf("paused run = %+v, %v; want interrupted", result, err)
+	}
+	setFeatureStatus(t, store, featureID, feature.StatusImplementing)
+	if result, err := runImplementationLoop(cfg, nil); err != nil || result.FinalStatus != finalStatusReviewPassed {
+		t.Fatalf("resumed run = %+v, %v; want review_passed", result, err)
+	}
+
+	if len(startIDs) != 2 || startIDs[0] != startIDs[1] {
+		t.Fatalf("session IDs = %v, want the same iteration session twice", startIDs)
+	}
+	for i, id := range resumeIDs {
+		if id != "" {
+			t.Errorf("BuildSession %d ResumeSessionID = %q, want a fresh native session", i+1, id)
+		}
+	}
+	run, err := store.LoadRun(featureID, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(run.SessionCosts) != 2 {
+		t.Fatalf("session costs = %+v, want one row per segment", run.SessionCosts)
+	}
+	if got := run.PhaseCosts["phase-1-impl"]; got < 0.1479 || got > 0.1481 {
+		t.Errorf("PhaseCosts[phase-1-impl] = %v, want 0.148", got)
 	}
 }

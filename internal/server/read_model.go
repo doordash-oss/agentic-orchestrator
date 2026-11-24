@@ -696,7 +696,8 @@ func actionCatalogDTOsWithChildGuard(f *feature.Feature, hasActiveChild bool) []
 	// failure never ends the flow, so retry stays available.
 	canPublish := f.IsPublishable() && (status == feature.StatusCodeReady || status == feature.StatusPublished)
 	canMerge := !f.IsPublishable() && (status == feature.StatusCodeReady || status == feature.StatusPublished)
-	canRewind := !running && (len(feature.RewindChoicesForFeature(f)) > 0 || hasRewindUpgradeTarget(f))
+	// Rewind stops the feature's sessions itself, so a running feature can rewind.
+	canRewind := len(feature.RewindChoicesForFeature(f)) > 0 || hasRewindUpgradeTarget(f)
 	canPostPublishPass := publishedOrManualReady
 	canReviewFeedback := canPostPublishPass && f.IsPublishable() && featureHasPullRequest(f)
 	canRetry := status == feature.StatusFailed

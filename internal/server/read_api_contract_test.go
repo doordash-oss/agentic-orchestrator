@@ -1313,6 +1313,7 @@ func TestFeatureDetailActionCatalogStateMatrix(t *testing.T) {
 			}{
 				string(FeatureActionCleanup): {disabledCode: "running"},
 				string(FeatureActionDelete):  {enabled: true},
+				string(FeatureActionRewind):  {enabled: true},
 			},
 		},
 		{

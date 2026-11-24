@@ -465,7 +465,9 @@ export function ArchiveMode(props: ArchiveModeProps) {
                           <span className="archive-mode__session-id">{sess.id}</span>
                           {sess.phase ? ` · ${displayPhaseLabel(sess.phase)}` : ''}
                           {sess.status ? ` · ${sess.status}` : ''}
-                          {sess.startedAt ? ` · ${new Date(sess.startedAt).toLocaleString()}` : ''}
+                          {Date.parse(sess.startedAt) > 0
+                            ? ` · ${new Date(sess.startedAt).toLocaleString()}`
+                            : ''}
                         </button>
                       </li>
                     ))}

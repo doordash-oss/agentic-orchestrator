@@ -127,7 +127,8 @@ func (h *apiHandler) handleRunDetail(w http.ResponseWriter, r *http.Request, fea
 // sessions are listed via bounded reads only; this endpoint never opens a
 // live output subscription.
 func (h *apiHandler) handleRunSessions(w http.ResponseWriter, r *http.Request, featureID string, runNumber int) {
-	if _, err := h.loadFeature(featureID); err != nil {
+	_, run, err := h.featureAndRun(featureID, runNumber)
+	if err != nil {
 		writeStoreError(w, err, featureID)
 		return
 	}
@@ -138,6 +139,7 @@ func (h *apiHandler) handleRunSessions(w http.ResponseWriter, r *http.Request, f
 		sessions = h.sessions.FeatureSessions(featureID)
 	}
 	summaries := make([]SessionSummary, 0, len(sessions))
+	seen := make(map[string]bool, len(sessions))
 	for _, sess := range sessions {
 		if sess == nil || sess.FeatureID() != featureID {
 			continue
@@ -146,8 +148,12 @@ func (h *apiHandler) handleRunSessions(w http.ResponseWriter, r *http.Request, f
 		if summary.RunNumber != runNumber {
 			continue
 		}
+		seen[summary.ID] = true
 		summaries = append(summaries, summary)
 	}
+	// Memory loses finished sessions on restart and when a later run reuses
+	// the ID, so the run's cost ledger fills them in.
+	summaries = append(summaries, ledgerSessionSummaries(featureID, run, seen)...)
 	revision := revisionForAny(summaries)
 	h.writeRevisionedJSON(w, r, revision, RunSessionListResponse{
 		APIVersion: APIVersion,
@@ -155,6 +161,59 @@ func (h *apiHandler) handleRunSessions(w http.ResponseWriter, r *http.Request, f
 		RunNumber:  runNumber,
 		Sessions:   summaries,
 	})
+}
+
+func ledgerSessionSummaries(featureID string, run *feature.Run, skip map[string]bool) []SessionSummary {
+	var summaries []SessionSummary
+	index := map[string]int{}
+	for _, rec := range run.SessionCosts {
+		id := strings.TrimSpace(rec.SessionID)
+		if id == "" || skip[id] {
+			continue
+		}
+		i, ok := index[id]
+		if !ok {
+			i = len(summaries)
+			index[id] = i
+			summaries = append(summaries, SessionSummary{
+				ID:             id,
+				FeatureID:      featureID,
+				RunNumber:      run.RunNumber,
+				Phase:          ledgerSessionPhase(rec),
+				Kind:           ports.KindPhase.String(),
+				Status:         ports.SessionDone.String(),
+				TaskActivities: []TaskActivity{},
+			})
+		}
+		s := &summaries[i]
+		if s.Repo == "" {
+			s.Repo = rec.RepoName
+		}
+		s.Usage.CostUSD += rec.CostUSD
+		s.Usage.InputTokens += rec.InputTokens
+		s.Usage.OutputTokens += rec.OutputTokens
+	}
+	return summaries
+}
+
+func ledgerSessionPhase(rec feature.SessionCostRecord) string {
+	if phase, err := feature.ParsePhaseName(rec.ObserverPhase); err == nil {
+		return phase.String()
+	}
+	if rec.ObserverPhase != "" {
+		return rec.ObserverPhase
+	}
+	key := rec.PhaseKey
+	switch {
+	case key == "implement" || strings.HasPrefix(key, "rebase-") || strings.HasSuffix(key, "-impl"):
+		return feature.PhaseImplement.String()
+	case strings.HasPrefix(key, "phase-") && strings.HasSuffix(key, "-plan"):
+		return feature.PhasePlan.String()
+	}
+	if phase, err := feature.ParsePhaseName(key); err == nil {
+		return phase.String()
+	}
+	return key
 }
 
 // runSummaryFromRun builds a RunSummary from run-level fields only. The

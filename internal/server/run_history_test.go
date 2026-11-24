@@ -468,6 +468,128 @@ func TestRunSessionsIncludeSessionsBeyondRecentList(t *testing.T) {
 	}
 }
 
+func runSessionsByID(t *testing.T, handler http.Handler, featureID string, run int) map[string]map[string]any {
+	t.Helper()
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/features/"+featureID+"/runs/"+strconv.Itoa(run)+"/sessions", nil)
+	w := httptest.NewRecorder()
+	handler.ServeHTTP(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d; want 200", w.Code)
+	}
+	byID := map[string]map[string]any{}
+	for _, raw := range decodeBodyMap(t, w.Result())["sessions"].([]any) {
+		sess := raw.(map[string]any)
+		id := sess["id"].(string)
+		if _, dup := byID[id]; dup {
+			t.Fatalf("session %q listed twice", id)
+		}
+		byID[id] = sess
+	}
+	return byID
+}
+
+func withSessionCosts(records ...feature.SessionCostRecord) func(*feature.Run) {
+	return func(r *feature.Run) { r.SessionCosts = records }
+}
+
+func TestRunSessionsFromLedgerAfterRestart(t *testing.T) {
+	t.Parallel()
+	store, f := seedHistoryFeature(t, sealedRun(t, 2, withSessionCosts(
+		feature.SessionCostRecord{SessionID: "f-research", PhaseKey: "research", ObserverPhase: "Research", CostUSD: 1.5, InputTokens: 10, OutputTokens: 5},
+		feature.SessionCostRecord{SessionID: "f-impl", PhaseKey: "phase-1-impl", RepoName: "api", CostUSD: 2},
+		feature.SessionCostRecord{PhaseKey: "plan", CostUSD: 9},
+	)))
+	opts := baseReadHandlerOptions(store)
+	opts.Sessions = fakeSessionManager{}
+	got := runSessionsByID(t, NewHandler(opts), f.ID, 2)
+
+	if len(got) != 2 {
+		t.Fatalf("sessions = %v; want f-research and f-impl", got)
+	}
+	research := got["f-research"]
+	if research["phase"] != "Research" || research["status"] != "Done" || research["kind"] != "phase" || research["run_number"] != float64(2) {
+		t.Fatalf("f-research = %v", research)
+	}
+	if usage := research["usage"].(map[string]any); usage["cost_usd"] != 1.5 || usage["input_tokens"] != float64(10) || usage["output_tokens"] != float64(5) {
+		t.Fatalf("f-research usage = %v", usage)
+	}
+	if impl := got["f-impl"]; impl["phase"] != "Implement" || impl["repo"] != "api" {
+		t.Fatalf("f-impl = %v", impl)
+	}
+}
+
+func TestRunSessionsKeepSealedRunSessionWhenIDReused(t *testing.T) {
+	t.Parallel()
+	store, f := seedHistoryFeature(t, sealedRun(t, 2, withSessionCosts(
+		feature.SessionCostRecord{SessionID: "f-roadmap-01", PhaseKey: "phase-1-plan", CostUSD: 3},
+	)))
+	opts := baseReadHandlerOptions(store)
+	opts.Sessions = fakeSessionManager{views: []ports.SessionView{&fakeSessionView{
+		MockSessionView: &mocks.MockSessionView{
+			IDVal:        "f-roadmap-01",
+			FeatureIDVal: f.ID,
+			PhaseVal:     feature.PhasePlan,
+			KindVal:      ports.KindPhase,
+			StatusVal:    ports.SessionRunning,
+		},
+		runNumber: 3,
+	}}}
+	got := runSessionsByID(t, NewHandler(opts), f.ID, 2)
+
+	sess, ok := got["f-roadmap-01"]
+	if !ok || len(got) != 1 {
+		t.Fatalf("sessions = %v; want the sealed run's f-roadmap-01", got)
+	}
+	if sess["status"] != "Done" || sess["phase"] != "Plan" || sess["run_number"] != float64(2) {
+		t.Fatalf("f-roadmap-01 = %v; want the sealed run's ledger row", sess)
+	}
+}
+
+func TestRunSessionsPreferInMemoryRowOverLedger(t *testing.T) {
+	t.Parallel()
+	store, f := seedHistoryFeature(t, sealedRun(t, 2, withSessionCosts(
+		feature.SessionCostRecord{SessionID: "f-design", PhaseKey: "design", CostUSD: 1},
+	)))
+	opts := baseReadHandlerOptions(store)
+	opts.Sessions = fakeSessionManager{views: []ports.SessionView{&fakeSessionView{
+		MockSessionView: &mocks.MockSessionView{
+			IDVal:        "f-design",
+			FeatureIDVal: f.ID,
+			PhaseVal:     feature.PhaseDesign,
+			KindVal:      ports.KindPhase,
+			StatusVal:    ports.SessionWaitingHelp,
+		},
+		runNumber: 2,
+	}}}
+	got := runSessionsByID(t, NewHandler(opts), f.ID, 2)
+
+	if len(got) != 1 || got["f-design"]["status"] != "WaitingHelp" {
+		t.Fatalf("sessions = %v; want the in-memory f-design row only", got)
+	}
+}
+
+func TestRunSessionsAggregateLedgerRecords(t *testing.T) {
+	t.Parallel()
+	store, f := seedHistoryFeature(t, sealedRun(t, 2, withSessionCosts(
+		feature.SessionCostRecord{SessionID: "f-review", PhaseKey: "review", ObserverPhase: "Final Review", CostUSD: 1.25, InputTokens: 100, OutputTokens: 10},
+		feature.SessionCostRecord{SessionID: "f-review", PhaseKey: "review", ObserverPhase: "Final Review", RepoName: "web", CostUSD: 0.75, InputTokens: 50, OutputTokens: 20},
+	)))
+	opts := baseReadHandlerOptions(store)
+	opts.Sessions = fakeSessionManager{}
+	got := runSessionsByID(t, NewHandler(opts), f.ID, 2)
+
+	sess, ok := got["f-review"]
+	if !ok || len(got) != 1 {
+		t.Fatalf("sessions = %v; want one f-review row", got)
+	}
+	if sess["phase"] != "Final Review" || sess["repo"] != "web" {
+		t.Fatalf("f-review = %v", sess)
+	}
+	if usage := sess["usage"].(map[string]any); usage["cost_usd"] != 2.0 || usage["input_tokens"] != float64(150) || usage["output_tokens"] != float64(30) {
+		t.Fatalf("f-review usage = %v", usage)
+	}
+}
+
 func TestRunHistoryRoutesRejectMutationMethods(t *testing.T) {
 	t.Parallel()
 	store, f := seedHistoryFeature(t, sealedRun(t, 2))

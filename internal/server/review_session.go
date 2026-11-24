@@ -254,6 +254,11 @@ func (s *reviewSessionService) submitDecision(featureID, reviewID string, req Re
 	if req.BaseRevision != meta.DraftRevision {
 		return ReviewSessionDecisionResponse{}, staleReviewRevisionError(reviewID, meta.DraftRevision)
 	}
+	if req.Decision == reviewDecisionIterate && !meta.CanIterate {
+		return ReviewSessionDecisionResponse{}, &ActionConflictError{
+			Detail: fmt.Sprintf("review %q does not accept iterate; edit the draft and proceed instead", reviewID),
+		}
+	}
 	draft, err := os.ReadFile(draftPath)
 	if err != nil {
 		return ReviewSessionDecisionResponse{}, fmt.Errorf("read review draft: %w", err)

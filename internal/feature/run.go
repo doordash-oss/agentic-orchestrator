@@ -283,10 +283,7 @@ func (r *Run) TotalRuntime() time.Duration {
 	for _, d := range r.PhaseTimings {
 		total += d
 	}
-	if r.ActivePhaseStart != nil {
-		total += time.Since(*r.ActivePhaseStart)
-	}
-	return total
+	return total + r.activeElapsed()
 }
 
 // PhaseRuntime returns the runtime for a specific phase/cycle timing key.
@@ -296,10 +293,23 @@ func (r *Run) PhaseRuntime(key string) time.Duration {
 		return 0
 	}
 	d := r.PhaseTimings[key]
-	if r.ActiveTimingKey == key && r.ActivePhaseStart != nil {
-		d += time.Since(*r.ActivePhaseStart)
+	if r.ActiveTimingKey == key {
+		d += r.activeElapsed()
 	}
 	return d
+}
+
+// activeElapsed is the running phase's elapsed time. A run sealed mid-phase
+// stops counting at its seal.
+func (r *Run) activeElapsed() time.Duration {
+	if r.ActivePhaseStart == nil {
+		return 0
+	}
+	end := time.Now()
+	if r.SealedAt != nil {
+		end = *r.SealedAt
+	}
+	return max(end.Sub(*r.ActivePhaseStart), 0)
 }
 
 // TotalCost returns the total accumulated cost for the run across all phases.

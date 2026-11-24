@@ -548,6 +548,25 @@ func TestTotalRuntimeNoData(t *testing.T) {
 	}
 }
 
+func TestRunRuntimeStopsAtSeal(t *testing.T) {
+	t.Parallel()
+	// parallel-candidate: pure value, table-driven, or per-test temp-dir assertions with no shared state.
+	start := time.Now().Add(-10 * time.Hour)
+	sealed := start.Add(5 * time.Minute)
+	r := &Run{
+		PhaseTimings:     map[string]time.Duration{"plan": time.Minute},
+		ActivePhaseStart: &start,
+		ActiveTimingKey:  "phase-1-impl",
+		SealedAt:         &sealed,
+	}
+	if got := r.PhaseRuntime("phase-1-impl"); got != 5*time.Minute {
+		t.Errorf("PhaseRuntime(phase-1-impl) = %v, want 5m", got)
+	}
+	if got := r.TotalRuntime(); got != 6*time.Minute {
+		t.Errorf("TotalRuntime() = %v, want 6m", got)
+	}
+}
+
 func TestPhaseRuntime(t *testing.T) {
 	t.Parallel()
 	// parallel-candidate: pure value, table-driven, or per-test temp-dir assertions with no shared state.

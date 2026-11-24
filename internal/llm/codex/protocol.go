@@ -633,7 +633,7 @@ func (p *Protocol) startTurn(userPrompt string) error {
 
 	sandboxPolicy := &SandboxPolicy{
 		Type:          "workspaceWrite",
-		WritableRoots: writableRoots,
+		WritableRoots: sandboxWritableRoots(writableRoots),
 		NetworkAccess: true,
 	}
 	if dangerFullAccess {
@@ -692,7 +692,7 @@ func (p *Protocol) sendFollowUpTurn(text string) error {
 
 	sandbox := &SandboxPolicy{
 		Type:          "workspaceWrite",
-		WritableRoots: writableRoots,
+		WritableRoots: sandboxWritableRoots(writableRoots),
 		NetworkAccess: true,
 	}
 	if dangerFullAccess {

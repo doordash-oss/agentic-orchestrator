@@ -768,13 +768,28 @@ func splitOptionLabelDesc(raw string) (string, string) {
 	}
 	label := raw
 	desc := ""
-	if idx := strings.Index(raw, ":"); idx >= 0 {
+	if idx := labelSeparatorIndex(raw); idx >= 0 {
 		label = strings.TrimSpace(raw[:idx])
 		desc = strings.TrimSpace(raw[idx+1:])
 	}
-	label = strings.Trim(label, "`")
-	label = strings.TrimSpace(label)
-	return label, desc
+	label = strings.NewReplacer("**", "", "`", "").Replace(label)
+	return strings.TrimSpace(label), desc
+}
+
+// labelSeparatorIndex returns the first colon outside inline code, or -1.
+func labelSeparatorIndex(s string) int {
+	inCode := false
+	for i, r := range s {
+		switch r {
+		case '`':
+			inCode = !inCode
+		case ':':
+			if !inCode {
+				return i
+			}
+		}
+	}
+	return -1
 }
 
 func splitOptionConfidence(raw string) (string, *float64, bool) {

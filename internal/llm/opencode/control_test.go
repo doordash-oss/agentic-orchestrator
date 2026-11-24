@@ -599,6 +599,37 @@ func TestPromptEndTurn_NumberedOptionsToleratesTrailingStemAndRecommendedAfterCo
 	}
 }
 
+// TestPromptEndTurn_NumberedOptionsLabelsIgnoreMarkdownAndCodeColons proves a
+// colon inside inline code does not end the label and markdown markup is
+// dropped from labels.
+func TestPromptEndTurn_NumberedOptionsLabelsIgnoreMarkdownAndCodeColons(t *testing.T) {
+	p, _, promptID := newPostHandshakeProtocol(t)
+	streamAssistantText(t, p, strings.Join([]string{
+		"What should the error message contain?",
+		"1. **Silent success (Recommended)**: print nothing, exit 0. [confidence: 0.80]",
+		"2. `line N: reason` prefix: the CLI prints `line 3: bad date`. [confidence: 0.40]",
+		"3. `budget CSV --month YYYY-MM` (Recommended): explicit paths. [confidence: 0.30]",
+	}, "\n"))
+	msgs := endTurn(t, p, promptID)
+	if len(msgs) != 1 || msgs[0].ControlRequest == nil {
+		t.Fatalf("numbered question produced %+v, want one AskUserQuestion control request", msgs)
+	}
+	qs := askUserQuestionsFrom(t, msgs[0].ControlRequest)
+	if len(qs) != 1 || len(qs[0].Options) != 3 {
+		t.Fatalf("numbered question = %+v, want one question with 3 options", qs)
+	}
+	want := []struct{ label, desc string }{
+		{"Silent success (Recommended)", "print nothing, exit 0."},
+		{"line N: reason prefix", "the CLI prints `line 3: bad date`."},
+		{"budget CSV --month YYYY-MM (Recommended)", "explicit paths."},
+	}
+	for i, w := range want {
+		if got := qs[0].Options[i]; got.Label != w.label || got.Description != w.desc {
+			t.Errorf("option %d = %q / %q, want %q / %q", i+1, got.Label, got.Description, w.label, w.desc)
+		}
+	}
+}
+
 // TestPromptEndTurn_NumberedOptionsWithoutStemRemindsBeforeSurfacing proves an
 // options-only response is not surfaced with the raw option list duplicated as
 // its question text.

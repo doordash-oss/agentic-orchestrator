@@ -16,6 +16,7 @@ package agent
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log"
 	"strings"
@@ -44,6 +45,18 @@ type sessionCostMetadata struct {
 	SessionID     string
 	ObserverPhase string
 	RepoName      string
+	// RunNumber is the run that hosted the session; zero means the active run.
+	RunNumber int
+}
+
+var errSessionRunNotActive = errors.New("session run is no longer active")
+
+// sessionRunNumber returns the run a session was started in, or zero.
+func sessionRunNumber(sess ports.SessionView) int {
+	if s, ok := sess.(interface{ RunNumber() int }); ok {
+		return s.RunNumber()
+	}
+	return 0
 }
 
 // extractSessionCost reads cost and accumulated usage from the session.
@@ -169,19 +182,36 @@ func accumulateSessionCost(store FeatureStore, featureID, fallbackKey string, co
 	if store == nil || strings.TrimSpace(featureID) == "" || !record.HasUsage() {
 		return nil
 	}
-	return store.Modify(featureID, func(f *feature.Feature) error {
-		costKey := ""
-		if preferActiveKey {
-			costKey = strings.TrimSpace(f.ActiveTimingKey)
+	return recordSessionCost(store, featureID, metadata.RunNumber, record, fallbackKey, preferActiveKey)
+}
+
+// recordSessionCost lands record in runNumber even when a rewind has since
+// sealed that run and forked a new active one.
+func recordSessionCost(store FeatureStore, featureID string, runNumber int, record feature.SessionCostRecord, fallbackKey string, preferActiveKey bool) error {
+	phaseKey := func(activeKey string) string {
+		if key := strings.TrimSpace(activeKey); preferActiveKey && key != "" {
+			return key
 		}
-		if costKey == "" {
-			costKey = strings.TrimSpace(fallbackKey)
+		return strings.TrimSpace(fallbackKey)
+	}
+	err := store.Modify(featureID, func(f *feature.Feature) error {
+		if runNumber > 0 && f.ActiveRun != runNumber {
+			return errSessionRunNotActive
 		}
-		if costKey == "" {
-			return nil
-		}
-		record.PhaseKey = costKey
+		record.PhaseKey = phaseKey(f.ActiveTimingKey)
 		f.RecordSessionCost(record)
+		return nil
+	})
+	if !errors.Is(err, errSessionRunNotActive) {
+		return err
+	}
+	runs, ok := store.(sealedRunStore)
+	if !ok {
+		return nil
+	}
+	return runs.ModifySealedRun(featureID, runNumber, func(r *feature.Run) error {
+		record.PhaseKey = phaseKey(r.ActiveTimingKey)
+		r.RecordSessionCost(record)
 		return nil
 	})
 }

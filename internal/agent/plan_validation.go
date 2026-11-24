@@ -1736,16 +1736,12 @@ attemptLoop:
 				// cost source or credits.
 				cost := extractSessionCost(sess)
 				if cfg.FeatureStore != nil && cost.TotalCostUSD > 0 {
-					_ = cfg.FeatureStore.Modify(cfg.Feature.ID, func(f *feature.Feature) error {
-						f.RecordSessionCost(feature.SessionCostRecord{
-							SessionID:     sessionID,
-							PhaseKey:      kind.costKey,
-							ObserverPhase: "plan",
-							RepoName:      cfg.RepoName,
-							CostUSD:       cost.TotalCostUSD,
-						})
-						return nil
-					})
+					_ = recordSessionCost(cfg.FeatureStore, cfg.Feature.ID, sessionRunNumber(sess), feature.SessionCostRecord{
+						SessionID:     sessionID,
+						ObserverPhase: "plan",
+						RepoName:      cfg.RepoName,
+						CostUSD:       cost.TotalCostUSD,
+					}, kind.costKey, false)
 				}
 
 				outcome, sessionResult, newCriticFeedback, newSessionAttempt := handleCompletedPlanSession(

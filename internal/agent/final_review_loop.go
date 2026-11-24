@@ -1079,6 +1079,7 @@ func (s *featureFinalReviewLoopState) runFix(run finalFixRun) finalFixResult {
 		_ = accumulateSessionCostToFeatureKey(cfg.FeatureStore, cfg.Feature.ID, feature.PhaseFinalReview.DirName(), cost, sessionCostMetadata{
 			SessionID:     sessionID,
 			ObserverPhase: feature.PhaseFinalReview.String(),
+			RunNumber:     sessionRunNumber(sess),
 		})
 		if observed {
 			cfg.Observer.SessionEnded(sessionCtx, feature.PhaseFinalReview.String(), sessionID, "", toSessionUsage(cost, sess), time.Since(sessionStart), sessionErrFromStatus(sess))

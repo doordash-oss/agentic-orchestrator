@@ -353,6 +353,7 @@ func (pr *PhaseRunner) runBoundedHelperSessionOnce(ctx context.Context, cfg boun
 			SessionID:     cfg.sessionID,
 			ObserverPhase: observerPhase,
 			RepoName:      cfg.repoName,
+			RunNumber:     sessionRunNumber(sess),
 		})
 		if pr.Observer != nil {
 			endErr := sessionErrFromStatus(sess)

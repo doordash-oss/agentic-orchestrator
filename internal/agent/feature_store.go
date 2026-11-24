@@ -21,3 +21,9 @@ type FeatureStore interface {
 	Load(id string) (*feature.Feature, error)
 	Modify(id string, fn func(*feature.Feature) error) error
 }
+
+// sealedRunStore lets accounting reach a run that was sealed after the
+// session it hosted started.
+type sealedRunStore interface {
+	ModifySealedRun(featureID string, runNumber int, fn func(*feature.Run) error) error
+}

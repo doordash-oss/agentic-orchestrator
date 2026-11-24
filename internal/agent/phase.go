@@ -356,6 +356,7 @@ func (pr *PhaseRunner) runInteractivePhase(f *feature.Feature, cfg interactivePh
 		_ = accumulateSessionCostToFeatureKey(pr.FeatureStore, f.ID, cfg.Phase.DirName(), cost, sessionCostMetadata{
 			SessionID:     sessionID,
 			ObserverPhase: cfg.Phase.String(),
+			RunNumber:     sessionRunNumber(sess),
 		})
 		pr.Observer.SessionEnded(sessionCtx, cfg.Phase.String(), sessionID, "", usage, duration, sessionErrFromStatus(sess))
 	})

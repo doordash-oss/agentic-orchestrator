@@ -621,6 +621,18 @@ func runImplementationLoop(cfg ImplementConfig, sm ports.SessionManager) (result
 			// reports a clean end without an outcome, the iteration records a
 			// protocol violation instead of treating transport completion as
 			// phase completion.
+			// Reads sess and sessionID at call time, so it also covers a crash-resume session.
+			endInterruptedSession := func() {
+				endedCost := extractSessionCost(sess)
+				cfg.Observer.SessionEnded(implSessionCtx, "implement", sessionID, cfg.RepoName, toSessionUsage(endedCost, sess), time.Since(iterStart), observe.ErrSessionInterrupted)
+				_ = accumulateSessionCostToFeature(cfg.FeatureStore, cfg.Feature.ID, "implement", endedCost, sessionCostMetadata{
+					SessionID:     sessionID,
+					ObserverPhase: "implement",
+					RepoName:      cfg.RepoName,
+					RunNumber:     sessionRunNumber(sess),
+				})
+			}
+
 			waitResult = WaitForPhaseOutcome(sess, implWaitOptions(sess, implSessionCtx, sessionID))
 			agentStatus = waitResult.Status
 			// Review decisions are recorded before any interrupt check, so a
@@ -642,10 +654,12 @@ func runImplementationLoop(cfg ImplementConfig, sm ports.SessionManager) (result
 			// that makes the next run advance to iteration N+1 instead of
 			// replaying N. Pausing briefly lets the normal shutdown path land.
 			if agentStatus == agentStatusFailed && sm != nil && waitForShutdownIntent(sm, shutdownDetectionGrace) {
+				endInterruptedSession()
 				return &LoopResult{FinalStatus: "interrupted", Iterations: i - 1}, nil
 			}
 
 			if isFeatureInterrupted(cfg.FeatureStore, cfg.Feature.ID) {
+				endInterruptedSession()
 				return &LoopResult{FinalStatus: "interrupted", Iterations: i}, nil
 			}
 
@@ -666,6 +680,7 @@ func runImplementationLoop(cfg ImplementConfig, sm ports.SessionManager) (result
 						SessionID:     sessionID,
 						ObserverPhase: "implement",
 						RepoName:      cfg.RepoName,
+						RunNumber:     sessionRunNumber(sess),
 					})
 					appendIterationLog(aggregateLogPath, i, sess.MessageLog().Text())
 
@@ -684,9 +699,11 @@ func runImplementationLoop(cfg ImplementConfig, sm ports.SessionManager) (result
 							implementerNote = gate.recordSession(i, iterDir, sess)
 						}
 						if agentStatus == agentStatusFailed && sm != nil && waitForShutdownIntent(sm, shutdownDetectionGrace) {
+							endInterruptedSession()
 							return &LoopResult{FinalStatus: "interrupted", Iterations: i - 1}, nil
 						}
 						if isFeatureInterrupted(cfg.FeatureStore, cfg.Feature.ID) {
+							endInterruptedSession()
 							return &LoopResult{FinalStatus: "interrupted", Iterations: i}, nil
 						}
 					}
@@ -775,6 +792,7 @@ func runImplementationLoop(cfg ImplementConfig, sm ports.SessionManager) (result
 			SessionID:     sessionID,
 			ObserverPhase: "implement",
 			RepoName:      cfg.RepoName,
+			RunNumber:     sessionRunNumber(sess),
 		})
 
 		// A pending handoff is settled by the user's answer, whatever the

@@ -23,6 +23,7 @@ import (
 
 	"github.com/doordash-oss/agentic-orchestrator/internal/errcat"
 	"github.com/doordash-oss/agentic-orchestrator/internal/feature"
+	"github.com/doordash-oss/agentic-orchestrator/internal/ports"
 )
 
 const (
@@ -130,7 +131,12 @@ func (h *apiHandler) handleRunSessions(w http.ResponseWriter, r *http.Request, f
 		writeStoreError(w, err, featureID)
 		return
 	}
-	sessions := h.allSessions()
+	// The feature's own sessions, not the server-wide recent list: that cap
+	// would drop older features' history.
+	var sessions []ports.SessionView
+	if h.sessions != nil {
+		sessions = h.sessions.FeatureSessions(featureID)
+	}
 	summaries := make([]SessionSummary, 0, len(sessions))
 	for _, sess := range sessions {
 		if sess == nil || sess.FeatureID() != featureID {

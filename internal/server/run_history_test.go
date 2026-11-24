@@ -16,6 +16,7 @@ package server
 
 import (
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -420,6 +421,50 @@ func TestRunSessionsFilteredByRunNumber(t *testing.T) {
 		if !want[id] {
 			t.Fatalf("unexpected run session %q; got %v", id, gotIDs)
 		}
+	}
+}
+
+func TestRunSessionsIncludeSessionsBeyondRecentList(t *testing.T) {
+	t.Parallel()
+	store, f := seedHistoryFeature(t, sealedRun(t, 2))
+	now := time.Date(2026, 6, 13, 13, 0, 0, 0, time.UTC)
+	views := []ports.SessionView{&fakeSessionView{
+		MockSessionView: &mocks.MockSessionView{
+			IDVal:        "sess-run2-old",
+			FeatureIDVal: f.ID,
+			PhaseVal:     feature.PhasePlan,
+			KindVal:      ports.KindPhase,
+			StatusVal:    ports.SessionDone,
+			StartedAtVal: now.Add(-time.Hour),
+		},
+		runNumber: 2,
+	}}
+	for i := range maxSessionListRecentSessions + 1 {
+		views = append(views, &fakeSessionView{
+			MockSessionView: &mocks.MockSessionView{
+				IDVal:        fmt.Sprintf("sess-newer-%02d", i),
+				FeatureIDVal: "other-feature",
+				PhaseVal:     feature.PhaseImplement,
+				KindVal:      ports.KindPhase,
+				StatusVal:    ports.SessionDone,
+				StartedAtVal: now.Add(time.Duration(i) * time.Second),
+			},
+			runNumber: 1,
+		})
+	}
+	opts := baseReadHandlerOptions(store)
+	opts.Sessions = fakeSessionManager{views: views}
+	handler := NewHandler(opts)
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/features/"+f.ID+"/runs/2/sessions", nil)
+	w := httptest.NewRecorder()
+	handler.ServeHTTP(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d; want 200", w.Code)
+	}
+	rawSessions := decodeBodyMap(t, w.Result())["sessions"].([]any)
+	if len(rawSessions) != 1 || rawSessions[0].(map[string]any)["id"] != "sess-run2-old" {
+		t.Fatalf("run sessions = %v; want only sess-run2-old", rawSessions)
 	}
 }
 

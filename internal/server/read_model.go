@@ -26,6 +26,7 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode/utf8"
 
 	"github.com/doordash-oss/agentic-orchestrator/internal/config"
 	"github.com/doordash-oss/agentic-orchestrator/internal/errcat"
@@ -1882,6 +1883,9 @@ func SafeDisplayText(s string, limit int) string {
 	s = strings.ReplaceAll(s, "raw initial prompt", "[redacted prompt]")
 	s = strings.TrimSpace(s)
 	if limit > 0 && len(s) > limit {
+		for limit > 0 && !utf8.RuneStart(s[limit]) {
+			limit--
+		}
 		return s[:limit] + "..."
 	}
 	return s

@@ -31,6 +31,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"unicode/utf8"
 )
 
 // Bundle is one ask-user turn: the questions of a single envelope.
@@ -272,6 +273,9 @@ func (b Bundle) clone() Bundle {
 func bound(s string, limit int) string {
 	s = strings.TrimSpace(s)
 	if limit > 0 && len(s) > limit {
+		for limit > 0 && !utf8.RuneStart(s[limit]) {
+			limit--
+		}
 		return s[:limit] + "..."
 	}
 	return s

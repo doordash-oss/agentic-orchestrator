@@ -211,8 +211,8 @@ func TestRunDetailIsRunAuthenticWithProvenance(t *testing.T) {
 
 	// current_phase comes from the run's pending review phase, NOT the
 	// feature's active current_phase (PhaseImplement).
-	if got := run["current_phase"]; got != feature.PhasePlan.DirName() {
-		t.Fatalf("current_phase = %v; want %s (run-authentic, not feature %s)", got, feature.PhasePlan.DirName(), f.CurrentPhase.DirName())
+	if got := run["current_phase"]; got != feature.PhasePlan.String() {
+		t.Fatalf("current_phase = %v; want %s (run-authentic, not feature %s)", got, feature.PhasePlan, f.CurrentPhase)
 	}
 	if got := run["rewind_target"]; got != feature.PhaseImplement.DirName() {
 		t.Fatalf("rewind_target = %v; want %s", got, feature.PhaseImplement.DirName())
@@ -684,5 +684,63 @@ func TestReconciledCostCanLowerSessionAndRunEstimates(t *testing.T) {
 		if got := cost["total_usd"].(float64); got != amount {
 			t.Fatalf("run retained old estimate: %v", got)
 		}
+	}
+}
+
+func TestSealedRunPhaseIsWhereTheRunStopped(t *testing.T) {
+	t.Parallel()
+	readyAt := time.Date(2026, 6, 13, 9, 0, 0, 0, time.UTC)
+	cases := []struct {
+		name string
+		edit func(*feature.Run)
+		want string
+	}{
+		{name: "roadmap implement", edit: func(r *feature.Run) { r.ActiveTimingKey = "phase-1-impl" }, want: "Implement"},
+		{name: "rebase cycle", edit: func(r *feature.Run) { r.ActiveTimingKey = "rebase-2" }, want: "Implement"},
+		{name: "roadmap plan", edit: func(r *feature.Run) { r.ActiveTimingKey = "phase-2-plan" }, want: "Plan"},
+		{name: "design", edit: func(r *feature.Run) { r.ActiveTimingKey = "design" }, want: "Design"},
+		{name: "pending review wins over timing key", edit: func(r *feature.Run) {
+			r.ActiveTimingKey = "research"
+			r.PendingReviewPhase = phasePtr(feature.PhaseDesign)
+		}, want: "Design"},
+		{name: "output ready is publish", edit: func(r *feature.Run) {
+			r.ActiveTimingKey = "review"
+			r.OutputReadyAt = &readyAt
+		}, want: "Publish"},
+		{name: "no phase data", edit: func(*feature.Run) {}, want: ""},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			store, f := seedHistoryFeature(t, sealedRun(t, 2, tc.edit))
+			if err := store.Modify(f.ID, func(current *feature.Feature) error {
+				current.RunCount = 2
+				current.CurrentPhase = feature.PhaseInquire
+				return nil
+			}); err != nil {
+				t.Fatal(err)
+			}
+			handler := NewHandler(baseReadHandlerOptions(store))
+
+			run := getJSONMap(t, handler, "/api/v1/features/"+f.ID+"/runs/2")["run"].(map[string]any)
+			if got, _ := run["current_phase"].(string); got != tc.want {
+				t.Fatalf("run detail current_phase = %v; want %q", got, tc.want)
+			}
+			detail := getJSONMap(t, handler, "/api/v1/features/"+f.ID)[entityFeature].(map[string]any)
+			history := detail["historical_runs"].([]any)
+			if len(history) != 1 {
+				t.Fatalf("historical_runs = %v; want one run", history)
+			}
+			if got := history[0].(map[string]any)["current_phase"]; got != run["current_phase"] {
+				t.Fatalf("historical current_phase = %v; want %v to match run detail", got, run["current_phase"])
+			}
+			if got := detail["active_run_detail"].(map[string]any)["current_phase"]; got != feature.PhaseInquire.String() {
+				t.Fatalf("active run current_phase = %v; want live %s", got, feature.PhaseInquire)
+			}
+			active := getJSONMap(t, handler, "/api/v1/features/"+f.ID+"/runs/1")["run"].(map[string]any)
+			if got := active["current_phase"]; got != feature.PhaseInquire.String() {
+				t.Fatalf("active run detail current_phase = %v; want live %s", got, feature.PhaseInquire)
+			}
+		})
 	}
 }

@@ -38,7 +38,8 @@ const (
 // without lexicographic truncation. Each entry is built from that run's own
 // run.yaml so no historical field is borrowed from the active run.
 func (h *apiHandler) handleRunList(w http.ResponseWriter, r *http.Request, featureID string) {
-	if _, err := h.loadFeature(featureID); err != nil {
+	f, err := h.loadFeature(featureID)
+	if err != nil {
 		writeStoreError(w, err, featureID)
 		return
 	}
@@ -88,7 +89,7 @@ func (h *apiHandler) handleRunList(w http.ResponseWriter, r *http.Request, featu
 			// Skip it rather than fabricating or crashing the page.
 			continue
 		}
-		runs = append(runs, runSummaryFromRun(run))
+		runs = append(runs, runSummaryFromRun(run, f))
 	}
 	resp := RunListResponse{
 		APIVersion: APIVersion,
@@ -106,12 +107,12 @@ func (h *apiHandler) handleRunList(w http.ResponseWriter, r *http.Request, featu
 // carry-forward provenance, redacted backup-branch repo names, and run-level
 // timing/cost. No field is borrowed from the active run.
 func (h *apiHandler) handleRunDetail(w http.ResponseWriter, r *http.Request, featureID string, runNumber int) {
-	_, run, err := h.featureAndRun(featureID, runNumber)
+	f, run, err := h.featureAndRun(featureID, runNumber)
 	if err != nil {
 		writeStoreError(w, err, featureID)
 		return
 	}
-	detail := runDetailFromRun(run)
+	detail := runDetailFromRun(run, f)
 	detail.Cost = h.runCostWithActiveSessions(featureID, run)
 	revision := revisionForAny(detail)
 	h.writeRevisionedJSON(w, r, revision, RunDetailResponse{
@@ -203,7 +204,11 @@ func ledgerSessionPhase(rec feature.SessionCostRecord) string {
 	if rec.ObserverPhase != "" {
 		return rec.ObserverPhase
 	}
-	key := rec.PhaseKey
+	return timingKeyPhase(rec.PhaseKey)
+}
+
+// timingKeyPhase maps a phase timing key (e.g. "phase-1-impl") to its phase label.
+func timingKeyPhase(key string) string {
 	switch {
 	case key == "implement" || strings.HasPrefix(key, "rebase-") || strings.HasSuffix(key, "-impl"):
 		return feature.PhaseImplement.String()
@@ -216,11 +221,9 @@ func ledgerSessionPhase(rec feature.SessionCostRecord) string {
 	return key
 }
 
-// runSummaryFromRun builds a RunSummary from run-level fields only. The
-// current_phase label is derived from the run's pending review phase (if any)
-// rather than the live feature, so a historical run never borrows the active
-// run's phase.
-func runSummaryFromRun(run *feature.Run) RunSummary {
+// runSummaryFromRun builds a RunSummary from run-level fields only, so a
+// historical run never borrows the active run's phase.
+func runSummaryFromRun(run *feature.Run, f *feature.Feature) RunSummary {
 	if run == nil {
 		return RunSummary{}
 	}
@@ -229,7 +232,7 @@ func runSummaryFromRun(run *feature.Run) RunSummary {
 		StartedAt:     run.StartedAt,
 		SealedAt:      run.SealedAt,
 		SealReason:    string(run.SealReason),
-		CurrentPhase:  runPhaseLabel(run),
+		CurrentPhase:  runCurrentPhase(run, f),
 		PhaseStatus:   run.CurrentPhaseStatus,
 		Iteration:     run.CurrentIteration,
 		RoadmapPhase:  run.CurrentRoadmapPhase,
@@ -249,8 +252,8 @@ func runSummaryFromRun(run *feature.Run) RunSummary {
 
 // runDetailFromRun extends the run-authentic summary with seal/provenance
 // fields, redacted backup-branch repo names, and run-level timing/cost.
-func runDetailFromRun(run *feature.Run) RunDetail {
-	summary := runSummaryFromRun(run)
+func runDetailFromRun(run *feature.Run, f *feature.Feature) RunDetail {
+	summary := runSummaryFromRun(run, f)
 	dto := RunDetail{
 		ArtifactCount:                   summary.ArtifactCount,
 		CurrentPhase:                    summary.CurrentPhase,
@@ -291,14 +294,26 @@ func runDetailFromRun(run *feature.Run) RunDetail {
 	return dto
 }
 
-// runPhaseLabel derives a run-authentic phase label from the run's pending
-// review phase. A sealed run does not store its own current phase, so an
-// empty label is returned rather than borrowing the active run's phase.
+// runPhaseLabel derives the phase a run stopped in from its persisted fields.
 func runPhaseLabel(run *feature.Run) string {
-	if run == nil || run.PendingReviewPhase == nil {
+	switch {
+	case run == nil:
 		return ""
+	case run.OutputReadyAt != nil || run.DeliveredAt != nil:
+		return feature.PhasePublish.String()
+	case run.PendingReviewPhase != nil:
+		return run.PendingReviewPhase.String()
 	}
-	return run.PendingReviewPhase.DirName()
+	return timingKeyPhase(strings.TrimSpace(run.ActiveTimingKey))
+}
+
+// runCurrentPhase reports the live phase for the feature's active run and the
+// run-derived phase otherwise.
+func runCurrentPhase(run *feature.Run, f *feature.Feature) string {
+	if run != nil && f != nil && run.RunNumber == f.ActiveRun && !run.IsSealed() {
+		return f.CurrentPhase.String()
+	}
+	return runPhaseLabel(run)
 }
 
 // runBackupBranchRepos returns the sorted repo names that have a recorded

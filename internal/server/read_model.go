@@ -93,14 +93,14 @@ func revisionForAny(v any) string {
 func (h *apiHandler) featureDetailDTO(f *feature.Feature) (FeatureDetail, error) {
 	var activeRelationshipChild *feature.Feature
 	var relationshipChildren *feature.RelationshipChildren
-	active := runSummaryDTO(f.Run(), f)
+	active := runSummaryFromRun(f.Run(), f)
 	historyRunNumbers := boundedHistoricalRunNumbers(f.ActiveRun, f.RunCount, maxFeatureDetailHistoricalRuns)
 	history := make([]RunSummary, 0, len(historyRunNumbers))
 	if h.store != nil {
 		for _, n := range historyRunNumbers {
 			run, err := h.store.LoadRun(f.ID, n)
 			if err == nil {
-				history = append(history, runSummaryDTO(run, f))
+				history = append(history, runSummaryFromRun(run, f))
 			}
 		}
 	}
@@ -1019,33 +1019,6 @@ func boundedHistoricalRunNumbers(activeRun, runCount, limit int) []int {
 	}
 	sort.Ints(runNumbers)
 	return runNumbers
-}
-
-func runSummaryDTO(run *feature.Run, f *feature.Feature) RunSummary {
-	if run == nil {
-		return RunSummary{}
-	}
-	dto := RunSummary{
-		RunNumber:     run.RunNumber,
-		StartedAt:     run.StartedAt,
-		SealedAt:      run.SealedAt,
-		SealReason:    string(run.SealReason),
-		CurrentPhase:  f.CurrentPhase.String(),
-		PhaseStatus:   run.CurrentPhaseStatus,
-		Iteration:     run.CurrentIteration,
-		RoadmapPhase:  run.CurrentRoadmapPhase,
-		RoadmapTotal:  run.TotalRoadmapPhases,
-		ArtifactCount: len(run.Artifacts),
-		Setup:         setupDTO(run.Setup),
-	}
-	if run.PendingReviewPhase != nil {
-		dto.PendingReviewPhase = run.PendingReviewPhase.DirName()
-	}
-	if run.PendingRewindReviewRoadmapPhase != nil {
-		dto.PendingRewindReviewRoadmapPhase = *run.PendingRewindReviewRoadmapPhase
-	}
-	dto.IsRewind = run.IsRewind
-	return dto
 }
 
 func setupDTO(setup *feature.SetupState) *Setup {

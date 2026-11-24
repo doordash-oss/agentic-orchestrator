@@ -92,11 +92,20 @@ const longContextInputThreshold = 272_000
 // defaultModel is the model requested when no model is configured.
 const defaultModel = "gpt-5.4"
 
-// lookupRate resolves a model string to its token rate.
-// It strips context-window suffixes. Unknown models have no price; substituting
-// another model would produce a misleading estimate.
-func lookupRate(model string) (tokenRate, bool) {
+// rateModelName strips the context-window suffix and any gateway route prefix
+// (for example "@route/gpt-6.2-sol[500K]" prices as "gpt-6.2-sol").
+func rateModelName(model string) string {
 	m := strings.ToLower(llm.StripModelContextWindow(model))
+	if idx := strings.LastIndex(m, "/"); idx >= 0 {
+		m = m[idx+1:]
+	}
+	return m
+}
+
+// lookupRate resolves a model string to its token rate. Unknown models have no
+// price; substituting another model would produce a misleading estimate.
+func lookupRate(model string) (tokenRate, bool) {
+	m := rateModelName(model)
 
 	// Direct match first.
 	if r, ok := modelRates[m]; ok {
@@ -119,7 +128,7 @@ func computeCostForServiceTier(model, tier string, input, cached, writes, output
 	case "flex", "batch":
 		return cost * 0.5
 	case "fast", "priority":
-		if m := strings.ToLower(llm.StripModelContextWindow(model)); strings.HasPrefix(m, "gpt-6") || strings.HasPrefix(m, "gpt-5.6") {
+		if m := rateModelName(model); strings.HasPrefix(m, "gpt-6") || strings.HasPrefix(m, "gpt-5.6") {
 			return cost * 2
 		}
 	}

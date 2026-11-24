@@ -50,6 +50,11 @@ func TestLookupRate(t *testing.T) {
 		{"gpt-5.4-mini[1M]", true, 0.75, 0.075, 0, 4.50, 0, 0, 0, 0},
 		{"gpt-5.3-codex", true, 1.75, 0.175, 0, 14.00, 0, 0, 0, 0},
 
+		// Gateway route prefixes price as the underlying model.
+		{"@openai-foundations/gpt-6.2-sol[500K]", true, 2, 0.1, 2.5, 10, 4, 0.2, 5, 15},
+		{"@route/GPT-6.1-TERRA", true, 1, 0.05, 1.25, 5, 2, 0.1, 2.5, 7.5},
+		{"@route/gpt-future-model", false, 0, 0, 0, 0, 0, 0, 0, 0},
+
 		// Empty model uses the default model rate.
 		{"", true, 2.50, 0.25, 0, 15.00, 5.00, 0.50, 0, 22.50},
 

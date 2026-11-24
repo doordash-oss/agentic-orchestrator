@@ -61,39 +61,103 @@ type openCodeChildSessionCostLookup struct {
 // as Task subagents. OpenCode reports the parent ACP session cost separately
 // from those rows, so Agentico has to add descendants explicitly.
 func (p *Protocol) AdditionalSessionCost(ctx context.Context) (llm.SessionCostAdjustment, error) {
-	sessionID := p.SessionID()
-	return openCodeChildSessionCostLookup{}.Lookup(ctx, sessionID)
+	adjustment, err := p.costLookup.Lookup(ctx, p.SessionID())
+	if err != nil {
+		return adjustment, err
+	}
+	p.mu.Lock()
+	baseline := p.costBaseline
+	p.mu.Unlock()
+	return baseline.subtractChildren(adjustment), nil
+}
+
+// openCodeCostBaseline is the spend a resumed native session already carried
+// when this process loaded it.
+type openCodeCostBaseline struct {
+	parentCostUSD float64
+	children      llm.SessionCostAdjustment
+}
+
+func (b openCodeCostBaseline) subtractChildren(a llm.SessionCostAdjustment) llm.SessionCostAdjustment {
+	if len(b.children.SessionIDs) == 0 && b.children.TotalCostUSD == 0 {
+		return a
+	}
+	prior := make(map[string]bool, len(b.children.SessionIDs))
+	for _, id := range b.children.SessionIDs {
+		prior[id] = true
+	}
+	var ids []string
+	for _, id := range a.SessionIDs {
+		if !prior[id] {
+			ids = append(ids, id)
+		}
+	}
+	return llm.SessionCostAdjustment{
+		TotalCostUSD: max(a.TotalCostUSD-b.children.TotalCostUSD, 0),
+		Usage: llm.Usage{
+			InputTokens:              max(a.Usage.InputTokens-b.children.Usage.InputTokens, 0),
+			OutputTokens:             max(a.Usage.OutputTokens-b.children.Usage.OutputTokens, 0),
+			CacheReadInputTokens:     max(a.Usage.CacheReadInputTokens-b.children.Usage.CacheReadInputTokens, 0),
+			CacheCreationInputTokens: max(a.Usage.CacheCreationInputTokens-b.children.Usage.CacheCreationInputTokens, 0),
+		},
+		SessionIDs: ids,
+	}
 }
 
 func (l openCodeChildSessionCostLookup) Lookup(ctx context.Context, parentSessionID string) (llm.SessionCostAdjustment, error) {
-	parentSessionID = strings.TrimSpace(parentSessionID)
-	if parentSessionID == "" || !openCodeSessionIDPattern.MatchString(parentSessionID) {
-		return llm.SessionCostAdjustment{}, nil
+	out, ok, err := l.query(ctx, parentSessionID, openCodeChildSessionCostQuery)
+	if err != nil || !ok {
+		return llm.SessionCostAdjustment{}, err
+	}
+	return parseOpenCodeChildSessionCostOutput(out)
+}
+
+// resumeBaseline reads the parent and child spend already recorded for a
+// session. ok is false when the session database cannot be read.
+func (l openCodeChildSessionCostLookup) resumeBaseline(ctx context.Context, sessionID string) (openCodeCostBaseline, bool, error) {
+	out, ok, err := l.query(ctx, sessionID, openCodeSessionCostQuery)
+	if err != nil || !ok {
+		return openCodeCostBaseline{}, false, err
+	}
+	parentCost, err := strconv.ParseFloat(strings.TrimSpace(string(out)), 64)
+	if err != nil {
+		return openCodeCostBaseline{}, false, fmt.Errorf("parse session cost: %w", err)
+	}
+	children, err := l.Lookup(ctx, sessionID)
+	if err != nil {
+		return openCodeCostBaseline{}, false, err
+	}
+	return openCodeCostBaseline{parentCostUSD: parentCost, children: children}, true, nil
+}
+
+func (l openCodeChildSessionCostLookup) query(ctx context.Context, sessionID string, build func(string) string) ([]byte, bool, error) {
+	sessionID = strings.TrimSpace(sessionID)
+	if sessionID == "" || !openCodeSessionIDPattern.MatchString(sessionID) {
+		return nil, false, nil
 	}
 	if l.dbPath == "" {
 		l.dbPath = defaultOpenCodeDBPath()
 	}
 	if l.dbPath == "" {
-		return llm.SessionCostAdjustment{}, nil
+		return nil, false, nil
 	}
 	if l.runner == nil {
 		if _, err := os.Stat(l.dbPath); err != nil {
 			if errors.Is(err, os.ErrNotExist) {
-				return llm.SessionCostAdjustment{}, nil
+				return nil, false, nil
 			}
-			return llm.SessionCostAdjustment{}, fmt.Errorf("stat OpenCode session database: %w", err)
+			return nil, false, fmt.Errorf("stat OpenCode session database: %w", err)
 		}
 		l.runner = sqliteCLIRunner{}
 	}
-
-	out, err := l.runner.RunSQLite(ctx, l.dbPath, openCodeChildSessionCostQuery(parentSessionID))
+	out, err := l.runner.RunSQLite(ctx, l.dbPath, build(sessionID))
 	if err != nil {
 		if errors.Is(err, errSQLiteUnavailable) {
-			return llm.SessionCostAdjustment{}, nil
+			return nil, false, nil
 		}
-		return llm.SessionCostAdjustment{}, err
+		return nil, false, err
 	}
-	return parseOpenCodeChildSessionCostOutput(out)
+	return out, true, nil
 }
 
 func defaultOpenCodeDBPath() string {
@@ -126,6 +190,10 @@ SELECT
   COALESCE(group_concat(s.id, ','), '')
 FROM session s
 WHERE s.id IN (SELECT id FROM descendants);`, parent)
+}
+
+func openCodeSessionCostQuery(sessionID string) string {
+	return fmt.Sprintf("SELECT COALESCE(SUM(cost), 0) FROM session WHERE id = %s;", sqlStringLiteral(sessionID))
 }
 
 func sqlStringLiteral(value string) string {

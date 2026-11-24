@@ -20,6 +20,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log"
 	"net/http"
 	"net/url"
 	"os"
@@ -101,6 +102,10 @@ type Protocol struct {
 	lastEstimatedUsageEmitTokens          int
 	costUSD                               float64
 	usageSeen                             bool
+	// costBaseline is subtracted so a resumed session reports only this
+	// process's spend.
+	costBaseline openCodeCostBaseline
+	costLookup   openCodeChildSessionCostLookup
 	// price is the catalog's advertised per-million-token pricing for the
 	// session model (nil when unknown). It is used only to estimate cost when
 	// OpenCode reports tokens but no positive cost amount.
@@ -236,6 +241,7 @@ func (p *Protocol) Handshake(ctx context.Context) error {
 	if err := p.startSession(ctx); err != nil {
 		return err
 	}
+	p.captureResumeBaseline(ctx)
 
 	if p.bridge != nil {
 		if err := p.bridge.start(ctx); err != nil {
@@ -347,6 +353,27 @@ func (p *Protocol) startSession(ctx context.Context) error {
 	}
 	return p.runSessionHandshake(ctx, sessionLoadMethod, p.sendSessionLoad)
 }
+
+// captureResumeBaseline records what a loaded session had already spent, since
+// OpenCode reports cumulative cost for the whole native session.
+func (p *Protocol) captureResumeBaseline(ctx context.Context) {
+	if p.resumeSessionID == "" {
+		return
+	}
+	lookupCtx, cancel := context.WithTimeout(ctx, resumeBaselineTimeout)
+	defer cancel()
+	baseline, _, err := p.costLookup.resumeBaseline(lookupCtx, p.resumeSessionID)
+	if err != nil {
+		log.Printf("opencode: resume cost baseline unavailable for %s: %v", p.resumeSessionID, err)
+	}
+	p.mu.Lock()
+	// A cost replayed by session/load is the floor when the database lags.
+	baseline.parentCostUSD = max(baseline.parentCostUSD, p.costUSD)
+	p.costBaseline = baseline
+	p.mu.Unlock()
+}
+
+const resumeBaselineTimeout = 2 * time.Second
 
 // runSessionHandshake sends a session-establishing request and blocks until the
 // session is ready, the context is cancelled, or a handshake error is recorded.
@@ -1806,7 +1833,7 @@ const (
 // not mistaken for a free session. Callers must hold p.mu.
 func (p *Protocol) costLocked() (float64, string) {
 	if p.costUSD > 0 {
-		return p.costUSD, ""
+		return max(p.costUSD-p.costBaseline.parentCostUSD, 0), ""
 	}
 	if p.inTok+p.outTok+p.cacheRead+p.cacheCreate == 0 {
 		return 0, ""

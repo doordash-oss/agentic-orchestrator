@@ -15,10 +15,12 @@
 package session
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
 	"io"
+	"log"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -1149,6 +1151,68 @@ func TestSessionStopStatusAfterInterruptResult(t *testing.T) {
 		})
 	}
 }
+
+func TestSessionRecordsProcessExit(t *testing.T) {
+	// parallel-exempt: owns provider subprocesses and redirects the global logger.
+	tests := []struct {
+		name       string
+		script     string
+		stop       bool
+		wantDesc   string
+		wantDetail string
+		wantStop   bool
+	}{
+		{name: "exit code", script: "exit 3", wantDesc: "exit code 3", wantDetail: "process exited with code 3"},
+		{name: "signal", script: "kill -9 $$", wantDesc: "signal 9 (killed)", wantDetail: "process terminated by signal 9 (killed)"},
+		{name: "stop requested", script: "while IFS= read -r line; do :; done; exit 1", stop: true, wantDesc: "exit code 1", wantDetail: "process exited with code 1", wantStop: true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var buf bytes.Buffer
+			var bufMu sync.Mutex
+			log.SetOutput(writerFunc(func(p []byte) (int, error) {
+				bufMu.Lock()
+				defer bufMu.Unlock()
+				return buf.Write(p)
+			}))
+			t.Cleanup(func() { log.SetOutput(os.Stderr) })
+
+			dir := t.TempDir()
+			script := filepath.Join(dir, "cli.sh")
+			if err := os.WriteFile(script, []byte("#!/bin/bash\n"+tt.script+"\n"), 0o755); err != nil {
+				t.Fatalf("write script: %v", err)
+			}
+			s := NewSession("exit-record", "feat-1", feature.PhaseImplement)
+			s.protocol = claude.NewProtocol(llm.ProtocolOpts{})
+			if err := s.Start([]string{"bash", script}, dir, nil, func(llm.SDKMessage) {}); err != nil {
+				t.Fatalf("start: %v", err)
+			}
+			if tt.stop {
+				if err := s.Stop(); err != nil {
+					t.Fatalf("Stop: %v", err)
+				}
+			}
+			<-s.Done()
+			if got := s.ExitDescription(); got != tt.wantDesc {
+				t.Errorf("ExitDescription = %q, want %q", got, tt.wantDesc)
+			}
+			if got := s.ExitCodeDetail(); got != tt.wantDetail {
+				t.Errorf("ExitCodeDetail = %q, want %q", got, tt.wantDetail)
+			}
+			bufMu.Lock()
+			logged := buf.String()
+			bufMu.Unlock()
+			want := fmt.Sprintf("exited: %s (stop requested: %t)", tt.wantDesc, tt.wantStop)
+			if n := strings.Count(logged, "session exit-record: process "); n != 1 || !strings.Contains(logged, want) {
+				t.Errorf("log = %q, want one exit line containing %q", logged, want)
+			}
+		})
+	}
+}
+
+type writerFunc func([]byte) (int, error)
+
+func (f writerFunc) Write(p []byte) (int, error) { return f(p) }
 
 type noInterruptProtocol struct{ llm.Protocol }
 

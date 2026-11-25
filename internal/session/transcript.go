@@ -193,5 +193,8 @@ func (s *Session) ExitCodeDetail() string {
 	if proc.ProcessState.Success() {
 		return ""
 	}
+	if proc.ProcessState.ExitCode() == -1 {
+		return "process terminated by " + describeProcessExit(proc.ProcessState)
+	}
 	return fmt.Sprintf("process exited with code %d", proc.ProcessState.ExitCode())
 }

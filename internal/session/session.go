@@ -285,6 +285,9 @@ type Session struct {
 	// resultSeq at that moment. Guarded by mu.
 	stopRequested bool
 	stopResultSeq uint64
+	// exitDescription is set once the reaped process exits. Atomic because
+	// the reaper holds mu while it waits.
+	exitDescription atomic.Pointer[string]
 
 	// keepAliveOnTurnResult lets loop-managed sessions continue the same
 	// provider process after any completed turn so the harness can nudge,
@@ -467,6 +470,37 @@ func (s *Session) StopRequested() bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return s.stopRequested
+}
+
+// ExitDescription reports how the provider process exited, such as
+// "exit code 1" or "signal 9 (killed)", or "" while it is still running.
+func (s *Session) ExitDescription() string {
+	if d := s.exitDescription.Load(); d != nil {
+		return *d
+	}
+	return ""
+}
+
+// recordExitLocked logs and stores how the reaped process exited.
+func (s *Session) recordExitLocked() {
+	ps := s.process.ProcessState
+	desc := describeProcessExit(ps)
+	s.exitDescription.Store(&desc)
+	pid := 0
+	if ps != nil {
+		pid = ps.Pid()
+	}
+	log.Printf("session %s: process %d exited: %s (stop requested: %t)", s.id, pid, desc, s.stopRequested)
+}
+
+func describeProcessExit(ps *os.ProcessState) string {
+	if ps == nil {
+		return "unknown"
+	}
+	if ws, ok := ps.Sys().(syscall.WaitStatus); ok && ws.Signaled() {
+		return fmt.Sprintf("signal %d (%s)", int(ws.Signal()), ws.Signal())
+	}
+	return fmt.Sprintf("exit code %d", ps.ExitCode())
 }
 
 // ResultInterruptedByStop reports whether the latest Result answered an
@@ -995,6 +1029,7 @@ func (s *Session) readMessages(onMessage func(llm.SDKMessage)) {
 		}
 		if s.process != nil {
 			_ = s.process.Wait()
+			s.recordExitLocked()
 			clean := s.process.ProcessState != nil && s.process.ProcessState.Success()
 			// Providers exit non-zero after an interrupt Agentico sent.
 			if clean || s.stopRequested {

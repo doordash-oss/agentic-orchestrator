@@ -21,6 +21,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode"
+	"unicode/utf8"
 
 	"github.com/doordash-oss/agentic-orchestrator/internal/llm"
 	"github.com/doordash-oss/agentic-orchestrator/internal/llm/askuser"
@@ -718,10 +720,124 @@ func parseNumberedOptions(text string) (string, []parsedOption, bool) {
 	}
 
 	cleaned := strings.TrimSpace(strings.Join(stem, "\n"))
-	if len(trailingStem) > 0 {
-		cleaned = strings.TrimSpace(strings.Join(trailingStem, "\n"))
+	trailing := strings.TrimSpace(strings.Join(trailingStem, "\n"))
+	return questionText(cleaned, trailing), options, true
+}
+
+// questionText picks the question for a stem and its post-options trailing
+// text. A generic trailing prompt ("Which do you pick?") gives way to the
+// stem's last question; a bold stem heading is kept as context.
+func questionText(stem, trailing string) string {
+	if trailing == "" {
+		return stem
 	}
-	return cleaned, options, true
+	heading, body := splitStemHeading(stem)
+	q := trailing
+	if isGenericQuestion(lastQuestionSentence(trailing)) {
+		if s := lastQuestionSentence(body); s != "" {
+			q = s
+		}
+	}
+	if heading == "" || strings.Contains(q, heading) {
+		return q
+	}
+	return heading + "\n\n" + q
+}
+
+// splitStemHeading returns the last line-leading bold span of stem and the
+// text after it. Without a heading, body is the whole stem.
+func splitStemHeading(stem string) (heading, body string) {
+	lines := strings.Split(stem, "\n")
+	for i := len(lines) - 1; i >= 0; i-- {
+		line := lines[i]
+		if !strings.HasPrefix(line, "**") {
+			continue
+		}
+		end := strings.Index(line[2:], "**")
+		if end <= 0 {
+			continue
+		}
+		heading = strings.TrimSpace(line[2 : 2+end])
+		rest := append([]string{line[2+end+2:]}, lines[i+1:]...)
+		return heading, strings.TrimSpace(strings.Join(rest, "\n"))
+	}
+	return "", stem
+}
+
+var sentenceAbbreviations = map[string]bool{"e.g": true, "i.e": true, "etc": true, "vs": true, "cf": true}
+
+// lastQuestionSentence returns the last sentence of text ending in '?'
+// outside inline code, or "".
+func lastQuestionSentence(text string) string {
+	last := ""
+	start := 0
+	inCode := false
+	for i := 0; i < len(text); i++ {
+		c := text[i]
+		if c == '`' {
+			inCode = !inCode
+			continue
+		}
+		if inCode {
+			continue
+		}
+		atBreak := i+1 == len(text) || text[i+1] == ' ' || text[i+1] == '\n'
+		switch {
+		case c == '\n' && i+1 < len(text) && text[i+1] == '\n':
+			start = i + 1
+		case c == '?' && atBreak:
+			last = strings.Join(strings.Fields(text[start:i+1]), " ")
+			start = i + 1
+		case (c == '.' || c == '!') && atBreak && startsSentence(text[i+1:]) && !endsWithAbbreviation(text[start:i]):
+			start = i + 1
+		}
+	}
+	return last
+}
+
+func startsSentence(s string) bool {
+	s = strings.TrimLeft(s, " \n")
+	if s == "" {
+		return false
+	}
+	r, _ := utf8.DecodeRuneInString(s)
+	return unicode.IsUpper(r) || strings.ContainsRune("`*_\"", r)
+}
+
+func endsWithAbbreviation(s string) bool {
+	fields := strings.Fields(s)
+	if len(fields) == 0 {
+		return false
+	}
+	return sentenceAbbreviations[strings.ToLower(strings.TrimLeft(fields[len(fields)-1], "(["))]
+}
+
+var genericQuestionWords = map[string]bool{
+	"which": true, "what": true, "how": true, "one": true, "option": true, "options": true,
+	"do": true, "does": true, "would": true, "will": true, "should": true, "shall": true,
+	"can": true, "could": true, "you": true, "we": true, "i": true, "me": true, "it": true,
+	"pick": true, "choose": true, "prefer": true, "want": true, "like": true, "go": true,
+	"select": true, "decide": true, "think": true, "proceed": true, "take": true, "use": true,
+	"with": true, "for": true, "to": true, "the": true, "a": true, "of": true, "or": true,
+	"these": true, "those": true, "above": true, "is": true, "your": true, "choice": true,
+	"preference": true, "sound": true, "sounds": true, "good": true, "ok": true, "okay": true,
+}
+
+// isGenericQuestion reports whether q is a bare prompt to choose that names
+// nothing about the decision itself.
+func isGenericQuestion(q string) bool {
+	if q == "" {
+		return false
+	}
+	words := strings.FieldsFunc(strings.ToLower(q), func(r rune) bool {
+		return !unicode.IsLetter(r) && !unicode.IsDigit(r)
+	})
+	for _, w := range words {
+		if !genericQuestionWords[w] && strings.TrimFunc(w, unicode.IsDigit) != "" {
+			return false
+		}
+	}
+	return true
 }
 
 func looksLikeTrailingQuestion(line string) bool {
@@ -768,28 +884,104 @@ func splitOptionLabelDesc(raw string) (string, string) {
 	}
 	label := raw
 	desc := ""
-	if idx := labelSeparatorIndex(raw); idx >= 0 {
-		label = strings.TrimSpace(raw[:idx])
-		desc = strings.TrimSpace(raw[idx+1:])
+	if l, d, ok := splitBoldLabel(raw); ok {
+		label, desc = l, d
+	} else if start, end := labelSeparator(raw); start >= 0 {
+		label, desc = raw[:start], raw[end:]
 	}
-	label = strings.NewReplacer("**", "", "`", "").Replace(label)
-	return strings.TrimSpace(label), desc
+	return cleanLabel(label), strings.TrimSpace(desc)
 }
 
-// labelSeparatorIndex returns the first colon outside inline code, or -1.
-func labelSeparatorIndex(s string) int {
-	inCode := false
-	for i, r := range s {
-		switch r {
-		case '`':
-			inCode = !inCode
-		case ':':
-			if !inCode {
-				return i
-			}
+// splitBoldLabel splits "**Label:** desc", "**Label**: desc" and
+// "**Label** — desc" after the closing bold marker.
+func splitBoldLabel(raw string) (string, string, bool) {
+	if !strings.HasPrefix(raw, "**") {
+		return "", "", false
+	}
+	end := strings.Index(raw[2:], "**")
+	if end <= 0 {
+		return "", "", false
+	}
+	inner := strings.TrimSpace(raw[2 : 2+end])
+	rest := strings.TrimSpace(raw[2+end+2:])
+	if label, ok := strings.CutSuffix(inner, ":"); ok {
+		return label, rest, true
+	}
+	if rest == "" {
+		return inner, "", true
+	}
+	if desc, ok := strings.CutPrefix(rest, ":"); ok {
+		return inner, strings.TrimSpace(desc), true
+	}
+	for _, dash := range []string{"— ", "– ", "- "} {
+		if desc, ok := strings.CutPrefix(rest, dash); ok {
+			return inner, strings.TrimSpace(desc), true
 		}
 	}
-	return -1
+	return "", "", false
+}
+
+// labelSeparator returns the byte range of the label/description separator:
+// the earlier of the first colon outside inline code and the first spaced em
+// or en dash outside code and parentheses, else the first such spaced hyphen.
+// It returns -1, -1 when there is none.
+func labelSeparator(s string) (int, int) {
+	inCode := false
+	depth := 0
+	colon, dash, dashW, hyphen := -1, -1, 0, -1
+	for i, r := range s {
+		if r == '`' {
+			inCode = !inCode
+			continue
+		}
+		if inCode {
+			continue
+		}
+		w := utf8.RuneLen(r)
+		spaced := i > 0 && s[i-1] == ' ' && i+w < len(s) && s[i+w] == ' '
+		switch {
+		case r == '(':
+			depth++
+		case r == ')' && depth > 0:
+			depth--
+		case r == ':' && colon < 0:
+			colon = i
+		case (r == '—' || r == '–') && spaced && depth == 0 && dash < 0:
+			dash, dashW = i, w
+		case r == '-' && spaced && depth == 0 && hyphen < 0:
+			hyphen = i
+		}
+	}
+	switch {
+	case colon >= 0 && (dash < 0 || colon < dash):
+		return colon, colon + 1
+	case dash >= 0:
+		return dash, dash + dashW
+	case hyphen >= 0:
+		return hyphen, hyphen + 1
+	}
+	return -1, -1
+}
+
+var (
+	starEmphasisRe       = regexp.MustCompile(`(^|[\s(\["'])\*([\p{L}\p{N}](?:[^*]*[\p{L}\p{N}])?)\*($|[\s.,;:!?)\]"'])`)
+	underscoreEmphasisRe = regexp.MustCompile(`(^|[\s(\["'])_([\p{L}\p{N}](?:[^_]*[\p{L}\p{N}])?)_($|[\s.,;:!?)\]"'])`)
+)
+
+// cleanLabel drops bold and emphasis markers outside inline code, then the
+// code backticks themselves.
+func cleanLabel(label string) string {
+	parts := strings.Split(label, "`")
+	for i := 0; i < len(parts); i += 2 {
+		s := strings.ReplaceAll(parts[i], "**", "")
+		for prev := ""; prev != s; {
+			prev = s
+			s = starEmphasisRe.ReplaceAllString(s, "$1$2$3")
+			s = underscoreEmphasisRe.ReplaceAllString(s, "$1$2$3")
+		}
+		parts[i] = s
+	}
+	return strings.TrimSpace(strings.Join(parts, ""))
 }
 
 func splitOptionConfidence(raw string) (string, *float64, bool) {

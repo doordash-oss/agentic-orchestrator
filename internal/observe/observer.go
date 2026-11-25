@@ -177,7 +177,10 @@ func (o *Observer) FeatureMutated(m feature.Mutation) {
 		return
 	}
 	if m.Before.ActiveRun != m.After.ActiveRun {
-		emit("feature.run_sealed", m.Before.Status.String(), map[string]any{"run_number": m.Before.ActiveRun, "_duration_ms": sinceMillis(m.Before.StartedAt, m.At)})
+		// A terminal run already emitted on its terminal transition.
+		if !telemetryTerminal(m.Before.Status) {
+			emit("feature.run_sealed", m.Before.Status.String(), map[string]any{"run_number": m.Before.ActiveRun, "_duration_ms": sinceMillis(m.Before.StartedAt, m.At)})
+		}
 		emit("feature.run_started", "started", map[string]any{"run_number": m.After.ActiveRun})
 	}
 	if m.Before.Status != m.After.Status {

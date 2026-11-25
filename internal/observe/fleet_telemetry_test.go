@@ -418,6 +418,75 @@ func TestFeatureMilestonesSurviveRestartAndMeasureEachRun(t *testing.T) {
 	}
 }
 
+func TestRunSealedEmitsOncePerSealingPath(t *testing.T) {
+	const fork, restart = feature.Status(-1), feature.Status(-2)
+	cases := []struct {
+		name  string
+		steps []feature.Status
+		want  []string
+	}{
+		{name: "rewind while running", steps: []feature.Status{feature.StatusInterrupted, fork}, want: []string{"Interrupted"}},
+		{name: "rewind from code ready", steps: []feature.Status{feature.StatusCodeReady, fork}, want: []string{"CodeReady"}},
+		{name: "rewind from done after restart", steps: []feature.Status{feature.StatusDone, restart, fork}, want: []string{"Done"}},
+		{name: "pause resume complete", steps: []feature.Status{feature.StatusInterrupted, feature.StatusImplementing, feature.StatusDone}, want: []string{"Interrupted", "Done"}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			dir := t.TempDir()
+			start := time.Now().Add(-time.Minute)
+			f := &feature.Feature{ID: "f1", Name: "test", Created: start, Status: feature.StatusImplementing, ActiveRun: 1, RunCount: 1, SchemaVersion: feature.SchemaVersionCurrent}
+			f.SetRun(&feature.Run{RunNumber: 1, StartedAt: &start})
+			newStore := func() *feature.Store {
+				store := feature.NewStore(dir)
+				store.SetMutationObserver(&Observer{enabled: true, localEnabled: true, emitter: newEmitter(dir)})
+				return store
+			}
+			store := newStore()
+			if err := store.Save(f); err != nil {
+				t.Fatal(err)
+			}
+			for _, step := range tc.steps {
+				var err error
+				switch step {
+				case restart:
+					store = newStore()
+				case fork:
+					_, err = store.SealAndForkRun(f.ID, func(r *feature.Run) error {
+						now := time.Now()
+						r.SealedAt = &now
+						r.SealReason = feature.SealReasonRewind
+						return nil
+					}, func(r *feature.Run) (*feature.Run, error) {
+						return &feature.Run{RunNumber: 2, StartedAt: &start, CarriedFromRun: 1, Committing: true}, nil
+					}, func(_, _ *feature.Run) error { return nil })
+				default:
+					err = store.Modify(f.ID, func(f *feature.Feature) error { f.Status = step; return nil })
+				}
+				if err != nil {
+					t.Fatal(err)
+				}
+			}
+			data, err := os.ReadFile(filepath.Join(dir, f.ID, "events.jsonl"))
+			if err != nil {
+				t.Fatal(err)
+			}
+			var got []string
+			for _, line := range strings.Split(strings.TrimSpace(string(data)), "\n") {
+				var event Event
+				if err := json.Unmarshal([]byte(line), &event); err != nil {
+					t.Fatal(err)
+				}
+				if event.EventType == "feature.run_sealed" {
+					got = append(got, event.Status)
+				}
+			}
+			if strings.Join(got, ",") != strings.Join(tc.want, ",") {
+				t.Errorf("run_sealed statuses = %v; want %v", got, tc.want)
+			}
+		})
+	}
+}
+
 func TestMetricErrorsUseCanonicalCatalog(t *testing.T) {
 	// A fixed representative list of catalog codes across classes stands in
 	// for the whole catalog: metricEnum resolves through errcat.Lookup, so

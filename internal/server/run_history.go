@@ -150,6 +150,7 @@ func (h *apiHandler) handleRunSessions(w http.ResponseWriter, r *http.Request, f
 			continue
 		}
 		seen[summary.ID] = true
+		addEarlierSegmentUsage(&summary, sess, run)
 		summaries = append(summaries, summary)
 	}
 	// Memory loses finished sessions on restart and when a later run reuses
@@ -162,6 +163,46 @@ func (h *apiHandler) handleRunSessions(w http.ResponseWriter, r *http.Request, f
 		RunNumber:  runNumber,
 		Sessions:   summaries,
 	})
+}
+
+// addEarlierSegmentUsage folds in the ledger rows of earlier segments of a
+// resumed session, which shares its ID with the in-memory latest segment. A
+// segment's own row is the last one for its ID and exists only once the
+// session has exited (Done runs the cost cleanups first) with usage to record.
+func addEarlierSegmentUsage(summary *SessionSummary, sess ports.SessionView, run *feature.Run) {
+	var rows []feature.SessionCostRecord
+	for _, rec := range run.SessionCosts {
+		if strings.TrimSpace(rec.SessionID) == summary.ID {
+			rows = append(rows, rec)
+		}
+	}
+	if len(rows) > 0 && sessionExited(sess) && sessionHasUsage(*summary, sess) {
+		rows = rows[:len(rows)-1]
+	}
+	for _, rec := range rows {
+		summary.Usage.CostUSD += rec.CostUSD
+		summary.Usage.InputTokens += rec.InputTokens
+		summary.Usage.OutputTokens += rec.OutputTokens
+	}
+}
+
+func sessionExited(sess ports.SessionView) bool {
+	done := sess.Done()
+	if done == nil {
+		return false
+	}
+	select {
+	case <-done:
+		return true
+	default:
+		return false
+	}
+}
+
+func sessionHasUsage(summary SessionSummary, sess ports.SessionView) bool {
+	u := sess.AccumulatedUsage()
+	return summary.Usage.CostUSD > 0 || u.CostCreditsMicros != nil ||
+		u.InputTokens+u.OutputTokens+u.CacheReadInputTokens+u.CacheCreationInputTokens > 0
 }
 
 func ledgerSessionSummaries(featureID string, run *feature.Run, skip map[string]bool) []SessionSummary {

@@ -3269,6 +3269,7 @@ type fakeSessionView struct {
 	contextPct     *int
 	usage          *llm.Usage
 	taskActivities []llm.TaskActivity
+	done           chan struct{}
 }
 
 func (s *fakeSessionView) RunNumber() int { return s.runNumber }
@@ -3317,7 +3318,12 @@ func (s *fakeSessionView) ContextPercentage() int {
 func (s *fakeSessionView) LastStdoutAt() time.Time         { return s.StartedAt() }
 func (s *fakeSessionView) StatusCh() <-chan string         { return nil }
 func (s *fakeSessionView) AttachCh() <-chan llm.SDKMessage { return nil }
-func (s *fakeSessionView) Done() <-chan struct{}           { return nil }
+func (s *fakeSessionView) Done() <-chan struct{} {
+	if s.done == nil {
+		return nil
+	}
+	return s.done
+}
 func (s *fakeSessionView) HasPendingAskUserQuestion() bool {
 	for _, req := range s.pending {
 		if req.Request.ToolName == toolNameAskUserQuestion {

@@ -18,6 +18,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"math"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -587,6 +588,84 @@ func TestRunSessionsAggregateLedgerRecords(t *testing.T) {
 	}
 	if usage := sess["usage"].(map[string]any); usage["cost_usd"] != 2.0 || usage["input_tokens"] != float64(150) || usage["output_tokens"] != float64(30) {
 		t.Fatalf("f-review usage = %v", usage)
+	}
+}
+
+func TestRunSessionsIncludeEarlierResumedSegments(t *testing.T) {
+	t.Parallel()
+	earlier := feature.SessionCostRecord{SessionID: "f-design", PhaseKey: "design", CostUSD: 0.115, InputTokens: 100, OutputTokens: 10}
+	latest := feature.SessionCostRecord{SessionID: "f-design", PhaseKey: "design", CostUSD: 0.271, InputTokens: 200, OutputTokens: 20}
+	other := feature.SessionCostRecord{SessionID: "f-other", PhaseKey: "design", CostUSD: 5}
+	latestUsage := &llm.Usage{CostUSD: 0.271, CostSource: "provider_estimate", InputTokens: 200, OutputTokens: 20}
+	cases := []struct {
+		name       string
+		sealed     bool
+		ledger     []feature.SessionCostRecord
+		usage      *llm.Usage
+		exited     bool
+		wantCost   float64
+		wantInput  int
+		wantOutput int
+	}{
+		{name: "ended resumed session", ledger: []feature.SessionCostRecord{earlier, other, latest}, usage: latestUsage, exited: true, wantCost: 0.386, wantInput: 300, wantOutput: 30},
+		{name: "live resumed session", ledger: []feature.SessionCostRecord{earlier, other}, usage: latestUsage, wantCost: 0.386, wantInput: 300, wantOutput: 30},
+		{name: "ended resumed segment without usage", ledger: []feature.SessionCostRecord{earlier}, usage: &llm.Usage{}, exited: true, wantCost: 0.115, wantInput: 100, wantOutput: 10},
+		{name: "ended session never resumed", ledger: []feature.SessionCostRecord{other, latest}, usage: latestUsage, exited: true, wantCost: 0.271, wantInput: 200, wantOutput: 20},
+		{name: "live session never resumed", ledger: []feature.SessionCostRecord{other}, usage: latestUsage, wantCost: 0.271, wantInput: 200, wantOutput: 20},
+		{name: "sealed run session never resumed", sealed: true, ledger: []feature.SessionCostRecord{latest}, usage: latestUsage, exited: true, wantCost: 0.271, wantInput: 200, wantOutput: 20},
+		{name: "sealed run resumed session", sealed: true, ledger: []feature.SessionCostRecord{earlier, latest}, usage: latestUsage, exited: true, wantCost: 0.386, wantInput: 300, wantOutput: 30},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			runNumber := 1
+			var store *feature.Store
+			var f *feature.Feature
+			if tc.sealed {
+				runNumber = 2
+				store, f = seedHistoryFeature(t, sealedRun(t, 2, withSessionCosts(tc.ledger...)))
+			} else {
+				store, f = seedHistoryFeature(t)
+				if err := store.Modify(f.ID, func(current *feature.Feature) error {
+					current.SessionCosts = tc.ledger
+					return nil
+				}); err != nil {
+					t.Fatal(err)
+				}
+			}
+			status := ports.SessionRunning
+			var done chan struct{}
+			if tc.exited {
+				status = ports.SessionDone
+				done = make(chan struct{})
+				close(done)
+			}
+			opts := baseReadHandlerOptions(store)
+			opts.Sessions = fakeSessionManager{views: []ports.SessionView{&fakeSessionView{
+				MockSessionView: &mocks.MockSessionView{
+					IDVal:        "f-design",
+					FeatureIDVal: f.ID,
+					PhaseVal:     feature.PhaseDesign,
+					KindVal:      ports.KindPhase,
+					StatusVal:    status,
+				},
+				runNumber: runNumber,
+				usage:     tc.usage,
+				done:      done,
+			}}}
+			got := runSessionsByID(t, NewHandler(opts), f.ID, runNumber)
+
+			usage := got["f-design"]["usage"].(map[string]any)
+			if cost, _ := usage["cost_usd"].(float64); math.Abs(cost-tc.wantCost) > 1e-9 {
+				t.Errorf("cost_usd = %v; want %v", cost, tc.wantCost)
+			}
+			if in, _ := usage["input_tokens"].(float64); int(in) != tc.wantInput {
+				t.Errorf("input_tokens = %v; want %d", in, tc.wantInput)
+			}
+			if out, _ := usage["output_tokens"].(float64); int(out) != tc.wantOutput {
+				t.Errorf("output_tokens = %v; want %d", out, tc.wantOutput)
+			}
+		})
 	}
 }
 

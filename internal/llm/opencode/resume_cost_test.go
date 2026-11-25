@@ -16,6 +16,7 @@ package opencode
 
 import (
 	"context"
+	"errors"
 	"math"
 	"strings"
 	"sync"
@@ -197,8 +198,8 @@ func TestReconciledUsageReadsSessionDatabase(t *testing.T) {
 			noDB: true,
 		},
 		{
-			name:      "missing sqlite3 is unchanged",
-			runnerErr: errSQLiteUnavailable,
+			name:      "unreadable database is unchanged",
+			runnerErr: errors.New("database is locked"),
 		},
 		{
 			name:    "missing session row is unchanged",

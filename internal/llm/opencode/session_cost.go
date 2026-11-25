@@ -20,7 +20,6 @@ import (
 	"fmt"
 	"log"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"regexp"
 	"strconv"
@@ -29,28 +28,11 @@ import (
 	"github.com/doordash-oss/agentic-orchestrator/internal/llm"
 )
 
-var (
-	openCodeSessionIDPattern = regexp.MustCompile(`^[A-Za-z0-9_-]+$`)
-	errSQLiteUnavailable     = errors.New("sqlite3 is not available")
-)
+var openCodeSessionIDPattern = regexp.MustCompile(`^[A-Za-z0-9_-]+$`)
 
+// sqliteRunner returns query rows as newline-separated, tab-delimited text.
 type sqliteRunner interface {
 	RunSQLite(ctx context.Context, dbPath, query string) ([]byte, error)
-}
-
-type sqliteCLIRunner struct{}
-
-func (sqliteCLIRunner) RunSQLite(ctx context.Context, dbPath, query string) ([]byte, error) {
-	sqlitePath, err := exec.LookPath("sqlite3")
-	if err != nil {
-		return nil, errSQLiteUnavailable
-	}
-	cmd := exec.CommandContext(ctx, sqlitePath, "-readonly", "-batch", "-noheader", "-separator", "\t", dbPath, query)
-	out, err := cmd.CombinedOutput()
-	if err != nil {
-		return nil, fmt.Errorf("sqlite3 query failed: %w: %s", err, strings.TrimSpace(string(out)))
-	}
-	return out, nil
 }
 
 type openCodeChildSessionCostLookup struct {
@@ -225,13 +207,10 @@ func (l openCodeChildSessionCostLookup) query(ctx context.Context, sessionID str
 			}
 			return nil, false, fmt.Errorf("stat OpenCode session database: %w", err)
 		}
-		l.runner = sqliteCLIRunner{}
+		l.runner = sqliteDriverRunner{}
 	}
 	out, err := l.runner.RunSQLite(ctx, l.dbPath, build(sessionID))
 	if err != nil {
-		if errors.Is(err, errSQLiteUnavailable) {
-			return nil, false, nil
-		}
 		return nil, false, err
 	}
 	return out, true, nil
@@ -285,8 +264,8 @@ func sqlStringLiteral(value string) string {
 }
 
 func parseOpenCodeSessionCostOutput(out []byte) (llm.SessionCostAdjustment, error) {
-	line := strings.TrimSpace(string(out))
-	if line == "" {
+	line := strings.Trim(string(out), "\r\n")
+	if strings.TrimSpace(line) == "" {
 		return llm.SessionCostAdjustment{}, nil
 	}
 	fields := strings.Split(line, "\t")

@@ -538,6 +538,9 @@ func (m *Manager) StopSession(id string) error {
 	if !ok {
 		return fmt.Errorf("session %s not found", id)
 	}
+	s.mu.Lock()
+	s.featureInterrupted = true
+	s.mu.Unlock()
 	return s.Stop()
 }
 

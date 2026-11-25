@@ -358,7 +358,11 @@ func (pr *PhaseRunner) runInteractivePhase(f *feature.Feature, cfg interactivePh
 			ObserverPhase: cfg.Phase.String(),
 			RunNumber:     sessionRunNumber(sess),
 		})
-		pr.Observer.SessionEnded(sessionCtx, cfg.Phase.String(), sessionID, "", usage, duration, sessionErrFromStatus(sess))
+		endErr := sessionErrFromStatus(sess)
+		if s, ok := sess.(interface{ FeatureInterrupted() bool }); ok && s.FeatureInterrupted() {
+			endErr = observe.ErrSessionInterrupted
+		}
+		pr.Observer.SessionEnded(sessionCtx, cfg.Phase.String(), sessionID, "", usage, duration, endErr)
 	})
 
 	// Set up log file

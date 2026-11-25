@@ -285,6 +285,9 @@ type Session struct {
 	// resultSeq at that moment. Guarded by mu.
 	stopRequested bool
 	stopResultSeq uint64
+	// featureInterrupted marks a stop issued through Manager.StopSession,
+	// which pauses, rewinds, restarts and deletions use. Guarded by mu.
+	featureInterrupted bool
 	// exitDescription is set once the reaped process exits. Atomic because
 	// the reaper holds mu while it waits.
 	exitDescription atomic.Pointer[string]
@@ -470,6 +473,14 @@ func (s *Session) StopRequested() bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return s.stopRequested
+}
+
+// FeatureInterrupted reports whether the session was stopped because its
+// feature was interrupted rather than by its own phase waiter.
+func (s *Session) FeatureInterrupted() bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.featureInterrupted
 }
 
 // ExitDescription reports how the provider process exited, such as

@@ -1479,9 +1479,9 @@ func TestSessionSendUserMessageRecordsConversationalTurn(t *testing.T) {
 		t.Fatalf("user content = %+v, want follow-up text", got)
 	}
 
-	persisted, err := readPersistedTranscript(s.transcriptPath)
+	persisted, err := ReadPersistedTranscript(s.transcriptPath)
 	if err != nil {
-		t.Fatalf("readPersistedTranscript: %v", err)
+		t.Fatalf("ReadTranscript: %v", err)
 	}
 	if len(persisted) != 1 || persisted[0].User == nil || persisted[0].User.Message.Content[0].Text != "What changed?" {
 		t.Fatalf("persisted messages = %+v, want follow-up user message", persisted)
@@ -1541,9 +1541,9 @@ func TestSessionSendUserMessageWithHiddenContextSplitsWireFromEcho(t *testing.T)
 		t.Fatalf("echoed user content = %+v, want the visible message only", got)
 	}
 
-	persisted, err := readPersistedTranscript(s.transcriptPath)
+	persisted, err := ReadPersistedTranscript(s.transcriptPath)
 	if err != nil {
-		t.Fatalf("readPersistedTranscript: %v", err)
+		t.Fatalf("ReadTranscript: %v", err)
 	}
 	if len(persisted) != 1 || persisted[0].User == nil || persisted[0].User.Message.Content[0].Text != "Explain this failure" {
 		t.Fatalf("persisted messages = %+v, want the visible message only", persisted)

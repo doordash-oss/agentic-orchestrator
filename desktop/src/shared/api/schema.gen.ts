@@ -427,6 +427,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/features/{feature_id}/runs/{run_number}/sessions/{session_id}/transcript": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Read a bounded transcript of one session as recorded in one run.
+         * @description Joins, oldest first, every segment the session wrote in this run (a resumed session writes a new one) with a `Session resumed` status row between them. Reads persisted rows, so finished and sealed-run sessions stay readable after a restart or after a later run reuses the ID. Row indexes are this endpoint's own and do not match `/output/stream`.
+         */
+        get: operations["getRunSessionTranscript"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/features/{feature_id}/runs/{run_number}/artifacts": {
         parameters: {
             query?: never;
@@ -4626,6 +4646,26 @@ export interface operations {
         requestBody?: never;
         responses: {
             200: components["responses"]["RunSessionListResponse"];
+            401: components["responses"]["Unauthorized"];
+        };
+    };
+    getRunSessionTranscript: {
+        parameters: {
+            query?: {
+                offset?: number;
+                limit?: components["parameters"]["Limit"];
+            };
+            header?: never;
+            path: {
+                feature_id: components["parameters"]["FeatureID"];
+                run_number: components["parameters"]["RunNumber"];
+                session_id: components["parameters"]["SessionID"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: components["responses"]["TranscriptResponse"];
             401: components["responses"]["Unauthorized"];
         };
     };

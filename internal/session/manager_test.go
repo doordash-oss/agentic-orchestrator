@@ -152,6 +152,7 @@ sleep 30
 
 	original := NewManager(nil)
 	t.Cleanup(original.Shutdown)
+	runTranscriptFixture(t, original, stateDir, "feature-1-implement", 3, "earlier segment")
 	sess, err := original.StartSession(
 		"feature-1-implement", "feature-1", feature.PhaseImplement,
 		[]string{"bash", scriptPath}, stateDir, nil,
@@ -194,8 +195,8 @@ sleep 30
 	if got := restored[0].MessageLog().Len(); got != 2 {
 		t.Fatalf("restored transcript rows = %d, want 2", got)
 	}
-	if got := restored[0].MessageLog().AssistantText(); !strings.Contains(got, "before restart") {
-		t.Fatalf("restored transcript = %q, want assistant output", got)
+	if got := restored[0].MessageLog().AssistantText(); !strings.Contains(got, "before restart") || strings.Contains(got, "earlier segment") {
+		t.Fatalf("restored transcript = %q, want only the live segment's output", got)
 	}
 	if got := restarted.GetSession("feature-1-implement"); got == nil {
 		t.Fatal("GetSession did not return the restored session")

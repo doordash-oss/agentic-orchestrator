@@ -15,10 +15,7 @@
 package session
 
 import (
-	"bufio"
 	"context"
-	"crypto/sha256"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -205,14 +202,14 @@ func (m *Manager) StartSession(id, featureID string, phase feature.Phase, comman
 		s.observer = opts[0].Observer
 		s.watchdog = newSessionWatchdog(s, opts[0].Watchdog)
 		if s.pidDir != "" {
-			sum := sha256.Sum256([]byte(id))
-			s.transcriptPath = filepath.Join(s.pidDir, fmt.Sprintf("session-transcript-%x.jsonl", sum[:8]))
 			if err := os.MkdirAll(s.pidDir, 0o755); err != nil {
 				return nil, fmt.Errorf("creating transcript directory: %w", err)
 			}
-			if err := os.Remove(s.transcriptPath); err != nil && !os.IsNotExist(err) {
-				return nil, fmt.Errorf("resetting transcript: %w", err)
+			path, err := createTranscriptSegment(s.pidDir, id, s.runNumber, time.Now())
+			if err != nil {
+				return nil, err
 			}
+			s.transcriptPath = path
 		}
 		// Set log file before Start() so the read goroutine can write from
 		// the first line. This avoids a race with fast sessions (codex)
@@ -364,7 +361,7 @@ func (m *Manager) restoreLiveSessions(stateDir string) error {
 			log.Printf("session-manager: skip session %q with unknown phase %q", pf.ManagerID, pf.Phase)
 			continue
 		}
-		messages, err := readPersistedTranscript(transcriptPath)
+		messages, err := ReadPersistedTranscript(transcriptPath)
 		if err != nil {
 			log.Printf("session-manager: skip session %q: %v", pf.ManagerID, err)
 			continue
@@ -421,38 +418,6 @@ func persistedPhase(name string) (feature.Phase, bool) {
 		}
 	}
 	return 0, false
-}
-
-func readPersistedTranscript(path string) ([]llm.SDKMessage, error) {
-	f, err := os.Open(path)
-	if err != nil {
-		return nil, fmt.Errorf("opening transcript: %w", err)
-	}
-	defer f.Close()
-
-	var messages []llm.SDKMessage
-	scanner := bufio.NewScanner(f)
-	scanner.Buffer(make([]byte, 64*1024), 16*1024*1024)
-	for scanner.Scan() {
-		var record persistedTranscriptRecord
-		if err := json.Unmarshal(scanner.Bytes(), &record); err != nil {
-			log.Printf("session-manager: skip malformed transcript row in %s: %v", path, err)
-			continue
-		}
-		msg := record.Message.sdkMessage()
-		switch {
-		case record.Index == len(messages):
-			messages = append(messages, msg)
-		case record.Index >= 0 && record.Index < len(messages):
-			messages[record.Index] = msg
-		default:
-			log.Printf("session-manager: skip out-of-order transcript row %d in %s", record.Index, path)
-		}
-	}
-	if err := scanner.Err(); err != nil {
-		return nil, fmt.Errorf("reading transcript: %w", err)
-	}
-	return messages, nil
 }
 
 // isChildExitedWriteError reports whether a stdin write failed because the

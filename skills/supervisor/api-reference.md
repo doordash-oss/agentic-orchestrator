@@ -133,6 +133,8 @@ Feature sessions ask questions (ask-user) and request help; both wait in the pen
   Example: `"$AGENTICO_BIN" api GET /api/v1/features/{feature_id}/runs/{run_number}`
 - `GET /api/v1/features/{feature_id}/runs/{run_number}/sessions` — the sessions that belong to one run.
   Example: `"$AGENTICO_BIN" api GET /api/v1/features/{feature_id}/runs/{run_number}/sessions`
+- `GET /api/v1/features/{feature_id}/runs/{run_number}/sessions/{session_id}/transcript` — the session's transcript as recorded in that run, every resumed segment joined with a `Session resumed` row; works for finished and sealed-run sessions after a restart. Optional query: `offset`, `limit`.
+  Example: `"$AGENTICO_BIN" api GET '/api/v1/features/{feature_id}/runs/{run_number}/sessions/{session_id}/transcript?limit=50'`
 
 ## Artifacts and logs
 

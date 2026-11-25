@@ -1533,7 +1533,9 @@ func (s *Session) appendLocalStatus(text string) error {
 			Message:   text,
 		},
 	}
-	s.messageLog.Append(msg)
+	if err := s.persistTranscriptRow(s.messageLog.Append(msg), msg); err != nil {
+		log.Printf("session %s: persist status: %v", s.id, err)
+	}
 	select {
 	case s.attachCh <- msg:
 	default:
@@ -2093,7 +2095,9 @@ func (s *Session) appendAskUserMessages(resolved askuser.Resolved, confidenceByI
 			msg.AutoPickQuestion = a.Question
 			msg.AutoPickConfidence = confidence
 		}
-		s.messageLog.Append(msg)
+		if err := s.persistTranscriptRow(s.messageLog.Append(msg), msg); err != nil {
+			log.Printf("session %s: persist ask-user answer: %v", s.id, err)
+		}
 	}
 }
 

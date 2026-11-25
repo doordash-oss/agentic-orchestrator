@@ -681,6 +681,7 @@ func documentedServerRoutes() []documentedRoute {
 		{method: httpMethodGet, path: "/api/v1/features/{feature_id}/runs"},
 		{method: httpMethodGet, path: "/api/v1/features/{feature_id}/runs/{run_number}"},
 		{method: httpMethodGet, path: "/api/v1/features/{feature_id}/runs/{run_number}/sessions"},
+		{method: httpMethodGet, path: "/api/v1/features/{feature_id}/runs/{run_number}/sessions/{session_id}/transcript"},
 		{method: httpMethodGet, path: "/api/v1/features/{feature_id}/runs/{run_number}/artifacts"},
 		{method: httpMethodGet, path: "/api/v1/features/{feature_id}/runs/{run_number}/artifacts/{artifact_id}"},
 		{method: httpMethodGet, path: "/api/v1/features/{feature_id}/runs/{run_number}/logs/{log_id}"},

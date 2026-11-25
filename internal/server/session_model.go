@@ -126,25 +126,7 @@ func (h *apiHandler) handleTranscript(w http.ResponseWriter, r *http.Request, se
 			errcat.WithParams(errcat.SubjectParams{Subject: "Session", Name: sessionID}))
 		return
 	}
-	total := sess.MessageLog().Len()
-	offset := int(parseInt64Query(r, "offset", 0))
-	limit := int(parseInt64Query(r, "limit", 100))
-	if offset < 0 || limit <= 0 || limit > 500 {
-		writeAPIError(w, http.StatusBadRequest, errcat.BadRequest,
-			errcat.WithDiagnostics(fmt.Sprintf("invalid transcript bounds for session %q", sessionID)))
-		return
-	}
-	if offset > total {
-		offset = total
-	}
-	end := min(offset+limit, total)
-	messages := sess.MessageLog().Messages()[offset:end]
-	resp := TranscriptResponse{
-		APIVersion: APIVersion,
-		Cursor:     Cursor{Total: total, Start: offset, End: end},
-		Messages:   transcriptDTOs(messages, offset, sess.WorkDir()),
-	}
-	h.writeRevisionedResponse(w, r, resp, func(meta ResponseMeta) any { resp.Meta = meta; return resp })
+	h.writeTranscriptPage(w, r, sessionID, sess.MessageLog().Messages(), sess.WorkDir())
 }
 
 // handleSessionOutputStream tails a session's transcript live over SSE,

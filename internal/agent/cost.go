@@ -91,7 +91,16 @@ func extractSessionCost(sess ports.SessionView) sessionCost {
 			applySessionCostAdjustment(&sc, adjustment)
 		}
 	}
+	// Tokens without any reported price, e.g. a turn stopped before its
+	// Result, must not read as a free session.
+	if sc.TotalCostUSD == 0 && sc.Usage.CostSource == "" && sess.Cost() == nil && usageHasTokens(sc.Usage) {
+		sc.Usage.CostSource = observe.CostSourceUnavailable
+	}
 	return sc
+}
+
+func usageHasTokens(u llm.Usage) bool {
+	return u.InputTokens+u.OutputTokens+u.CacheReadInputTokens+u.CacheCreationInputTokens > 0
 }
 
 func applySessionCostAdjustment(cost *sessionCost, adjustment llm.SessionCostAdjustment) {

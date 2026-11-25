@@ -16,11 +16,13 @@ package agent
 
 import (
 	"path/filepath"
+	"sync"
 	"testing"
 	"time"
 
 	"github.com/doordash-oss/agentic-orchestrator/internal/feature"
 	"github.com/doordash-oss/agentic-orchestrator/internal/llm"
+	"github.com/doordash-oss/agentic-orchestrator/internal/observe"
 	"github.com/doordash-oss/agentic-orchestrator/internal/ports"
 	"github.com/doordash-oss/agentic-orchestrator/internal/session"
 	"github.com/doordash-oss/agentic-orchestrator/test/testutil"
@@ -135,6 +137,99 @@ func TestImplementLoop_InterruptedSessionRecordsCostInItsRun(t *testing.T) {
 				}
 			}
 
+			ended := filterEventsByType(readObserveEvents(t, observeDir, featureID), "session.ended")
+			if len(ended) != 1 || ended[0].Status != "interrupted" {
+				t.Fatalf("session.ended = %+v, want one interrupted event", ended)
+			}
+		})
+	}
+}
+
+// stopResultTestSession mimics a Claude session whose Stop interrupts the
+// in-flight turn: the provider's Result, if any, lands before Stop returns.
+type stopResultTestSession struct {
+	*runNumberTestSession
+	stopResult *llm.ResultMessage
+	once       sync.Once
+	mu         sync.Mutex
+	cost       *llm.ResultMessage
+}
+
+func (s *stopResultTestSession) Cost() *llm.ResultMessage {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.cost
+}
+
+func (s *stopResultTestSession) Stop() error {
+	s.once.Do(func() {
+		s.mu.Lock()
+		s.cost = s.stopResult
+		s.mu.Unlock()
+		s.StatusChVal <- agentStatusFailed
+	})
+	return nil
+}
+
+func TestImplementLoop_InterruptedMidTurnRecordsProviderCost(t *testing.T) {
+	tests := []struct {
+		name           string
+		stopResult     *llm.ResultMessage
+		wantCost       float64
+		wantCostSource string
+	}{
+		{
+			name:       "result emitted on interrupt",
+			stopResult: &llm.ResultMessage{Subtype: "error_during_execution", IsError: true, TotalCostUSD: 0.0357},
+			wantCost:   0.0357,
+		},
+		{name: "no result marks cost unavailable", wantCostSource: observe.CostSourceUnavailable},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			featureID := "interrupt-midturn-001"
+			artifactDir, stateDir, workDir, observeDir := crashResumeTestDirs(t, featureID)
+			cfg := newCrashResumeLoopConfig(t, artifactDir, stateDir, workDir, observeDir, featureID)
+			store := feature.NewStore(filepath.Join(t.TempDir(), "features"))
+			f := seedInterruptFeature(t, store, featureID)
+			f.Repos = cfg.Feature.Repos
+			cfg.Feature = f
+			cfg.FeatureStore = store
+			cfg.BuildSession = func(BuildSessionOpts) ([]string, []string, *session.SessionOpts, error) {
+				return []string{"mock-agent"}, nil, &session.SessionOpts{}, nil
+			}
+			cfg.SessionStartFunc = func(id, featureID string, phase feature.Phase, command []string, workdir string, env []string, opts ...*session.SessionOpts) (ports.SessionHandle, error) {
+				sess := &stopResultTestSession{
+					runNumberTestSession: &runNumberTestSession{utilityTestSession: newUtilityTestSession(), runNumber: opts[0].RunNumber},
+					stopResult:           tt.stopResult,
+				}
+				sess.ProviderNameVal = "claude"
+				sess.AccumulatedUsageVal = llm.Usage{InputTokens: 8, OutputTokens: 56, CacheReadInputTokens: 139327, CacheCreationInputTokens: 30678}
+				go func() {
+					setFeatureStatus(t, store, featureID, feature.StatusInterrupted)
+					_ = sess.Stop()
+				}()
+				return sess, nil
+			}
+
+			result, err := runImplementationLoop(cfg, nil)
+			if err != nil {
+				t.Fatalf("runImplementationLoop: %v", err)
+			}
+			if result.FinalStatus != "interrupted" {
+				t.Fatalf("FinalStatus = %q, want interrupted", result.FinalStatus)
+			}
+			run1, err := store.LoadRun(featureID, 1)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(run1.SessionCosts) != 1 {
+				t.Fatalf("run 1 session costs = %+v, want one row", run1.SessionCosts)
+			}
+			row := run1.SessionCosts[0]
+			if row.CostUSD != tt.wantCost || row.CostSource != tt.wantCostSource || row.CacheReadInputTokens != 139327 {
+				t.Errorf("session cost row = %+v, want cost %v source %q with streamed tokens", row, tt.wantCost, tt.wantCostSource)
+			}
 			ended := filterEventsByType(readObserveEvents(t, observeDir, featureID), "session.ended")
 			if len(ended) != 1 || ended[0].Status != "interrupted" {
 				t.Fatalf("session.ended = %+v, want one interrupted event", ended)

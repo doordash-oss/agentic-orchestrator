@@ -77,6 +77,10 @@ var criticalAttachSendTimeout = 5 * time.Second
 // shrink it.
 var resultShutdownGrace = 5 * time.Second
 
+// stopInterruptGrace is how long Stop waits for the Result of a turn it
+// interrupted, so the provider can report the turn's cost.
+const stopInterruptGrace = 3 * time.Second
+
 // Session manages a CLI subprocess using the JSON stdin/stdout protocol.
 // Provider-specific wire protocol logic is delegated to the Protocol interface.
 type Session struct {
@@ -270,6 +274,13 @@ type Session struct {
 	// in readMessages; never reset.
 	resultShutdownStarted atomic.Bool
 	resultShutdownGrace   time.Duration
+
+	// turnInFlight is true from a sent prompt or streamed root output until
+	// the next Result. Guarded by mu.
+	turnInFlight bool
+	// stopInterruptGrace bounds how long Stop waits for an interrupted
+	// turn's Result before closing stdin.
+	stopInterruptGrace time.Duration
 
 	// keepAliveOnTurnResult lets loop-managed sessions continue the same
 	// provider process after any completed turn so the harness can nudge,
@@ -1097,6 +1108,7 @@ func (s *Session) readMessages(onMessage func(llm.SDKMessage)) {
 				s.mu.Lock()
 				s.cost = msg.Result
 				s.resultSeq++
+				s.turnInFlight = false
 				// Extract context window from modelUsage if available (Claude CLI).
 				for _, mu := range msg.Result.ModelUsage {
 					if mu.ContextWindow > 0 && s.latestUsage != nil {
@@ -1119,6 +1131,8 @@ func (s *Session) readMessages(onMessage func(llm.SDKMessage)) {
 					s.streamedUsage = streamedMessageUsage{}
 				}
 				s.mu.Unlock()
+			} else if msg.Assistant != nil || msg.Type == "stream_event" {
+				s.setTurnInFlight(true)
 			}
 
 			// Capture usage from any assistant message that carries it.
@@ -1666,7 +1680,10 @@ func (s *Session) SendUserMessageWithHiddenContext(visible, hiddenContext string
 	if hiddenContext = strings.TrimSpace(hiddenContext); hiddenContext != "" {
 		wireText = hiddenContext + "\n\n" + visible
 	}
+	// Marked before sending so a fast Result cannot be followed by a stale mark.
+	s.setTurnInFlight(true)
 	if err := s.protocol.SendUserMessage(wireText); err != nil {
+		s.setTurnInFlight(false)
 		return err
 	}
 
@@ -2210,10 +2227,53 @@ func (s *Session) Interrupt() error {
 	return nil
 }
 
-// Stop gracefully stops the session: close stdin → SIGTERM → SIGKILL.
+func (s *Session) setTurnInFlight(v bool) {
+	s.mu.Lock()
+	s.turnInFlight = v
+	s.mu.Unlock()
+}
+
+// interruptTurnForStop asks the provider to end an in-flight turn and waits,
+// bounded, for its Result so the turn's cost is recorded. No SIGINT fallback:
+// Stop escalates on its own. Conversational sessions mark a cut turn as
+// interrupted themselves, so their turns are not completed here.
+func (s *Session) interruptTurnForStop() {
+	s.mu.Lock()
+	p := s.protocol
+	inFlight := s.turnInFlight && s.stdin != nil && s.process != nil && !s.kind.Conversational()
+	seq := s.resultSeq
+	grace := s.stopInterruptGrace
+	s.mu.Unlock()
+	if !inFlight || p == nil || p.Interrupt() != nil {
+		return
+	}
+	if grace <= 0 {
+		grace = stopInterruptGrace
+	}
+	deadline := time.NewTimer(grace)
+	defer deadline.Stop()
+	tick := time.NewTicker(20 * time.Millisecond)
+	defer tick.Stop()
+	for {
+		select {
+		case <-s.done:
+			return
+		case <-deadline.C:
+			return
+		case <-tick.C:
+			if s.ResultSeq() != seq {
+				return
+			}
+		}
+	}
+}
+
+// Stop gracefully stops the session: interrupt an in-flight turn → close
+// stdin → SIGTERM → SIGKILL.
 func (s *Session) Stop() error {
 	s.lifecycleCancel()
 	s.disposePermissionHandler()
+	s.interruptTurnForStop()
 
 	s.mu.Lock()
 	proc := s.process

@@ -59,6 +59,15 @@ func sessionRunNumber(sess ports.SessionView) int {
 	return 0
 }
 
+// resultInterruptedByStop reports whether the session's latest Result answers
+// an Agentico-initiated stop.
+func resultInterruptedByStop(sess ports.SessionView) bool {
+	if s, ok := sess.(interface{ ResultInterruptedByStop() bool }); ok {
+		return s.ResultInterruptedByStop()
+	}
+	return false
+}
+
 // extractSessionCost reads cost and accumulated usage from the session.
 // Returns zero values if no data is available.
 func extractSessionCost(sess ports.SessionView) sessionCost {
@@ -143,6 +152,9 @@ func toSessionUsage(cost sessionCost, sessions ...ports.SessionView) observe.Ses
 		usage.Outcome = "success"
 		if result.IsError || result.Subtype != "success" {
 			usage.Outcome = "error"
+			if resultInterruptedByStop(sess) {
+				usage.Outcome = observe.SessionEndedStatusInterrupted
+			}
 		}
 		if len(result.ModelUsage) > 0 {
 			usage.PerModelContextWindows = make(map[string]int, len(result.ModelUsage))

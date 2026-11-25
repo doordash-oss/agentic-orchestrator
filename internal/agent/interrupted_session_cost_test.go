@@ -238,6 +238,51 @@ func TestImplementLoop_InterruptedMidTurnRecordsProviderCost(t *testing.T) {
 	}
 }
 
+// A provider keeps working after reporting success; the harness commits the
+// outcome and stops it. The interrupt's error Result must not read as failure.
+func TestImplementLoop_StopAfterCommittedOutcomeIsNotFailure(t *testing.T) {
+	// parallel-exempt: owns provider subprocesses.
+	featureID := "stop-after-outcome-001"
+	artifactDir, stateDir, workDir, observeDir := crashResumeTestDirs(t, featureID)
+	cfg := newCrashResumeLoopConfig(t, artifactDir, stateDir, workDir, observeDir, featureID)
+	agentScript := testutil.WriteScript(t, t.TempDir(), "agent.sh", testutil.JSONLInit+`
+echo '{"type":"assistant","message":{"id":"m1","role":"assistant","content":[{"type":"text","text":"<agentico-outcome>{\"status\":\"success\"}</agentico-outcome>"}]}}'
+echo '{"type":"assistant","message":{"id":"m2","role":"assistant","content":[{"type":"tool_use","id":"t1","name":"Bash","input":{"command":"true"}}]}}'
+while IFS= read -r line; do
+  case "$line" in *'"interrupt"'*) echo '{"type":"result","subtype":"error_during_execution","is_error":true,"session_id":"mock","total_cost_usd":0.02}'; exit 1;; esac
+done
+exit 1
+`)
+	cfg.BuildSession = mockBuildSession(agentScript, "")
+	sm := session.NewManager(make(chan interface{}, 100))
+	defer sm.Shutdown()
+
+	if _, err := runImplementationLoop(cfg, sm); err != nil {
+		t.Fatalf("runImplementationLoop: %v", err)
+	}
+	meta, err := (&artifactManager{}).readMeta(filepath.Join(artifactDir, "iteration-01"))
+	if err != nil {
+		t.Fatalf("read iteration meta: %v", err)
+	}
+	if meta.AgentStatus != agentStatusSuccess {
+		t.Errorf("iteration agent status = %q, want %q", meta.AgentStatus, agentStatusSuccess)
+	}
+	ended := filterEventsByType(readObserveEvents(t, observeDir, featureID), "session.ended")
+	if len(ended) != 1 {
+		t.Fatalf("session.ended = %+v, want one event", ended)
+	}
+	if ended[0].Error != "" || ended[0].Data["outcome"] != observe.SessionEndedStatusInterrupted {
+		t.Errorf("session.ended error %q outcome %v, want no error and outcome interrupted", ended[0].Error, ended[0].Data["outcome"])
+	}
+	sess := sm.GetSession(ended[0].SessionID)
+	if sess == nil {
+		t.Fatalf("session %q not found", ended[0].SessionID)
+	}
+	if got := sess.Status(); got != ports.SessionDone {
+		t.Errorf("session status = %v, want %v", got, ports.SessionDone)
+	}
+}
+
 func TestAccumulateSessionCostToFeature_TargetsSessionRun(t *testing.T) {
 	tests := []struct {
 		name       string

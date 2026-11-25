@@ -1073,6 +1073,83 @@ func TestSessionStopInterruptsInFlightTurn(t *testing.T) {
 	}
 }
 
+func TestSessionStopStatusAfterInterruptResult(t *testing.T) {
+	// parallel-exempt: owns provider subprocesses.
+	assistant := `{"type":"assistant","message":{"id":"m1","role":"assistant","content":[{"type":"text","text":"working"}],"usage":{"input_tokens":8,"output_tokens":56}}}`
+	errResult := `{"type":"result","subtype":"error_during_execution","is_error":true,"session_id":"s1","total_cost_usd":0.42}`
+	tests := []struct {
+		name            string
+		errorBeforeStop bool
+		wantStatus      SessionStatus
+		wantInterrupted bool
+	}{
+		{name: "interrupt answer ends done", wantStatus: SessionDone, wantInterrupted: true},
+		{name: "genuine error before stop stays failed", errorBeforeStop: true, wantStatus: SessionFailed},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			dir := t.TempDir()
+			body := "#!/bin/bash\necho '{\"type\":\"system\",\"subtype\":\"init\",\"session_id\":\"s1\",\"model\":\"test\"}'\n"
+			body += "echo '" + assistant + "'\n"
+			if tt.errorBeforeStop {
+				body += "echo '" + errResult + "'\n"
+			}
+			// The CLI exits non-zero after an interrupt.
+			body += "while IFS= read -r line; do\n  case \"$line\" in *'\"interrupt\"'*) echo '" + errResult + "'; exit 1;; esac\ndone\nexit 1\n"
+			script := filepath.Join(dir, "cli.sh")
+			if err := os.WriteFile(script, []byte(body), 0o755); err != nil {
+				t.Fatalf("write script: %v", err)
+			}
+
+			mgr := NewManager(make(chan interface{}, 100))
+			s := NewSession("stop-status", "feat-1", feature.PhaseImplement)
+			s.protocol = claude.NewProtocol(llm.ProtocolOpts{})
+			var seenMu sync.Mutex
+			var seen []SessionStatus
+			onMessage := func(msg llm.SDKMessage) {
+				mgr.handleSessionMessage(s, s.ID(), s.FeatureID(), s.Phase(), msg)
+				seenMu.Lock()
+				seen = append(seen, s.Status())
+				seenMu.Unlock()
+			}
+			if err := s.Start([]string{"bash", script}, dir, nil, onMessage); err != nil {
+				t.Fatalf("start: %v", err)
+			}
+			s.protocol.SetStdin(s.stdin)
+			waitFor(t, 5*time.Second, func() bool {
+				s.mu.Lock()
+				defer s.mu.Unlock()
+				if tt.errorBeforeStop {
+					return s.resultSeq == 1
+				}
+				return s.turnInFlight
+			})
+
+			if err := s.Stop(); err != nil {
+				t.Fatalf("Stop: %v", err)
+			}
+			if got := s.Status(); got != tt.wantStatus {
+				t.Errorf("status = %v, want %v", got, tt.wantStatus)
+			}
+			if got := s.ResultInterruptedByStop(); got != tt.wantInterrupted {
+				t.Errorf("ResultInterruptedByStop = %v, want %v", got, tt.wantInterrupted)
+			}
+			if !s.StopRequested() {
+				t.Error("StopRequested = false after Stop")
+			}
+			if tt.wantStatus == SessionDone {
+				seenMu.Lock()
+				defer seenMu.Unlock()
+				for _, st := range seen {
+					if st == SessionFailed {
+						t.Fatalf("observed statuses %v, want no Failed", seen)
+					}
+				}
+			}
+		})
+	}
+}
+
 type noInterruptProtocol struct{ llm.Protocol }
 
 func (noInterruptProtocol) Interrupt() error { return llm.ErrNotSupported }

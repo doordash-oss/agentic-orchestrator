@@ -469,8 +469,8 @@ func (pr *PhaseRunner) runBoundedHelperSessionOnce(ctx context.Context, cfg boun
 				if rootCompletionIntent(sess).Found && !hasPendingRootQuestion(sess) &&
 					(ceilingExpired || silence() >= backgroundTaskStallGrace.get()) {
 					// Stop kills the process group, taking the tasks with it.
+					stopped := tasksStoppedSession{SessionHandle: sess, result: sess.Cost()}
 					_ = sess.Stop()
-					stopped := tasksStoppedSession{sess}
 					result, err := finalizeBoundedHelperResult(cfg.responsePath, stopped, label, cfg.requireOutput, cfg.completionDir, cfg.contractPhase, cfg.contractRole)
 					return finish(result, err)
 				}
@@ -609,15 +609,22 @@ func isRetryableProviderNetworkFailure(output string, err error) bool {
 	return false
 }
 
+// tasksStoppedSession reports no live background tasks for a session the
+// waiter already stopped over a task stall, and the root turn's Result from
+// before the stop, so finalization classifies the root outcome instead of the
+// killed tasks or the stop's interrupt.
+type tasksStoppedSession struct {
+	ports.SessionHandle
+	result *llm.ResultMessage
+}
+
+func (tasksStoppedSession) LiveBackgroundTaskCount() int { return 0 }
+
+func (s tasksStoppedSession) Cost() *llm.ResultMessage { return s.result }
+
 // boundedHelperTurnDisposition interprets a provider turn. Helpers using the
 // phase completion protocol require a root-owned semantic outcome; ordinary
 // helpers retain their one-shot text-result behavior.
-// tasksStoppedSession reports no live background tasks for a session the
-// waiter already stopped over a task stall, so finalization classifies the
-// root outcome instead of the killed tasks.
-type tasksStoppedSession struct{ ports.SessionHandle }
-
-func (tasksStoppedSession) LiveBackgroundTaskCount() int { return 0 }
 
 func boundedHelperTurnDisposition(sess ports.SessionView, completionProtocol bool) llm.TurnDisposition {
 	result := sess.Cost()

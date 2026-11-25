@@ -448,7 +448,10 @@ func (m *Manager) handleSessionMessage(s *Session, id, featureID string, phase f
 		// The phase waiter owns stopping the still-live provider transport;
 		// chat remains available for the user's next turn after an error.
 		if !s.kind.Conversational() && (msg.Result.IsError || msg.Result.Subtype == "error") {
-			s.setStatusLocked(SessionFailed)
+			// After an Agentico stop, the error Result answers our interrupt.
+			if !s.stopRequested {
+				s.setStatusLocked(SessionFailed)
+			}
 			break
 		}
 		interactive := s.turnMode == ports.TurnModeInteractive

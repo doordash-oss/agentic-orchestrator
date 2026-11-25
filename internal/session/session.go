@@ -281,6 +281,10 @@ type Session struct {
 	// stopInterruptGrace bounds how long Stop waits for an interrupted
 	// turn's Result before closing stdin.
 	stopInterruptGrace time.Duration
+	// stopRequested marks an Agentico-initiated Stop; stopResultSeq is
+	// resultSeq at that moment. Guarded by mu.
+	stopRequested bool
+	stopResultSeq uint64
 
 	// keepAliveOnTurnResult lets loop-managed sessions continue the same
 	// provider process after any completed turn so the harness can nudge,
@@ -456,6 +460,21 @@ func (s *Session) ResultSeq() uint64 {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return s.resultSeq
+}
+
+// StopRequested reports whether Agentico has called Stop on this session.
+func (s *Session) StopRequested() bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.stopRequested
+}
+
+// ResultInterruptedByStop reports whether the latest Result answered an
+// Agentico-initiated stop rather than ending the turn on its own.
+func (s *Session) ResultInterruptedByStop() bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.stopRequested && s.resultSeq > s.stopResultSeq && s.status != SessionFailed
 }
 
 // RootOutcomeCh signals whenever a committable root outcome is recorded.
@@ -976,7 +995,9 @@ func (s *Session) readMessages(onMessage func(llm.SDKMessage)) {
 		}
 		if s.process != nil {
 			_ = s.process.Wait()
-			if s.process.ProcessState != nil && s.process.ProcessState.Success() {
+			clean := s.process.ProcessState != nil && s.process.ProcessState.Success()
+			// Providers exit non-zero after an interrupt Agentico sent.
+			if clean || s.stopRequested {
 				// A clean transport shutdown does not undo a failed turn.
 				if s.status != SessionFailed {
 					s.setStatusLocked(SessionDone)
@@ -2275,6 +2296,12 @@ func (s *Session) interruptTurnForStop() {
 // Stop gracefully stops the session: interrupt an in-flight turn → close
 // stdin → SIGTERM → SIGKILL.
 func (s *Session) Stop() error {
+	s.mu.Lock()
+	if !s.stopRequested {
+		s.stopRequested = true
+		s.stopResultSeq = s.resultSeq
+	}
+	s.mu.Unlock()
 	s.lifecycleCancel()
 	s.disposePermissionHandler()
 	s.interruptTurnForStop()

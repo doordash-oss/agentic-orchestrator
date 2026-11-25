@@ -113,6 +113,25 @@ describe('SessionService snapshots', () => {
     );
   });
 
+  it('reads a run-scoped transcript when the run is named', async () => {
+    const apiRequest = vi.fn().mockResolvedValue({
+      status: 200,
+      body: { api_version: 'v1', cursor: { total: 0, start: 0, end: 0 }, messages: [] },
+    });
+    const service = new SessionService({ ...transport(), apiRequest });
+
+    await service.transcript({
+      sessionId: 'session.1',
+      featureId: 'abcd1234',
+      runNumber: 2,
+      limit: 500,
+    });
+    expect(apiRequest).toHaveBeenCalledWith(
+      '/api/v1/features/abcd1234/runs/2/sessions/session.1/transcript?limit=500',
+      undefined,
+    );
+  });
+
   it('rejects incompatible, oversized, polluted, and malformed snapshots', async () => {
     const cases: unknown[] = [
       { api_version: 'v2', sessions: [] },

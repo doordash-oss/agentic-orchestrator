@@ -757,6 +757,16 @@ describe('CurrentRunInspection', () => {
 
     await user.click(screen.getByRole('tab', { name: 'Craft — completed' }));
     expect(await screen.findByText('craft transcript')).toBeVisible();
+    expect(mock.api.getSessionTranscript).toHaveBeenCalledWith({
+      sessionId: 'craft',
+      featureId: 'abcd1234ef567890',
+      runNumber: 8,
+      limit: 500,
+    });
+    expect(mock.api.getSessionTranscript).toHaveBeenCalledWith({
+      sessionId: 'cleanliness',
+      limit: 500,
+    });
   });
 
   it('groups the roster by role and walks agents with arrow keys', async () => {

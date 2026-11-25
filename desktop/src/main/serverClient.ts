@@ -137,8 +137,12 @@ export class SessionService {
     if (input.offset !== undefined) query.set('offset', String(input.offset));
     if (input.limit !== undefined) query.set('limit', String(input.limit));
     const suffix = query.size === 0 ? '' : `?${query.toString()}`;
+    const path =
+      input.featureId !== undefined && input.runNumber !== undefined
+        ? `/api/v1/features/${input.featureId}/runs/${input.runNumber}/sessions/${input.sessionId}/transcript`
+        : `/api/v1/sessions/${input.sessionId}/transcript`;
     const response = validateWithSchema(
-      await this.api(`/api/v1/sessions/${input.sessionId}/transcript${suffix}`),
+      await this.api(`${path}${suffix}`),
       TranscriptResponseSchema,
     );
     return validateWithSchema(

@@ -1832,13 +1832,24 @@ const (
 // with no usable price it stays zero and is marked unavailable so the zero is
 // not mistaken for a free session. Callers must hold p.mu.
 func (p *Protocol) costLocked() (float64, string) {
-	if p.costUSD > 0 {
-		return max(p.costUSD-p.costBaseline.parentCostUSD, 0), ""
+	return openCodeCost(p.costUSD > 0, max(p.costUSD-p.costBaseline.parentCostUSD, 0), p.price, llm.Usage{
+		InputTokens:              p.inTok,
+		OutputTokens:             p.outTok,
+		CacheReadInputTokens:     p.cacheRead,
+		CacheCreationInputTokens: p.cacheCreate,
+	})
+}
+
+// openCodeCost applies costLocked's rules: a reported cost wins when priced,
+// otherwise tokens are estimated from price or marked unavailable.
+func openCodeCost(priced bool, reported float64, price *llm.ModelCost, u llm.Usage) (float64, string) {
+	if priced {
+		return reported, ""
 	}
-	if p.inTok+p.outTok+p.cacheRead+p.cacheCreate == 0 {
+	if usageTokenTotal(u) == 0 {
 		return 0, ""
 	}
-	if estimate, ok := estimateTokenCost(p.price, p.inTok, p.outTok, p.cacheRead, p.cacheCreate); ok {
+	if estimate, ok := estimateTokenCost(price, u.InputTokens, u.OutputTokens, u.CacheReadInputTokens, u.CacheCreationInputTokens); ok {
 		return estimate, costSourceTokenEstimate
 	}
 	return 0, costSourceUnavailable

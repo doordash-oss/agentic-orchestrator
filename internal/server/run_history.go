@@ -150,7 +150,7 @@ func (h *apiHandler) handleRunSessions(w http.ResponseWriter, r *http.Request, f
 			continue
 		}
 		seen[summary.ID] = true
-		addEarlierSegmentUsage(&summary, sess, run)
+		addEarlierSegmentCost(&summary, sess, run)
 		summaries = append(summaries, summary)
 	}
 	// Memory loses finished sessions on restart and when a later run reuses
@@ -165,11 +165,12 @@ func (h *apiHandler) handleRunSessions(w http.ResponseWriter, r *http.Request, f
 	})
 }
 
-// addEarlierSegmentUsage folds in the ledger rows of earlier segments of a
-// resumed session, which shares its ID with the in-memory latest segment. A
+// addEarlierSegmentCost folds in the cost of earlier segments of a resumed
+// session, which shares its ID with the in-memory latest segment. Tokens stay
+// the latest turn's, since ledger rows hold per-segment totals. A
 // segment's own row is the last one for its ID and exists only once the
 // session has exited (Done runs the cost cleanups first) with usage to record.
-func addEarlierSegmentUsage(summary *SessionSummary, sess ports.SessionView, run *feature.Run) {
+func addEarlierSegmentCost(summary *SessionSummary, sess ports.SessionView, run *feature.Run) {
 	var rows []feature.SessionCostRecord
 	for _, rec := range run.SessionCosts {
 		if strings.TrimSpace(rec.SessionID) == summary.ID {
@@ -181,8 +182,6 @@ func addEarlierSegmentUsage(summary *SessionSummary, sess ports.SessionView, run
 	}
 	for _, rec := range rows {
 		summary.Usage.CostUSD += rec.CostUSD
-		summary.Usage.InputTokens += rec.InputTokens
-		summary.Usage.OutputTokens += rec.OutputTokens
 	}
 }
 

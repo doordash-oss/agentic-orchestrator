@@ -596,7 +596,7 @@ func TestRunSessionsIncludeEarlierResumedSegments(t *testing.T) {
 	earlier := feature.SessionCostRecord{SessionID: "f-design", PhaseKey: "design", CostUSD: 0.115, InputTokens: 100, OutputTokens: 10}
 	latest := feature.SessionCostRecord{SessionID: "f-design", PhaseKey: "design", CostUSD: 0.271, InputTokens: 200, OutputTokens: 20}
 	other := feature.SessionCostRecord{SessionID: "f-other", PhaseKey: "design", CostUSD: 5}
-	latestUsage := &llm.Usage{CostUSD: 0.271, CostSource: "provider_estimate", InputTokens: 200, OutputTokens: 20}
+	latestUsage := &llm.Usage{CostUSD: 0.271, CostSource: "provider_estimate", InputTokens: 7, OutputTokens: 3}
 	cases := []struct {
 		name       string
 		sealed     bool
@@ -607,13 +607,13 @@ func TestRunSessionsIncludeEarlierResumedSegments(t *testing.T) {
 		wantInput  int
 		wantOutput int
 	}{
-		{name: "ended resumed session", ledger: []feature.SessionCostRecord{earlier, other, latest}, usage: latestUsage, exited: true, wantCost: 0.386, wantInput: 300, wantOutput: 30},
-		{name: "live resumed session", ledger: []feature.SessionCostRecord{earlier, other}, usage: latestUsage, wantCost: 0.386, wantInput: 300, wantOutput: 30},
-		{name: "ended resumed segment without usage", ledger: []feature.SessionCostRecord{earlier}, usage: &llm.Usage{}, exited: true, wantCost: 0.115, wantInput: 100, wantOutput: 10},
-		{name: "ended session never resumed", ledger: []feature.SessionCostRecord{other, latest}, usage: latestUsage, exited: true, wantCost: 0.271, wantInput: 200, wantOutput: 20},
-		{name: "live session never resumed", ledger: []feature.SessionCostRecord{other}, usage: latestUsage, wantCost: 0.271, wantInput: 200, wantOutput: 20},
-		{name: "sealed run session never resumed", sealed: true, ledger: []feature.SessionCostRecord{latest}, usage: latestUsage, exited: true, wantCost: 0.271, wantInput: 200, wantOutput: 20},
-		{name: "sealed run resumed session", sealed: true, ledger: []feature.SessionCostRecord{earlier, latest}, usage: latestUsage, exited: true, wantCost: 0.386, wantInput: 300, wantOutput: 30},
+		{name: "ended resumed session", ledger: []feature.SessionCostRecord{earlier, other, latest}, usage: latestUsage, exited: true, wantCost: 0.386, wantInput: 7, wantOutput: 3},
+		{name: "live resumed session", ledger: []feature.SessionCostRecord{earlier, other}, usage: latestUsage, wantCost: 0.386, wantInput: 7, wantOutput: 3},
+		{name: "ended resumed segment without usage", ledger: []feature.SessionCostRecord{earlier}, usage: &llm.Usage{}, exited: true, wantCost: 0.115},
+		{name: "ended session never resumed", ledger: []feature.SessionCostRecord{other, latest}, usage: latestUsage, exited: true, wantCost: 0.271, wantInput: 7, wantOutput: 3},
+		{name: "live session never resumed", ledger: []feature.SessionCostRecord{other}, usage: latestUsage, wantCost: 0.271, wantInput: 7, wantOutput: 3},
+		{name: "sealed run session never resumed", sealed: true, ledger: []feature.SessionCostRecord{latest}, usage: latestUsage, exited: true, wantCost: 0.271, wantInput: 7, wantOutput: 3},
+		{name: "sealed run resumed session", sealed: true, ledger: []feature.SessionCostRecord{earlier, latest}, usage: latestUsage, exited: true, wantCost: 0.386, wantInput: 7, wantOutput: 3},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

@@ -166,6 +166,7 @@ sleep 30
 	if err != nil {
 		t.Fatalf("reading live session metadata: %v", err)
 	}
+	waitForPersistedLine(t, pidFile.Transcript, "before restart")
 	transcript, err := os.OpenFile(pidFile.Transcript, os.O_APPEND|os.O_WRONLY, 0)
 	if err != nil {
 		t.Fatalf("opening persisted transcript: %v", err)
@@ -252,6 +253,21 @@ func waitForMessageCount(t *testing.T, sess ports.SessionView, want int) {
 		time.Sleep(10 * time.Millisecond)
 	}
 	t.Fatalf("message count = %d, want at least %d", sess.MessageLog().Len(), want)
+}
+
+func waitForPersistedLine(t *testing.T, path, substr string) {
+	t.Helper()
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		data, _ := os.ReadFile(path)
+		for _, line := range strings.SplitAfter(string(data), "\n") {
+			if strings.HasSuffix(line, "\n") && strings.Contains(line, substr) {
+				return
+			}
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatalf("transcript %s never persisted a complete line containing %q", path, substr)
 }
 
 // TestHighVolumePartialStreamNoBoundedGoroutines verifies that high-volume

@@ -71,6 +71,13 @@ var finalReviewRootOrchestrationArtifacts = agent.FinalReviewRootOrchestrationAr
 
 // emitPhaseCompleted emits a PhaseCompleted event and fires the hook. This
 // is the sole emission site for phase completion in completion handlers.
+func (o *Orchestrator) emitPhaseStarted(featureID string, phase feature.Phase) {
+	if o.hooks.OnPhaseStarted != nil {
+		o.hooks.OnPhaseStarted(featureID, phase)
+	}
+	o.emitEvent(ports.Event{Type: ports.PhaseStarted, FeatureID: featureID, Phase: phase})
+}
+
 func (o *Orchestrator) emitPhaseCompleted(featureID string, phase feature.Phase, err error) {
 	if o.hooks.OnPhaseCompleted != nil {
 		o.hooks.OnPhaseCompleted(featureID, phase, err)
@@ -925,6 +932,7 @@ func (o *Orchestrator) runDeferredFinalReview(featureID string) error {
 	if err != nil {
 		return err
 	}
+	o.emitPhaseStarted(featureID, feature.PhaseFinalReview)
 	res, ok := <-resultCh
 	return o.finishDeferredFinalReviewResult(featureID, res, ok)
 }

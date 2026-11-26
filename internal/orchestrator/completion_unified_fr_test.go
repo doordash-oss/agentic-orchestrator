@@ -155,6 +155,9 @@ func TestOrchestrator_StartFeature_FinalReviewDispatchIsAsyncAndIdempotent(t *te
 	if got := loadStoredFeature(t, fs, f.ID).Status; got != feature.StatusCodeReady {
 		t.Fatalf("persisted status = %v, want CodeReady after background final review", got)
 	}
+	if got := countPhaseStarted(drainEvents(o), feature.PhaseFinalReview); got != 1 {
+		t.Fatalf("PhaseStarted(PhaseFinalReview) count = %d, want 1", got)
+	}
 }
 
 // TestOrchestrator_OnMultiReposPassed_N1_NoLegacySingleRepoFRRouting verifies
@@ -204,7 +207,10 @@ func TestOrchestrator_OnMultiReposPassed_MediumRunsDeferredFinalReview(t *testin
 	}
 	fs, lc := newStoredFeatureFixture(t, f)
 
-	o := orchestrator.New(orchestrator.Deps{Manager: lc, Store: fs}, orchestrator.Hooks{})
+	var hookStarts []feature.Phase
+	o := orchestrator.New(orchestrator.Deps{Manager: lc, Store: fs}, orchestrator.Hooks{
+		OnPhaseStarted: func(_ string, phase feature.Phase) { hookStarts = append(hookStarts, phase) },
+	})
 	o.SetRunMultiRepoFinalReviewFn(func(
 		ff *feature.Feature,
 	) (chan *agent.OrchestratorResult, error) {
@@ -233,6 +239,22 @@ func TestOrchestrator_OnMultiReposPassed_MediumRunsDeferredFinalReview(t *testin
 	if !hasPhaseCompleted(events, feature.PhaseFinalReview) {
 		t.Fatalf("expected PhaseCompleted(PhaseFinalReview); events: %v", events)
 	}
+	if got := countPhaseStarted(events, feature.PhaseFinalReview); got != 1 {
+		t.Fatalf("PhaseStarted(PhaseFinalReview) count = %d, want 1; events: %v", got, events)
+	}
+	if len(hookStarts) != 1 || hookStarts[0] != feature.PhaseFinalReview {
+		t.Fatalf("OnPhaseStarted calls = %v, want [PhaseFinalReview]", hookStarts)
+	}
+}
+
+func countPhaseStarted(events []ports.Event, want feature.Phase) int {
+	n := 0
+	for _, ev := range events {
+		if ev.Type == ports.PhaseStarted && ev.Phase == want {
+			n++
+		}
+	}
+	return n
 }
 
 // TestOrchestrator_OnMultiReposPassed_N1_AutoPublishComplete_EmitsPublishCompleted

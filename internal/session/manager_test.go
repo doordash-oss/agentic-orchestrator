@@ -814,3 +814,43 @@ echo '{"type":"result","subtype":"success","session_id":"s1","total_cost_usd":0}
 		t.Fatalf("expected stderr log file at %s: %v", stderrPath, err)
 	}
 }
+
+func TestStartSession_RunsCleanupsAfterExitOrFailedStart(t *testing.T) {
+	t.Run("after the process exits", func(t *testing.T) {
+		sm := NewManager(make(chan interface{}, 100))
+		defer sm.Shutdown()
+		var runs atomic.Int64
+		sess, err := sm.StartSession(
+			"cleanup-exit", "feat-1", feature.PhaseImplement,
+			[]string{"sh", "-c", "read _line"}, t.TempDir(), nil,
+			&SessionOpts{Protocol: claude.NewProtocol(llm.ProtocolOpts{}), Cleanups: []func(){func() { runs.Add(1) }}},
+		)
+		if err != nil {
+			t.Fatalf("StartSession() error = %v", err)
+		}
+		if got := runs.Load(); got != 0 {
+			t.Fatalf("cleanups ran %d times while the process is alive", got)
+		}
+		_ = sess.Stop()
+		sess.Wait()
+		if got := runs.Load(); got != 1 {
+			t.Fatalf("cleanups ran %d times after exit, want 1", got)
+		}
+	})
+	t.Run("when the process fails to start", func(t *testing.T) {
+		sm := NewManager(make(chan interface{}, 100))
+		defer sm.Shutdown()
+		var runs atomic.Int64
+		_, err := sm.StartSession(
+			"cleanup-fail", "feat-1", feature.PhaseImplement,
+			[]string{filepath.Join(t.TempDir(), "missing")}, t.TempDir(), nil,
+			&SessionOpts{Protocol: claude.NewProtocol(llm.ProtocolOpts{}), Cleanups: []func(){func() { runs.Add(1) }}},
+		)
+		if err == nil {
+			t.Fatal("StartSession() succeeded for a missing binary")
+		}
+		if got := runs.Load(); got != 1 {
+			t.Fatalf("cleanups ran %d times after a failed start, want 1", got)
+		}
+	})
+}

@@ -82,7 +82,8 @@ const FakeSupervisorUserInputsFile = "user_inputs"
 
 // FakeSupervisorSystemPromptFile is the file, next to the script, that each
 // fake interactive Claude launch overwrites with the value it received on
-// the --append-system-prompt launch flag (empty when none was passed).
+// the --append-system-prompt launch flag or read from
+// --append-system-prompt-file (empty when neither was passed).
 const FakeSupervisorSystemPromptFile = "system_prompt"
 
 // fakeSupervisorLaunchPrologue records the launch, its argv and its system
@@ -94,6 +95,7 @@ resume=""
 prev=""
 for arg in "$@"; do
   if [ "$prev" = "--append-system-prompt" ]; then sysprompt="$arg"; fi
+  if [ "$prev" = "--append-system-prompt-file" ]; then sysprompt=$(cat "$arg"; printf x); sysprompt=${sysprompt%x}; fi
   if [ "$prev" = "--resume" ]; then resume="$arg"; fi
   prev="$arg"
 done

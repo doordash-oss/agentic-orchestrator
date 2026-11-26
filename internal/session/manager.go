@@ -171,6 +171,17 @@ func (m *Manager) StartSession(id, featureID string, phase feature.Phase, comman
 	if len(opts) == 0 || opts[0] == nil || opts[0].Protocol == nil {
 		return nil, errors.New("starting session: session options must carry a provider protocol")
 	}
+	started := false
+	defer func() {
+		if !started {
+			for _, fn := range opts[0].Cleanups {
+				fn()
+			}
+		}
+	}()
+	for _, fn := range opts[0].Cleanups {
+		s.AddCleanupFunc(fn)
+	}
 	if len(opts) > 0 && opts[0] != nil {
 		s.pidDir = opts[0].PIDDir
 		s.runNumber = opts[0].RunNumber
@@ -228,6 +239,7 @@ func (m *Manager) StartSession(id, featureID string, phase feature.Phase, comman
 	if err := s.Start(command, workdir, env, onMessage); err != nil {
 		return nil, fmt.Errorf("starting session: %w", err)
 	}
+	started = true
 	if len(opts) > 0 && opts[0] != nil {
 		noticeCtx := ports.SessionBuildNoticeContext{
 			SessionID: id,

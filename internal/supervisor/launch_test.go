@@ -17,6 +17,7 @@ package supervisor
 import (
 	"context"
 	"errors"
+	"os"
 	"path/filepath"
 	"slices"
 	"strings"
@@ -97,8 +98,17 @@ func TestSessionLauncher_CarriesSupervisorPromptAndRuntimeDirEnv(t *testing.T) {
 	if got := sessions.opts.DebugSystemPrompt; got != want {
 		t.Fatalf("system prompt =\n%s\nwant\n%s", got, want)
 	}
-	if i := slices.Index(sessions.cmd, "--append-system-prompt"); i < 0 || i+1 >= len(sessions.cmd) || sessions.cmd[i+1] != want {
-		t.Fatalf("launch command does not carry the prompt on its system-prompt flag: %q", sessions.cmd)
+	i := slices.Index(sessions.cmd, "--append-system-prompt-file")
+	if i < 0 || i+1 >= len(sessions.cmd) {
+		t.Fatalf("launch command has no system prompt file: %q", sessions.cmd)
+	}
+	if data, readErr := os.ReadFile(sessions.cmd[i+1]); readErr != nil || string(data) != want {
+		t.Fatalf("system prompt file = %q (%v), want the supervisor prompt", data, readErr)
+	}
+	for _, arg := range sessions.cmd {
+		if strings.Contains(arg, ".agentico-server.json") {
+			t.Fatalf("launch argv leaks the system prompt: %q", arg)
+		}
 	}
 	if sessions.opts.InitialPrompt != "" {
 		t.Fatalf("initial prompt = %q, want none (the first message is the user's own text)", sessions.opts.InitialPrompt)

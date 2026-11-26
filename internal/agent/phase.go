@@ -1124,8 +1124,21 @@ func (pr *PhaseRunner) BuildSession(opts BuildSessionOpts) (cmd []string, env []
 		Interactive:          opts.Interactive,
 	}
 
+	var cleanups []func()
+	if reader, ok := prov.(llm.SystemPromptFileReader); ok && reader.ReadsSystemPromptFromFile() && opts.SystemPrompt != "" {
+		path, cleanup, writeErr := writeSystemPromptFile(buildOpts.StateDir, opts.SystemPrompt)
+		if writeErr != nil {
+			return nil, nil, nil, fmt.Errorf("building command for %s: %w", prov.Name(), writeErr)
+		}
+		buildOpts.SystemPromptFile = path
+		cleanups = append(cleanups, cleanup)
+	}
+
 	cmd, env, err = prov.BuildCommand(buildOpts)
 	if err != nil {
+		for _, fn := range cleanups {
+			fn()
+		}
 		return nil, nil, nil, fmt.Errorf("building command for %s: %w", prov.Name(), err)
 	}
 	env = appendAgenticoBinEnv(env)
@@ -1189,6 +1202,7 @@ func (pr *PhaseRunner) BuildSession(opts BuildSessionOpts) (cmd []string, env []
 		Model:               bareModel,
 		Protocol:            protocol,
 		DebugSystemPrompt:   opts.SystemPrompt,
+		Cleanups:            cleanups,
 		TurnMode:            opts.TurnMode,
 		Watchdog:            watchdogConfigForProvider(prov),
 		AutoReview:          arSnap,

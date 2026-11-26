@@ -17,6 +17,7 @@ package claude
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strings"
 
@@ -60,10 +61,19 @@ func (p *Provider) cliBinary() string {
 }
 
 func (p *Provider) BuildCommand(opts llm.CommandBuildOpts) ([]string, []string, error) {
+	if opts.SystemPrompt != "" && opts.SystemPromptFile == "" {
+		return nil, nil, ErrSystemPromptFileRequired
+	}
 	opts.Model = p.claudeCLIModel(opts.Model)
 	args := buildInteractiveCommand(p.cliBinary(), opts)
 	return args, nil, nil
 }
+
+// ErrSystemPromptFileRequired reports a system prompt without the file that
+// carries it to the CLI.
+var ErrSystemPromptFileRequired = errors.New("claude: system prompt requires a system prompt file")
+
+func (p *Provider) ReadsSystemPromptFromFile() bool { return true }
 
 func (p *Provider) AskingQuestionsClause() string {
 	return `## Asking Questions
@@ -306,8 +316,8 @@ func applyStreamingOpts(args []string, opts llm.CommandBuildOpts) []string {
 	if opts.AgentsJSON != "" {
 		args = append(args, "--agents", opts.AgentsJSON)
 	}
-	if opts.SystemPrompt != "" {
-		args = append(args, "--append-system-prompt", opts.SystemPrompt)
+	if opts.SystemPromptFile != "" {
+		args = append(args, "--append-system-prompt-file", opts.SystemPromptFile)
 	}
 	if opts.NativeToollessReview {
 		args = append(args, "--tools", "")

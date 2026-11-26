@@ -166,7 +166,7 @@ func TestRunBoundedHelperRecordsIndividualSessionCost(t *testing.T) {
 	pr.FeatureStore = store
 
 	_, err := pr.runBoundedHelper(context.Background(), boundedHelperConfig{
-		SessionID:     "feature-1-planreview-architecture-01",
+		SessionID:     "feature-1-roadmap-planreview-architecture-01",
 		FeatureID:     "feature-1",
 		Phase:         feature.PhasePlan,
 		Label:         "review helper",
@@ -195,8 +195,8 @@ func TestRunBoundedHelperRecordsIndividualSessionCost(t *testing.T) {
 		t.Fatalf("len(SessionCosts) = %d, want 1", len(updated.SessionCosts))
 	}
 	got := updated.SessionCosts[0]
-	if got.SessionID != "feature-1-planreview-architecture-01" {
-		t.Errorf("SessionID = %q, want feature-1-planreview-architecture-01", got.SessionID)
+	if got.SessionID != "feature-1-roadmap-planreview-architecture-01" {
+		t.Errorf("SessionID = %q, want feature-1-roadmap-planreview-architecture-01", got.SessionID)
 	}
 	if got.PhaseKey != "phase-1-plan" {
 		t.Errorf("PhaseKey = %q, want phase-1-plan", got.PhaseKey)

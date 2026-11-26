@@ -1058,7 +1058,7 @@ func (s *Session) readMessages(onMessage func(llm.SDKMessage)) {
 		copy(cleanups, s.cleanupFuncs)
 		s.mu.Unlock()
 		if pidDir != "" {
-			_ = removePIDFile(pidDir, repoName)
+			_ = removePIDFile(pidDir, s.id, repoName)
 		}
 		for _, fn := range cleanups {
 			fn()
@@ -2372,7 +2372,7 @@ func (s *Session) Stop() error {
 			s.mu.Unlock()
 			s.CloseDone()
 			if pidDir != "" {
-				_ = removePIDFile(pidDir, repoName)
+				_ = removePIDFile(pidDir, s.id, repoName)
 			}
 		}
 		return nil

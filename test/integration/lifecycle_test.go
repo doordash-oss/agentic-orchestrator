@@ -541,7 +541,7 @@ func TestPIDFileLifecycle(t *testing.T) {
 	time.Sleep(100 * time.Millisecond)
 
 	// Verify PID file exists during execution
-	pidFile := filepath.Join(pidDir, "session-pid-repo.pid")
+	pidFile := filepath.Join(pidDir, "session-pid-repo-pid-test.pid")
 	if _, err := os.Stat(pidFile); os.IsNotExist(err) {
 		t.Error("expected PID file to exist during session execution")
 	}

@@ -15,10 +15,16 @@
 package session
 
 import (
+	"context"
 	"os"
 	"path/filepath"
+	"reflect"
+	"sort"
 	"testing"
 	"time"
+
+	"github.com/doordash-oss/agentic-orchestrator/internal/ports"
+	"gopkg.in/yaml.v3"
 )
 
 func TestPIDFileWriteAndRead(t *testing.T) {
@@ -60,7 +66,7 @@ func TestPIDFileRemove(t *testing.T) {
 	pf := PIDFile{PID: 1, RepoName: "repo-a"}
 	WritePIDFile(dir, pf)
 
-	if err := removePIDFile(dir, "repo-a"); err != nil {
+	if err := removePIDFile(dir, "", "repo-a"); err != nil {
 		t.Fatalf("remove PID file: %v", err)
 	}
 
@@ -137,30 +143,114 @@ func TestIsProcessRunning(t *testing.T) {
 
 func TestPIDFileName(t *testing.T) {
 	tests := []struct {
-		name     string
-		repoName string
-		want     string
+		name      string
+		managerID string
+		repoName  string
+		want      string
 	}{
-		{name: "with repo name", repoName: "service-a", want: "session-service-a.pid"},
-		{name: "another repo name", repoName: "backend", want: "session-backend.pid"},
+		{name: "repo and manager", managerID: "feat-1-implement", repoName: "service-a", want: "session-service-a-feat-1-implement.pid"},
+		{name: "empty repo", managerID: "feat-1-final-review.2", want: "session-feat-1-final-review.2.pid"},
+		{name: "unsafe characters", managerID: "a/b c", repoName: "../x", want: "session-.._x-a_b_c.pid"},
+		{name: "no manager falls back to legacy", repoName: "backend", want: "session-backend.pid"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got := pidfileName(tt.repoName)
+			got := pidfileName(tt.managerID, tt.repoName)
 			if got != tt.want {
-				t.Errorf("pidfileName(%q) = %q, want %q", tt.repoName, got, tt.want)
+				t.Errorf("pidfileName(%q, %q) = %q, want %q", tt.managerID, tt.repoName, got, tt.want)
 			}
 		})
 	}
 }
 
-// TestPIDFileName_AlwaysPerRepo asserts the contract: pidfileName always
-// produces the per-repo "session-<repo>.pid" form. There is no longer a
-// legacy "session.pid" path.
-func TestPIDFileName_AlwaysPerRepo(t *testing.T) {
-	if got := pidfileName("foo"); got != "session-foo.pid" {
-		t.Errorf("pidfileName(\"foo\") = %q, want \"session-foo.pid\"", got)
+func TestPIDFilesPerSessionInSharedDir(t *testing.T) {
+	for _, repoName := range []string{"repo-a", ""} {
+		t.Run("repo="+repoName, func(t *testing.T) {
+			stateDir := t.TempDir()
+			dir := filepath.Join(stateDir, "feat-1")
+			ids := []string{"feat-1-final-review.1", "feat-1-final-review.2"}
+			for i, id := range ids {
+				if err := WritePIDFile(dir, PIDFile{PID: 999999990 + i, FeatureID: "feat-1", ManagerID: id, RepoName: repoName}); err != nil {
+					t.Fatalf("WritePIDFile(%s): %v", id, err)
+				}
+			}
+
+			items, err := NewRecoveryAdapter(stateDir, nil).ScanForRecovery(context.Background())
+			if err != nil {
+				t.Fatalf("ScanForRecovery: %v", err)
+			}
+			if got := recoveredManagerIDs(items); !reflect.DeepEqual(got, ids) {
+				t.Fatalf("recovered sessions = %v, want %v", got, ids)
+			}
+
+			if err := removePIDFile(dir, ids[0], repoName); err != nil {
+				t.Fatalf("removePIDFile: %v", err)
+			}
+			pids, err := findPIDFiles(stateDir)
+			if err != nil {
+				t.Fatalf("findPIDFiles: %v", err)
+			}
+			if len(pids) != 1 || pids[0].ManagerID != ids[1] {
+				t.Fatalf("after removing %s found %+v, want only %s", ids[0], pids, ids[1])
+			}
+		})
 	}
+}
+
+func TestLegacyPIDFileRecovered(t *testing.T) {
+	stateDir := t.TempDir()
+	dir := filepath.Join(stateDir, "feat-1")
+	legacy := PIDFile{PID: 999999990, FeatureID: "feat-1", ManagerID: "feat-1-implement", RepoName: "repo-a", Phase: "implement"}
+	data, err := yaml.Marshal(legacy)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	legacyPath := filepath.Join(dir, "session-repo-a.pid")
+	if err := os.WriteFile(legacyPath, data, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := WritePIDFile(dir, PIDFile{PID: 999999991, FeatureID: "feat-1", ManagerID: "feat-1-review", RepoName: "repo-a"}); err != nil {
+		t.Fatal(err)
+	}
+
+	adapter := NewRecoveryAdapter(stateDir, nil)
+	items, err := adapter.ScanForRecovery(context.Background())
+	if err != nil {
+		t.Fatalf("ScanForRecovery: %v", err)
+	}
+	if got, want := recoveredManagerIDs(items), []string{"feat-1-implement", "feat-1-review"}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("recovered sessions = %v, want %v", got, want)
+	}
+
+	if err := removePIDFile(dir, "feat-1-other", "repo-a"); err == nil {
+		t.Fatal("removePIDFile for an unknown session succeeded")
+	}
+	if _, err := os.Stat(legacyPath); err != nil {
+		t.Fatalf("legacy file of another session was removed: %v", err)
+	}
+
+	if err := adapter.ExecuteRecovery(context.Background(), items, map[string]ports.RecoveryAction{}); err != nil {
+		t.Fatalf("ExecuteRecovery: %v", err)
+	}
+	pids, err := findPIDFiles(stateDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(pids) != 0 {
+		t.Fatalf("PID files left after skip of dead sessions: %+v", pids)
+	}
+}
+
+func recoveredManagerIDs(items []ports.RecoveryItem) []string {
+	ids := make([]string, 0, len(items))
+	for _, item := range items {
+		ids = append(ids, item.PIDFile.ManagerID)
+	}
+	sort.Strings(ids)
+	return ids
 }
 
 func TestWritePIDFileWithRepoName(t *testing.T) {
@@ -247,7 +337,7 @@ func TestRemovePIDFileWithRepoName(t *testing.T) {
 	}
 
 	// Remove it
-	if err := removePIDFile(dir, "service-a"); err != nil {
+	if err := removePIDFile(dir, "", "service-a"); err != nil {
 		t.Fatalf("remove PID file: %v", err)
 	}
 

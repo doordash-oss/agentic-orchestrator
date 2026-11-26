@@ -32,10 +32,34 @@ type PIDFile = ports.PIDFile
 
 var _ = time.Second // keep time import used elsewhere
 
-// pidfileName returns the PID file name for a given repo name.
-// Always returns "session-<repoName>.pid".
-func pidfileName(repoName string) string {
+// pidfileName returns the per-session PID file name. Several sessions can
+// share one PID directory and repo name, so the manager ID keeps them apart.
+func pidfileName(managerID, repoName string) string {
+	if managerID == "" {
+		return legacyPIDFileName(repoName)
+	}
+	parts := []string{"session"}
+	if repoName != "" {
+		parts = append(parts, sanitizePIDFileComponent(repoName))
+	}
+	parts = append(parts, sanitizePIDFileComponent(managerID))
+	return strings.Join(parts, "-") + ".pid"
+}
+
+// legacyPIDFileName is the per-repo name earlier versions wrote.
+func legacyPIDFileName(repoName string) string {
 	return "session-" + repoName + ".pid"
+}
+
+func sanitizePIDFileComponent(s string) string {
+	return strings.Map(func(r rune) rune {
+		switch {
+		case r >= 'a' && r <= 'z', r >= 'A' && r <= 'Z', r >= '0' && r <= '9', r == '.', r == '_', r == '-':
+			return r
+		default:
+			return '_'
+		}
+	}, s)
 }
 
 // WritePIDFile creates a PID file for a session.
@@ -47,7 +71,7 @@ func WritePIDFile(dir string, pf PIDFile) error {
 	if err != nil {
 		return fmt.Errorf("marshaling PID file: %w", err)
 	}
-	path := filepath.Join(dir, pidfileName(pf.RepoName))
+	path := filepath.Join(dir, pidfileName(pf.ManagerID, pf.RepoName))
 	return os.WriteFile(path, data, 0o644)
 }
 
@@ -64,9 +88,20 @@ func ReadPIDFile(path string) (*PIDFile, error) {
 	return &pf, nil
 }
 
-// removePIDFile removes a PID file.
-func removePIDFile(dir string, repoName string) error {
-	return os.Remove(filepath.Join(dir, pidfileName(repoName)))
+// removePIDFile removes the session's own PID file, plus a legacy per-repo
+// file only when that file belongs to the same session.
+func removePIDFile(dir, managerID, repoName string) error {
+	err := os.Remove(filepath.Join(dir, pidfileName(managerID, repoName)))
+	if managerID == "" {
+		return err
+	}
+	legacy := filepath.Join(dir, legacyPIDFileName(repoName))
+	if pf, readErr := ReadPIDFile(legacy); readErr == nil && pf.ManagerID == managerID {
+		if legacyErr := os.Remove(legacy); legacyErr == nil {
+			return nil
+		}
+	}
+	return err
 }
 
 // findPIDFiles scans the bounded set of directories where sessions persist PID

@@ -162,7 +162,7 @@ sleep 30
 		t.Fatalf("starting live session: %v", err)
 	}
 	waitForMessageCount(t, sess, 2)
-	pidFile, err := ReadPIDFile(filepath.Join(stateDir, pidfileName("")))
+	pidFile, err := ReadPIDFile(filepath.Join(stateDir, pidfileName("feature-1-implement", "")))
 	if err != nil {
 		t.Fatalf("reading live session metadata: %v", err)
 	}

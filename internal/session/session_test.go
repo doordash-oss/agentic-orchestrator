@@ -130,7 +130,7 @@ func TestSessionInitPersistsProtocolSessionIDToPIDFile(t *testing.T) {
 	})
 
 	if err := WritePIDFile(dir, PIDFile{
-		PID: s.process.Process.Pid, RepoName: "repo", FeatureID: "feat-1", Phase: feature.PhaseImplement.String(),
+		PID: s.process.Process.Pid, ManagerID: "test-session", RepoName: "repo", FeatureID: "feat-1", Phase: feature.PhaseImplement.String(),
 	}); err != nil {
 		t.Fatalf("write initial PID file: %v", err)
 	}
@@ -140,7 +140,7 @@ func TestSessionInitPersistsProtocolSessionIDToPIDFile(t *testing.T) {
 		if msg.Init == nil {
 			return
 		}
-		if pf, err := ReadPIDFile(filepath.Join(dir, pidfileName("repo"))); err == nil {
+		if pf, err := ReadPIDFile(filepath.Join(dir, pidfileName("test-session", "repo"))); err == nil {
 			captured = pf.SessionID
 		}
 	})

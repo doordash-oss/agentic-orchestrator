@@ -451,7 +451,14 @@ function writeStubCli(
       : []),
     ...(rebaseProvider
       ? [
-          '_context=$(printf "%s\\n" "$@" "$_agentico_prompt")',
+          // Claude reads its system prompt from --append-system-prompt-file.
+          '_prompt_file=""',
+          '_prev_arg=""',
+          'for _arg in "$@"; do',
+          '  if [ "$_prev_arg" = "--append-system-prompt-file" ]; then _prompt_file="$_arg"; fi',
+          '  _prev_arg="$_arg"',
+          'done',
+          '_context=$(printf "%s\\n" "$@" "$_agentico_prompt"; if [ -n "$_prompt_file" ]; then cat "$_prompt_file"; fi)',
           `printf 'rebase-session\\n' >> "${providerInvocationLog}"`,
           'write_approved_review() {',
           '  _feedback=$(printf "%s\\n" "$_context" | grep -o \'/[^"\\\\ ]*review-feedback\\.md\' | head -n 1)',

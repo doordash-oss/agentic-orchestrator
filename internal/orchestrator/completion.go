@@ -69,8 +69,7 @@ var errFinalReviewInterrupted = errors.New("final review interrupted")
 // canonical list lives with the agent-side round-commit contract.
 var finalReviewRootOrchestrationArtifacts = agent.FinalReviewRootOrchestrationArtifacts
 
-// emitPhaseCompleted emits a PhaseCompleted event and fires the hook. This
-// is the sole emission site for phase completion in completion handlers.
+// emitPhaseStarted fires the hook and emits a PhaseStarted event.
 func (o *Orchestrator) emitPhaseStarted(featureID string, phase feature.Phase) {
 	if o.hooks.OnPhaseStarted != nil {
 		o.hooks.OnPhaseStarted(featureID, phase)
@@ -78,6 +77,8 @@ func (o *Orchestrator) emitPhaseStarted(featureID string, phase feature.Phase) {
 	o.emitEvent(ports.Event{Type: ports.PhaseStarted, FeatureID: featureID, Phase: phase})
 }
 
+// emitPhaseCompleted emits a PhaseCompleted event and fires the hook. This
+// is the sole emission site for phase completion in completion handlers.
 func (o *Orchestrator) emitPhaseCompleted(featureID string, phase feature.Phase, err error) {
 	if o.hooks.OnPhaseCompleted != nil {
 		o.hooks.OnPhaseCompleted(featureID, phase, err)

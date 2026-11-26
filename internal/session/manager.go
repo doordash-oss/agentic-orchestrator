@@ -236,6 +236,10 @@ func (m *Manager) StartSession(id, featureID string, phase feature.Phase, comman
 		m.handleSessionMessage(s, id, featureID, phase, msg)
 	}
 
+	if serializer, ok := s.protocol.(llm.StartupSerializer); ok {
+		release := serializer.SerializeStartup()
+		defer release()
+	}
 	if err := s.Start(command, workdir, env, onMessage); err != nil {
 		return nil, fmt.Errorf("starting session: %w", err)
 	}

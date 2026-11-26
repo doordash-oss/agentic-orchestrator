@@ -247,6 +247,13 @@ type StdoutInterposer interface {
 	InterposeStdout(stdout io.ReadCloser) io.ReadCloser
 }
 
+// StartupSerializer is implemented by protocols whose processes cannot safely
+// start concurrently. The session calls it before spawning the process and
+// calls the returned release once the handshake has finished or failed.
+type StartupSerializer interface {
+	SerializeStartup() (release func())
+}
+
 // DiagnosticSanitizer is implemented by protocols whose process output may
 // echo provider credentials; the session passes provider text through it
 // before surfacing that text.

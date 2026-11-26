@@ -32,6 +32,12 @@ const sqliteBusyTimeoutMS = 500
 type sqliteDriverRunner struct{}
 
 func (sqliteDriverRunner) RunSQLite(ctx context.Context, dbPath, query string) ([]byte, error) {
+	select {
+	case dbGate <- struct{}{}:
+		defer func() { <-dbGate }()
+	case <-ctx.Done():
+		return nil, fmt.Errorf("wait for OpenCode startup: %w", ctx.Err())
+	}
 	db, err := sql.Open("sqlite", sqliteReadOnlyDSN(dbPath))
 	if err != nil {
 		return nil, fmt.Errorf("open OpenCode session database: %w", err)

@@ -55,6 +55,8 @@ type Protocol struct {
 	stdin io.Writer
 	mu    sync.Mutex
 
+	startupRelease func()
+
 	// Handshake state. initDone closes when the initialize response arrives;
 	// sessionReady closes when session/new returns a session id.
 	initDone     chan struct{}
@@ -207,6 +209,33 @@ func NewProtocol(opts llm.ProtocolOpts) *Protocol {
 // SanitizeDiagnostic implements llm.DiagnosticSanitizer.
 func (p *Protocol) SanitizeDiagnostic(text string) string { return sanitizeDiagnostic(text) }
 
+// dbGate keeps OpenCode launches apart from each other and from Agentico's
+// own database reads: OpenCode opens its shared database before setting a
+// busy timeout, so any concurrent opener can fail it with "database is locked".
+var dbGate = make(chan struct{}, 1)
+
+// SerializeStartup implements llm.StartupSerializer. Handshake releases the
+// gate early, once the session exists and OpenCode's database setup is done.
+func (p *Protocol) SerializeStartup() func() {
+	dbGate <- struct{}{}
+	release := sync.OnceFunc(func() { <-dbGate })
+	p.mu.Lock()
+	p.startupRelease = release
+	p.mu.Unlock()
+	return release
+}
+
+func (p *Protocol) endStartup() {
+	p.mu.Lock()
+	release := p.startupRelease
+	p.mu.Unlock()
+	if release != nil {
+		release()
+	}
+}
+
+var _ llm.StartupSerializer = (*Protocol)(nil)
+
 func (p *Protocol) SetStdin(w io.Writer) {
 	p.mu.Lock()
 	p.stdin = w
@@ -241,6 +270,7 @@ func (p *Protocol) Handshake(ctx context.Context) error {
 	if err := p.startSession(ctx); err != nil {
 		return err
 	}
+	p.endStartup()
 	p.captureResumeBaseline(ctx)
 
 	if p.bridge != nil {

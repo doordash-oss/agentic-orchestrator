@@ -15,6 +15,7 @@
 package agent
 
 import (
+	"os"
 	"path/filepath"
 	"sync"
 	"testing"
@@ -391,5 +392,95 @@ func TestImplementLoop_PauseResumeCountsEachSegmentOnce(t *testing.T) {
 	}
 	if got := run.PhaseCosts["phase-1-impl"]; got < 0.1479 || got > 0.1481 {
 		t.Errorf("PhaseCosts[phase-1-impl] = %v, want 0.148", got)
+	}
+}
+
+// A rewind stops sessions through the manager without moving the feature to
+// Interrupted. A provider that answers the interrupt with an error Result and
+// a non-zero exit must still end the session as interrupted.
+func TestImplementLoop_FeatureStopReportsInterruptedSession(t *testing.T) {
+	// parallel-exempt: owns provider subprocesses.
+	tests := []struct {
+		name        string
+		stop        bool
+		script      string
+		wantStatus  string
+		wantOutcome string
+		wantCost    float64
+	}{
+		{
+			name: "stopped through the manager",
+			stop: true,
+			script: `
+echo '{"type":"assistant","message":{"id":"m1","role":"assistant","content":[{"type":"tool_use","id":"t1","name":"Bash","input":{"command":"true"}}]}}'
+touch "$STARTED"
+while IFS= read -r line; do
+  case "$line" in *'"interrupt"'*) echo '{"type":"result","subtype":"error_during_execution","is_error":true,"stop_reason":"tool_use","session_id":"mock","total_cost_usd":0.1536}'; exit 1;; esac
+done
+exit 1
+`,
+			wantStatus:  observe.SessionEndedStatusInterrupted,
+			wantOutcome: observe.SessionEndedStatusInterrupted,
+			wantCost:    0.1536,
+		},
+		{
+			name: "failed without a stop",
+			script: `
+echo '{"type":"result","subtype":"error_during_execution","is_error":true,"session_id":"mock","total_cost_usd":0.02}'
+exit 1
+`,
+			wantStatus:  "error",
+			wantOutcome: "error",
+			wantCost:    0.02,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			featureID := "feature-stop-001"
+			artifactDir, stateDir, workDir, observeDir := crashResumeTestDirs(t, featureID)
+			cfg := newCrashResumeLoopConfig(t, artifactDir, stateDir, workDir, observeDir, featureID)
+			store := feature.NewStore(filepath.Join(t.TempDir(), "features"))
+			f := seedInterruptFeature(t, store, featureID)
+			f.Repos = cfg.Feature.Repos
+			cfg.Feature = f
+			cfg.FeatureStore = store
+			started := filepath.Join(t.TempDir(), "started")
+			t.Setenv("STARTED", started)
+			cfg.BuildSession = mockBuildSession(testutil.WriteScript(t, t.TempDir(), "agent.sh", testutil.JSONLInit+tt.script), "")
+			sm := session.NewManager(make(chan any, 100))
+			defer sm.Shutdown()
+
+			if tt.stop {
+				go func() {
+					deadline := time.Now().Add(10 * time.Second)
+					for time.Now().Before(deadline) {
+						if _, err := os.Stat(started); err == nil {
+							for _, s := range sm.FeatureSessions(featureID) {
+								_ = sm.StopSession(s.ID())
+							}
+							return
+						}
+						time.Sleep(10 * time.Millisecond)
+					}
+				}()
+			}
+
+			result, err := runImplementationLoop(cfg, sm)
+			if tt.stop && (err != nil || result.FinalStatus != "interrupted") {
+				t.Fatalf("runImplementationLoop = %+v, %v; want interrupted", result, err)
+			}
+			ended := filterEventsByType(readObserveEvents(t, observeDir, featureID), "session.ended")
+			if len(ended) == 0 {
+				t.Fatal("no session.ended event")
+			}
+			got := ended[0]
+			if got.Status != tt.wantStatus || got.Data["outcome"] != tt.wantOutcome || got.Data["total_cost_usd"] != tt.wantCost {
+				t.Errorf("session.ended status %q error %q outcome %v cost %v, want status %q outcome %q cost %v",
+					got.Status, got.Error, got.Data["outcome"], got.Data["total_cost_usd"], tt.wantStatus, tt.wantOutcome, tt.wantCost)
+			}
+			if tt.stop && got.Error != observe.ErrSessionInterrupted.Error() {
+				t.Errorf("session.ended error = %q, want %q", got.Error, observe.ErrSessionInterrupted)
+			}
+		})
 	}
 }

@@ -357,7 +357,7 @@ func (pr *PhaseRunner) runBoundedHelperSessionOnce(ctx context.Context, cfg boun
 		})
 		if pr.Observer != nil {
 			endErr := sessionErrFromStatus(sess)
-			if endedInterrupted {
+			if endedInterrupted || stoppedForFeatureInterrupt(sess) {
 				endErr = errHelperInterrupted
 			}
 			pr.Observer.SessionEnded(sessionCtx, observerPhase, cfg.sessionID, cfg.repoName, toSessionUsage(cost, sess), time.Since(sessionStart), endErr)

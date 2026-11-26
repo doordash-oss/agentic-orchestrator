@@ -1961,8 +1961,12 @@ func handleCompletedPlanSession(
 	attemptDir, artifactDir, logPath string,
 ) (outcome planSessionOutcome, result *PlanLoopResult, newCriticFeedback string, newSessionAttempt int) {
 	agentStatus := waitResult.Status
+	endErr := sessionErrFromAgentStatus(agentStatus)
+	if stoppedForFeatureInterrupt(sess) {
+		endErr = observe.ErrSessionInterrupted
+	}
 	cfg.Observer.SessionEnded(planSessionCtx, "plan", sessionID, cfg.RepoName,
-		toSessionUsage(cost, sess), time.Since(sessionStart), sessionErrFromAgentStatus(agentStatus))
+		toSessionUsage(cost, sess), time.Since(sessionStart), endErr)
 
 	output := sess.MessageLog().Text()
 	_ = os.WriteFile(logPath, []byte(output), 0o644)

@@ -1082,7 +1082,11 @@ func (s *featureFinalReviewLoopState) runFix(run finalFixRun) finalFixResult {
 			RunNumber:     sessionRunNumber(sess),
 		})
 		if observed {
-			cfg.Observer.SessionEnded(sessionCtx, feature.PhaseFinalReview.String(), sessionID, "", toSessionUsage(cost, sess), time.Since(sessionStart), sessionErrFromStatus(sess))
+			endErr := sessionErrFromStatus(sess)
+			if stoppedForFeatureInterrupt(sess) {
+				endErr = observe.ErrSessionInterrupted
+			}
+			cfg.Observer.SessionEnded(sessionCtx, feature.PhaseFinalReview.String(), sessionID, "", toSessionUsage(cost, sess), time.Since(sessionStart), endErr)
 		}
 	}()
 

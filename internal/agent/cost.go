@@ -68,6 +68,13 @@ func resultInterruptedByStop(sess ports.SessionView) bool {
 	return false
 }
 
+// stoppedForFeatureInterrupt reports whether a feature pause or rewind
+// stopped the session before it failed on its own.
+func stoppedForFeatureInterrupt(sess ports.SessionView) bool {
+	s, ok := sess.(interface{ FeatureInterrupted() bool })
+	return ok && s.FeatureInterrupted() && sess.Status() != ports.SessionFailed
+}
+
 // extractSessionCost reads cost and accumulated usage from the session.
 // Returns zero values if no data is available.
 func extractSessionCost(sess ports.SessionView) sessionCost {

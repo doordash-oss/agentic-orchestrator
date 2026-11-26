@@ -359,7 +359,7 @@ func (pr *PhaseRunner) runInteractivePhase(f *feature.Feature, cfg interactivePh
 			RunNumber:     sessionRunNumber(sess),
 		})
 		endErr := sessionErrFromStatus(sess)
-		if s, ok := sess.(interface{ FeatureInterrupted() bool }); ok && s.FeatureInterrupted() {
+		if stoppedForFeatureInterrupt(sess) {
 			endErr = observe.ErrSessionInterrupted
 		}
 		pr.Observer.SessionEnded(sessionCtx, cfg.Phase.String(), sessionID, "", usage, duration, endErr)

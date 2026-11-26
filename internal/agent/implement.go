@@ -658,7 +658,7 @@ func runImplementationLoop(cfg ImplementConfig, sm ports.SessionManager) (result
 				return &LoopResult{FinalStatus: "interrupted", Iterations: i - 1}, nil
 			}
 
-			if isFeatureInterrupted(cfg.FeatureStore, cfg.Feature.ID) {
+			if isFeatureInterrupted(cfg.FeatureStore, cfg.Feature.ID) || stoppedForFeatureInterrupt(sess) {
 				endInterruptedSession()
 				return &LoopResult{FinalStatus: "interrupted", Iterations: i}, nil
 			}
@@ -702,7 +702,7 @@ func runImplementationLoop(cfg ImplementConfig, sm ports.SessionManager) (result
 							endInterruptedSession()
 							return &LoopResult{FinalStatus: "interrupted", Iterations: i - 1}, nil
 						}
-						if isFeatureInterrupted(cfg.FeatureStore, cfg.Feature.ID) {
+						if isFeatureInterrupted(cfg.FeatureStore, cfg.Feature.ID) || stoppedForFeatureInterrupt(sess) {
 							endInterruptedSession()
 							return &LoopResult{FinalStatus: "interrupted", Iterations: i}, nil
 						}

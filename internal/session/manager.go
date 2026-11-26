@@ -426,9 +426,10 @@ func persistedPhase(name string) (feature.Phase, bool) {
 
 // isChildExitedWriteError reports whether a stdin write failed because the
 // child process already closed its end of the pipe (it exited). Both EPIPE and
-// io.ErrClosedPipe surface this race.
+// io.ErrClosedPipe surface this race, and os.ErrClosed when the session closed
+// stdin itself after the child's result.
 func isChildExitedWriteError(err error) bool {
-	return errors.Is(err, syscall.EPIPE) || errors.Is(err, io.ErrClosedPipe)
+	return errors.Is(err, syscall.EPIPE) || errors.Is(err, io.ErrClosedPipe) || errors.Is(err, os.ErrClosed)
 }
 
 func (m *Manager) handleSessionMessage(s *Session, id, featureID string, phase feature.Phase, msg llm.SDKMessage) {

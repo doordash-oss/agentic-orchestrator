@@ -271,6 +271,10 @@ func (m *Manager) StartSession(id, featureID string, phase feature.Phase, comman
 		case <-ctx.Done():
 		}
 	}()
+	// The handshake sends the initial prompt, which starts a turn.
+	if s.initialPrompt != "" {
+		s.setTurnInFlight(true)
+	}
 	if err := s.protocol.Handshake(ctx); err != nil && !isChildExitedWriteError(err) {
 		select {
 		case <-m.stoppingCh:

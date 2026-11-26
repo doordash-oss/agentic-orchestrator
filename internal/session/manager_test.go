@@ -243,6 +243,50 @@ echo '{"type":"result","subtype":"success","session_id":"s1","total_cost_usd":0}
 	}
 }
 
+// A stop after the initial prompt reaches the provider, but before it
+// streams any output, still interrupts the turn and records its cost.
+func TestStopSessionInterruptsInitialPromptTurn(t *testing.T) {
+	// parallel-exempt: owns provider subprocesses.
+	sm := NewManager(nil)
+	t.Cleanup(sm.Shutdown)
+
+	tmpDir := t.TempDir()
+	prompted := filepath.Join(tmpDir, "prompted")
+	scriptPath := filepath.Join(tmpDir, "silent.sh")
+	if err := os.WriteFile(scriptPath, []byte(`#!/bin/bash
+echo '{"type":"system","subtype":"init","session_id":"s1","model":"test"}'
+while IFS= read -r line; do
+  case "$line" in
+    *'"interrupt"'*) echo '{"type":"result","subtype":"error_during_execution","is_error":true,"session_id":"s1","total_cost_usd":0.31}'; exit 1;;
+    *'"type":"user"'*) touch '`+prompted+`';;
+  esac
+done
+exit 1
+`), 0o755); err != nil {
+		t.Fatalf("writing script: %v", err)
+	}
+
+	sess, err := sm.StartSession(
+		"initial-prompt-stop", "feat-1", feature.PhaseImplement,
+		[]string{"bash", scriptPath}, tmpDir, nil,
+		&SessionOpts{InitialPrompt: "do it", Protocol: claude.NewProtocol(llm.ProtocolOpts{InitialPrompt: "do it"})},
+	)
+	if err != nil {
+		t.Fatalf("StartSession() error = %v", err)
+	}
+	waitForCondition(t, 5*time.Second, func() bool {
+		_, err := os.Stat(prompted)
+		return err == nil
+	}, "provider never received the initial prompt")
+
+	if err := sm.StopSession(sess.ID()); err != nil {
+		t.Fatalf("StopSession() error = %v", err)
+	}
+	if c := sess.Cost(); c == nil || c.TotalCostUSD != 0.31 {
+		t.Fatalf("Cost() = %+v, want the interrupted turn's 0.31", c)
+	}
+}
+
 func waitForMessageCount(t *testing.T, sess ports.SessionView, want int) {
 	t.Helper()
 	deadline := time.Now().Add(5 * time.Second)

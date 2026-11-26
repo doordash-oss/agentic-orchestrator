@@ -454,8 +454,10 @@ exit 1
 				go func() {
 					deadline := time.Now().Add(10 * time.Second)
 					for time.Now().Before(deadline) {
-						if _, err := os.Stat(started); err == nil {
-							for _, s := range sm.FeatureSessions(featureID) {
+						// A registered session has sent its prompt.
+						sessions := sm.FeatureSessions(featureID)
+						if _, err := os.Stat(started); err == nil && len(sessions) > 0 {
+							for _, s := range sessions {
 								_ = sm.StopSession(s.ID())
 							}
 							return

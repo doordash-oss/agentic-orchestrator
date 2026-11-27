@@ -522,6 +522,27 @@ func (o *Observer) PhaseCompleted(sc SpanContext, phase string, duration time.Du
 	o.otel.EndSpan(sc.SpanID, status, nil)
 }
 
+// PhaseInterrupted emits a phase.interrupted event for a phase ended by a
+// user pause, stop or rewind rather than by success or failure.
+func (o *Observer) PhaseInterrupted(sc SpanContext, phase string, duration time.Duration) {
+	if o == nil || !o.enabled {
+		return
+	}
+	o.emit(sc, Event{
+		Timestamp:    time.Now(),
+		TraceID:      sc.TraceID,
+		SpanID:       sc.SpanID,
+		ParentSpanID: sc.ParentSpanID,
+		EventType:    "phase.interrupted",
+		Phase:        phase,
+		Status:       "interrupted",
+		FeatureID:    sc.FeatureID,
+		DurationMs:   duration.Milliseconds(),
+	})
+	o.activePhaseSpans.Delete(sc.FeatureID)
+	o.otel.EndSpan(sc.SpanID, "interrupted", nil)
+}
+
 // SessionStarted emits a session.started event.
 func (o *Observer) SessionStarted(sc SpanContext, phase, sessionID, provider, model, repoName string, effortLevel string, effortSource string) {
 	if o == nil || !o.enabled {

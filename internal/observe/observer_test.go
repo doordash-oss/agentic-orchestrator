@@ -1788,6 +1788,60 @@ func TestActivePhaseSpanContextClearedAfterPhaseCompleted(t *testing.T) {
 	}
 }
 
+func TestPhaseEndOutcomes(t *testing.T) {
+	tests := []struct {
+		name       string
+		end        func(obs *Observer, sc SpanContext)
+		wantType   string
+		wantStatus string
+		wantError  string
+	}{
+		{
+			name:       "user interrupt",
+			end:        func(obs *Observer, sc SpanContext) { obs.PhaseInterrupted(sc, "implement", 3*time.Second) },
+			wantType:   "phase.interrupted",
+			wantStatus: "interrupted",
+		},
+		{
+			name: "genuine failure",
+			end: func(obs *Observer, sc SpanContext) {
+				obs.PhaseCompleted(sc, "implement", 3*time.Second, errors.New("max_iterations"))
+			},
+			wantType:   "phase.failed",
+			wantStatus: "failed",
+			wantError:  "max_iterations",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			stateDir := t.TempDir()
+			featureID := "feat-phase-end"
+			if err := os.MkdirAll(filepath.Join(stateDir, featureID), 0o755); err != nil {
+				t.Fatal(err)
+			}
+			obs := newObserver(true, stateDir, false, "", false, "")
+			sc := SpanContextForFeature(featureID, "", "", "").WithRun(2).Child()
+			obs.PhaseStarted(sc, "implement")
+			tt.end(obs, sc)
+
+			if _, ok := obs.ActivePhaseSpanContext(featureID); ok {
+				t.Error("active phase span still tracked after the phase ended")
+			}
+			events := readEvents(t, stateDir, featureID)
+			if len(events) != 2 {
+				t.Fatalf("got %d events, want 2", len(events))
+			}
+			got := events[1]
+			if got.EventType != tt.wantType || got.Status != tt.wantStatus || got.Error != tt.wantError {
+				t.Errorf("event = {%q %q %q}, want {%q %q %q}", got.EventType, got.Status, got.Error, tt.wantType, tt.wantStatus, tt.wantError)
+			}
+			if got.DurationMs != 3000 || got.RunNumber != 2 || got.SpanID != sc.SpanID {
+				t.Errorf("duration=%d run=%d span=%q, want 3000, 2, %q", got.DurationMs, got.RunNumber, got.SpanID, sc.SpanID)
+			}
+		})
+	}
+}
+
 func TestActivePhaseSpanContextNilObserver(t *testing.T) {
 	var obs *Observer
 	_, ok := obs.ActivePhaseSpanContext("feat-nil")

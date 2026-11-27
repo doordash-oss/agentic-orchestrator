@@ -75,7 +75,7 @@ log segments are normalized to their OpenAPI template names.
 
 Every typed local event is also exported as a short span named
 `agentico.event.<event_type>`, including `phase.started`, `phase.completed`,
-`phase.failed`, `session.started`, `session.ended`, `iteration.started`,
+`phase.failed`, `phase.interrupted`, `session.started`, `session.ended`, `iteration.started`,
 `iteration.ended`, `review.started`, `review.completed`, `validation.started`,
 `validation.completed`, `validator.started`, `validator.completed`,
 `permission.requested`, `permission.resolved`, `question.asked`,
@@ -85,6 +85,8 @@ Every typed local event is also exported as a short span named
 `recovery.action`, `agent.task_started`, `agent.task_progress`,
 `agent.task_ended`, `feature.started`, `feature.completed`, `feature.failed`,
 `feature.interrupted`, `feature.config_changed`, and `feature.rewound`.
+A phase ended by a user pause, stop or rewind emits `phase.interrupted` with
+status `interrupted`, not `phase.failed`.
 
 Store-authoritative events add `runtime.started`, `runtime.stopped`,
 `feature.created`, `feature.state_changed`, `feature.deleted`,

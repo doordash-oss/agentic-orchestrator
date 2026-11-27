@@ -265,6 +265,14 @@ func runImplementationLoop(cfg ImplementConfig, sm ports.SessionManager) (result
 	phaseStart := time.Now()
 	cfg.Observer.PhaseStarted(phaseCtx, "implement")
 	defer func() {
+		finalStatus := ""
+		if result != nil {
+			finalStatus = result.FinalStatus
+		}
+		if (err != nil || finalStatus != finalStatusReviewPassed) && phaseInterruptedByUser(cfg.FeatureStore, cfg.Feature.ID, finalStatus, err) {
+			cfg.Observer.PhaseInterrupted(phaseCtx, "implement", time.Since(phaseStart))
+			return
+		}
 		var finalErr error
 		if err != nil {
 			finalErr = err
@@ -2517,6 +2525,30 @@ func verificationContext(store FeatureStore, featureID string) (context.Context,
 // isFeatureInterrupted checks the feature store to determine if the feature
 // has been stopped by the user. Loops call this before starting new sessions
 // to avoid zombie iterations after the user presses 's' to stop.
+// phaseInterruptedByUser reports whether a phase loop that did not succeed
+// ended because the user paused, stopped or rewound the feature.
+// A feature failed elsewhere also stops the loop as "interrupted"; that
+// stays a failure.
+func phaseInterruptedByUser(store FeatureStore, featureID, finalStatus string, err error) bool {
+	var status feature.Status
+	if store != nil {
+		if f, loadErr := store.Load(featureID); loadErr == nil {
+			status = f.Status
+		}
+	}
+	if status == feature.StatusFailed {
+		return false
+	}
+	switch finalStatus {
+	case "interrupted", finalStatusStopped:
+		return true
+	}
+	if errors.Is(err, observe.ErrSessionInterrupted) || errors.Is(err, context.Canceled) || errors.Is(err, errPlanLoopSuperseded) {
+		return true
+	}
+	return status == feature.StatusInterrupted
+}
+
 func isFeatureInterrupted(store FeatureStore, featureID string) bool {
 	if store == nil {
 		return false

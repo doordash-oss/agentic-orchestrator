@@ -1538,6 +1538,14 @@ func runPlanningLoop(cfg planLoopConfig, kind planArtifactKind, sm ports.Session
 	phaseStart := time.Now()
 	cfg.Observer.PhaseStarted(cfg.PhaseSpanCtx, "plan")
 	defer func() {
+		finalStatus := ""
+		if result != nil {
+			finalStatus = result.FinalStatus
+		}
+		if (retErr != nil || finalStatus != "approved") && phaseInterruptedByUser(cfg.FeatureStore, cfg.Feature.ID, finalStatus, retErr) {
+			cfg.Observer.PhaseInterrupted(cfg.PhaseSpanCtx, "plan", time.Since(phaseStart))
+			return
+		}
 		var phaseErr error
 		if retErr != nil {
 			phaseErr = retErr

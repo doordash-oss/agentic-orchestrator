@@ -724,19 +724,17 @@ func parseNumberedOptions(text string) (string, []parsedOption, bool) {
 	return questionText(cleaned, trailing), options, true
 }
 
-// questionText picks the question for a stem and its post-options trailing
-// text. A generic trailing prompt ("Which do you pick?") gives way to the
-// stem's last question; a bold stem heading is kept as context.
+// questionText combines a stem and its post-options trailing text without
+// losing the stem's question: trailing text is appended unless it only
+// restates a question the stem body already asks. A bold heading is kept.
 func questionText(stem, trailing string) string {
 	if trailing == "" {
 		return stem
 	}
 	heading, body := splitStemHeading(stem)
-	q := trailing
-	if isGenericQuestion(lastQuestionSentence(trailing)) {
-		if s := lastQuestionSentence(body); s != "" {
-			q = s
-		}
+	q := strings.TrimSpace(body + "\n\n" + trailing)
+	if s := lastQuestionSentence(body); s != "" && trailingIsRedundant(lastQuestionSentence(trailing), body) {
+		q = s
 	}
 	if heading == "" || strings.Contains(q, heading) {
 		return q
@@ -823,21 +821,40 @@ var genericQuestionWords = map[string]bool{
 	"preference": true, "sound": true, "sounds": true, "good": true, "ok": true, "okay": true,
 }
 
-// isGenericQuestion reports whether q is a bare prompt to choose that names
-// nothing about the decision itself.
-func isGenericQuestion(q string) bool {
+// trailingIsRedundant reports whether trailing question q names nothing the
+// body does not already mention; a generic "Which do you pick?" names nothing.
+func trailingIsRedundant(q, body string) bool {
 	if q == "" {
 		return false
 	}
-	words := strings.FieldsFunc(strings.ToLower(q), func(r rune) bool {
-		return !unicode.IsLetter(r) && !unicode.IsDigit(r)
-	})
-	for _, w := range words {
-		if !genericQuestionWords[w] && strings.TrimFunc(w, unicode.IsDigit) != "" {
+	inBody := make(map[string]bool)
+	for _, w := range questionWords(body) {
+		inBody[w] = true
+	}
+	for _, w := range specificWords(q) {
+		if !inBody[w] {
 			return false
 		}
 	}
 	return true
+}
+
+// specificWords returns q's lowercased words that are neither generic
+// question words nor numbers.
+func specificWords(q string) []string {
+	var out []string
+	for _, w := range questionWords(q) {
+		if !genericQuestionWords[w] && strings.TrimFunc(w, unicode.IsDigit) != "" {
+			out = append(out, w)
+		}
+	}
+	return out
+}
+
+func questionWords(s string) []string {
+	return strings.FieldsFunc(strings.ToLower(s), func(r rune) bool {
+		return !unicode.IsLetter(r) && !unicode.IsDigit(r)
+	})
 }
 
 func looksLikeTrailingQuestion(line string) bool {

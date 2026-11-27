@@ -581,8 +581,8 @@ func TestPromptEndTurn_NumberedOptionsToleratesTrailingStemAndRecommendedAfterCo
 	if len(qs) != 1 {
 		t.Fatalf("questions = %+v, want one question", qs)
 	}
-	if qs[0].Question != "Which technical-term strategy should the translation use?" {
-		t.Fatalf("question = %q, want trailing question stem", qs[0].Question)
+	if qs[0].Question != "I read the research and need one final decision.\n\nWhich technical-term strategy should the translation use?" {
+		t.Fatalf("question = %q, want stem followed by trailing question", qs[0].Question)
 	}
 	if len(qs[0].Options) != 3 {
 		t.Fatalf("options = %+v, want 3", qs[0].Options)
@@ -712,10 +712,78 @@ func TestPromptEndTurn_NumberedOptionsRealSampleShapes(t *testing.T) {
 				"",
 				"Should the budget report keep the tab-separated layout scripts already parse?",
 			},
-			wantQuestion: "Question 5: Report layout.\n\nShould the budget report keep the tab-separated layout scripts already parse?",
+			wantQuestion: "Question 5: Report layout.\n\nThe existing `summary` prints tab-separated lines. How should the report lay out its columns?\n\nShould the budget report keep the tab-separated layout scripts already parse?",
 			wantOptions: []opt{
 				{"Tab-separated, no header (Recommended)", "consistent with `summary`."},
 				{"Aligned table with header row", "nicer for humans."},
+			},
+		},
+		{
+			name: "conditional follow-up kept after stem question",
+			text: []string{
+				"**Question 3 of ~6:** Which fields should `rules.csv` hold?",
+				"",
+				"1. `day,store,limit` rows (Recommended): one row per store per day, e.g. `2026-11-02,bakery,40.00`. [confidence: 0.70]",
+				"2. `store,limit` only: one limit per store for all days. [confidence: 0.30]",
+				"",
+				"If option 1: should totals also be restricted to the chosen `--day`?",
+			},
+			wantQuestion: "Question 3 of ~6:\n\nWhich fields should `rules.csv` hold?\n\nIf option 1: should totals also be restricted to the chosen `--day`?",
+			wantOptions: []opt{
+				{"day,store,limit rows (Recommended)", "one row per store per day, e.g. `2026-11-02,bakery,40.00`."},
+				{"store,limit only", "one limit per store for all days."},
+			},
+		},
+		{
+			name: "closer restating body words dropped",
+			text: []string{
+				"I've reviewed the parser and its tests. One question at a time.",
+				"",
+				"**Question 2 of ~4: Timestamp zone**",
+				"",
+				"When a record has no offset, which zone policy should the parser apply to its timestamp?",
+				"",
+				"1. **Assume UTC (Recommended)**: predictable across hosts. [confidence: 0.80]",
+				"2. **Assume local time**: matches what users typed. [confidence: 0.35]",
+				"",
+				"Which zone policy do you want?",
+			},
+			wantQuestion: "Question 2 of ~4: Timestamp zone\n\nWhen a record has no offset, which zone policy should the parser apply to its timestamp?",
+			wantOptions: []opt{
+				{"Assume UTC (Recommended)", "predictable across hosts."},
+				{"Assume local time", "matches what users typed."},
+			},
+		},
+		{
+			name: "generic closer dropped",
+			text: []string{
+				"**Question 1:** Where should cache files live?",
+				"",
+				"1. **XDG cache dir (Recommended)**: standard location. [confidence: 0.75]",
+				"2. **Next to the binary**: portable. [confidence: 0.25]",
+				"",
+				"Which do you pick?",
+			},
+			wantQuestion: "Question 1:\n\nWhere should cache files live?",
+			wantOptions: []opt{
+				{"XDG cache dir (Recommended)", "standard location."},
+				{"Next to the binary", "portable."},
+			},
+		},
+		{
+			name: "stem without question keeps trailing question",
+			text: []string{
+				"**Retry policy.** The client gives up after the first failure today.",
+				"",
+				"1. **Exponential backoff (Recommended)**: three attempts. [confidence: 0.70]",
+				"2. **No retries**: fail fast. [confidence: 0.30]",
+				"",
+				"Which do you pick?",
+			},
+			wantQuestion: "Retry policy.\n\nThe client gives up after the first failure today.\n\nWhich do you pick?",
+			wantOptions: []opt{
+				{"Exponential backoff (Recommended)", "three attempts."},
+				{"No retries", "fail fast."},
 			},
 		},
 	}

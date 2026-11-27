@@ -558,7 +558,7 @@ func (p *Protocol) synthesizeAskUser(text string, options []parsedOption) llm.SD
 	for _, o := range options {
 		opts = append(opts, askuser.Option{Label: o.Label, Description: o.Description, Confidence: o.Confidence})
 	}
-	inputJSON := askuser.Bundle{Questions: []askuser.Question{{Question: strings.TrimSpace(text), Header: "Agent Question", Options: opts}}}.Encode()
+	inputJSON := askuser.Bundle{Questions: []askuser.Question{{Question: stripStrong(text), Header: "Agent Question", Options: opts}}}.Encode()
 
 	return llm.SDKMessage{
 		Type:    "control_request",
@@ -971,17 +971,31 @@ var (
 // cleanLabel drops bold and emphasis markers outside inline code, then the
 // code backticks themselves.
 func cleanLabel(label string) string {
-	parts := strings.Split(label, "`")
-	for i := 0; i < len(parts); i += 2 {
-		s := strings.ReplaceAll(parts[i], "**", "")
+	s := mapOutsideCode(label, func(s string) string {
+		s = strings.ReplaceAll(s, "**", "")
 		for prev := ""; prev != s; {
 			prev = s
 			s = starEmphasisRe.ReplaceAllString(s, "$1$2$3")
 			s = underscoreEmphasisRe.ReplaceAllString(s, "$1$2$3")
 		}
-		parts[i] = s
+		return s
+	})
+	return strings.TrimSpace(strings.ReplaceAll(s, "`", ""))
+}
+
+// stripStrong drops bold markers outside inline code, keeping the code spans.
+func stripStrong(text string) string {
+	return strings.TrimSpace(mapOutsideCode(text, func(s string) string {
+		return strings.ReplaceAll(s, "**", "")
+	}))
+}
+
+func mapOutsideCode(s string, f func(string) string) string {
+	parts := strings.Split(s, "`")
+	for i := 0; i < len(parts); i += 2 {
+		parts[i] = f(parts[i])
 	}
-	return strings.TrimSpace(strings.Join(parts, ""))
+	return strings.Join(parts, "`")
 }
 
 func splitOptionConfidence(raw string) (string, *float64, bool) {

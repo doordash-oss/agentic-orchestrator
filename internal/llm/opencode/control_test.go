@@ -743,6 +743,75 @@ func TestPromptEndTurn_NumberedOptionsRealSampleShapes(t *testing.T) {
 	}
 }
 
+// TestPromptEndTurn_QuestionTextDropsBoldMarkup proves synthesized question
+// text is plain text: bold markers go wherever they sit, inline code stays.
+func TestPromptEndTurn_QuestionTextDropsBoldMarkup(t *testing.T) {
+	options := []string{
+		"",
+		"1. **Alphabetical (Recommended)**: predictable order. [confidence: 0.80]",
+		"2. **By date**: newest first. [confidence: 0.40]",
+	}
+	tests := []struct {
+		name         string
+		text         []string
+		wantQuestion string
+		wantOptions  int
+	}{
+		{
+			name:         "heading inside a paragraph",
+			text:         append([]string{"Thanks, that settles storage. **Question 2: Which sort order should `list` use?**"}, options...),
+			wantQuestion: "Thanks, that settles storage. Question 2: Which sort order should `list` use?",
+			wantOptions:  2,
+		},
+		{
+			name:         "bold question sentence",
+			text:         append([]string{"Storage is settled.", "", "**Which sort order should the list use?**"}, options...),
+			wantQuestion: "Storage is settled.\n\nWhich sort order should the list use?",
+			wantOptions:  2,
+		},
+		{
+			name:         "bold mid-sentence words",
+			text:         append([]string{"Which sort order should the **default** listing use?"}, options...),
+			wantQuestion: "Which sort order should the default listing use?",
+			wantOptions:  2,
+		},
+		{
+			name:         "inline code containing bold markers kept",
+			text:         append([]string{"Should `glob **/*.go` be the **default** pattern?"}, options...),
+			wantQuestion: "Should `glob **/*.go` be the default pattern?",
+			wantOptions:  2,
+		},
+		{
+			name:         "plain question unchanged",
+			text:         append([]string{"Which sort order should `list` use?"}, options...),
+			wantQuestion: "Which sort order should `list` use?",
+			wantOptions:  2,
+		},
+		{
+			name:         "free-form question",
+			text:         []string{"FREE_FORM: What **exact** version string should I tag?"},
+			wantQuestion: "What exact version string should I tag?",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			p, _, promptID := newPostHandshakeProtocol(t)
+			streamAssistantText(t, p, strings.Join(tt.text, "\n"))
+			msgs := endTurn(t, p, promptID)
+			if len(msgs) != 1 || msgs[0].ControlRequest == nil {
+				t.Fatalf("produced %+v, want one AskUserQuestion control request", msgs)
+			}
+			qs := askUserQuestionsFrom(t, msgs[0].ControlRequest)
+			if len(qs) != 1 || len(qs[0].Options) != tt.wantOptions {
+				t.Fatalf("questions = %+v, want one question with %d options", qs, tt.wantOptions)
+			}
+			if qs[0].Question != tt.wantQuestion {
+				t.Errorf("question = %q, want %q", qs[0].Question, tt.wantQuestion)
+			}
+		})
+	}
+}
+
 // TestPromptEndTurn_NumberedOptionsWithoutStemRemindsBeforeSurfacing proves an
 // options-only response is not surfaced with the raw option list duplicated as
 // its question text.

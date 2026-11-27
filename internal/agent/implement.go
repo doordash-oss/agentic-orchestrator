@@ -2522,13 +2522,9 @@ func verificationContext(store FeatureStore, featureID string) (context.Context,
 	return ctx, cancel
 }
 
-// isFeatureInterrupted checks the feature store to determine if the feature
-// has been stopped by the user. Loops call this before starting new sessions
-// to avoid zombie iterations after the user presses 's' to stop.
 // phaseInterruptedByUser reports whether a phase loop that did not succeed
-// ended because the user paused, stopped or rewound the feature.
-// A feature failed elsewhere also stops the loop as "interrupted"; that
-// stays a failure.
+// ended because the user paused, stopped or rewound the feature. A feature
+// failed elsewhere also ends the loop as "interrupted"; that stays a failure.
 func phaseInterruptedByUser(store FeatureStore, featureID, finalStatus string, err error) bool {
 	var status feature.Status
 	if store != nil {
@@ -2549,6 +2545,9 @@ func phaseInterruptedByUser(store FeatureStore, featureID, finalStatus string, e
 	return status == feature.StatusInterrupted
 }
 
+// isFeatureInterrupted checks the feature store to determine if the feature
+// has been stopped by the user. Loops call this before starting new sessions
+// to avoid zombie iterations after the user presses 's' to stop.
 func isFeatureInterrupted(store FeatureStore, featureID string) bool {
 	if store == nil {
 		return false

@@ -56,3 +56,9 @@ func writeSSEFrame(w http.ResponseWriter, event, id string, includeID bool, data
 	}
 	return err
 }
+
+func writeSSEComment(w http.ResponseWriter, text string) error {
+	setStreamWriteDeadline(w)
+	_, err := fmt.Fprintf(w, ": %s\n\n", text)
+	return err
+}

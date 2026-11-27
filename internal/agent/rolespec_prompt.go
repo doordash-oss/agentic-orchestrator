@@ -123,9 +123,10 @@ func artifactPreflightCommand(spec roleSpec, iterationDir string) string {
 	if spec.Role == "" || iterationDir == "" || !spec.hasValidatedArtifact() {
 		return ""
 	}
-	return fmt.Sprintf(`"$AGENTICO_BIN" validate-artifacts --phase %s --role %s --dir %q`,
+	// Some harnesses strip quotes wrapping a whole command, so don't end in one.
+	return fmt.Sprintf(`"$AGENTICO_BIN" validate-artifacts --dir %q --phase %s --role %s`,
+		iterationDir,
 		spec.Phase.DirName(),
 		string(spec.Role),
-		iterationDir,
 	)
 }

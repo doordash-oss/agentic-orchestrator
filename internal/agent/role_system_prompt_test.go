@@ -102,12 +102,22 @@ func TestRoleSystemPromptIncludesArtifactPreflightCommand(t *testing.T) {
 	for _, want := range []string{
 		"## Artifact Preflight",
 		"`AGENTICO_BIN` is set to the current Agentico executable",
-		`"$AGENTICO_BIN" validate-artifacts --phase research --role researcher --dir "/state/feat-x/runs/run-001/research"`,
+		`"$AGENTICO_BIN" validate-artifacts --dir "/state/feat-x/runs/run-001/research" --phase research --role researcher`,
 		"run it before emitting the outcome tag",
 	} {
 		if !strings.Contains(got, want) {
 			t.Fatalf("buildRoleSystemPrompt() missing %q in:\n%s", want, got)
 		}
+	}
+}
+
+func TestArtifactPreflightCommandDoesNotEndInQuote(t *testing.T) {
+	got := artifactPreflightCommand(researcherRoleSpec, "/state/feat x/runs/run-001/research")
+	if !strings.HasPrefix(got, `"$AGENTICO_BIN" validate-artifacts `) {
+		t.Fatalf("artifactPreflightCommand() = %q; want a \"$AGENTICO_BIN\" validate-artifacts prefix", got)
+	}
+	if strings.HasSuffix(got, `"`) {
+		t.Fatalf("artifactPreflightCommand() = %q ends in a double quote", got)
 	}
 }
 

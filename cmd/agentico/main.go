@@ -1158,6 +1158,9 @@ func bootstrapRuntime(ctx context.Context, configPath, stateDir string, dangerou
 		}
 		go agent.PruneStaleReviewScratch(fm, busyIDs)
 	}
+	if phaseRunner != nil {
+		go pruneOrphanedSystemPrompts(phaseRunner.StateDir, stderr)
+	}
 	boot.featureManager = fm
 	boot.sessionManager = sm
 	boot.orchestrator = orch
@@ -1173,6 +1176,19 @@ func bootstrapRuntime(ctx context.Context, configPath, stateDir string, dangerou
 	boot.recoveryScanOK = recoveryScanOK
 	success = true
 	return boot, nil
+}
+
+// pruneOrphanedSystemPrompts removes prompt files left behind by sessions
+// whose cleanups never ran because a previous server died.
+func pruneOrphanedSystemPrompts(stateDir string, stderr io.Writer) {
+	removed, err := agent.PruneOrphanedSystemPrompts(stateDir, agent.SystemPromptPruneOpts{})
+	if err != nil {
+		fmt.Fprintf(stderr, "skipping system prompt cleanup: %v\n", err)
+		return
+	}
+	if removed > 0 {
+		fmt.Fprintf(stderr, "removed %d orphaned system prompt directories\n", removed)
+	}
 }
 
 func scanStartupRecovery(ctx context.Context, orch *orchestrator.Orchestrator, stderr io.Writer) ([]ports.RecoveryItem, bool) {

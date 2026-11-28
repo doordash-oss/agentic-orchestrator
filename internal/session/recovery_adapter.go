@@ -93,7 +93,7 @@ func (a *RecoveryAdapter) ExecuteRecovery(_ context.Context, items []ports.Recov
 			}
 			// Clean up PID file after the process is confirmed dead
 			if item.PIDFile.Dir != "" {
-				_ = removePIDFile(item.PIDFile.Dir, item.PIDFile.RepoName)
+				_ = removePIDFile(item.PIDFile.Dir, item.PIDFile.ManagerID, item.PIDFile.RepoName)
 			}
 			if item.Feature != nil && a.FeatureManager != nil {
 				_ = a.FeatureManager.Transition(item.Feature.ID, feature.StatusInterrupted)
@@ -106,7 +106,7 @@ func (a *RecoveryAdapter) ExecuteRecovery(_ context.Context, items []ports.Recov
 			}
 			// Clean up stale PID file after process is confirmed dead
 			if item.PIDFile.Dir != "" {
-				_ = removePIDFile(item.PIDFile.Dir, item.PIDFile.RepoName)
+				_ = removePIDFile(item.PIDFile.Dir, item.PIDFile.ManagerID, item.PIDFile.RepoName)
 			}
 			// Store the SessionID on the feature so the phase runner
 			// can use --resume to continue the session from where it left off.
@@ -133,7 +133,7 @@ func (a *RecoveryAdapter) ExecuteRecovery(_ context.Context, items []ports.Recov
 		case ports.RecoverySkip:
 			// Clean up PID file if process is dead
 			if !item.ProcessAlive && item.PIDFile.Dir != "" {
-				_ = removePIDFile(item.PIDFile.Dir, item.PIDFile.RepoName)
+				_ = removePIDFile(item.PIDFile.Dir, item.PIDFile.ManagerID, item.PIDFile.RepoName)
 			}
 		}
 	}

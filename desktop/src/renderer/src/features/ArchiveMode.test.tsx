@@ -146,3 +146,50 @@ describe('ArchiveMode error surfaces', () => {
     await waitFor(() => expect(screen.queryByRole('alert')).not.toBeInTheDocument());
   });
 });
+
+describe('ArchiveMode historical sessions', () => {
+  it('opens a session row from the sealed run it was recorded in', async () => {
+    const mock = installAgenticoMock();
+    mock.api.getRun.mockResolvedValue({
+      runNumber: 7,
+      startedAt: '2026-08-03T10:00:00.000Z',
+      sealedAt: '2026-08-03T11:00:00.000Z',
+      sealReason: 'Completed',
+      currentPhase: 'Implement',
+      artifactCount: 0,
+    });
+    mock.api.listRunSessions.mockResolvedValue({
+      runNumber: 7,
+      sessions: [
+        {
+          id: 'f-phase-01-impl-01',
+          featureId: 'abcd1234ef567890',
+          runNumber: 7,
+          phase: 'Implement',
+          kind: 'phase',
+          status: 'Done',
+          startedAt: '0001-01-01T00:00:00Z',
+          usage: {},
+          taskActivities: [],
+          runningTaskCount: 0,
+        },
+      ],
+    });
+    render(
+      <ArchiveMode
+        featureId="abcd1234ef567890"
+        selectedRunNumber={7}
+        active
+        onReturnToCurrent={vi.fn()}
+      />,
+    );
+
+    await userEvent.click(await screen.findByRole('button', { name: /f-phase-01-impl-01/ }));
+    expect(mock.api.getSessionTranscript).toHaveBeenCalledWith({
+      sessionId: 'f-phase-01-impl-01',
+      featureId: 'abcd1234ef567890',
+      runNumber: 7,
+      limit: 500,
+    });
+  });
+});

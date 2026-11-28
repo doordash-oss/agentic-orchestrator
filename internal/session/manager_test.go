@@ -152,6 +152,7 @@ sleep 30
 
 	original := NewManager(nil)
 	t.Cleanup(original.Shutdown)
+	runTranscriptFixture(t, original, stateDir, "feature-1-implement", 3, "earlier segment")
 	sess, err := original.StartSession(
 		"feature-1-implement", "feature-1", feature.PhaseImplement,
 		[]string{"bash", scriptPath}, stateDir, nil,
@@ -161,10 +162,11 @@ sleep 30
 		t.Fatalf("starting live session: %v", err)
 	}
 	waitForMessageCount(t, sess, 2)
-	pidFile, err := ReadPIDFile(filepath.Join(stateDir, pidfileName("")))
+	pidFile, err := ReadPIDFile(filepath.Join(stateDir, pidfileName("feature-1-implement", "")))
 	if err != nil {
 		t.Fatalf("reading live session metadata: %v", err)
 	}
+	waitForPersistedLine(t, pidFile.Transcript, "before restart")
 	transcript, err := os.OpenFile(pidFile.Transcript, os.O_APPEND|os.O_WRONLY, 0)
 	if err != nil {
 		t.Fatalf("opening persisted transcript: %v", err)
@@ -194,8 +196,8 @@ sleep 30
 	if got := restored[0].MessageLog().Len(); got != 2 {
 		t.Fatalf("restored transcript rows = %d, want 2", got)
 	}
-	if got := restored[0].MessageLog().AssistantText(); !strings.Contains(got, "before restart") {
-		t.Fatalf("restored transcript = %q, want assistant output", got)
+	if got := restored[0].MessageLog().AssistantText(); !strings.Contains(got, "before restart") || strings.Contains(got, "earlier segment") {
+		t.Fatalf("restored transcript = %q, want only the live segment's output", got)
 	}
 	if got := restarted.GetSession("feature-1-implement"); got == nil {
 		t.Fatal("GetSession did not return the restored session")
@@ -241,6 +243,50 @@ echo '{"type":"result","subtype":"success","session_id":"s1","total_cost_usd":0}
 	}
 }
 
+// A stop after the initial prompt reaches the provider, but before it
+// streams any output, still interrupts the turn and records its cost.
+func TestStopSessionInterruptsInitialPromptTurn(t *testing.T) {
+	// parallel-exempt: owns provider subprocesses.
+	sm := NewManager(nil)
+	t.Cleanup(sm.Shutdown)
+
+	tmpDir := t.TempDir()
+	prompted := filepath.Join(tmpDir, "prompted")
+	scriptPath := filepath.Join(tmpDir, "silent.sh")
+	if err := os.WriteFile(scriptPath, []byte(`#!/bin/bash
+echo '{"type":"system","subtype":"init","session_id":"s1","model":"test"}'
+while IFS= read -r line; do
+  case "$line" in
+    *'"interrupt"'*) echo '{"type":"result","subtype":"error_during_execution","is_error":true,"session_id":"s1","total_cost_usd":0.31}'; exit 1;;
+    *'"type":"user"'*) touch '`+prompted+`';;
+  esac
+done
+exit 1
+`), 0o755); err != nil {
+		t.Fatalf("writing script: %v", err)
+	}
+
+	sess, err := sm.StartSession(
+		"initial-prompt-stop", "feat-1", feature.PhaseImplement,
+		[]string{"bash", scriptPath}, tmpDir, nil,
+		&SessionOpts{InitialPrompt: "do it", Protocol: claude.NewProtocol(llm.ProtocolOpts{InitialPrompt: "do it"})},
+	)
+	if err != nil {
+		t.Fatalf("StartSession() error = %v", err)
+	}
+	waitForCondition(t, 5*time.Second, func() bool {
+		_, err := os.Stat(prompted)
+		return err == nil
+	}, "provider never received the initial prompt")
+
+	if err := sm.StopSession(sess.ID()); err != nil {
+		t.Fatalf("StopSession() error = %v", err)
+	}
+	if c := sess.Cost(); c == nil || c.TotalCostUSD != 0.31 {
+		t.Fatalf("Cost() = %+v, want the interrupted turn's 0.31", c)
+	}
+}
+
 func waitForMessageCount(t *testing.T, sess ports.SessionView, want int) {
 	t.Helper()
 	deadline := time.Now().Add(5 * time.Second)
@@ -251,6 +297,21 @@ func waitForMessageCount(t *testing.T, sess ports.SessionView, want int) {
 		time.Sleep(10 * time.Millisecond)
 	}
 	t.Fatalf("message count = %d, want at least %d", sess.MessageLog().Len(), want)
+}
+
+func waitForPersistedLine(t *testing.T, path, substr string) {
+	t.Helper()
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		data, _ := os.ReadFile(path)
+		for _, line := range strings.SplitAfter(string(data), "\n") {
+			if strings.HasSuffix(line, "\n") && strings.Contains(line, substr) {
+				return
+			}
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatalf("transcript %s never persisted a complete line containing %q", path, substr)
 }
 
 // TestHighVolumePartialStreamNoBoundedGoroutines verifies that high-volume
@@ -752,4 +813,44 @@ echo '{"type":"result","subtype":"success","session_id":"s1","total_cost_usd":0}
 	if _, err := os.Stat(stderrPath); err != nil {
 		t.Fatalf("expected stderr log file at %s: %v", stderrPath, err)
 	}
+}
+
+func TestStartSession_RunsCleanupsAfterExitOrFailedStart(t *testing.T) {
+	t.Run("after the process exits", func(t *testing.T) {
+		sm := NewManager(make(chan interface{}, 100))
+		defer sm.Shutdown()
+		var runs atomic.Int64
+		sess, err := sm.StartSession(
+			"cleanup-exit", "feat-1", feature.PhaseImplement,
+			[]string{"sh", "-c", "read _line"}, t.TempDir(), nil,
+			&SessionOpts{Protocol: claude.NewProtocol(llm.ProtocolOpts{}), Cleanups: []func(){func() { runs.Add(1) }}},
+		)
+		if err != nil {
+			t.Fatalf("StartSession() error = %v", err)
+		}
+		if got := runs.Load(); got != 0 {
+			t.Fatalf("cleanups ran %d times while the process is alive", got)
+		}
+		_ = sess.Stop()
+		sess.Wait()
+		if got := runs.Load(); got != 1 {
+			t.Fatalf("cleanups ran %d times after exit, want 1", got)
+		}
+	})
+	t.Run("when the process fails to start", func(t *testing.T) {
+		sm := NewManager(make(chan interface{}, 100))
+		defer sm.Shutdown()
+		var runs atomic.Int64
+		_, err := sm.StartSession(
+			"cleanup-fail", "feat-1", feature.PhaseImplement,
+			[]string{filepath.Join(t.TempDir(), "missing")}, t.TempDir(), nil,
+			&SessionOpts{Protocol: claude.NewProtocol(llm.ProtocolOpts{}), Cleanups: []func(){func() { runs.Add(1) }}},
+		)
+		if err == nil {
+			t.Fatal("StartSession() succeeded for a missing binary")
+		}
+		if got := runs.Load(); got != 1 {
+			t.Fatalf("cleanups ran %d times after a failed start, want 1", got)
+		}
+	})
 }

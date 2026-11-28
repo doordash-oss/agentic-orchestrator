@@ -618,9 +618,23 @@ func roadmapValidatorsForRisk(risk feature.RiskLevel) []planValidatorAxis {
 
 // planValidationExtras carries optional prompt augmentations that only some
 // validators consume. Roadmap and single-phase flows pass the zero value;
-// per-phase plan validation populates PriorPhasePlanPaths.
+// per-phase plan validation populates PriorPhasePlanPaths and PhaseNumber.
 type planValidationExtras struct {
 	PriorPhasePlanPaths []string
+	PhaseNumber         int
+}
+
+// planReviewSessionID names the plan under review so reviews of the roadmap
+// and of each phase plan in one run never share a session ID.
+func planReviewSessionID(featureID string, kind validationArtifactKind, phaseNumber int, axis string, attempt int) string {
+	target := ""
+	switch {
+	case kind == validationArtifactRoadmap:
+		target = "-roadmap"
+	case phaseNumber > 0:
+		target = fmt.Sprintf("-phase-%02d", phaseNumber)
+	}
+	return fmt.Sprintf("%s%s-planreview-%s-%02d", featureID, target, axis, attempt)
 }
 
 // runSpecializedPlanValidationForArtifact runs a single specialized validator
@@ -648,7 +662,7 @@ func runSpecializedPlanValidationForArtifact(cfg planLoopConfig, sm ports.Sessio
 	if len(addDirs) == 0 {
 		addDirs = []string{ActiveRunDir(cfg.StateDir, cfg.Feature)}
 	}
-	reviewID := fmt.Sprintf("%s-planreview-%s-%02d", cfg.Feature.ID, domain.Axis, attempt)
+	reviewID := planReviewSessionID(cfg.Feature.ID, kind, extras.PhaseNumber, domain.Axis, attempt)
 	helper := &PhaseRunner{
 		Registry:       cfg.Registry,
 		SessionManager: sm,
@@ -1167,9 +1181,9 @@ func infrastructureFailedValidators(results []validatorResult) []int {
 //
 // Returns per-axis results alongside the aggregated verdict so the phase
 // planning loop can detect per-axis stalls (see detectAxisStall).
-func runPhasePlanMultiValidatorValidation(cfg planLoopConfig, priorPhasePlanPaths []string, sm ports.SessionManager, attempt int, attemptDir, planArtifactPath string) ([]validatorResult, reviewStatus, string, error) {
+func runPhasePlanMultiValidatorValidation(cfg planLoopConfig, phaseNumber int, priorPhasePlanPaths []string, sm ports.SessionManager, attempt int, attemptDir, planArtifactPath string) ([]validatorResult, reviewStatus, string, error) {
 	validators := phasePlanValidatorsForRisk(cfg.Feature.RiskLevel)
-	extras := planValidationExtras{PriorPhasePlanPaths: priorPhasePlanPaths}
+	extras := planValidationExtras{PriorPhasePlanPaths: priorPhasePlanPaths, PhaseNumber: phaseNumber}
 	return runValidatorSetWithInfrastructureRetry(cfg, sm, attempt, attemptDir, planArtifactPath, validators, validationArtifactPhasePlan, extras)
 }
 
@@ -1507,7 +1521,7 @@ func phasePlanKind(roadmapPath string, phase RoadmapPhase, priorPhasePlanPaths [
 			return buildPhasePlanRevisionPrompt(cfg.Feature, cfg.SkillsDir, previousPath, criticFeedback, phase, attempt, approvals)
 		},
 		validate: func(cfg planLoopConfig, sm ports.SessionManager, attempt int, attemptDir, planArtifactPath string) ([]validatorResult, reviewStatus, string, error) {
-			return runPhasePlanMultiValidatorValidation(cfg, priorPhasePlanPaths, sm, attempt, attemptDir, planArtifactPath)
+			return runPhasePlanMultiValidatorValidation(cfg, phase.Number, priorPhasePlanPaths, sm, attempt, attemptDir, planArtifactPath)
 		},
 		recordApproved: func(cfg planLoopConfig, planArtifactPath string) error {
 			return recordApprovedPhasePlanArtifact(cfg, phase.Number, planArtifactPath)
@@ -1524,6 +1538,14 @@ func runPlanningLoop(cfg planLoopConfig, kind planArtifactKind, sm ports.Session
 	phaseStart := time.Now()
 	cfg.Observer.PhaseStarted(cfg.PhaseSpanCtx, "plan")
 	defer func() {
+		finalStatus := ""
+		if result != nil {
+			finalStatus = result.FinalStatus
+		}
+		if (retErr != nil || finalStatus != "approved") && phaseInterruptedByUser(cfg.FeatureStore, cfg.Feature.ID, finalStatus, retErr) {
+			cfg.Observer.PhaseInterrupted(cfg.PhaseSpanCtx, "plan", time.Since(phaseStart))
+			return
+		}
 		var phaseErr error
 		if retErr != nil {
 			phaseErr = retErr
@@ -1736,16 +1758,12 @@ attemptLoop:
 				// cost source or credits.
 				cost := extractSessionCost(sess)
 				if cfg.FeatureStore != nil && cost.TotalCostUSD > 0 {
-					_ = cfg.FeatureStore.Modify(cfg.Feature.ID, func(f *feature.Feature) error {
-						f.RecordSessionCost(feature.SessionCostRecord{
-							SessionID:     sessionID,
-							PhaseKey:      kind.costKey,
-							ObserverPhase: "plan",
-							RepoName:      cfg.RepoName,
-							CostUSD:       cost.TotalCostUSD,
-						})
-						return nil
-					})
+					_ = recordSessionCost(cfg.FeatureStore, cfg.Feature.ID, sessionRunNumber(sess), feature.SessionCostRecord{
+						SessionID:     sessionID,
+						ObserverPhase: "plan",
+						RepoName:      cfg.RepoName,
+						CostUSD:       cost.TotalCostUSD,
+					}, kind.costKey, false)
 				}
 
 				outcome, sessionResult, newCriticFeedback, newSessionAttempt := handleCompletedPlanSession(
@@ -1965,8 +1983,12 @@ func handleCompletedPlanSession(
 	attemptDir, artifactDir, logPath string,
 ) (outcome planSessionOutcome, result *PlanLoopResult, newCriticFeedback string, newSessionAttempt int) {
 	agentStatus := waitResult.Status
+	endErr := sessionErrFromAgentStatus(agentStatus)
+	if stoppedForFeatureInterrupt(sess) {
+		endErr = observe.ErrSessionInterrupted
+	}
 	cfg.Observer.SessionEnded(planSessionCtx, "plan", sessionID, cfg.RepoName,
-		toSessionUsage(cost, sess), time.Since(sessionStart), sessionErrFromAgentStatus(agentStatus))
+		toSessionUsage(cost, sess), time.Since(sessionStart), endErr)
 
 	output := sess.MessageLog().Text()
 	_ = os.WriteFile(logPath, []byte(output), 0o644)

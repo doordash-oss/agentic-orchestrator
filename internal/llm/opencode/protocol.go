@@ -20,6 +20,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log"
 	"net/http"
 	"net/url"
 	"os"
@@ -53,6 +54,8 @@ type Protocol struct {
 
 	stdin io.Writer
 	mu    sync.Mutex
+
+	startupRelease func()
 
 	// Handshake state. initDone closes when the initialize response arrives;
 	// sessionReady closes when session/new returns a session id.
@@ -101,6 +104,10 @@ type Protocol struct {
 	lastEstimatedUsageEmitTokens          int
 	costUSD                               float64
 	usageSeen                             bool
+	// costBaseline is subtracted so a resumed session reports only this
+	// process's spend.
+	costBaseline openCodeCostBaseline
+	costLookup   openCodeChildSessionCostLookup
 	// price is the catalog's advertised per-million-token pricing for the
 	// session model (nil when unknown). It is used only to estimate cost when
 	// OpenCode reports tokens but no positive cost amount.
@@ -202,6 +209,33 @@ func NewProtocol(opts llm.ProtocolOpts) *Protocol {
 // SanitizeDiagnostic implements llm.DiagnosticSanitizer.
 func (p *Protocol) SanitizeDiagnostic(text string) string { return sanitizeDiagnostic(text) }
 
+// dbGate keeps OpenCode launches apart from each other and from Agentico's
+// own database reads: OpenCode opens its shared database before setting a
+// busy timeout, so any concurrent opener can fail it with "database is locked".
+var dbGate = make(chan struct{}, 1)
+
+// SerializeStartup implements llm.StartupSerializer. Handshake releases the
+// gate early, once the session exists and OpenCode's database setup is done.
+func (p *Protocol) SerializeStartup() func() {
+	dbGate <- struct{}{}
+	release := sync.OnceFunc(func() { <-dbGate })
+	p.mu.Lock()
+	p.startupRelease = release
+	p.mu.Unlock()
+	return release
+}
+
+func (p *Protocol) endStartup() {
+	p.mu.Lock()
+	release := p.startupRelease
+	p.mu.Unlock()
+	if release != nil {
+		release()
+	}
+}
+
+var _ llm.StartupSerializer = (*Protocol)(nil)
+
 func (p *Protocol) SetStdin(w io.Writer) {
 	p.mu.Lock()
 	p.stdin = w
@@ -236,6 +270,8 @@ func (p *Protocol) Handshake(ctx context.Context) error {
 	if err := p.startSession(ctx); err != nil {
 		return err
 	}
+	p.endStartup()
+	p.captureResumeBaseline(ctx)
 
 	if p.bridge != nil {
 		if err := p.bridge.start(ctx); err != nil {
@@ -347,6 +383,27 @@ func (p *Protocol) startSession(ctx context.Context) error {
 	}
 	return p.runSessionHandshake(ctx, sessionLoadMethod, p.sendSessionLoad)
 }
+
+// captureResumeBaseline records what a loaded session had already spent, since
+// OpenCode reports cumulative cost for the whole native session.
+func (p *Protocol) captureResumeBaseline(ctx context.Context) {
+	if p.resumeSessionID == "" {
+		return
+	}
+	lookupCtx, cancel := context.WithTimeout(ctx, resumeBaselineTimeout)
+	defer cancel()
+	baseline, _, err := p.costLookup.resumeBaseline(lookupCtx, p.resumeSessionID)
+	if err != nil {
+		log.Printf("opencode: resume cost baseline unavailable for %s: %v", p.resumeSessionID, err)
+	}
+	p.mu.Lock()
+	// A cost replayed by session/load is the floor when the database lags.
+	baseline.parentCostUSD = max(baseline.parentCostUSD, p.costUSD)
+	p.costBaseline = baseline
+	p.mu.Unlock()
+}
+
+const resumeBaselineTimeout = 2 * time.Second
 
 // runSessionHandshake sends a session-establishing request and blocks until the
 // session is ready, the context is cancelled, or a handshake error is recorded.
@@ -1805,13 +1862,24 @@ const (
 // with no usable price it stays zero and is marked unavailable so the zero is
 // not mistaken for a free session. Callers must hold p.mu.
 func (p *Protocol) costLocked() (float64, string) {
-	if p.costUSD > 0 {
-		return p.costUSD, ""
+	return openCodeCost(p.costUSD > 0, max(p.costUSD-p.costBaseline.parentCostUSD, 0), p.price, llm.Usage{
+		InputTokens:              p.inTok,
+		OutputTokens:             p.outTok,
+		CacheReadInputTokens:     p.cacheRead,
+		CacheCreationInputTokens: p.cacheCreate,
+	})
+}
+
+// openCodeCost applies costLocked's rules: a reported cost wins when priced,
+// otherwise tokens are estimated from price or marked unavailable.
+func openCodeCost(priced bool, reported float64, price *llm.ModelCost, u llm.Usage) (float64, string) {
+	if priced {
+		return reported, ""
 	}
-	if p.inTok+p.outTok+p.cacheRead+p.cacheCreate == 0 {
+	if usageTokenTotal(u) == 0 {
 		return 0, ""
 	}
-	if estimate, ok := estimateTokenCost(p.price, p.inTok, p.outTok, p.cacheRead, p.cacheCreate); ok {
+	if estimate, ok := estimateTokenCost(price, u.InputTokens, u.OutputTokens, u.CacheReadInputTokens, u.CacheCreationInputTokens); ok {
 		return estimate, costSourceTokenEstimate
 	}
 	return 0, costSourceUnavailable

@@ -449,3 +449,22 @@ describe('gateway event stream paths', () => {
     expect(isAllowedApiPath('/api/v1/sessions/session-1/output/stream', 'POST')).toBe(false);
   });
 });
+
+describe('gateway API path allowlist for run-scoped session transcripts', () => {
+  it('accepts bounded run session transcript reads and rejects unsafe ones', () => {
+    for (const path of [
+      '/api/v1/features/feat-1/runs/2/sessions/session.a-1/transcript',
+      '/api/v1/features/feat-1/runs/2/sessions/session-1/transcript?limit=500',
+      '/api/v1/features/feat-1/runs/2/sessions/session-1/transcript?offset=0&limit=100',
+    ]) {
+      expect(isAllowedApiPath(path, 'GET'), path).toBe(true);
+    }
+    for (const path of [
+      '/api/v1/features/feat-1/runs/2/sessions/session-1/transcript?limit=501',
+      '/api/v1/features/feat-1/runs/2/sessions/session-1/transcript?foo=1',
+      '/api/v1/features/feat-1/runs/2/sessions/../transcript',
+    ]) {
+      expect(isAllowedApiPath(path, 'GET'), path).toBe(false);
+    }
+  });
+});

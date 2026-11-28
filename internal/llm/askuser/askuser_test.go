@@ -337,6 +337,11 @@ func TestDisplay(t *testing.T) {
 	if got := exact.Display(limits); got.Questions[0].Question != "12345" || got.Questions[0].Header != "abc" {
 		t.Fatalf("suffix appended at the limit: %#v", got)
 	}
+	// "ab—c": the em dash spans bytes 2–4, so a 3-byte limit keeps "ab".
+	dash := Bundle{Questions: []Question{{Question: "ab—c"}}}
+	if got := dash.Display(Limits{Question: 3}); got.Questions[0].Question != "ab..." {
+		t.Fatalf("multi-byte cut = %q, want %q", got.Questions[0].Question, "ab...")
+	}
 	long := strings.Repeat("x", 10)
 	unbounded := Bundle{Questions: []Question{{Question: long}}}
 	if got := unbounded.Display(Limits{}); got.Questions[0].Question != long {

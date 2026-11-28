@@ -2487,11 +2487,18 @@ export const SessionDetailSchema = SessionSummarySchema.extend({
 });
 export type SessionDetail = z.output<typeof SessionDetailSchema>;
 
-export const SessionTranscriptRequestSchema = z.strictObject({
-  sessionId: SessionIdSchema,
-  offset: z.number().int().nonnegative().optional(),
-  limit: z.number().int().min(1).max(500).optional(),
-});
+export const SessionTranscriptRequestSchema = z
+  .strictObject({
+    sessionId: SessionIdSchema,
+    offset: z.number().int().nonnegative().optional(),
+    limit: z.number().int().min(1).max(500).optional(),
+    /** With runNumber, reads the session as recorded in that run (persisted rows). */
+    featureId: FeatureIdSchema.optional(),
+    runNumber: z.number().int().positive().optional(),
+  })
+  .refine((request) => (request.featureId === undefined) === (request.runNumber === undefined), {
+    message: 'featureId and runNumber must be provided together',
+  });
 export type SessionTranscriptRequest = z.output<typeof SessionTranscriptRequestSchema>;
 
 export const SessionTranscriptSchema = z.strictObject({

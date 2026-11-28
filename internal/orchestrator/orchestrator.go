@@ -616,14 +616,7 @@ func (o *Orchestrator) startPhase(featureID string, phase feature.Phase) (featur
 
 	switch result.Outcome {
 	case PhaseStarted:
-		if o.hooks.OnPhaseStarted != nil {
-			o.hooks.OnPhaseStarted(featureID, phase)
-		}
-		o.emitEvent(ports.Event{
-			Type:      ports.PhaseStarted,
-			FeatureID: featureID,
-			Phase:     phase,
-		})
+		o.emitPhaseStarted(featureID, phase)
 		return phase, true, nil
 	case PhaseNoOp:
 		o.admissionSettleIfQuiet(featureID)

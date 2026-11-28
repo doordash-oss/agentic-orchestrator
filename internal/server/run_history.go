@@ -23,6 +23,7 @@ import (
 
 	"github.com/doordash-oss/agentic-orchestrator/internal/errcat"
 	"github.com/doordash-oss/agentic-orchestrator/internal/feature"
+	"github.com/doordash-oss/agentic-orchestrator/internal/ports"
 )
 
 const (
@@ -37,7 +38,8 @@ const (
 // without lexicographic truncation. Each entry is built from that run's own
 // run.yaml so no historical field is borrowed from the active run.
 func (h *apiHandler) handleRunList(w http.ResponseWriter, r *http.Request, featureID string) {
-	if _, err := h.loadFeature(featureID); err != nil {
+	f, err := h.loadFeature(featureID)
+	if err != nil {
 		writeStoreError(w, err, featureID)
 		return
 	}
@@ -87,7 +89,7 @@ func (h *apiHandler) handleRunList(w http.ResponseWriter, r *http.Request, featu
 			// Skip it rather than fabricating or crashing the page.
 			continue
 		}
-		runs = append(runs, runSummaryFromRun(run))
+		runs = append(runs, runSummaryFromRun(run, f))
 	}
 	resp := RunListResponse{
 		APIVersion: APIVersion,
@@ -105,12 +107,12 @@ func (h *apiHandler) handleRunList(w http.ResponseWriter, r *http.Request, featu
 // carry-forward provenance, redacted backup-branch repo names, and run-level
 // timing/cost. No field is borrowed from the active run.
 func (h *apiHandler) handleRunDetail(w http.ResponseWriter, r *http.Request, featureID string, runNumber int) {
-	_, run, err := h.featureAndRun(featureID, runNumber)
+	f, run, err := h.featureAndRun(featureID, runNumber)
 	if err != nil {
 		writeStoreError(w, err, featureID)
 		return
 	}
-	detail := runDetailFromRun(run)
+	detail := runDetailFromRun(run, f)
 	detail.Cost = h.runCostWithActiveSessions(featureID, run)
 	revision := revisionForAny(detail)
 	h.writeRevisionedJSON(w, r, revision, RunDetailResponse{
@@ -126,12 +128,19 @@ func (h *apiHandler) handleRunDetail(w http.ResponseWriter, r *http.Request, fea
 // sessions are listed via bounded reads only; this endpoint never opens a
 // live output subscription.
 func (h *apiHandler) handleRunSessions(w http.ResponseWriter, r *http.Request, featureID string, runNumber int) {
-	if _, err := h.loadFeature(featureID); err != nil {
+	_, run, err := h.featureAndRun(featureID, runNumber)
+	if err != nil {
 		writeStoreError(w, err, featureID)
 		return
 	}
-	sessions := h.allSessions()
+	// The feature's own sessions, not the server-wide recent list: that cap
+	// would drop older features' history.
+	var sessions []ports.SessionView
+	if h.sessions != nil {
+		sessions = h.sessions.FeatureSessions(featureID)
+	}
 	summaries := make([]SessionSummary, 0, len(sessions))
+	seen := make(map[string]bool, len(sessions))
 	for _, sess := range sessions {
 		if sess == nil || sess.FeatureID() != featureID {
 			continue
@@ -140,8 +149,13 @@ func (h *apiHandler) handleRunSessions(w http.ResponseWriter, r *http.Request, f
 		if summary.RunNumber != runNumber {
 			continue
 		}
+		seen[summary.ID] = true
+		addEarlierSegmentCost(&summary, sess, run)
 		summaries = append(summaries, summary)
 	}
+	// Memory loses finished sessions on restart and when a later run reuses
+	// the ID, so the run's cost ledger fills them in.
+	summaries = append(summaries, ledgerSessionSummaries(featureID, run, seen)...)
 	revision := revisionForAny(summaries)
 	h.writeRevisionedJSON(w, r, revision, RunSessionListResponse{
 		APIVersion: APIVersion,
@@ -151,11 +165,105 @@ func (h *apiHandler) handleRunSessions(w http.ResponseWriter, r *http.Request, f
 	})
 }
 
-// runSummaryFromRun builds a RunSummary from run-level fields only. The
-// current_phase label is derived from the run's pending review phase (if any)
-// rather than the live feature, so a historical run never borrows the active
-// run's phase.
-func runSummaryFromRun(run *feature.Run) RunSummary {
+// addEarlierSegmentCost folds in the cost of earlier segments of a resumed
+// session, which shares its ID with the in-memory latest segment. Tokens stay
+// the latest turn's, since ledger rows hold per-segment totals. A
+// segment's own row is the last one for its ID and exists only once the
+// session has exited (Done runs the cost cleanups first) with usage to record.
+func addEarlierSegmentCost(summary *SessionSummary, sess ports.SessionView, run *feature.Run) {
+	var rows []feature.SessionCostRecord
+	for _, rec := range run.SessionCosts {
+		if strings.TrimSpace(rec.SessionID) == summary.ID {
+			rows = append(rows, rec)
+		}
+	}
+	if len(rows) > 0 && sessionExited(sess) && sessionHasUsage(*summary, sess) {
+		rows = rows[:len(rows)-1]
+	}
+	for _, rec := range rows {
+		summary.Usage.CostUSD += rec.CostUSD
+	}
+}
+
+func sessionExited(sess ports.SessionView) bool {
+	done := sess.Done()
+	if done == nil {
+		return false
+	}
+	select {
+	case <-done:
+		return true
+	default:
+		return false
+	}
+}
+
+func sessionHasUsage(summary SessionSummary, sess ports.SessionView) bool {
+	u := sess.AccumulatedUsage()
+	return summary.Usage.CostUSD > 0 || u.CostCreditsMicros != nil ||
+		u.InputTokens+u.OutputTokens+u.CacheReadInputTokens+u.CacheCreationInputTokens > 0
+}
+
+func ledgerSessionSummaries(featureID string, run *feature.Run, skip map[string]bool) []SessionSummary {
+	var summaries []SessionSummary
+	index := map[string]int{}
+	for _, rec := range run.SessionCosts {
+		id := strings.TrimSpace(rec.SessionID)
+		if id == "" || skip[id] {
+			continue
+		}
+		i, ok := index[id]
+		if !ok {
+			i = len(summaries)
+			index[id] = i
+			summaries = append(summaries, SessionSummary{
+				ID:             id,
+				FeatureID:      featureID,
+				RunNumber:      run.RunNumber,
+				Phase:          ledgerSessionPhase(rec),
+				Kind:           ports.KindPhase.String(),
+				Status:         ports.SessionDone.String(),
+				TaskActivities: []TaskActivity{},
+			})
+		}
+		s := &summaries[i]
+		if s.Repo == "" {
+			s.Repo = rec.RepoName
+		}
+		s.Usage.CostUSD += rec.CostUSD
+		s.Usage.InputTokens += rec.InputTokens
+		s.Usage.OutputTokens += rec.OutputTokens
+	}
+	return summaries
+}
+
+func ledgerSessionPhase(rec feature.SessionCostRecord) string {
+	if phase, err := feature.ParsePhaseName(rec.ObserverPhase); err == nil {
+		return phase.String()
+	}
+	if rec.ObserverPhase != "" {
+		return rec.ObserverPhase
+	}
+	return timingKeyPhase(rec.PhaseKey)
+}
+
+// timingKeyPhase maps a phase timing key (e.g. "phase-1-impl") to its phase label.
+func timingKeyPhase(key string) string {
+	switch {
+	case key == "implement" || strings.HasPrefix(key, "rebase-") || strings.HasSuffix(key, "-impl"):
+		return feature.PhaseImplement.String()
+	case strings.HasPrefix(key, "phase-") && strings.HasSuffix(key, "-plan"):
+		return feature.PhasePlan.String()
+	}
+	if phase, err := feature.ParsePhaseName(key); err == nil {
+		return phase.String()
+	}
+	return key
+}
+
+// runSummaryFromRun builds a RunSummary from run-level fields only, so a
+// historical run never borrows the active run's phase.
+func runSummaryFromRun(run *feature.Run, f *feature.Feature) RunSummary {
 	if run == nil {
 		return RunSummary{}
 	}
@@ -164,7 +272,7 @@ func runSummaryFromRun(run *feature.Run) RunSummary {
 		StartedAt:     run.StartedAt,
 		SealedAt:      run.SealedAt,
 		SealReason:    string(run.SealReason),
-		CurrentPhase:  runPhaseLabel(run),
+		CurrentPhase:  runCurrentPhase(run, f),
 		PhaseStatus:   run.CurrentPhaseStatus,
 		Iteration:     run.CurrentIteration,
 		RoadmapPhase:  run.CurrentRoadmapPhase,
@@ -184,8 +292,8 @@ func runSummaryFromRun(run *feature.Run) RunSummary {
 
 // runDetailFromRun extends the run-authentic summary with seal/provenance
 // fields, redacted backup-branch repo names, and run-level timing/cost.
-func runDetailFromRun(run *feature.Run) RunDetail {
-	summary := runSummaryFromRun(run)
+func runDetailFromRun(run *feature.Run, f *feature.Feature) RunDetail {
+	summary := runSummaryFromRun(run, f)
 	dto := RunDetail{
 		ArtifactCount:                   summary.ArtifactCount,
 		CurrentPhase:                    summary.CurrentPhase,
@@ -226,14 +334,26 @@ func runDetailFromRun(run *feature.Run) RunDetail {
 	return dto
 }
 
-// runPhaseLabel derives a run-authentic phase label from the run's pending
-// review phase. A sealed run does not store its own current phase, so an
-// empty label is returned rather than borrowing the active run's phase.
+// runPhaseLabel derives the phase a run stopped in from its persisted fields.
 func runPhaseLabel(run *feature.Run) string {
-	if run == nil || run.PendingReviewPhase == nil {
+	switch {
+	case run == nil:
 		return ""
+	case run.OutputReadyAt != nil || run.DeliveredAt != nil:
+		return feature.PhasePublish.String()
+	case run.PendingReviewPhase != nil:
+		return run.PendingReviewPhase.String()
 	}
-	return run.PendingReviewPhase.DirName()
+	return timingKeyPhase(strings.TrimSpace(run.ActiveTimingKey))
+}
+
+// runCurrentPhase reports the live phase for the feature's active run and the
+// run-derived phase otherwise.
+func runCurrentPhase(run *feature.Run, f *feature.Feature) string {
+	if run != nil && f != nil && run.RunNumber == f.ActiveRun && !run.IsSealed() {
+		return f.CurrentPhase.String()
+	}
+	return runPhaseLabel(run)
 }
 
 // runBackupBranchRepos returns the sorted repo names that have a recorded

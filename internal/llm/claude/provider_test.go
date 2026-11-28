@@ -191,6 +191,41 @@ func TestProviderBuildCommand_UsesCatalogAliasForClaudeCLIModel(t *testing.T) {
 	}
 }
 
+func TestProviderBuildCommand_SystemPromptGoesThroughFile(t *testing.T) {
+	p := NewProvider("")
+	const prompt = "role instructions naming server.json"
+
+	args, _, err := p.BuildCommand(llm.CommandBuildOpts{
+		Model:            "haiku[200K]",
+		SystemPrompt:     prompt,
+		SystemPromptFile: "/state/system-prompts/x/system-prompt.md",
+	})
+	if err != nil {
+		t.Fatalf("BuildCommand() error: %v", err)
+	}
+	if got := flagValue(args, "--append-system-prompt-file"); got != "/state/system-prompts/x/system-prompt.md" {
+		t.Errorf("--append-system-prompt-file = %q, want the file path", got)
+	}
+	for _, arg := range args {
+		if arg == "--append-system-prompt" || strings.Contains(arg, prompt) {
+			t.Errorf("argv carries the system prompt: %q", args)
+		}
+	}
+
+	if _, _, err := p.BuildCommand(llm.CommandBuildOpts{Model: "haiku[200K]", SystemPrompt: prompt}); !errors.Is(err, ErrSystemPromptFileRequired) {
+		t.Errorf("BuildCommand() without a file error = %v, want ErrSystemPromptFileRequired", err)
+	}
+}
+
+func flagValue(args []string, flag string) string {
+	for i, arg := range args {
+		if arg == flag && i+1 < len(args) {
+			return args[i+1]
+		}
+	}
+	return ""
+}
+
 func TestProviderBuildCommand_UsesDiscoveredCatalogAliasForClaudeCLIModel(t *testing.T) {
 	p := &Provider{}
 	p.SetModelCatalog([]llm.ModelInfo{

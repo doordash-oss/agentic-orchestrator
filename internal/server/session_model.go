@@ -15,6 +15,7 @@
 package server
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -126,25 +127,7 @@ func (h *apiHandler) handleTranscript(w http.ResponseWriter, r *http.Request, se
 			errcat.WithParams(errcat.SubjectParams{Subject: "Session", Name: sessionID}))
 		return
 	}
-	total := sess.MessageLog().Len()
-	offset := int(parseInt64Query(r, "offset", 0))
-	limit := int(parseInt64Query(r, "limit", 100))
-	if offset < 0 || limit <= 0 || limit > 500 {
-		writeAPIError(w, http.StatusBadRequest, errcat.BadRequest,
-			errcat.WithDiagnostics(fmt.Sprintf("invalid transcript bounds for session %q", sessionID)))
-		return
-	}
-	if offset > total {
-		offset = total
-	}
-	end := min(offset+limit, total)
-	messages := sess.MessageLog().Messages()[offset:end]
-	resp := TranscriptResponse{
-		APIVersion: APIVersion,
-		Cursor:     Cursor{Total: total, Start: offset, End: end},
-		Messages:   transcriptDTOs(messages, offset, sess.WorkDir()),
-	}
-	h.writeRevisionedResponse(w, r, resp, func(meta ResponseMeta) any { resp.Meta = meta; return resp })
+	h.writeTranscriptPage(w, r, sessionID, sess.MessageLog().Messages(), sess.WorkDir())
 }
 
 // handleSessionOutputStream tails a session's transcript live over SSE,
@@ -178,30 +161,42 @@ func (h *apiHandler) handleSessionOutputStream(w http.ResponseWriter, r *http.Re
 		return
 	}
 
+	keepalive := heartbeatInterval(r)
+	lastWrite := time.Now()
 	ticker := time.NewTicker(250 * time.Millisecond)
 	defer ticker.Stop()
+	// The first pass re-sends row from-1 so a resuming client refreshes the
+	// row it last saw. After that, the last-sent row is re-sent only when its
+	// DTOs change (UpdateLastAssistantPartial mutates it in place without
+	// growing Len()); new rows are always sent. Idle streams get an SSE
+	// comment every keepalive interval so clients' body timeouts don't fire.
+	first := true
+	sent := from
+	var tailSig []byte
 	for {
 		messages := sess.MessageLog().Messages()
 		total := len(messages)
-		// Re-include the previously-sent tail index on every tick (not just
-		// strictly-new ones): UpdateLastAssistantPartial can mutate
-		// the last message in place without growing Len(), so the tail may
-		// still be changing. Resending an unchanged row is harmless — the
-		// client's row-level dedup (shared with snapshot-refresh
-		// reconciliation) treats "same key, same signature" as a no-op.
-		tailStart := from
-		if tailStart > 0 {
-			tailStart--
+		start := sent
+		if start > 0 {
+			start--
 		}
-		if tailStart < total {
-			for _, row := range transcriptDTOs(messages[tailStart:], tailStart, sess.WorkDir()) {
+		if start < total {
+			rows := transcriptDTOs(messages[start:], start, sess.WorkDir())
+			skipTail := !first && sent > 0 && bytes.Equal(transcriptRowSignature(rows, sent-1), tailSig)
+			for _, row := range rows {
+				if skipTail && row.Index == sent-1 {
+					continue
+				}
 				chunk := SessionOutputChunk{APIVersion: APIVersion, SessionID: sessionID, Index: row.Index, Message: row}
 				if err := writeSSEFrame(w, "session.output", strconv.Itoa(row.Index), true, chunk); err != nil {
 					return
 				}
 				flusher.Flush()
+				lastWrite = time.Now()
 			}
-			from = total
+			tailSig = transcriptRowSignature(rows, total-1)
+			sent = total
+			first = false
 		}
 		if !sess.IsActive() {
 			done := SessionOutputChunk{APIVersion: APIVersion, SessionID: sessionID, Index: total - 1, Done: true}
@@ -211,12 +206,33 @@ func (h *apiHandler) handleSessionOutputStream(w http.ResponseWriter, r *http.Re
 			flusher.Flush()
 			return
 		}
+		if time.Since(lastWrite) >= keepalive {
+			if err := writeSSEComment(w, "keepalive"); err != nil {
+				return
+			}
+			flusher.Flush()
+			lastWrite = time.Now()
+		}
 		select {
 		case <-r.Context().Done():
 			return
 		case <-ticker.C:
 		}
 	}
+}
+
+// transcriptRowSignature returns the marshalled DTOs for one transcript row
+// index (a single message can expand to several DTOs).
+func transcriptRowSignature(rows []TranscriptMessage, index int) []byte {
+	var sig []byte
+	for _, row := range rows {
+		if row.Index != index {
+			continue
+		}
+		b, _ := json.Marshal(row)
+		sig = append(sig, b...)
+	}
+	return sig
 }
 
 // sessionOutputStreamOffset parses the /output/stream resume position from

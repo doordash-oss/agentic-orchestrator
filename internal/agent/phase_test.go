@@ -22,6 +22,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"runtime"
 	"slices"
 	"strings"
 	"sync"
@@ -2227,6 +2228,104 @@ func findAllArgValues(cmd []string, flag string) []string {
 	return vals
 }
 
+// systemPromptFromCmd returns the content of the --append-system-prompt-file
+// file, or "" when cmd names none.
+func systemPromptFromCmd(t *testing.T, cmd []string) string {
+	t.Helper()
+	path := findArgValue(cmd, "--append-system-prompt-file")
+	if path == "" {
+		return ""
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("reading system prompt file: %v", err)
+	}
+	return string(data)
+}
+
+func TestBuildSession_ClaudeSystemPromptStaysOffArgv(t *testing.T) {
+	dir := t.TempDir()
+	pr := NewPhaseRunner(session.NewManager(make(chan any, 100)), feature.NewStore(dir), dir)
+	pr.Registry = newRegistryWithProviders()
+
+	const prompt = "discovery file .agentico-server.json lives here"
+	cmd, _, sessOpts, err := pr.BuildSession(BuildSessionOpts{
+		Model:        "opus",
+		Prompt:       "do the work",
+		SystemPrompt: prompt,
+		PIDDir:       filepath.Join(dir, "pid"),
+		PermHandler:  permHandlerFor(false, nil, ""),
+		WorkDir:      dir,
+	})
+	if err != nil {
+		t.Fatalf("BuildSession() error: %v", err)
+	}
+
+	if slices.Contains(cmd, "--append-system-prompt") {
+		t.Errorf("argv carries --append-system-prompt: %v", cmd)
+	}
+	for _, arg := range cmd {
+		if strings.Contains(arg, "agentico-server") {
+			t.Errorf("argv leaks system prompt text in %q", arg)
+		}
+	}
+	path := findArgValue(cmd, "--append-system-prompt-file")
+	if path == "" {
+		t.Fatalf("argv has no --append-system-prompt-file: %v", cmd)
+	}
+	if got := systemPromptFromCmd(t, cmd); got != prompt {
+		t.Errorf("system prompt file = %q, want %q", got, prompt)
+	}
+
+	if runtime.GOOS != "windows" {
+		for p, want := range map[string]os.FileMode{
+			path:                             0o600,
+			filepath.Dir(path):               0o700,
+			filepath.Dir(filepath.Dir(path)): 0o700,
+		} {
+			info, statErr := os.Stat(p)
+			if statErr != nil {
+				t.Fatalf("stat %s: %v", p, statErr)
+			}
+			if got := info.Mode().Perm(); got != want {
+				t.Errorf("%s mode = %o, want %o", p, got, want)
+			}
+		}
+	}
+
+	if sessOpts == nil || len(sessOpts.Cleanups) != 1 {
+		t.Fatalf("session cleanups = %v, want one", sessOpts)
+	}
+	sessOpts.Cleanups[0]()
+	if _, statErr := os.Stat(filepath.Dir(path)); !os.IsNotExist(statErr) {
+		t.Errorf("system prompt directory survives cleanup: %v", statErr)
+	}
+}
+
+func TestBuildSession_SystemPromptFilePerStart(t *testing.T) {
+	dir := t.TempDir()
+	pr := NewPhaseRunner(session.NewManager(make(chan any, 100)), feature.NewStore(dir), dir)
+	pr.Registry = newRegistryWithProviders()
+
+	build := func() string {
+		cmd, _, _, err := pr.BuildSession(BuildSessionOpts{
+			Model:           "opus",
+			SystemPrompt:    "same prompt",
+			ResumeSessionID: "resume-me",
+			PermHandler:     permHandlerFor(false, nil, ""),
+			WorkDir:         dir,
+		})
+		if err != nil {
+			t.Fatalf("BuildSession() error: %v", err)
+		}
+		return findArgValue(cmd, "--append-system-prompt-file")
+	}
+	first, second := build(), build()
+	if first == "" || first == second {
+		t.Errorf("system prompt files %q and %q, want distinct per start", first, second)
+	}
+}
+
 func TestBuildSession_SkillsInjection(t *testing.T) {
 	dir := t.TempDir()
 	skillsDir := filepath.Join(dir, "skills")
@@ -2257,7 +2356,7 @@ func TestBuildSession_SkillsInjection(t *testing.T) {
 	// The retired "Available Skills" discovery table must not be appended
 	// by BuildSession. RoleSpec-backed system prompts carry the current
 	// Useful Resources section before this layer is called.
-	systemPrompt := findArgValue(cmd, "--append-system-prompt")
+	systemPrompt := systemPromptFromCmd(t, cmd)
 	if strings.Contains(systemPrompt, "## Available Skills") {
 		t.Error("soft skills discovery preamble must not appear in system prompt (moved to user prompt)")
 	}
@@ -2299,7 +2398,7 @@ func TestBuildSession_SkillsNoSystemPrompt(t *testing.T) {
 
 	// When SystemPrompt is empty, skills preamble should NOT be injected.
 	// Prompt-free sessions (e.g. review gates) get directory access only.
-	systemPrompt := findArgValue(cmd, "--append-system-prompt")
+	systemPrompt := systemPromptFromCmd(t, cmd)
 	if strings.Contains(systemPrompt, "## Available Skills") {
 		t.Error("skills preamble should not be injected when SystemPrompt is empty")
 	}
@@ -2333,7 +2432,7 @@ func TestBuildSession_EmptySkillsDir(t *testing.T) {
 	}
 
 	// System prompt should NOT contain skills preamble
-	systemPrompt := findArgValue(cmd, "--append-system-prompt")
+	systemPrompt := systemPromptFromCmd(t, cmd)
 	if strings.Contains(systemPrompt, "## Available Skills") {
 		t.Error("skills preamble injected despite empty SkillsDir")
 	}
@@ -2378,7 +2477,7 @@ func TestAvailabilityContract(t *testing.T) {
 	}
 
 	// No skills preamble injected
-	systemPrompt := findArgValue(cmd, "--append-system-prompt")
+	systemPrompt := systemPromptFromCmd(t, cmd)
 	if strings.Contains(systemPrompt, "## Available Skills") {
 		t.Error("skills preamble injected after reconciliation failure")
 	}

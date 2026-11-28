@@ -37,6 +37,10 @@ const SESSION_TRANSCRIPT_PATH_PATTERN = new RegExp(
   'i',
 );
 const SAFE_API_SEGMENT = '[a-z0-9_-]+';
+const RUN_SESSION_TRANSCRIPT_PATH_PATTERN = new RegExp(
+  `^/api/v1/features/${SAFE_API_SEGMENT}/runs/\\d+/sessions/${SESSION_ID_SEGMENT_PATTERN}/transcript$`,
+  'i',
+);
 const RUN_LIST_PATH_PATTERN = new RegExp(`^/api/v1/features/${SAFE_API_SEGMENT}/runs$`, 'i');
 const RUN_CONTENT_PATH_PATTERN = new RegExp(
   `^/api/v1/features/${SAFE_API_SEGMENT}/runs/\\d+/(?:artifacts|logs)/${SAFE_API_SEGMENT}$`,
@@ -114,7 +118,9 @@ export function isAllowedApiPath(path: string, method: string = 'GET'): boolean 
   }
   if (parts.length === 1) {
     return (
-      QUERYLESS_API_PATH_PATTERN.test(pathname) || QUERYLESS_SESSION_API_PATH_PATTERN.test(pathname)
+      QUERYLESS_API_PATH_PATTERN.test(pathname) ||
+      QUERYLESS_SESSION_API_PATH_PATTERN.test(pathname) ||
+      RUN_SESSION_TRANSCRIPT_PATH_PATTERN.test(pathname)
     );
   }
   if (parts.length === 2 && RUN_LIST_PATH_PATTERN.test(pathname)) {
@@ -138,7 +144,13 @@ export function isAllowedApiPath(path: string, method: string = 'GET'): boolean 
   if (parts.length === 2 && CLONE_LIST_PATH_PATTERN.test(pathname)) {
     return hasCloneListQuery(parts[1] ?? '');
   }
-  if (parts.length !== 2 || !SESSION_TRANSCRIPT_PATH_PATTERN.test(pathname)) {
+  if (
+    parts.length !== 2 ||
+    !(
+      SESSION_TRANSCRIPT_PATH_PATTERN.test(pathname) ||
+      RUN_SESSION_TRANSCRIPT_PATH_PATTERN.test(pathname)
+    )
+  ) {
     return false;
   }
   return hasBoundedIntegerQuery(parts[1] ?? '', {

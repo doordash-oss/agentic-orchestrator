@@ -265,6 +265,14 @@ func runImplementationLoop(cfg ImplementConfig, sm ports.SessionManager) (result
 	phaseStart := time.Now()
 	cfg.Observer.PhaseStarted(phaseCtx, "implement")
 	defer func() {
+		finalStatus := ""
+		if result != nil {
+			finalStatus = result.FinalStatus
+		}
+		if (err != nil || finalStatus != finalStatusReviewPassed) && phaseInterruptedByUser(cfg.FeatureStore, cfg.Feature.ID, finalStatus, err) {
+			cfg.Observer.PhaseInterrupted(phaseCtx, "implement", time.Since(phaseStart))
+			return
+		}
 		var finalErr error
 		if err != nil {
 			finalErr = err
@@ -621,6 +629,18 @@ func runImplementationLoop(cfg ImplementConfig, sm ports.SessionManager) (result
 			// reports a clean end without an outcome, the iteration records a
 			// protocol violation instead of treating transport completion as
 			// phase completion.
+			// Reads sess and sessionID at call time, so it also covers a crash-resume session.
+			endInterruptedSession := func() {
+				endedCost := extractSessionCost(sess)
+				cfg.Observer.SessionEnded(implSessionCtx, "implement", sessionID, cfg.RepoName, toSessionUsage(endedCost, sess), time.Since(iterStart), observe.ErrSessionInterrupted)
+				_ = accumulateSessionCostToFeature(cfg.FeatureStore, cfg.Feature.ID, "implement", endedCost, sessionCostMetadata{
+					SessionID:     sessionID,
+					ObserverPhase: "implement",
+					RepoName:      cfg.RepoName,
+					RunNumber:     sessionRunNumber(sess),
+				})
+			}
+
 			waitResult = WaitForPhaseOutcome(sess, implWaitOptions(sess, implSessionCtx, sessionID))
 			agentStatus = waitResult.Status
 			// Review decisions are recorded before any interrupt check, so a
@@ -642,10 +662,12 @@ func runImplementationLoop(cfg ImplementConfig, sm ports.SessionManager) (result
 			// that makes the next run advance to iteration N+1 instead of
 			// replaying N. Pausing briefly lets the normal shutdown path land.
 			if agentStatus == agentStatusFailed && sm != nil && waitForShutdownIntent(sm, shutdownDetectionGrace) {
+				endInterruptedSession()
 				return &LoopResult{FinalStatus: "interrupted", Iterations: i - 1}, nil
 			}
 
-			if isFeatureInterrupted(cfg.FeatureStore, cfg.Feature.ID) {
+			if isFeatureInterrupted(cfg.FeatureStore, cfg.Feature.ID) || stoppedForFeatureInterrupt(sess) {
+				endInterruptedSession()
 				return &LoopResult{FinalStatus: "interrupted", Iterations: i}, nil
 			}
 
@@ -666,6 +688,7 @@ func runImplementationLoop(cfg ImplementConfig, sm ports.SessionManager) (result
 						SessionID:     sessionID,
 						ObserverPhase: "implement",
 						RepoName:      cfg.RepoName,
+						RunNumber:     sessionRunNumber(sess),
 					})
 					appendIterationLog(aggregateLogPath, i, sess.MessageLog().Text())
 
@@ -684,9 +707,11 @@ func runImplementationLoop(cfg ImplementConfig, sm ports.SessionManager) (result
 							implementerNote = gate.recordSession(i, iterDir, sess)
 						}
 						if agentStatus == agentStatusFailed && sm != nil && waitForShutdownIntent(sm, shutdownDetectionGrace) {
+							endInterruptedSession()
 							return &LoopResult{FinalStatus: "interrupted", Iterations: i - 1}, nil
 						}
-						if isFeatureInterrupted(cfg.FeatureStore, cfg.Feature.ID) {
+						if isFeatureInterrupted(cfg.FeatureStore, cfg.Feature.ID) || stoppedForFeatureInterrupt(sess) {
+							endInterruptedSession()
 							return &LoopResult{FinalStatus: "interrupted", Iterations: i}, nil
 						}
 					}
@@ -775,6 +800,7 @@ func runImplementationLoop(cfg ImplementConfig, sm ports.SessionManager) (result
 			SessionID:     sessionID,
 			ObserverPhase: "implement",
 			RepoName:      cfg.RepoName,
+			RunNumber:     sessionRunNumber(sess),
 		})
 
 		// A pending handoff is settled by the user's answer, whatever the
@@ -2494,6 +2520,29 @@ func verificationContext(store FeatureStore, featureID string) (context.Context,
 		}
 	}()
 	return ctx, cancel
+}
+
+// phaseInterruptedByUser reports whether a phase loop that did not succeed
+// ended because the user paused, stopped or rewound the feature. A feature
+// failed elsewhere also ends the loop as "interrupted"; that stays a failure.
+func phaseInterruptedByUser(store FeatureStore, featureID, finalStatus string, err error) bool {
+	var status feature.Status
+	if store != nil {
+		if f, loadErr := store.Load(featureID); loadErr == nil {
+			status = f.Status
+		}
+	}
+	if status == feature.StatusFailed {
+		return false
+	}
+	switch finalStatus {
+	case "interrupted", finalStatusStopped:
+		return true
+	}
+	if errors.Is(err, observe.ErrSessionInterrupted) || errors.Is(err, context.Canceled) || errors.Is(err, errPlanLoopSuperseded) {
+		return true
+	}
+	return status == feature.StatusInterrupted
 }
 
 // isFeatureInterrupted checks the feature store to determine if the feature

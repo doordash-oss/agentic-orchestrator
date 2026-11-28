@@ -16,7 +16,9 @@ package server
 
 import (
 	"encoding/json"
+	"fmt"
 	"io"
+	"math"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -210,8 +212,8 @@ func TestRunDetailIsRunAuthenticWithProvenance(t *testing.T) {
 
 	// current_phase comes from the run's pending review phase, NOT the
 	// feature's active current_phase (PhaseImplement).
-	if got := run["current_phase"]; got != feature.PhasePlan.DirName() {
-		t.Fatalf("current_phase = %v; want %s (run-authentic, not feature %s)", got, feature.PhasePlan.DirName(), f.CurrentPhase.DirName())
+	if got := run["current_phase"]; got != feature.PhasePlan.String() {
+		t.Fatalf("current_phase = %v; want %s (run-authentic, not feature %s)", got, feature.PhasePlan, f.CurrentPhase)
 	}
 	if got := run["rewind_target"]; got != feature.PhaseImplement.DirName() {
 		t.Fatalf("rewind_target = %v; want %s", got, feature.PhaseImplement.DirName())
@@ -423,6 +425,250 @@ func TestRunSessionsFilteredByRunNumber(t *testing.T) {
 	}
 }
 
+func TestRunSessionsIncludeSessionsBeyondRecentList(t *testing.T) {
+	t.Parallel()
+	store, f := seedHistoryFeature(t, sealedRun(t, 2))
+	now := time.Date(2026, 6, 13, 13, 0, 0, 0, time.UTC)
+	views := []ports.SessionView{&fakeSessionView{
+		MockSessionView: &mocks.MockSessionView{
+			IDVal:        "sess-run2-old",
+			FeatureIDVal: f.ID,
+			PhaseVal:     feature.PhasePlan,
+			KindVal:      ports.KindPhase,
+			StatusVal:    ports.SessionDone,
+			StartedAtVal: now.Add(-time.Hour),
+		},
+		runNumber: 2,
+	}}
+	for i := range maxSessionListRecentSessions + 1 {
+		views = append(views, &fakeSessionView{
+			MockSessionView: &mocks.MockSessionView{
+				IDVal:        fmt.Sprintf("sess-newer-%02d", i),
+				FeatureIDVal: "other-feature",
+				PhaseVal:     feature.PhaseImplement,
+				KindVal:      ports.KindPhase,
+				StatusVal:    ports.SessionDone,
+				StartedAtVal: now.Add(time.Duration(i) * time.Second),
+			},
+			runNumber: 1,
+		})
+	}
+	opts := baseReadHandlerOptions(store)
+	opts.Sessions = fakeSessionManager{views: views}
+	handler := NewHandler(opts)
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/features/"+f.ID+"/runs/2/sessions", nil)
+	w := httptest.NewRecorder()
+	handler.ServeHTTP(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d; want 200", w.Code)
+	}
+	rawSessions := decodeBodyMap(t, w.Result())["sessions"].([]any)
+	if len(rawSessions) != 1 || rawSessions[0].(map[string]any)["id"] != "sess-run2-old" {
+		t.Fatalf("run sessions = %v; want only sess-run2-old", rawSessions)
+	}
+}
+
+func runSessionsByID(t *testing.T, handler http.Handler, featureID string, run int) map[string]map[string]any {
+	t.Helper()
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/features/"+featureID+"/runs/"+strconv.Itoa(run)+"/sessions", nil)
+	w := httptest.NewRecorder()
+	handler.ServeHTTP(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d; want 200", w.Code)
+	}
+	byID := map[string]map[string]any{}
+	for _, raw := range decodeBodyMap(t, w.Result())["sessions"].([]any) {
+		sess := raw.(map[string]any)
+		id := sess["id"].(string)
+		if _, dup := byID[id]; dup {
+			t.Fatalf("session %q listed twice", id)
+		}
+		byID[id] = sess
+	}
+	return byID
+}
+
+func withSessionCosts(records ...feature.SessionCostRecord) func(*feature.Run) {
+	return func(r *feature.Run) { r.SessionCosts = records }
+}
+
+func TestRunSessionsFromLedgerAfterRestart(t *testing.T) {
+	t.Parallel()
+	store, f := seedHistoryFeature(t, sealedRun(t, 2, withSessionCosts(
+		feature.SessionCostRecord{SessionID: "f-research", PhaseKey: "research", ObserverPhase: "Research", CostUSD: 1.5, InputTokens: 10, OutputTokens: 5},
+		feature.SessionCostRecord{SessionID: "f-impl", PhaseKey: "phase-1-impl", RepoName: "api", CostUSD: 2},
+		feature.SessionCostRecord{PhaseKey: "plan", CostUSD: 9},
+	)))
+	opts := baseReadHandlerOptions(store)
+	opts.Sessions = fakeSessionManager{}
+	got := runSessionsByID(t, NewHandler(opts), f.ID, 2)
+
+	if len(got) != 2 {
+		t.Fatalf("sessions = %v; want f-research and f-impl", got)
+	}
+	research := got["f-research"]
+	if research["phase"] != "Research" || research["status"] != "Done" || research["kind"] != "phase" || research["run_number"] != float64(2) {
+		t.Fatalf("f-research = %v", research)
+	}
+	if usage := research["usage"].(map[string]any); usage["cost_usd"] != 1.5 || usage["input_tokens"] != float64(10) || usage["output_tokens"] != float64(5) {
+		t.Fatalf("f-research usage = %v", usage)
+	}
+	if impl := got["f-impl"]; impl["phase"] != "Implement" || impl["repo"] != "api" {
+		t.Fatalf("f-impl = %v", impl)
+	}
+}
+
+func TestRunSessionsKeepSealedRunSessionWhenIDReused(t *testing.T) {
+	t.Parallel()
+	store, f := seedHistoryFeature(t, sealedRun(t, 2, withSessionCosts(
+		feature.SessionCostRecord{SessionID: "f-roadmap-01", PhaseKey: "phase-1-plan", CostUSD: 3},
+	)))
+	opts := baseReadHandlerOptions(store)
+	opts.Sessions = fakeSessionManager{views: []ports.SessionView{&fakeSessionView{
+		MockSessionView: &mocks.MockSessionView{
+			IDVal:        "f-roadmap-01",
+			FeatureIDVal: f.ID,
+			PhaseVal:     feature.PhasePlan,
+			KindVal:      ports.KindPhase,
+			StatusVal:    ports.SessionRunning,
+		},
+		runNumber: 3,
+	}}}
+	got := runSessionsByID(t, NewHandler(opts), f.ID, 2)
+
+	sess, ok := got["f-roadmap-01"]
+	if !ok || len(got) != 1 {
+		t.Fatalf("sessions = %v; want the sealed run's f-roadmap-01", got)
+	}
+	if sess["status"] != "Done" || sess["phase"] != "Plan" || sess["run_number"] != float64(2) {
+		t.Fatalf("f-roadmap-01 = %v; want the sealed run's ledger row", sess)
+	}
+}
+
+func TestRunSessionsPreferInMemoryRowOverLedger(t *testing.T) {
+	t.Parallel()
+	store, f := seedHistoryFeature(t, sealedRun(t, 2, withSessionCosts(
+		feature.SessionCostRecord{SessionID: "f-design", PhaseKey: "design", CostUSD: 1},
+	)))
+	opts := baseReadHandlerOptions(store)
+	opts.Sessions = fakeSessionManager{views: []ports.SessionView{&fakeSessionView{
+		MockSessionView: &mocks.MockSessionView{
+			IDVal:        "f-design",
+			FeatureIDVal: f.ID,
+			PhaseVal:     feature.PhaseDesign,
+			KindVal:      ports.KindPhase,
+			StatusVal:    ports.SessionWaitingHelp,
+		},
+		runNumber: 2,
+	}}}
+	got := runSessionsByID(t, NewHandler(opts), f.ID, 2)
+
+	if len(got) != 1 || got["f-design"]["status"] != "WaitingHelp" {
+		t.Fatalf("sessions = %v; want the in-memory f-design row only", got)
+	}
+}
+
+func TestRunSessionsAggregateLedgerRecords(t *testing.T) {
+	t.Parallel()
+	store, f := seedHistoryFeature(t, sealedRun(t, 2, withSessionCosts(
+		feature.SessionCostRecord{SessionID: "f-review", PhaseKey: "review", ObserverPhase: "Final Review", CostUSD: 1.25, InputTokens: 100, OutputTokens: 10},
+		feature.SessionCostRecord{SessionID: "f-review", PhaseKey: "review", ObserverPhase: "Final Review", RepoName: "web", CostUSD: 0.75, InputTokens: 50, OutputTokens: 20},
+	)))
+	opts := baseReadHandlerOptions(store)
+	opts.Sessions = fakeSessionManager{}
+	got := runSessionsByID(t, NewHandler(opts), f.ID, 2)
+
+	sess, ok := got["f-review"]
+	if !ok || len(got) != 1 {
+		t.Fatalf("sessions = %v; want one f-review row", got)
+	}
+	if sess["phase"] != "Final Review" || sess["repo"] != "web" {
+		t.Fatalf("f-review = %v", sess)
+	}
+	if usage := sess["usage"].(map[string]any); usage["cost_usd"] != 2.0 || usage["input_tokens"] != float64(150) || usage["output_tokens"] != float64(30) {
+		t.Fatalf("f-review usage = %v", usage)
+	}
+}
+
+func TestRunSessionsIncludeEarlierResumedSegments(t *testing.T) {
+	t.Parallel()
+	earlier := feature.SessionCostRecord{SessionID: "f-design", PhaseKey: "design", CostUSD: 0.115, InputTokens: 100, OutputTokens: 10}
+	latest := feature.SessionCostRecord{SessionID: "f-design", PhaseKey: "design", CostUSD: 0.271, InputTokens: 200, OutputTokens: 20}
+	other := feature.SessionCostRecord{SessionID: "f-other", PhaseKey: "design", CostUSD: 5}
+	latestUsage := &llm.Usage{CostUSD: 0.271, CostSource: "provider_estimate", InputTokens: 7, OutputTokens: 3}
+	cases := []struct {
+		name       string
+		sealed     bool
+		ledger     []feature.SessionCostRecord
+		usage      *llm.Usage
+		exited     bool
+		wantCost   float64
+		wantInput  int
+		wantOutput int
+	}{
+		{name: "ended resumed session", ledger: []feature.SessionCostRecord{earlier, other, latest}, usage: latestUsage, exited: true, wantCost: 0.386, wantInput: 7, wantOutput: 3},
+		{name: "live resumed session", ledger: []feature.SessionCostRecord{earlier, other}, usage: latestUsage, wantCost: 0.386, wantInput: 7, wantOutput: 3},
+		{name: "ended resumed segment without usage", ledger: []feature.SessionCostRecord{earlier}, usage: &llm.Usage{}, exited: true, wantCost: 0.115},
+		{name: "ended session never resumed", ledger: []feature.SessionCostRecord{other, latest}, usage: latestUsage, exited: true, wantCost: 0.271, wantInput: 7, wantOutput: 3},
+		{name: "live session never resumed", ledger: []feature.SessionCostRecord{other}, usage: latestUsage, wantCost: 0.271, wantInput: 7, wantOutput: 3},
+		{name: "sealed run session never resumed", sealed: true, ledger: []feature.SessionCostRecord{latest}, usage: latestUsage, exited: true, wantCost: 0.271, wantInput: 7, wantOutput: 3},
+		{name: "sealed run resumed session", sealed: true, ledger: []feature.SessionCostRecord{earlier, latest}, usage: latestUsage, exited: true, wantCost: 0.386, wantInput: 7, wantOutput: 3},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			runNumber := 1
+			var store *feature.Store
+			var f *feature.Feature
+			if tc.sealed {
+				runNumber = 2
+				store, f = seedHistoryFeature(t, sealedRun(t, 2, withSessionCosts(tc.ledger...)))
+			} else {
+				store, f = seedHistoryFeature(t)
+				if err := store.Modify(f.ID, func(current *feature.Feature) error {
+					current.SessionCosts = tc.ledger
+					return nil
+				}); err != nil {
+					t.Fatal(err)
+				}
+			}
+			status := ports.SessionRunning
+			var done chan struct{}
+			if tc.exited {
+				status = ports.SessionDone
+				done = make(chan struct{})
+				close(done)
+			}
+			opts := baseReadHandlerOptions(store)
+			opts.Sessions = fakeSessionManager{views: []ports.SessionView{&fakeSessionView{
+				MockSessionView: &mocks.MockSessionView{
+					IDVal:        "f-design",
+					FeatureIDVal: f.ID,
+					PhaseVal:     feature.PhaseDesign,
+					KindVal:      ports.KindPhase,
+					StatusVal:    status,
+				},
+				runNumber: runNumber,
+				usage:     tc.usage,
+				done:      done,
+			}}}
+			got := runSessionsByID(t, NewHandler(opts), f.ID, runNumber)
+
+			usage := got["f-design"]["usage"].(map[string]any)
+			if cost, _ := usage["cost_usd"].(float64); math.Abs(cost-tc.wantCost) > 1e-9 {
+				t.Errorf("cost_usd = %v; want %v", cost, tc.wantCost)
+			}
+			if in, _ := usage["input_tokens"].(float64); int(in) != tc.wantInput {
+				t.Errorf("input_tokens = %v; want %d", in, tc.wantInput)
+			}
+			if out, _ := usage["output_tokens"].(float64); int(out) != tc.wantOutput {
+				t.Errorf("output_tokens = %v; want %d", out, tc.wantOutput)
+			}
+		})
+	}
+}
+
 func TestRunHistoryRoutesRejectMutationMethods(t *testing.T) {
 	t.Parallel()
 	store, f := seedHistoryFeature(t, sealedRun(t, 2))
@@ -517,5 +763,63 @@ func TestReconciledCostCanLowerSessionAndRunEstimates(t *testing.T) {
 		if got := cost["total_usd"].(float64); got != amount {
 			t.Fatalf("run retained old estimate: %v", got)
 		}
+	}
+}
+
+func TestSealedRunPhaseIsWhereTheRunStopped(t *testing.T) {
+	t.Parallel()
+	readyAt := time.Date(2026, 6, 13, 9, 0, 0, 0, time.UTC)
+	cases := []struct {
+		name string
+		edit func(*feature.Run)
+		want string
+	}{
+		{name: "roadmap implement", edit: func(r *feature.Run) { r.ActiveTimingKey = "phase-1-impl" }, want: "Implement"},
+		{name: "rebase cycle", edit: func(r *feature.Run) { r.ActiveTimingKey = "rebase-2" }, want: "Implement"},
+		{name: "roadmap plan", edit: func(r *feature.Run) { r.ActiveTimingKey = "phase-2-plan" }, want: "Plan"},
+		{name: "design", edit: func(r *feature.Run) { r.ActiveTimingKey = "design" }, want: "Design"},
+		{name: "pending review wins over timing key", edit: func(r *feature.Run) {
+			r.ActiveTimingKey = "research"
+			r.PendingReviewPhase = phasePtr(feature.PhaseDesign)
+		}, want: "Design"},
+		{name: "output ready is publish", edit: func(r *feature.Run) {
+			r.ActiveTimingKey = "review"
+			r.OutputReadyAt = &readyAt
+		}, want: "Publish"},
+		{name: "no phase data", edit: func(*feature.Run) {}, want: ""},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			store, f := seedHistoryFeature(t, sealedRun(t, 2, tc.edit))
+			if err := store.Modify(f.ID, func(current *feature.Feature) error {
+				current.RunCount = 2
+				current.CurrentPhase = feature.PhaseInquire
+				return nil
+			}); err != nil {
+				t.Fatal(err)
+			}
+			handler := NewHandler(baseReadHandlerOptions(store))
+
+			run := getJSONMap(t, handler, "/api/v1/features/"+f.ID+"/runs/2")["run"].(map[string]any)
+			if got, _ := run["current_phase"].(string); got != tc.want {
+				t.Fatalf("run detail current_phase = %v; want %q", got, tc.want)
+			}
+			detail := getJSONMap(t, handler, "/api/v1/features/"+f.ID)[entityFeature].(map[string]any)
+			history := detail["historical_runs"].([]any)
+			if len(history) != 1 {
+				t.Fatalf("historical_runs = %v; want one run", history)
+			}
+			if got := history[0].(map[string]any)["current_phase"]; got != run["current_phase"] {
+				t.Fatalf("historical current_phase = %v; want %v to match run detail", got, run["current_phase"])
+			}
+			if got := detail["active_run_detail"].(map[string]any)["current_phase"]; got != feature.PhaseInquire.String() {
+				t.Fatalf("active run current_phase = %v; want live %s", got, feature.PhaseInquire)
+			}
+			active := getJSONMap(t, handler, "/api/v1/features/"+f.ID+"/runs/1")["run"].(map[string]any)
+			if got := active["current_phase"]; got != feature.PhaseInquire.String() {
+				t.Fatalf("active run detail current_phase = %v; want live %s", got, feature.PhaseInquire)
+			}
+		})
 	}
 }

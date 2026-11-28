@@ -226,15 +226,25 @@ export function ArchiveMode(props: ArchiveModeProps) {
     [featureId, selectedRunNumber],
   );
 
-  const handleSessionSelect = useCallback(async (sessionId: string) => {
-    try {
-      setInspectionError(null);
-      setSelectedSession(await window.agentico.getSessionTranscript({ sessionId, limit: 500 }));
-    } catch (error) {
-      setSelectedSession(null);
-      setInspectionError(parseIpcError(error));
-    }
-  }, []);
+  const handleSessionSelect = useCallback(
+    async (sessionId: string) => {
+      try {
+        setInspectionError(null);
+        setSelectedSession(
+          await window.agentico.getSessionTranscript({
+            sessionId,
+            featureId,
+            runNumber: selectedRunNumber,
+            limit: 500,
+          }),
+        );
+      } catch (error) {
+        setSelectedSession(null);
+        setInspectionError(parseIpcError(error));
+      }
+    },
+    [featureId, selectedRunNumber],
+  );
 
   if (state.phase === 'loading') {
     return <ArchiveShell state="loading" onReturnToCurrent={onReturnToCurrent} />;
@@ -465,7 +475,9 @@ export function ArchiveMode(props: ArchiveModeProps) {
                           <span className="archive-mode__session-id">{sess.id}</span>
                           {sess.phase ? ` · ${displayPhaseLabel(sess.phase)}` : ''}
                           {sess.status ? ` · ${sess.status}` : ''}
-                          {sess.startedAt ? ` · ${new Date(sess.startedAt).toLocaleString()}` : ''}
+                          {Date.parse(sess.startedAt) > 0
+                            ? ` · ${new Date(sess.startedAt).toLocaleString()}`
+                            : ''}
                         </button>
                       </li>
                     ))}

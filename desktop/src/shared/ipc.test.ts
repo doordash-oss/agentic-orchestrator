@@ -832,6 +832,16 @@ describe('operational IPC schemas', () => {
         seq: 9,
       }).success,
     ).toBe(false);
+    expect(
+      SessionTranscriptRequestSchema.parse({
+        sessionId: 'session-1',
+        featureId: 'abcd1234',
+        runNumber: 2,
+      }),
+    ).toStrictEqual({ sessionId: 'session-1', featureId: 'abcd1234', runNumber: 2 });
+    expect(
+      SessionTranscriptRequestSchema.safeParse({ sessionId: 'session-1', runNumber: 2 }).success,
+    ).toBe(false);
   });
 
   it('accepts dotted session IDs as one safe path segment', () => {

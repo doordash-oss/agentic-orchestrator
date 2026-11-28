@@ -26,6 +26,7 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode/utf8"
 
 	"github.com/doordash-oss/agentic-orchestrator/internal/config"
 	"github.com/doordash-oss/agentic-orchestrator/internal/errcat"
@@ -92,14 +93,14 @@ func revisionForAny(v any) string {
 func (h *apiHandler) featureDetailDTO(f *feature.Feature) (FeatureDetail, error) {
 	var activeRelationshipChild *feature.Feature
 	var relationshipChildren *feature.RelationshipChildren
-	active := runSummaryDTO(f.Run(), f)
+	active := runSummaryFromRun(f.Run(), f)
 	historyRunNumbers := boundedHistoricalRunNumbers(f.ActiveRun, f.RunCount, maxFeatureDetailHistoricalRuns)
 	history := make([]RunSummary, 0, len(historyRunNumbers))
 	if h.store != nil {
 		for _, n := range historyRunNumbers {
 			run, err := h.store.LoadRun(f.ID, n)
 			if err == nil {
-				history = append(history, runSummaryDTO(run, f))
+				history = append(history, runSummaryFromRun(run, f))
 			}
 		}
 	}
@@ -695,7 +696,8 @@ func actionCatalogDTOsWithChildGuard(f *feature.Feature, hasActiveChild bool) []
 	// failure never ends the flow, so retry stays available.
 	canPublish := f.IsPublishable() && (status == feature.StatusCodeReady || status == feature.StatusPublished)
 	canMerge := !f.IsPublishable() && (status == feature.StatusCodeReady || status == feature.StatusPublished)
-	canRewind := !running && (len(feature.RewindChoicesForFeature(f)) > 0 || hasRewindUpgradeTarget(f))
+	// Rewind stops the feature's sessions itself, so a running feature can rewind.
+	canRewind := len(feature.RewindChoicesForFeature(f)) > 0 || hasRewindUpgradeTarget(f)
 	canPostPublishPass := publishedOrManualReady
 	canReviewFeedback := canPostPublishPass && f.IsPublishable() && featureHasPullRequest(f)
 	canRetry := status == feature.StatusFailed
@@ -1017,33 +1019,6 @@ func boundedHistoricalRunNumbers(activeRun, runCount, limit int) []int {
 	}
 	sort.Ints(runNumbers)
 	return runNumbers
-}
-
-func runSummaryDTO(run *feature.Run, f *feature.Feature) RunSummary {
-	if run == nil {
-		return RunSummary{}
-	}
-	dto := RunSummary{
-		RunNumber:     run.RunNumber,
-		StartedAt:     run.StartedAt,
-		SealedAt:      run.SealedAt,
-		SealReason:    string(run.SealReason),
-		CurrentPhase:  f.CurrentPhase.String(),
-		PhaseStatus:   run.CurrentPhaseStatus,
-		Iteration:     run.CurrentIteration,
-		RoadmapPhase:  run.CurrentRoadmapPhase,
-		RoadmapTotal:  run.TotalRoadmapPhases,
-		ArtifactCount: len(run.Artifacts),
-		Setup:         setupDTO(run.Setup),
-	}
-	if run.PendingReviewPhase != nil {
-		dto.PendingReviewPhase = run.PendingReviewPhase.DirName()
-	}
-	if run.PendingRewindReviewRoadmapPhase != nil {
-		dto.PendingRewindReviewRoadmapPhase = *run.PendingRewindReviewRoadmapPhase
-	}
-	dto.IsRewind = run.IsRewind
-	return dto
 }
 
 func setupDTO(setup *feature.SetupState) *Setup {
@@ -1882,6 +1857,9 @@ func SafeDisplayText(s string, limit int) string {
 	s = strings.ReplaceAll(s, "raw initial prompt", "[redacted prompt]")
 	s = strings.TrimSpace(s)
 	if limit > 0 && len(s) > limit {
+		for limit > 0 && !utf8.RuneStart(s[limit]) {
+			limit--
+		}
 		return s[:limit] + "..."
 	}
 	return s

@@ -15,6 +15,7 @@
 package server
 
 import (
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -81,11 +82,9 @@ func TestSessionOutputStreamEmitsIndexedTranscriptRecordsAndTerminates(t *testin
 	}
 }
 
-// TestSessionOutputStreamReincludesMutatingTailRow guards the poll loop's
-// "re-include the previously-sent tail index every tick" behavior: a final
-// assistant message can replace the last streaming partial in place without
-// growing Len(), so a client resuming from the row it already has must still
-// receive that row again once it changes, not be starved of the update.
+// TestSessionOutputStreamReincludesMutatingTailRow: a final assistant message
+// can replace the last streaming partial in place without growing Len(), so
+// the changed tail row must be re-sent.
 func TestSessionOutputStreamReincludesMutatingTailRow(t *testing.T) {
 	t.Parallel()
 
@@ -141,6 +140,128 @@ func TestSessionOutputStreamReincludesMutatingTailRow(t *testing.T) {
 	}
 	if !strings.Contains(got, "event: session.output.done") {
 		t.Fatalf("stream missing terminal event:\n%s", got)
+	}
+}
+
+func newActiveStreamSession(log *session.MessageLog) *raceSafeActiveSessionView {
+	sess := &raceSafeActiveSessionView{fakeSessionView: &fakeSessionView{
+		MockSessionView: &mocks.MockSessionView{IDVal: fixtureSessionID},
+	}}
+	sess.log = log
+	sess.active.Store(true)
+	return sess
+}
+
+// runOutputStream serves path against sess, calls during while the stream is
+// live, then ends the session and returns the full body.
+func runOutputStream(t *testing.T, sess *raceSafeActiveSessionView, path string, during func()) string {
+	t.Helper()
+	handler := NewHandler(HandlerOptions{
+		Sessions:              fakeSessionManager{views: []ports.SessionView{sess}},
+		DisableHostValidation: true,
+	})
+	w := httptest.NewRecorder()
+	done := make(chan struct{})
+	go func() {
+		handler.ServeHTTP(w, httptest.NewRequest(http.MethodGet, path, nil))
+		close(done)
+	}()
+	during()
+	sess.active.Store(false)
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("handler did not terminate after session finished")
+	}
+	return w.Body.String()
+}
+
+func outputFrameCount(body string, index int) int {
+	return strings.Count(body, fmt.Sprintf("id: %d\nevent: session.output\n", index))
+}
+
+func TestSessionOutputStreamSendsIdleRowsOnce(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name string
+		from int
+		want map[int]int
+	}{
+		{name: "from start", from: 0, want: map[int]int{0: 1, 1: 1, 2: 1}},
+		{name: "resume refreshes last seen row", from: 2, want: map[int]int{0: 0, 1: 1, 2: 1}},
+		{name: "caught up", from: 3, want: map[int]int{0: 0, 1: 0, 2: 1}},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			log := session.NewMessageLog()
+			for _, text := range []string{"a", "b", "c"} {
+				log.Append(assistantText(text))
+			}
+			sess := newActiveStreamSession(log)
+			body := runOutputStream(t, sess, fmt.Sprintf("/api/v1/sessions/sess-1/output/stream?from=%d", tc.from), func() {
+				time.Sleep(time.Second)
+			})
+			for index, want := range tc.want {
+				if got := outputFrameCount(body, index); got != want {
+					t.Errorf("row %d sent %d times; want %d\n%s", index, got, want, body)
+				}
+			}
+			if !strings.Contains(body, "event: session.output.done") {
+				t.Fatalf("stream missing terminal event:\n%s", body)
+			}
+		})
+	}
+}
+
+func TestSessionOutputStreamResendsTailOncePerChange(t *testing.T) {
+	t.Parallel()
+
+	log := session.NewMessageLog()
+	partial := func(text string) llm.SDKMessage {
+		msg := assistantText(text)
+		msg.Subtype = "partial"
+		return msg
+	}
+	log.Append(partial("one"))
+	sess := newActiveStreamSession(log)
+	body := runOutputStream(t, sess, "/api/v1/sessions/sess-1/output/stream?from=0", func() {
+		time.Sleep(600 * time.Millisecond)
+		log.UpdateLastAssistantPartial(partial("two"))
+		time.Sleep(600 * time.Millisecond)
+		log.UpdateLastAssistantPartial(assistantText("three"))
+		time.Sleep(600 * time.Millisecond)
+		log.Append(assistantText("four"))
+		time.Sleep(600 * time.Millisecond)
+	})
+	if got := outputFrameCount(body, 0); got != 3 {
+		t.Errorf("row 0 sent %d times; want 3 (initial + two changes)\n%s", got, body)
+	}
+	if got := outputFrameCount(body, 1); got != 1 {
+		t.Errorf("row 1 sent %d times; want 1\n%s", got, body)
+	}
+	for _, text := range []string{"one", "two", "three", "four"} {
+		if got := strings.Count(body, fmt.Sprintf(`"text":%q`, text)); got != 1 {
+			t.Errorf("text %q sent %d times; want 1\n%s", text, got, body)
+		}
+	}
+}
+
+func TestSessionOutputStreamSendsKeepaliveWhenIdle(t *testing.T) {
+	t.Parallel()
+
+	log := session.NewMessageLog()
+	log.Append(assistantText("a"))
+	sess := newActiveStreamSession(log)
+	body := runOutputStream(t, sess, "/api/v1/sessions/sess-1/output/stream?from=0&heartbeat_ms=100", func() {
+		time.Sleep(700 * time.Millisecond)
+	})
+	if !strings.Contains(body, ": keepalive\n\n") {
+		t.Fatalf("idle stream missing keepalive comment:\n%s", body)
+	}
+	if got := outputFrameCount(body, 0); got != 1 {
+		t.Errorf("row 0 sent %d times; want 1\n%s", got, body)
 	}
 }
 

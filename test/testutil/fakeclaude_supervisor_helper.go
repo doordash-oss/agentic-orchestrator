@@ -102,6 +102,7 @@ sysprompt=""
 prev=""
 for arg in "$@"; do
   if [ "$prev" = "--append-system-prompt" ]; then sysprompt="$arg"; fi
+  if [ "$prev" = "--append-system-prompt-file" ]; then sysprompt=$(cat "$arg"; printf x); sysprompt=${sysprompt%x}; fi
   prev="$arg"
 done
 supervisor=0

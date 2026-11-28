@@ -211,7 +211,9 @@ Clients bootstrap from a snapshot and then consume ordered event deltas:
 To follow one feature or a set of kinds, add `feature_id=<id>` and/or
 `kind=<kind>[,<kind>...]` to `/api/v1/events`. `connected`, `stream.reset` and
 `heartbeat` always pass, and `seq` still counts every event, so a filtered
-cursor resumes the same way.
+cursor resumes the same way. `connected` is sent only when the request has no
+cursor; a resume sends the replayed events (or `stream.reset`) and then live
+events, so an empty window sends only heartbeats.
 
 Event envelopes include `seq`, `epoch`, `kind`, `resource`,
 `resource_version`, and `snapshot_required`. Snapshot responses include

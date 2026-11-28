@@ -177,7 +177,10 @@ func (o *Observer) FeatureMutated(m feature.Mutation) {
 		return
 	}
 	if m.Before.ActiveRun != m.After.ActiveRun {
-		emit("feature.run_sealed", m.Before.Status.String(), map[string]any{"run_number": m.Before.ActiveRun, "_duration_ms": sinceMillis(m.Before.StartedAt, m.At)})
+		// A terminal run already emitted on its terminal transition.
+		if !telemetryTerminal(m.Before.Status) {
+			emit("feature.run_sealed", m.Before.Status.String(), map[string]any{"run_number": m.Before.ActiveRun, "_duration_ms": sinceMillis(m.Before.StartedAt, m.At)})
+		}
 		emit("feature.run_started", "started", map[string]any{"run_number": m.After.ActiveRun})
 	}
 	if m.Before.Status != m.After.Status {
@@ -517,6 +520,27 @@ func (o *Observer) PhaseCompleted(sc SpanContext, phase string, duration time.Du
 	o.emit(sc, evt)
 	o.activePhaseSpans.Delete(sc.FeatureID)
 	o.otel.EndSpan(sc.SpanID, status, nil)
+}
+
+// PhaseInterrupted emits a phase.interrupted event for a phase ended by a
+// user pause, stop or rewind rather than by success or failure.
+func (o *Observer) PhaseInterrupted(sc SpanContext, phase string, duration time.Duration) {
+	if o == nil || !o.enabled {
+		return
+	}
+	o.emit(sc, Event{
+		Timestamp:    time.Now(),
+		TraceID:      sc.TraceID,
+		SpanID:       sc.SpanID,
+		ParentSpanID: sc.ParentSpanID,
+		EventType:    "phase.interrupted",
+		Phase:        phase,
+		Status:       "interrupted",
+		FeatureID:    sc.FeatureID,
+		DurationMs:   duration.Milliseconds(),
+	})
+	o.activePhaseSpans.Delete(sc.FeatureID)
+	o.otel.EndSpan(sc.SpanID, "interrupted", nil)
 }
 
 // SessionStarted emits a session.started event.

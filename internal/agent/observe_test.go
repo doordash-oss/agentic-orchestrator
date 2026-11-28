@@ -26,6 +26,7 @@ import (
 	"github.com/doordash-oss/agentic-orchestrator/internal/feature"
 	"github.com/doordash-oss/agentic-orchestrator/internal/llm"
 	"github.com/doordash-oss/agentic-orchestrator/internal/observe"
+	"github.com/doordash-oss/agentic-orchestrator/internal/ports"
 	"github.com/doordash-oss/agentic-orchestrator/internal/session"
 	"github.com/doordash-oss/agentic-orchestrator/test/testutil"
 	"go.uber.org/fx"
@@ -384,6 +385,78 @@ func TestImplementLoopEmitsFullEventSequence(t *testing.T) {
 	}
 
 	_ = strings.HasSuffix // use strings import
+}
+
+func TestRunInquireSessionEndedReportsFeatureInterrupt(t *testing.T) {
+	// parallel-exempt: owns provider subprocesses.
+	tests := []struct {
+		name        string
+		viaManager  bool
+		wantStatus  string
+		wantErrText bool
+	}{
+		{name: "feature interrupt", viaManager: true, wantStatus: observe.SessionEndedStatusInterrupted, wantErrText: true},
+		{name: "phase waiter stop", wantStatus: "ok"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			observeDir := t.TempDir()
+			featureID := "test-inquire-interrupt-001"
+			_ = os.MkdirAll(filepath.Join(observeDir, featureID), 0o755)
+			stateDir := t.TempDir()
+			store := feature.NewStore(stateDir)
+			f := &feature.Feature{
+				ID:           featureID,
+				Name:         "Inquire Interrupt",
+				Slug:         "inquire-interrupt",
+				Status:       feature.StatusResearching,
+				CurrentPhase: feature.PhaseInquire,
+				TraceID:      "trace-inquire-interrupt",
+				Repos:        []feature.FeatureRepo{{Name: "testrepo", Path: t.TempDir()}},
+				Models:       config.ModelConfig{Research: "test-model"},
+			}
+			if err := store.Save(f); err != nil {
+				t.Fatal(err)
+			}
+			_ = os.MkdirAll(filepath.Join(stateDir, featureID), 0o755)
+			agentScript := testutil.WriteScript(t, t.TempDir(), "agent.sh",
+				testutil.JSONLInit+"\nwhile IFS= read -r line; do :; done\n")
+			sm := session.NewManager(make(chan any, 100))
+			defer sm.Shutdown()
+			pr := &PhaseRunner{
+				SessionManager: sm,
+				FeatureStore:   store,
+				StateDir:       stateDir,
+				Observer:       observerFromModule(t, true, observeDir, "agentic"),
+				BuildSessionFn: func(opts BuildSessionOpts) ([]string, []string, *session.SessionOpts, error) {
+					return []string{"bash", agentScript}, nil, &session.SessionOpts{
+						Protocol: testSessionProtocol(opts.Prompt),
+						PIDDir:   opts.PIDDir,
+						RepoName: opts.RepoName,
+					}, nil
+				},
+			}
+			sessionID, err := pr.RunInquire(f)
+			if err != nil {
+				t.Fatalf("RunInquire: %v", err)
+			}
+			if tt.viaManager {
+				err = sm.StopSession(sessionID)
+			} else {
+				err = sm.GetSession(sessionID).(ports.SessionHandle).Stop()
+			}
+			if err != nil {
+				t.Fatalf("stop: %v", err)
+			}
+			ended := filterEventsByType(readObserveEvents(t, observeDir, featureID), "session.ended")
+			if len(ended) != 1 {
+				t.Fatalf("session.ended = %+v, want one event", ended)
+			}
+			if ended[0].Status != tt.wantStatus || (ended[0].Error != "") != tt.wantErrText {
+				t.Errorf("session.ended status %q error %q, want status %q", ended[0].Status, ended[0].Error, tt.wantStatus)
+			}
+		})
+	}
 }
 
 func TestRunInquireEmitsPhaseAndSessionEvents(t *testing.T) {

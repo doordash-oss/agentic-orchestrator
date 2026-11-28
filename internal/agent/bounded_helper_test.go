@@ -166,7 +166,7 @@ func TestRunBoundedHelperRecordsIndividualSessionCost(t *testing.T) {
 	pr.FeatureStore = store
 
 	_, err := pr.runBoundedHelper(context.Background(), boundedHelperConfig{
-		SessionID:     "feature-1-planreview-architecture-01",
+		SessionID:     "feature-1-roadmap-planreview-architecture-01",
 		FeatureID:     "feature-1",
 		Phase:         feature.PhasePlan,
 		Label:         "review helper",
@@ -195,8 +195,8 @@ func TestRunBoundedHelperRecordsIndividualSessionCost(t *testing.T) {
 		t.Fatalf("len(SessionCosts) = %d, want 1", len(updated.SessionCosts))
 	}
 	got := updated.SessionCosts[0]
-	if got.SessionID != "feature-1-planreview-architecture-01" {
-		t.Errorf("SessionID = %q, want feature-1-planreview-architecture-01", got.SessionID)
+	if got.SessionID != "feature-1-roadmap-planreview-architecture-01" {
+		t.Errorf("SessionID = %q, want feature-1-roadmap-planreview-architecture-01", got.SessionID)
 	}
 	if got.PhaseKey != "phase-1-plan" {
 		t.Errorf("PhaseKey = %q, want phase-1-plan", got.PhaseKey)
@@ -334,8 +334,11 @@ type boundedNudgeSession struct {
 	doneC     chan struct{}
 	nudges    chan string
 	stopCalls int
-	intentMu  sync.RWMutex
-	intent    llm.CompletionIntent
+	// stopResult, when set, replaces the Result on Stop like a provider
+	// answering the stop's interrupt.
+	stopResult *llm.ResultMessage
+	intentMu   sync.RWMutex
+	intent     llm.CompletionIntent
 }
 
 func newBoundedNudgeSession(result *llm.ResultMessage) *boundedNudgeSession {
@@ -356,7 +359,13 @@ func (s *boundedNudgeSession) SendUserMessage(text string) error {
 	s.nudges <- text
 	return nil
 }
-func (s *boundedNudgeSession) Stop() error { s.stopCalls++; return nil }
+func (s *boundedNudgeSession) Stop() error {
+	s.stopCalls++
+	if s.stopResult != nil {
+		s.CostVal = s.stopResult
+	}
+	return nil
+}
 func (s *boundedNudgeSession) RootCompletionIntent() llm.CompletionIntent {
 	s.intentMu.RLock()
 	defer s.intentMu.RUnlock()
@@ -1268,9 +1277,11 @@ func TestRunBoundedHelper_StalledBackgroundTasks(t *testing.T) {
 		ceiling     time.Duration
 		staleStdout bool
 		withOutcome bool
+		interrupted bool
 		wantStatus  string
 	}{
 		{name: "silent tasks past stall grace commit present outcome", grace: 20 * time.Millisecond, ceiling: time.Hour, staleStdout: true, withOutcome: true, wantStatus: boundedHelperStatusCompleted},
+		{name: "interrupt result from the stop keeps present outcome", grace: 20 * time.Millisecond, ceiling: time.Hour, staleStdout: true, withOutcome: true, interrupted: true, wantStatus: boundedHelperStatusCompleted},
 		{name: "fresh stdout past ceiling commits present outcome", grace: time.Hour, ceiling: 50 * time.Millisecond, withOutcome: true, wantStatus: boundedHelperStatusCompleted},
 		{name: "ceiling without outcome is a protocol violation", grace: time.Hour, ceiling: 50 * time.Millisecond, wantStatus: BoundedHelperStatusProtocolViolation},
 	}
@@ -1283,6 +1294,9 @@ func TestRunBoundedHelper_StalledBackgroundTasks(t *testing.T) {
 			phaseDir := t.TempDir()
 			sess := newBoundedBgTaskSession(&llm.ResultMessage{Type: testResultMessageType, Subtype: testResultSuccessValue, StopReason: testStopReasonEndTurn})
 			sess.liveTasks.Store(1)
+			if tt.interrupted {
+				sess.stopResult = &llm.ResultMessage{Type: testResultMessageType, Subtype: "error_during_execution", IsError: true}
+			}
 			if tt.staleStdout {
 				sess.lastStdoutNs.Store(time.Now().Add(-time.Hour).UnixNano())
 			}

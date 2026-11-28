@@ -77,6 +77,10 @@ var criticalAttachSendTimeout = 5 * time.Second
 // shrink it.
 var resultShutdownGrace = 5 * time.Second
 
+// stopInterruptGrace is how long Stop waits for the Result of a turn it
+// interrupted, so the provider can report the turn's cost.
+const stopInterruptGrace = 3 * time.Second
+
 // Session manages a CLI subprocess using the JSON stdin/stdout protocol.
 // Provider-specific wire protocol logic is delegated to the Protocol interface.
 type Session struct {
@@ -271,6 +275,23 @@ type Session struct {
 	resultShutdownStarted atomic.Bool
 	resultShutdownGrace   time.Duration
 
+	// turnInFlight is true from a sent prompt or streamed root output until
+	// the next Result. Guarded by mu.
+	turnInFlight bool
+	// stopInterruptGrace bounds how long Stop waits for an interrupted
+	// turn's Result before closing stdin.
+	stopInterruptGrace time.Duration
+	// stopRequested marks an Agentico-initiated Stop; stopResultSeq is
+	// resultSeq at that moment. Guarded by mu.
+	stopRequested bool
+	stopResultSeq uint64
+	// featureInterrupted marks a stop issued through Manager.StopSession,
+	// which pauses, rewinds, restarts and deletions use. Guarded by mu.
+	featureInterrupted bool
+	// exitDescription is set once the reaped process exits. Atomic because
+	// the reaper holds mu while it waits.
+	exitDescription atomic.Pointer[string]
+
 	// keepAliveOnTurnResult lets loop-managed sessions continue the same
 	// provider process after any completed turn so the harness can nudge,
 	// resume background work, or recover a truncated response.
@@ -445,6 +466,60 @@ func (s *Session) ResultSeq() uint64 {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return s.resultSeq
+}
+
+// StopRequested reports whether Agentico has called Stop on this session.
+func (s *Session) StopRequested() bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.stopRequested
+}
+
+// FeatureInterrupted reports whether the session was stopped because its
+// feature was interrupted rather than by its own phase waiter.
+func (s *Session) FeatureInterrupted() bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.featureInterrupted
+}
+
+// ExitDescription reports how the provider process exited, such as
+// "exit code 1" or "signal 9 (killed)", or "" while it is still running.
+func (s *Session) ExitDescription() string {
+	if d := s.exitDescription.Load(); d != nil {
+		return *d
+	}
+	return ""
+}
+
+// recordExitLocked logs and stores how the reaped process exited.
+func (s *Session) recordExitLocked() {
+	ps := s.process.ProcessState
+	desc := describeProcessExit(ps)
+	s.exitDescription.Store(&desc)
+	pid := 0
+	if ps != nil {
+		pid = ps.Pid()
+	}
+	log.Printf("session %s: process %d exited: %s (stop requested: %t)", s.id, pid, desc, s.stopRequested)
+}
+
+func describeProcessExit(ps *os.ProcessState) string {
+	if ps == nil {
+		return "unknown"
+	}
+	if ws, ok := ps.Sys().(syscall.WaitStatus); ok && ws.Signaled() {
+		return fmt.Sprintf("signal %d (%s)", int(ws.Signal()), ws.Signal())
+	}
+	return fmt.Sprintf("exit code %d", ps.ExitCode())
+}
+
+// ResultInterruptedByStop reports whether the latest Result answered an
+// Agentico-initiated stop rather than ending the turn on its own.
+func (s *Session) ResultInterruptedByStop() bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.stopRequested && s.resultSeq > s.stopResultSeq && s.status != SessionFailed
 }
 
 // RootOutcomeCh signals whenever a committable root outcome is recorded.
@@ -965,7 +1040,10 @@ func (s *Session) readMessages(onMessage func(llm.SDKMessage)) {
 		}
 		if s.process != nil {
 			_ = s.process.Wait()
-			if s.process.ProcessState != nil && s.process.ProcessState.Success() {
+			s.recordExitLocked()
+			clean := s.process.ProcessState != nil && s.process.ProcessState.Success()
+			// Providers exit non-zero after an interrupt Agentico sent.
+			if clean || s.stopRequested {
 				// A clean transport shutdown does not undo a failed turn.
 				if s.status != SessionFailed {
 					s.setStatusLocked(SessionDone)
@@ -980,7 +1058,7 @@ func (s *Session) readMessages(onMessage func(llm.SDKMessage)) {
 		copy(cleanups, s.cleanupFuncs)
 		s.mu.Unlock()
 		if pidDir != "" {
-			_ = removePIDFile(pidDir, repoName)
+			_ = removePIDFile(pidDir, s.id, repoName)
 		}
 		for _, fn := range cleanups {
 			fn()
@@ -1097,6 +1175,7 @@ func (s *Session) readMessages(onMessage func(llm.SDKMessage)) {
 				s.mu.Lock()
 				s.cost = msg.Result
 				s.resultSeq++
+				s.turnInFlight = false
 				// Extract context window from modelUsage if available (Claude CLI).
 				for _, mu := range msg.Result.ModelUsage {
 					if mu.ContextWindow > 0 && s.latestUsage != nil {
@@ -1119,6 +1198,8 @@ func (s *Session) readMessages(onMessage func(llm.SDKMessage)) {
 					s.streamedUsage = streamedMessageUsage{}
 				}
 				s.mu.Unlock()
+			} else if msg.Assistant != nil || msg.Type == "stream_event" {
+				s.setTurnInFlight(true)
 			}
 
 			// Capture usage from any assistant message that carries it.
@@ -1519,7 +1600,9 @@ func (s *Session) appendLocalStatus(text string) error {
 			Message:   text,
 		},
 	}
-	s.messageLog.Append(msg)
+	if err := s.persistTranscriptRow(s.messageLog.Append(msg), msg); err != nil {
+		log.Printf("session %s: persist status: %v", s.id, err)
+	}
 	select {
 	case s.attachCh <- msg:
 	default:
@@ -1666,7 +1749,10 @@ func (s *Session) SendUserMessageWithHiddenContext(visible, hiddenContext string
 	if hiddenContext = strings.TrimSpace(hiddenContext); hiddenContext != "" {
 		wireText = hiddenContext + "\n\n" + visible
 	}
+	// Marked before sending so a fast Result cannot be followed by a stale mark.
+	s.setTurnInFlight(true)
 	if err := s.protocol.SendUserMessage(wireText); err != nil {
+		s.setTurnInFlight(false)
 		return err
 	}
 
@@ -2076,7 +2162,9 @@ func (s *Session) appendAskUserMessages(resolved askuser.Resolved, confidenceByI
 			msg.AutoPickQuestion = a.Question
 			msg.AutoPickConfidence = confidence
 		}
-		s.messageLog.Append(msg)
+		if err := s.persistTranscriptRow(s.messageLog.Append(msg), msg); err != nil {
+			log.Printf("session %s: persist ask-user answer: %v", s.id, err)
+		}
 	}
 }
 
@@ -2210,10 +2298,59 @@ func (s *Session) Interrupt() error {
 	return nil
 }
 
-// Stop gracefully stops the session: close stdin → SIGTERM → SIGKILL.
+func (s *Session) setTurnInFlight(v bool) {
+	s.mu.Lock()
+	s.turnInFlight = v
+	s.mu.Unlock()
+}
+
+// interruptTurnForStop asks the provider to end an in-flight turn and waits,
+// bounded, for its Result so the turn's cost is recorded. No SIGINT fallback:
+// Stop escalates on its own. Conversational sessions mark a cut turn as
+// interrupted themselves, so their turns are not completed here.
+func (s *Session) interruptTurnForStop() {
+	s.mu.Lock()
+	p := s.protocol
+	inFlight := s.turnInFlight && s.stdin != nil && s.process != nil && !s.kind.Conversational()
+	seq := s.resultSeq
+	grace := s.stopInterruptGrace
+	s.mu.Unlock()
+	if !inFlight || p == nil || p.Interrupt() != nil {
+		return
+	}
+	if grace <= 0 {
+		grace = stopInterruptGrace
+	}
+	deadline := time.NewTimer(grace)
+	defer deadline.Stop()
+	tick := time.NewTicker(20 * time.Millisecond)
+	defer tick.Stop()
+	for {
+		select {
+		case <-s.done:
+			return
+		case <-deadline.C:
+			return
+		case <-tick.C:
+			if s.ResultSeq() != seq {
+				return
+			}
+		}
+	}
+}
+
+// Stop gracefully stops the session: interrupt an in-flight turn → close
+// stdin → SIGTERM → SIGKILL.
 func (s *Session) Stop() error {
+	s.mu.Lock()
+	if !s.stopRequested {
+		s.stopRequested = true
+		s.stopResultSeq = s.resultSeq
+	}
+	s.mu.Unlock()
 	s.lifecycleCancel()
 	s.disposePermissionHandler()
+	s.interruptTurnForStop()
 
 	s.mu.Lock()
 	proc := s.process
@@ -2235,7 +2372,7 @@ func (s *Session) Stop() error {
 			s.mu.Unlock()
 			s.CloseDone()
 			if pidDir != "" {
-				_ = removePIDFile(pidDir, repoName)
+				_ = removePIDFile(pidDir, s.id, repoName)
 			}
 		}
 		return nil

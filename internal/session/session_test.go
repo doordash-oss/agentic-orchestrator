@@ -15,10 +15,12 @@
 package session
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
 	"io"
+	"log"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -128,7 +130,7 @@ func TestSessionInitPersistsProtocolSessionIDToPIDFile(t *testing.T) {
 	})
 
 	if err := WritePIDFile(dir, PIDFile{
-		PID: s.process.Process.Pid, RepoName: "repo", FeatureID: "feat-1", Phase: feature.PhaseImplement.String(),
+		PID: s.process.Process.Pid, ManagerID: "test-session", RepoName: "repo", FeatureID: "feat-1", Phase: feature.PhaseImplement.String(),
 	}); err != nil {
 		t.Fatalf("write initial PID file: %v", err)
 	}
@@ -138,7 +140,7 @@ func TestSessionInitPersistsProtocolSessionIDToPIDFile(t *testing.T) {
 		if msg.Init == nil {
 			return
 		}
-		if pf, err := ReadPIDFile(filepath.Join(dir, pidfileName("repo"))); err == nil {
+		if pf, err := ReadPIDFile(filepath.Join(dir, pidfileName("test-session", "repo"))); err == nil {
 			captured = pf.SessionID
 		}
 	})
@@ -996,6 +998,237 @@ func TestSessionStop(t *testing.T) {
 	}
 }
 
+func TestSessionStopInterruptsInFlightTurn(t *testing.T) {
+	// parallel-exempt: owns provider subprocesses.
+	const grace = 400 * time.Millisecond
+	assistant := `{"type":"assistant","message":{"id":"m1","role":"assistant","content":[{"type":"text","text":"working"}],"usage":{"input_tokens":8,"output_tokens":56}}}`
+	result := `{"type":"result","subtype":"error_during_execution","is_error":true,"session_id":"s1","total_cost_usd":0.42}`
+	tests := []struct {
+		name          string
+		turnInFlight  bool
+		replyResult   bool
+		noInterrupt   bool
+		wantInterrupt bool
+		wantCost      float64
+		wantMinStop   time.Duration
+		wantMaxStop   time.Duration
+	}{
+		{name: "result on interrupt", turnInFlight: true, replyResult: true, wantInterrupt: true, wantCost: 0.42, wantMaxStop: grace},
+		{name: "no result waits bounded grace", turnInFlight: true, wantInterrupt: true, wantMinStop: grace, wantMaxStop: grace + 4*time.Second},
+		{name: "idle session is not interrupted", wantMaxStop: grace},
+		{name: "provider without protocol interrupt", turnInFlight: true, replyResult: true, noInterrupt: true, wantMaxStop: grace},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			dir := t.TempDir()
+			mark := filepath.Join(dir, "interrupts")
+			body := "#!/bin/bash\necho '{\"type\":\"system\",\"subtype\":\"init\",\"session_id\":\"s1\",\"model\":\"test\"}'\n"
+			if tt.turnInFlight {
+				body += "echo '" + assistant + "'\n"
+			}
+			reply := ""
+			if tt.replyResult {
+				reply = "echo '" + result + "'"
+			}
+			body += "while IFS= read -r line; do\n  case \"$line\" in *'\"interrupt\"'*) echo x >> '" + mark + "'; " + reply + ";; esac\ndone\n"
+			script := filepath.Join(dir, "cli.sh")
+			if err := os.WriteFile(script, []byte(body), 0o755); err != nil {
+				t.Fatalf("write script: %v", err)
+			}
+
+			s := NewSession("stop-interrupt", "feat-1", feature.PhaseImplement)
+			s.protocol = claude.NewProtocol(llm.ProtocolOpts{})
+			if tt.noInterrupt {
+				s.protocol = noInterruptProtocol{s.protocol}
+			}
+			s.stopInterruptGrace = grace
+			if err := s.Start([]string{"bash", script}, dir, nil, func(llm.SDKMessage) {}); err != nil {
+				t.Fatalf("start: %v", err)
+			}
+			s.protocol.SetStdin(s.stdin)
+			waitFor(t, 5*time.Second, func() bool {
+				s.mu.Lock()
+				defer s.mu.Unlock()
+				return s.model == "test" && s.turnInFlight == tt.turnInFlight
+			})
+
+			start := time.Now()
+			if err := s.Stop(); err != nil {
+				t.Fatalf("Stop: %v", err)
+			}
+			elapsed := time.Since(start)
+			if elapsed < tt.wantMinStop || elapsed > tt.wantMaxStop {
+				t.Errorf("Stop took %s, want within [%s, %s]", elapsed, tt.wantMinStop, tt.wantMaxStop)
+			}
+			_, statErr := os.Stat(mark)
+			if gotInterrupt := statErr == nil; gotInterrupt != tt.wantInterrupt {
+				t.Errorf("interrupt sent = %v, want %v", gotInterrupt, tt.wantInterrupt)
+			}
+			var gotCost float64
+			if c := s.Cost(); c != nil {
+				gotCost = c.TotalCostUSD
+			}
+			if gotCost != tt.wantCost {
+				t.Errorf("Cost().TotalCostUSD = %v, want %v", gotCost, tt.wantCost)
+			}
+		})
+	}
+}
+
+func TestSessionStopStatusAfterInterruptResult(t *testing.T) {
+	// parallel-exempt: owns provider subprocesses.
+	assistant := `{"type":"assistant","message":{"id":"m1","role":"assistant","content":[{"type":"text","text":"working"}],"usage":{"input_tokens":8,"output_tokens":56}}}`
+	errResult := `{"type":"result","subtype":"error_during_execution","is_error":true,"session_id":"s1","total_cost_usd":0.42}`
+	tests := []struct {
+		name            string
+		errorBeforeStop bool
+		wantStatus      SessionStatus
+		wantInterrupted bool
+	}{
+		{name: "interrupt answer ends done", wantStatus: SessionDone, wantInterrupted: true},
+		{name: "genuine error before stop stays failed", errorBeforeStop: true, wantStatus: SessionFailed},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			dir := t.TempDir()
+			body := "#!/bin/bash\necho '{\"type\":\"system\",\"subtype\":\"init\",\"session_id\":\"s1\",\"model\":\"test\"}'\n"
+			body += "echo '" + assistant + "'\n"
+			if tt.errorBeforeStop {
+				body += "echo '" + errResult + "'\n"
+			}
+			// The CLI exits non-zero after an interrupt.
+			body += "while IFS= read -r line; do\n  case \"$line\" in *'\"interrupt\"'*) echo '" + errResult + "'; exit 1;; esac\ndone\nexit 1\n"
+			script := filepath.Join(dir, "cli.sh")
+			if err := os.WriteFile(script, []byte(body), 0o755); err != nil {
+				t.Fatalf("write script: %v", err)
+			}
+
+			mgr := NewManager(make(chan interface{}, 100))
+			s := NewSession("stop-status", "feat-1", feature.PhaseImplement)
+			s.protocol = claude.NewProtocol(llm.ProtocolOpts{})
+			var seenMu sync.Mutex
+			var seen []SessionStatus
+			onMessage := func(msg llm.SDKMessage) {
+				mgr.handleSessionMessage(s, s.ID(), s.FeatureID(), s.Phase(), msg)
+				seenMu.Lock()
+				seen = append(seen, s.Status())
+				seenMu.Unlock()
+			}
+			if err := s.Start([]string{"bash", script}, dir, nil, onMessage); err != nil {
+				t.Fatalf("start: %v", err)
+			}
+			s.protocol.SetStdin(s.stdin)
+			waitFor(t, 5*time.Second, func() bool {
+				s.mu.Lock()
+				defer s.mu.Unlock()
+				if tt.errorBeforeStop {
+					return s.resultSeq == 1
+				}
+				return s.turnInFlight
+			})
+
+			if err := s.Stop(); err != nil {
+				t.Fatalf("Stop: %v", err)
+			}
+			if got := s.Status(); got != tt.wantStatus {
+				t.Errorf("status = %v, want %v", got, tt.wantStatus)
+			}
+			if got := s.ResultInterruptedByStop(); got != tt.wantInterrupted {
+				t.Errorf("ResultInterruptedByStop = %v, want %v", got, tt.wantInterrupted)
+			}
+			if !s.StopRequested() {
+				t.Error("StopRequested = false after Stop")
+			}
+			if tt.wantStatus == SessionDone {
+				seenMu.Lock()
+				defer seenMu.Unlock()
+				for _, st := range seen {
+					if st == SessionFailed {
+						t.Fatalf("observed statuses %v, want no Failed", seen)
+					}
+				}
+			}
+		})
+	}
+}
+
+func TestSessionRecordsProcessExit(t *testing.T) {
+	// parallel-exempt: owns provider subprocesses and redirects the global logger.
+	tests := []struct {
+		name       string
+		script     string
+		stop       bool
+		wantDesc   string
+		wantDetail string
+		wantStop   bool
+	}{
+		{name: "exit code", script: "exit 3", wantDesc: "exit code 3", wantDetail: "process exited with code 3"},
+		{name: "signal", script: "kill -9 $$", wantDesc: "signal 9 (killed)", wantDetail: "process terminated by signal 9 (killed)"},
+		{name: "stop requested", script: "while IFS= read -r line; do :; done; exit 1", stop: true, wantDesc: "exit code 1", wantDetail: "process exited with code 1", wantStop: true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var buf bytes.Buffer
+			var bufMu sync.Mutex
+			log.SetOutput(writerFunc(func(p []byte) (int, error) {
+				bufMu.Lock()
+				defer bufMu.Unlock()
+				return buf.Write(p)
+			}))
+			t.Cleanup(func() { log.SetOutput(os.Stderr) })
+
+			dir := t.TempDir()
+			script := filepath.Join(dir, "cli.sh")
+			if err := os.WriteFile(script, []byte("#!/bin/bash\n"+tt.script+"\n"), 0o755); err != nil {
+				t.Fatalf("write script: %v", err)
+			}
+			s := NewSession("exit-record", "feat-1", feature.PhaseImplement)
+			s.protocol = claude.NewProtocol(llm.ProtocolOpts{})
+			if err := s.Start([]string{"bash", script}, dir, nil, func(llm.SDKMessage) {}); err != nil {
+				t.Fatalf("start: %v", err)
+			}
+			if tt.stop {
+				if err := s.Stop(); err != nil {
+					t.Fatalf("Stop: %v", err)
+				}
+			}
+			<-s.Done()
+			if got := s.ExitDescription(); got != tt.wantDesc {
+				t.Errorf("ExitDescription = %q, want %q", got, tt.wantDesc)
+			}
+			if got := s.ExitCodeDetail(); got != tt.wantDetail {
+				t.Errorf("ExitCodeDetail = %q, want %q", got, tt.wantDetail)
+			}
+			bufMu.Lock()
+			logged := buf.String()
+			bufMu.Unlock()
+			want := fmt.Sprintf("exited: %s (stop requested: %t)", tt.wantDesc, tt.wantStop)
+			if n := strings.Count(logged, "session exit-record: process "); n != 1 || !strings.Contains(logged, want) {
+				t.Errorf("log = %q, want one exit line containing %q", logged, want)
+			}
+		})
+	}
+}
+
+type writerFunc func([]byte) (int, error)
+
+func (f writerFunc) Write(p []byte) (int, error) { return f(p) }
+
+type noInterruptProtocol struct{ llm.Protocol }
+
+func (noInterruptProtocol) Interrupt() error { return llm.ErrNotSupported }
+
+func waitFor(t *testing.T, timeout time.Duration, cond func() bool) {
+	t.Helper()
+	deadline := time.Now().Add(timeout)
+	for !cond() {
+		if time.Now().After(deadline) {
+			t.Fatal("condition not met before timeout")
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+}
+
 // TestSession_CodexProviderStaysAliveAfterResult verifies the legacy
 // Codex provider exception for one-shot post-Result wrapper cleanup. The
 // Codex provider's `app-server` is multi-turn: a Result on turn/completed is
@@ -1387,9 +1620,9 @@ func TestSessionSendUserMessageRecordsConversationalTurn(t *testing.T) {
 		t.Fatalf("user content = %+v, want follow-up text", got)
 	}
 
-	persisted, err := readPersistedTranscript(s.transcriptPath)
+	persisted, err := ReadPersistedTranscript(s.transcriptPath)
 	if err != nil {
-		t.Fatalf("readPersistedTranscript: %v", err)
+		t.Fatalf("ReadTranscript: %v", err)
 	}
 	if len(persisted) != 1 || persisted[0].User == nil || persisted[0].User.Message.Content[0].Text != "What changed?" {
 		t.Fatalf("persisted messages = %+v, want follow-up user message", persisted)
@@ -1449,9 +1682,9 @@ func TestSessionSendUserMessageWithHiddenContextSplitsWireFromEcho(t *testing.T)
 		t.Fatalf("echoed user content = %+v, want the visible message only", got)
 	}
 
-	persisted, err := readPersistedTranscript(s.transcriptPath)
+	persisted, err := ReadPersistedTranscript(s.transcriptPath)
 	if err != nil {
-		t.Fatalf("readPersistedTranscript: %v", err)
+		t.Fatalf("ReadTranscript: %v", err)
 	}
 	if len(persisted) != 1 || persisted[0].User == nil || persisted[0].User.Message.Content[0].Text != "Explain this failure" {
 		t.Fatalf("persisted messages = %+v, want the visible message only", persisted)

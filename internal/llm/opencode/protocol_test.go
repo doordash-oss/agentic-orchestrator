@@ -19,6 +19,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"strings"
@@ -1487,4 +1488,57 @@ func (b *syncBuffer) lastLine(t *testing.T) []byte {
 		t.Fatalf("no output captured")
 	}
 	return []byte(lines[len(lines)-1])
+}
+
+func TestSerializeStartupBlocksConcurrentLaunchesUntilReleased(t *testing.T) {
+	first := NewProtocol(llm.ProtocolOpts{Model: "opencode:vendor/first"})
+	second := NewProtocol(llm.ProtocolOpts{Model: "opencode:vendor/second"})
+
+	release := first.SerializeStartup()
+	readCtx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+	defer cancel()
+	if _, err := (sqliteDriverRunner{}).RunSQLite(readCtx, t.TempDir()+"/opencode.db", "SELECT 1"); !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("RunSQLite() during startup error = %v, want it to wait for the launch", err)
+	}
+	acquired := make(chan func(), 1)
+	go func() { acquired <- second.SerializeStartup() }()
+	select {
+	case <-acquired:
+		t.Fatal("second launch started while the first still held startup")
+	case <-time.After(100 * time.Millisecond):
+	}
+	release()
+	release()
+	select {
+	case releaseSecond := <-acquired:
+		releaseSecond()
+	case <-time.After(5 * time.Second):
+		t.Fatal("second launch did not start after the first released startup")
+	}
+}
+
+func TestHandshakeReleasesStartupOnceSessionExists(t *testing.T) {
+	h := newHandshakeHarness(t, llm.ProtocolOpts{Model: "opencode:vendor/first", WorkDir: "/work/dir", InitialPrompt: "go"})
+	release := h.p.SerializeStartup()
+	defer release()
+
+	errCh := make(chan error, 1)
+	go func() { errCh <- h.p.Handshake(context.Background()) }()
+	initReq := h.nextRequest(t)
+	h.feed(t, responseLine(t, mustID(t, initReq.ID), map[string]any{"protocolVersion": 1}))
+	snReq := h.nextRequest(t)
+	h.feed(t, responseLine(t, mustID(t, snReq.ID), map[string]any{"sessionId": "ses_abc123"}))
+	h.nextRequest(t)
+	if err := <-errCh; err != nil {
+		t.Fatalf("Handshake() error: %v", err)
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	select {
+	case dbGate <- struct{}{}:
+		<-dbGate
+	case <-ctx.Done():
+		t.Fatal("startup gate still held after session/new completed")
+	}
 }

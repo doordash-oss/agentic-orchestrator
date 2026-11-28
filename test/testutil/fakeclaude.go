@@ -117,14 +117,16 @@ func (FakeClaudeProvider) SetModelCatalog([]llm.ModelInfo) {}
 // launch flags the real Claude adapter uses, so scripts can observe them.
 func (p FakeClaudeProvider) BuildCommand(opts llm.CommandBuildOpts) ([]string, []string, error) {
 	cmd := []string{"sh", p.Script}
-	if opts.SystemPrompt != "" {
-		cmd = append(cmd, "--append-system-prompt", opts.SystemPrompt)
+	if opts.SystemPromptFile != "" {
+		cmd = append(cmd, "--append-system-prompt-file", opts.SystemPromptFile)
 	}
 	if opts.ResumeSessionID != "" {
 		cmd = append(cmd, "--resume", opts.ResumeSessionID)
 	}
 	return cmd, nil, nil
 }
+func (p FakeClaudeProvider) ReadsSystemPromptFromFile() bool { return true }
+
 func (p FakeClaudeProvider) NewProtocol(opts llm.ProtocolOpts) llm.Protocol {
 	return claude.NewProtocol(opts)
 }

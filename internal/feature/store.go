@@ -919,6 +919,25 @@ func (s *Store) SealAndForkRun(
 	return f, nil
 }
 
+// ModifySealedRun applies fn to sealed run runNumber and persists it. It lets
+// a session that a rewind interrupted record its accounting in the run that
+// hosted it after that run was sealed.
+func (s *Store) ModifySealedRun(featureID string, runNumber int, fn func(r *Run) error) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	r, err := s.loadRunUnlocked(featureID, runNumber)
+	if err != nil {
+		return err
+	}
+	if !r.IsSealed() {
+		return fmt.Errorf("run %d of feature %s is not sealed", runNumber, featureID)
+	}
+	if err := fn(r); err != nil {
+		return err
+	}
+	return s.saveRunUnlocked(featureID, r)
+}
+
 // CleanupOrphanRuns reconciles a feature's runs directory against feature.yaml.
 // Deletes any run-NNN subdirectory whose run_number > feature.ActiveRun (a
 // stale fork from a rewind that crashed before bumping active_run) or whose

@@ -271,6 +271,7 @@ func TestOrchestrator_StartPhase_PhaseRunnerDispatch_Sync(t *testing.T) {
 				PhaseRunner: cpr.pr,
 				CmdRunner:   cpr.cmd,
 			}, orchestrator.Hooks{})
+			t.Cleanup(o.WaitForCycles)
 
 			if err := o.StartFeature(f.ID); err != nil {
 				t.Fatalf("StartFeature: %v", err)
@@ -372,6 +373,7 @@ func TestOrchestrator_StartPhase_PhaseRunnerDispatch_Async(t *testing.T) {
 				PhaseRunner: cpr.pr,
 				CmdRunner:   cpr.cmd,
 			}, orchestrator.Hooks{})
+			t.Cleanup(o.WaitForCycles)
 
 			if err := o.StartFeature(f.ID); err != nil {
 				t.Fatalf("StartFeature: %v", err)
@@ -434,6 +436,7 @@ func TestOrchestrator_StartPlanIncludesResearchDocumentInRoadmapPrompt(t *testin
 		PhaseRunner: cpr.pr,
 		CmdRunner:   cpr.cmd,
 	}, orchestrator.Hooks{})
+	t.Cleanup(o.WaitForCycles)
 
 	if err := o.StartFeature(featureID); err != nil {
 		t.Fatalf("StartFeature: %v", err)
@@ -495,6 +498,7 @@ func TestOrchestrator_StartRoadmapPhasePlanIncludesResearchDocument(t *testing.T
 		PhaseRunner: cpr.pr,
 		CmdRunner:   cpr.cmd,
 	}, orchestrator.Hooks{})
+	t.Cleanup(o.WaitForCycles)
 
 	if err := o.StartFeature(featureID); err != nil {
 		t.Fatalf("StartFeature: %v", err)
@@ -604,6 +608,7 @@ func TestOrchestrator_StartFeature_InterruptedWithMissingCurrentPhase_FallsBackT
 	}, orchestrator.Hooks{
 		OnPhaseStarted: func(id string, p feature.Phase) { observed = p },
 	})
+	t.Cleanup(o.WaitForCycles)
 
 	if err := o.StartFeature(f.ID); err != nil {
 		t.Fatalf("StartFeature: %v", err)
@@ -658,6 +663,7 @@ func TestOrchestrator_StartFeature_InterruptedMidResearch_HonorsCurrentPhase(t *
 		PhaseRunner: cpr.pr,
 		CmdRunner:   cpr.cmd,
 	}, orchestrator.Hooks{})
+	t.Cleanup(o.WaitForCycles)
 
 	if err := o.StartFeature(f.ID); err != nil {
 		t.Fatalf("StartFeature: %v", err)
@@ -714,6 +720,7 @@ func TestOrchestrator_StartPlan_RoadmapPhase_WhenPlanning_SkipsTransition(t *tes
 		PhaseRunner: cpr.pr,
 		CmdRunner:   cpr.cmd,
 	}, orchestrator.Hooks{})
+	t.Cleanup(o.WaitForCycles)
 
 	if err := o.StartFeature(featureID); err != nil {
 		t.Fatalf("StartFeature: %v", err)
@@ -766,6 +773,7 @@ func TestOrchestrator_StartPlan_RoadmapPhase_WhenNotPlanning_Transitions(t *test
 		PhaseRunner: cpr.pr,
 		CmdRunner:   cpr.cmd,
 	}, orchestrator.Hooks{})
+	t.Cleanup(o.WaitForCycles)
 
 	if err := o.StartFeature(featureID); err != nil {
 		t.Fatalf("StartFeature: %v", err)

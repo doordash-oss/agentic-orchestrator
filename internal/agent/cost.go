@@ -16,6 +16,7 @@ package agent
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log"
 	"strings"
@@ -44,6 +45,34 @@ type sessionCostMetadata struct {
 	SessionID     string
 	ObserverPhase string
 	RepoName      string
+	// RunNumber is the run that hosted the session; zero means the active run.
+	RunNumber int
+}
+
+var errSessionRunNotActive = errors.New("session run is no longer active")
+
+// sessionRunNumber returns the run a session was started in, or zero.
+func sessionRunNumber(sess ports.SessionView) int {
+	if s, ok := sess.(interface{ RunNumber() int }); ok {
+		return s.RunNumber()
+	}
+	return 0
+}
+
+// resultInterruptedByStop reports whether the session's latest Result answers
+// an Agentico-initiated stop.
+func resultInterruptedByStop(sess ports.SessionView) bool {
+	if s, ok := sess.(interface{ ResultInterruptedByStop() bool }); ok {
+		return s.ResultInterruptedByStop()
+	}
+	return false
+}
+
+// stoppedForFeatureInterrupt reports whether a feature pause or rewind
+// stopped the session before it failed on its own.
+func stoppedForFeatureInterrupt(sess ports.SessionView) bool {
+	s, ok := sess.(interface{ FeatureInterrupted() bool })
+	return ok && s.FeatureInterrupted() && sess.Status() != ports.SessionFailed
 }
 
 // extractSessionCost reads cost and accumulated usage from the session.
@@ -78,7 +107,16 @@ func extractSessionCost(sess ports.SessionView) sessionCost {
 			applySessionCostAdjustment(&sc, adjustment)
 		}
 	}
+	// Tokens without any reported price, e.g. a turn stopped before its
+	// Result, must not read as a free session.
+	if sc.TotalCostUSD == 0 && sc.Usage.CostSource == "" && sess.Cost() == nil && usageHasTokens(sc.Usage) {
+		sc.Usage.CostSource = observe.CostSourceUnavailable
+	}
 	return sc
+}
+
+func usageHasTokens(u llm.Usage) bool {
+	return u.InputTokens+u.OutputTokens+u.CacheReadInputTokens+u.CacheCreationInputTokens > 0
 }
 
 func applySessionCostAdjustment(cost *sessionCost, adjustment llm.SessionCostAdjustment) {
@@ -121,6 +159,9 @@ func toSessionUsage(cost sessionCost, sessions ...ports.SessionView) observe.Ses
 		usage.Outcome = "success"
 		if result.IsError || result.Subtype != "success" {
 			usage.Outcome = "error"
+			if resultInterruptedByStop(sess) {
+				usage.Outcome = observe.SessionEndedStatusInterrupted
+			}
 		}
 		if len(result.ModelUsage) > 0 {
 			usage.PerModelContextWindows = make(map[string]int, len(result.ModelUsage))
@@ -169,19 +210,36 @@ func accumulateSessionCost(store FeatureStore, featureID, fallbackKey string, co
 	if store == nil || strings.TrimSpace(featureID) == "" || !record.HasUsage() {
 		return nil
 	}
-	return store.Modify(featureID, func(f *feature.Feature) error {
-		costKey := ""
-		if preferActiveKey {
-			costKey = strings.TrimSpace(f.ActiveTimingKey)
+	return recordSessionCost(store, featureID, metadata.RunNumber, record, fallbackKey, preferActiveKey)
+}
+
+// recordSessionCost lands record in runNumber even when a rewind has since
+// sealed that run and forked a new active one.
+func recordSessionCost(store FeatureStore, featureID string, runNumber int, record feature.SessionCostRecord, fallbackKey string, preferActiveKey bool) error {
+	phaseKey := func(activeKey string) string {
+		if key := strings.TrimSpace(activeKey); preferActiveKey && key != "" {
+			return key
 		}
-		if costKey == "" {
-			costKey = strings.TrimSpace(fallbackKey)
+		return strings.TrimSpace(fallbackKey)
+	}
+	err := store.Modify(featureID, func(f *feature.Feature) error {
+		if runNumber > 0 && f.ActiveRun != runNumber {
+			return errSessionRunNotActive
 		}
-		if costKey == "" {
-			return nil
-		}
-		record.PhaseKey = costKey
+		record.PhaseKey = phaseKey(f.ActiveTimingKey)
 		f.RecordSessionCost(record)
+		return nil
+	})
+	if !errors.Is(err, errSessionRunNotActive) {
+		return err
+	}
+	runs, ok := store.(sealedRunStore)
+	if !ok {
+		return nil
+	}
+	return runs.ModifySealedRun(featureID, runNumber, func(r *feature.Run) error {
+		record.PhaseKey = phaseKey(r.ActiveTimingKey)
+		r.RecordSessionCost(record)
 		return nil
 	})
 }

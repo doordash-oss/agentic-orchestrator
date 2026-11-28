@@ -15,10 +15,7 @@
 package session
 
 import (
-	"bufio"
 	"context"
-	"crypto/sha256"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -174,6 +171,17 @@ func (m *Manager) StartSession(id, featureID string, phase feature.Phase, comman
 	if len(opts) == 0 || opts[0] == nil || opts[0].Protocol == nil {
 		return nil, errors.New("starting session: session options must carry a provider protocol")
 	}
+	started := false
+	defer func() {
+		if !started {
+			for _, fn := range opts[0].Cleanups {
+				fn()
+			}
+		}
+	}()
+	for _, fn := range opts[0].Cleanups {
+		s.AddCleanupFunc(fn)
+	}
 	if len(opts) > 0 && opts[0] != nil {
 		s.pidDir = opts[0].PIDDir
 		s.runNumber = opts[0].RunNumber
@@ -205,14 +213,14 @@ func (m *Manager) StartSession(id, featureID string, phase feature.Phase, comman
 		s.observer = opts[0].Observer
 		s.watchdog = newSessionWatchdog(s, opts[0].Watchdog)
 		if s.pidDir != "" {
-			sum := sha256.Sum256([]byte(id))
-			s.transcriptPath = filepath.Join(s.pidDir, fmt.Sprintf("session-transcript-%x.jsonl", sum[:8]))
 			if err := os.MkdirAll(s.pidDir, 0o755); err != nil {
 				return nil, fmt.Errorf("creating transcript directory: %w", err)
 			}
-			if err := os.Remove(s.transcriptPath); err != nil && !os.IsNotExist(err) {
-				return nil, fmt.Errorf("resetting transcript: %w", err)
+			path, err := createTranscriptSegment(s.pidDir, id, s.runNumber, time.Now())
+			if err != nil {
+				return nil, err
 			}
+			s.transcriptPath = path
 		}
 		// Set log file before Start() so the read goroutine can write from
 		// the first line. This avoids a race with fast sessions (codex)
@@ -228,9 +236,14 @@ func (m *Manager) StartSession(id, featureID string, phase feature.Phase, comman
 		m.handleSessionMessage(s, id, featureID, phase, msg)
 	}
 
+	if serializer, ok := s.protocol.(llm.StartupSerializer); ok {
+		release := serializer.SerializeStartup()
+		defer release()
+	}
 	if err := s.Start(command, workdir, env, onMessage); err != nil {
 		return nil, fmt.Errorf("starting session: %w", err)
 	}
+	started = true
 	if len(opts) > 0 && opts[0] != nil {
 		noticeCtx := ports.SessionBuildNoticeContext{
 			SessionID: id,
@@ -274,6 +287,10 @@ func (m *Manager) StartSession(id, featureID string, phase feature.Phase, comman
 		case <-ctx.Done():
 		}
 	}()
+	// The handshake sends the initial prompt, which starts a turn.
+	if s.initialPrompt != "" {
+		s.setTurnInFlight(true)
+	}
 	if err := s.protocol.Handshake(ctx); err != nil && !isChildExitedWriteError(err) {
 		select {
 		case <-m.stoppingCh:
@@ -364,7 +381,7 @@ func (m *Manager) restoreLiveSessions(stateDir string) error {
 			log.Printf("session-manager: skip session %q with unknown phase %q", pf.ManagerID, pf.Phase)
 			continue
 		}
-		messages, err := readPersistedTranscript(transcriptPath)
+		messages, err := ReadPersistedTranscript(transcriptPath)
 		if err != nil {
 			log.Printf("session-manager: skip session %q: %v", pf.ManagerID, err)
 			continue
@@ -423,43 +440,12 @@ func persistedPhase(name string) (feature.Phase, bool) {
 	return 0, false
 }
 
-func readPersistedTranscript(path string) ([]llm.SDKMessage, error) {
-	f, err := os.Open(path)
-	if err != nil {
-		return nil, fmt.Errorf("opening transcript: %w", err)
-	}
-	defer f.Close()
-
-	var messages []llm.SDKMessage
-	scanner := bufio.NewScanner(f)
-	scanner.Buffer(make([]byte, 64*1024), 16*1024*1024)
-	for scanner.Scan() {
-		var record persistedTranscriptRecord
-		if err := json.Unmarshal(scanner.Bytes(), &record); err != nil {
-			log.Printf("session-manager: skip malformed transcript row in %s: %v", path, err)
-			continue
-		}
-		msg := record.Message.sdkMessage()
-		switch {
-		case record.Index == len(messages):
-			messages = append(messages, msg)
-		case record.Index >= 0 && record.Index < len(messages):
-			messages[record.Index] = msg
-		default:
-			log.Printf("session-manager: skip out-of-order transcript row %d in %s", record.Index, path)
-		}
-	}
-	if err := scanner.Err(); err != nil {
-		return nil, fmt.Errorf("reading transcript: %w", err)
-	}
-	return messages, nil
-}
-
 // isChildExitedWriteError reports whether a stdin write failed because the
 // child process already closed its end of the pipe (it exited). Both EPIPE and
-// io.ErrClosedPipe surface this race.
+// io.ErrClosedPipe surface this race, and os.ErrClosed when the session closed
+// stdin itself after the child's result.
 func isChildExitedWriteError(err error) bool {
-	return errors.Is(err, syscall.EPIPE) || errors.Is(err, io.ErrClosedPipe)
+	return errors.Is(err, syscall.EPIPE) || errors.Is(err, io.ErrClosedPipe) || errors.Is(err, os.ErrClosed)
 }
 
 func (m *Manager) handleSessionMessage(s *Session, id, featureID string, phase feature.Phase, msg llm.SDKMessage) {
@@ -483,7 +469,10 @@ func (m *Manager) handleSessionMessage(s *Session, id, featureID string, phase f
 		// The phase waiter owns stopping the still-live provider transport;
 		// chat remains available for the user's next turn after an error.
 		if !s.kind.Conversational() && (msg.Result.IsError || msg.Result.Subtype == "error") {
-			s.setStatusLocked(SessionFailed)
+			// After an Agentico stop, the error Result answers our interrupt.
+			if !s.stopRequested {
+				s.setStatusLocked(SessionFailed)
+			}
 			break
 		}
 		interactive := s.turnMode == ports.TurnModeInteractive
@@ -570,6 +559,9 @@ func (m *Manager) StopSession(id string) error {
 	if !ok {
 		return fmt.Errorf("session %s not found", id)
 	}
+	s.mu.Lock()
+	s.featureInterrupted = true
+	s.mu.Unlock()
 	return s.Stop()
 }
 

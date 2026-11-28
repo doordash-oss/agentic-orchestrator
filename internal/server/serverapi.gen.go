@@ -5587,6 +5587,12 @@ type GetRunLogContentParams struct {
 	Limit  Limit  `form:"limit,omitempty" json:"limit,omitempty"`
 }
 
+// GetRunSessionTranscriptParams defines parameters for GetRunSessionTranscript.
+type GetRunSessionTranscriptParams struct {
+	Offset int64 `form:"offset,omitempty" json:"offset,omitempty"`
+	Limit  Limit `form:"limit,omitempty" json:"limit,omitempty"`
+}
+
 // AnswerPermissionParams defines parameters for AnswerPermission.
 type AnswerPermissionParams struct {
 	// XAgenticoClient CSRF defense-in-depth for local browser-origin mutations. Bearer auth is still required.

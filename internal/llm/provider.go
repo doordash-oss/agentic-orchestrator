@@ -247,6 +247,13 @@ type StdoutInterposer interface {
 	InterposeStdout(stdout io.ReadCloser) io.ReadCloser
 }
 
+// StartupSerializer is implemented by protocols whose processes cannot safely
+// start concurrently. The session calls it before spawning the process and
+// calls the returned release once the handshake has finished or failed.
+type StartupSerializer interface {
+	SerializeStartup() (release func())
+}
+
 // DiagnosticSanitizer is implemented by protocols whose process output may
 // echo provider credentials; the session passes provider text through it
 // before surfacing that text.
@@ -293,6 +300,9 @@ type CommandBuildOpts struct {
 	// WorkDir is the session's working directory (cwd). Empty leaves a provider's
 	// path matching unchanged.
 	WorkDir string
+	// SystemPromptFile holds SystemPrompt for providers implementing
+	// SystemPromptFileReader, keeping the prompt out of the process argv.
+	SystemPromptFile string
 	// PermissionMode pins the provider's session-level permission mode. Empty
 	// means inherit the user's default (e.g. ~/.claude/settings.json). Set this
 	// for phases whose prompts require behavior that the user's defaults could
@@ -318,6 +328,14 @@ type CommandBuildOpts struct {
 	// so a provider can choose its interactive launch profile. Non-interactive
 	// sessions build exactly the orchestrated-phase command.
 	Interactive bool
+}
+
+// SystemPromptFileReader is implemented by providers whose CLI reads the
+// system prompt from CommandBuildOpts.SystemPromptFile. Any process of the
+// same user can read another's argv, so a prompt there leaks and can match
+// pattern-based process kills.
+type SystemPromptFileReader interface {
+	ReadsSystemPromptFromFile() bool
 }
 
 // ProtocolOpts contains all parameters needed to create a Protocol instance.

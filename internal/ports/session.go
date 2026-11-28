@@ -268,6 +268,9 @@ type SessionOpts struct {
 	Model             string
 	Protocol          llm.Protocol
 	DebugSystemPrompt string
+	// Cleanups run once the session process has exited, or when it fails to
+	// start.
+	Cleanups []func()
 	// CriticalAttachSendTimeout overrides the bounded send timeout for
 	// result messages forwarded to the attach channel. Zero uses the
 	// production default.

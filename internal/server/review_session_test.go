@@ -448,6 +448,45 @@ func TestReviewSessionServiceDecisionCommitsDraftBeforeDelegate(t *testing.T) {
 	}
 }
 
+func TestReviewSessionServiceDecisionRejectsIterateWhenReviewCannotIterate(t *testing.T) {
+	store, f, researchPath := seedReviewSessionFeature(t, feature.StatusResearchNeedsReview, nil, "research", "# Research\n")
+	service := newReviewSessionService(store, func(string, ReviewDecisionRequest) error {
+		t.Fatal("review decision delegate called for a rejected iterate")
+		return nil
+	})
+	resp, err := service.create(f.ID)
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	if resp.CanIterate {
+		t.Fatalf("CanIterate = true, want false for an artifact gate")
+	}
+	updated, err := service.saveDraft(f.ID, resp.ReviewID, ReviewDraftUpdateRequest{
+		BaseRevision: resp.DraftRevision,
+		Text:         "# Edited\n",
+	})
+	if err != nil {
+		t.Fatalf("SaveDraft: %v", err)
+	}
+
+	_, err = service.submitDecision(f.ID, resp.ReviewID, ReviewSessionDecisionRequest{
+		Decision:     reviewDecisionIterate,
+		BaseRevision: updated.DraftRevision,
+	})
+
+	var conflict *ActionConflictError
+	if !errors.As(err, &conflict) {
+		t.Fatalf("SubmitDecision iterate err = %T %v, want ActionConflictError", err, err)
+	}
+	data, err := os.ReadFile(researchPath)
+	if err != nil {
+		t.Fatalf("read research artifact: %v", err)
+	}
+	if string(data) != "# Research\n" {
+		t.Fatalf("research artifact = %q, want the draft left uncommitted", string(data))
+	}
+}
+
 func seedReviewSessionFeature(t *testing.T, status feature.Status, pending *feature.Phase, artifactID, body string) (*feature.Store, *feature.Feature, string) {
 	t.Helper()
 	store := feature.NewStore(t.TempDir())

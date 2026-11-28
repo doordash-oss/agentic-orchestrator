@@ -133,6 +133,8 @@ Feature sessions ask questions (ask-user) and request help; both wait in the pen
   Example: `"$AGENTICO_BIN" api GET /api/v1/features/{feature_id}/runs/{run_number}`
 - `GET /api/v1/features/{feature_id}/runs/{run_number}/sessions` — the sessions that belong to one run.
   Example: `"$AGENTICO_BIN" api GET /api/v1/features/{feature_id}/runs/{run_number}/sessions`
+- `GET /api/v1/features/{feature_id}/runs/{run_number}/sessions/{session_id}/transcript` — the session's transcript as recorded in that run, every resumed segment joined with a `Session resumed` row; works for finished and sealed-run sessions after a restart. Optional query: `offset`, `limit`.
+  Example: `"$AGENTICO_BIN" api GET '/api/v1/features/{feature_id}/runs/{run_number}/sessions/{session_id}/transcript?limit=50'`
 
 ## Artifacts and logs
 
@@ -231,6 +233,6 @@ Repository operations act on configured workspace roots. Most need explicit user
 
 ## Global events stream
 
-- `GET /api/v1/events` — the ordered runtime event stream. Requires `--timeout`; optional `--after <seq>` resumes after a snapshot's `meta.as_of_seq`. Each printed line is one event envelope with `seq`, `kind` (`connected`, `lifecycle.updated`, `session.updated`, `session.output.activity`, `config.updated`, `recovery.updated`, `clone.updated`, `update.updated`, `stream.reset`), and `resource`. Events say what changed, not the new state: re-read the snapshot the event names. On `stream.reset`, re-read your snapshots before trusting later events. `--feature <id>` keeps only events about that feature (including its parent and child relationship events) and `--kind <kind>[,<kind>]` keeps only the listed kinds; they set the `feature_id` and `kind` query parameters, so the command needs no quotes, `&` or pipe. `connected`, `stream.reset` and heartbeats always pass, and `seq` still counts every event.
+- `GET /api/v1/events` — the ordered runtime event stream. Requires `--timeout`; optional `--after <seq>` resumes after a snapshot's `meta.as_of_seq`. Each printed line is one event envelope with `seq`, `kind` (`connected`, `lifecycle.updated`, `session.updated`, `session.output.activity`, `config.updated`, `recovery.updated`, `clone.updated`, `update.updated`, `stream.reset`), and `resource`. Events say what changed, not the new state: re-read the snapshot the event names. On `stream.reset`, re-read your snapshots before trusting later events. `--feature <id>` keeps only events about that feature (including its parent and child relationship events) and `--kind <kind>[,<kind>]` keeps only the listed kinds; they set the `feature_id` and `kind` query parameters, so the command needs no quotes, `&` or pipe. `connected`, `stream.reset` and heartbeats always pass, and `seq` still counts every event. `connected` is sent only without `--after`; with `--after` the stream starts with the replayed events (or `stream.reset`), and since heartbeats are not printed, an empty window prints nothing.
   Example: `"$AGENTICO_BIN" api --timeout 60s --after 1520 GET /api/v1/events`
   Example: `"$AGENTICO_BIN" api --timeout 10m --after 1520 --feature {feature_id} --kind lifecycle.updated,session.updated,prompt.updated,permission.updated,config.updated GET /api/v1/events`

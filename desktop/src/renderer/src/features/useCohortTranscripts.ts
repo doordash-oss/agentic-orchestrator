@@ -167,6 +167,20 @@ export function useCohortTranscripts(
 
     const attach = async (session: SessionSummary): Promise<void> => {
       try {
+        // Finished sessions read the run's persisted record, which keeps
+        // earlier segments and survives restarts; its rows replace the live
+        // ones because the two index spaces differ.
+        if (isTerminalSessionStatus(session.status)) {
+          const recorded = await window.agentico.getSessionTranscript({
+            sessionId: session.id,
+            featureId,
+            runNumber,
+            limit: 500,
+          });
+          if (disposed) return;
+          setTranscripts((current) => ({ ...current, [session.id]: recorded.messages }));
+          return;
+        }
         const backfill = await window.agentico.getSessionTranscript({
           sessionId: session.id,
           limit: 500,
@@ -176,7 +190,7 @@ export function useCohortTranscripts(
           ...current,
           [session.id]: reconcileMessages(current[session.id] ?? [], backfill.messages),
         }));
-        if (!shouldStream || isTerminalSessionStatus(session.status)) return;
+        if (!shouldStream) return;
         const opened = await window.agentico.openSessionOutput({
           sessionId: session.id,
           from: backfill.cursor.end,

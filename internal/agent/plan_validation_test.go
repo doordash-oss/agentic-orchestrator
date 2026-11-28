@@ -840,7 +840,7 @@ func TestPlanValidatorHelperUsesIsolatedDirAndHarnessReceipt(t *testing.T) {
 		planArtifactPath,
 		testPlanValidatorAxis(t, "validate-roadmap-scope"),
 		validationArtifactPhasePlan,
-		planValidationExtras{},
+		planValidationExtras{PhaseNumber: 1},
 		observe.SpanContext{},
 	)
 	if err != nil {
@@ -877,8 +877,8 @@ func TestPlanValidatorHelperUsesIsolatedDirAndHarnessReceipt(t *testing.T) {
 		t.Fatalf("len(SessionCosts) = %d, want 1", len(updated.SessionCosts))
 	}
 	cost := updated.SessionCosts[0]
-	if cost.SessionID != "test-plan-001-planreview-scope-01" {
-		t.Errorf("SessionID = %q, want test-plan-001-planreview-scope-01", cost.SessionID)
+	if cost.SessionID != "test-plan-001-phase-01-planreview-scope-01" {
+		t.Errorf("SessionID = %q, want test-plan-001-phase-01-planreview-scope-01", cost.SessionID)
 	}
 	if cost.PhaseKey != "phase-1-plan" {
 		t.Errorf("PhaseKey = %q, want phase-1-plan", cost.PhaseKey)
@@ -888,6 +888,46 @@ func TestPlanValidatorHelperUsesIsolatedDirAndHarnessReceipt(t *testing.T) {
 	}
 	if cost.CostUSD != 0.001 {
 		t.Errorf("CostUSD = %v, want 0.001", cost.CostUSD)
+	}
+
+	if _, _, _, err := runSpecializedPlanValidationForArtifact(cfg, sm, 1, attemptDir, planArtifactPath,
+		testPlanValidatorAxis(t, "validate-roadmap-scope"), validationArtifactRoadmap, planValidationExtras{}, observe.SpanContext{}); err != nil {
+		t.Fatalf("roadmap review error = %v", err)
+	}
+	updated, err = store.Load(f.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(updated.SessionCosts) != 2 {
+		t.Fatalf("len(SessionCosts) = %d, want 2 (one row per reviewed plan)", len(updated.SessionCosts))
+	}
+	if got := updated.SessionCosts[1].SessionID; got != "test-plan-001-roadmap-planreview-scope-01" {
+		t.Errorf("roadmap review SessionID = %q, want test-plan-001-roadmap-planreview-scope-01", got)
+	}
+}
+
+func TestPlanReviewSessionIDDistinguishesPlanTargets(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name  string
+		kind  validationArtifactKind
+		phase int
+		want  string
+	}{
+		{name: "roadmap", kind: validationArtifactRoadmap, want: "f-1-roadmap-planreview-scope-01"},
+		{name: "phase 1 plan", kind: validationArtifactPhasePlan, phase: 1, want: "f-1-phase-01-planreview-scope-01"},
+		{name: "phase 2 plan", kind: validationArtifactPhasePlan, phase: 2, want: "f-1-phase-02-planreview-scope-01"},
+	}
+	seen := map[string]string{}
+	for _, tt := range tests {
+		got := planReviewSessionID("f-1", tt.kind, tt.phase, "scope", 1)
+		if got != tt.want {
+			t.Errorf("%s: planReviewSessionID = %q, want %q", tt.name, got, tt.want)
+		}
+		if prev, ok := seen[got]; ok {
+			t.Errorf("%s and %s share session ID %q", prev, tt.name, got)
+		}
+		seen[got] = tt.name
 	}
 }
 

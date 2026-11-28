@@ -45,7 +45,8 @@ model, tier, or rate changes from aggregate token counts alone.
 ## Rate fallback and Astra
 
 The standard API fallback table is dated in `internal/llm/codex/rates.go`.
-It includes GPT-6 Astra and the current GPT-5.6 rates. Unknown models receive
+It includes GPT-6 Astra and the current GPT-5.6 rates. A gateway route prefix
+(`@route/gpt-6.2-sol`) prices as the underlying model. Unknown models receive
 `cost_source: unavailable` instead of another model's rate. Known service tiers
 and model-rerouting notifications affect live estimates; provider estimates
 remain preferable for account-specific billing. The internal-only raw-response

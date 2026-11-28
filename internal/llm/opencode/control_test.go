@@ -581,8 +581,8 @@ func TestPromptEndTurn_NumberedOptionsToleratesTrailingStemAndRecommendedAfterCo
 	if len(qs) != 1 {
 		t.Fatalf("questions = %+v, want one question", qs)
 	}
-	if qs[0].Question != "Which technical-term strategy should the translation use?" {
-		t.Fatalf("question = %q, want trailing question stem", qs[0].Question)
+	if qs[0].Question != "I read the research and need one final decision.\n\nWhich technical-term strategy should the translation use?" {
+		t.Fatalf("question = %q, want stem followed by trailing question", qs[0].Question)
 	}
 	if len(qs[0].Options) != 3 {
 		t.Fatalf("options = %+v, want 3", qs[0].Options)
@@ -596,6 +596,301 @@ func TestPromptEndTurn_NumberedOptionsToleratesTrailingStemAndRecommendedAfterCo
 	}
 	if strings.Contains(first.Description, "confidence") || strings.Contains(first.Description, "Recommended") {
 		t.Fatalf("option 1 description still contains parser metadata: %q", first.Description)
+	}
+}
+
+// TestPromptEndTurn_NumberedOptionsLabelsIgnoreMarkdownAndCodeColons proves a
+// colon inside inline code does not end the label and markdown markup is
+// dropped from labels.
+func TestPromptEndTurn_NumberedOptionsLabelsIgnoreMarkdownAndCodeColons(t *testing.T) {
+	p, _, promptID := newPostHandshakeProtocol(t)
+	streamAssistantText(t, p, strings.Join([]string{
+		"What should the error message contain?",
+		"1. **Silent success (Recommended)**: print nothing, exit 0. [confidence: 0.80]",
+		"2. `line N: reason` prefix: the CLI prints `line 3: bad date`. [confidence: 0.40]",
+		"3. `budget CSV --month YYYY-MM` (Recommended): explicit paths. [confidence: 0.30]",
+	}, "\n"))
+	msgs := endTurn(t, p, promptID)
+	if len(msgs) != 1 || msgs[0].ControlRequest == nil {
+		t.Fatalf("numbered question produced %+v, want one AskUserQuestion control request", msgs)
+	}
+	qs := askUserQuestionsFrom(t, msgs[0].ControlRequest)
+	if len(qs) != 1 || len(qs[0].Options) != 3 {
+		t.Fatalf("numbered question = %+v, want one question with 3 options", qs)
+	}
+	want := []struct{ label, desc string }{
+		{"Silent success (Recommended)", "print nothing, exit 0."},
+		{"line N: reason prefix", "the CLI prints `line 3: bad date`."},
+		{"budget CSV --month YYYY-MM (Recommended)", "explicit paths."},
+	}
+	for i, w := range want {
+		if got := qs[0].Options[i]; got.Label != w.label || got.Description != w.desc {
+			t.Errorf("option %d = %q / %q, want %q / %q", i+1, got.Label, got.Description, w.label, w.desc)
+		}
+	}
+}
+
+// TestPromptEndTurn_NumberedOptionsRealSampleShapes pins option and question
+// shapes OpenCode agents produced in real runs: em-dash and bold-colon
+// separators, inline emphasis, and a generic trailing prompt after a heading
+// and a substantive question.
+func TestPromptEndTurn_NumberedOptionsRealSampleShapes(t *testing.T) {
+	type opt struct{ label, desc string }
+	tests := []struct {
+		name         string
+		text         []string
+		wantQuestion string
+		wantOptions  []opt
+	}{
+		{
+			name: "em dash separator with heading and generic trailing prompt",
+			text: []string{
+				"Agreed — reader's own line counter, header = line 1.",
+				"",
+				"**Question 3 of ~5 — What exactly goes to stderr when the CLI catches `LedgerError`?**",
+				"",
+				"The exception will carry path, line number, and a short reason (e.g. `invalid date`, `missing column: amount`). What format should the `summary`/`filter` subcommands print before exiting 1?",
+				"",
+				"1. Compiler-style `path:line: reason` (Recommended) — e.g. `examples/expenses.csv:3: invalid date \"2026-13-99\"`. Greppable. [confidence: 0.82]",
+				"2. Prose style `reason (file: path, line: N)` — more readable for humans, less tool-friendly. [confidence: 0.30]",
+				"3. Reason only on stderr; path/line live solely on the exception object — loses the \"where\" in the terminal. [confidence: 0.10]",
+				"",
+				"Which do you choose?",
+			},
+			wantQuestion: "Question 3 of ~5 — What exactly goes to stderr when the CLI catches `LedgerError`?\n\nWhat format should the `summary`/`filter` subcommands print before exiting 1?",
+			wantOptions: []opt{
+				{"Compiler-style path:line: reason (Recommended)", "e.g. `examples/expenses.csv:3: invalid date \"2026-13-99\"`. Greppable."},
+				{"Prose style reason (file: path, line: N)", "more readable for humans, less tool-friendly."},
+				{"Reason only on stderr; path/line live solely on the exception object", "loses the \"where\" in the terminal."},
+			},
+		},
+		{
+			name: "bold colon labels with inline heading and recommendation before generic prompt",
+			text: []string{
+				"**Question 1: CLI invocation shape.** The existing `summary` command takes a CSV path argument. For `budget --month YYYY-MM`, how should the user supply the expenses data and the budgets file?",
+				"",
+				"1. **Path args for both (Recommended):** `python3 -m ledger budget expenses.csv --budgets budgets.csv` — explicit. [confidence: 0.75]",
+				"2. **Expenses path arg, budgets from fixed default:** `budget expenses.csv --month 2026-10` with budgets from a conventional location. [confidence: 0.30]",
+				"3. **`month,category,amount`:** e.g. `2026-10,groceries,500.00`. [confidence: 0.15]",
+				"",
+				"My recommendation is option 1: it keeps both inputs explicit. Which do you pick?",
+			},
+			wantQuestion: "Question 1: CLI invocation shape.\n\nFor `budget --month YYYY-MM`, how should the user supply the expenses data and the budgets file?",
+			wantOptions: []opt{
+				{"Path args for both (Recommended)", "`python3 -m ledger budget expenses.csv --budgets budgets.csv` — explicit."},
+				{"Expenses path arg, budgets from fixed default", "`budget expenses.csv --month 2026-10` with budgets from a conventional location."},
+				{"month,category,amount", "e.g. `2026-10,groceries,500.00`."},
+			},
+		},
+		{
+			name: "inline emphasis stripped outside code",
+			text: []string{
+				"**Question 4 of ~5 — Is an empty amount field \"bad\"?**",
+				"",
+				"Should an empty `amount` field raise `LedgerError`, or keep the current lenient behavior? (Empty *date* already raises.)",
+				"",
+				"1. Empty amount is bad (Recommended): missing data, not zero money. [confidence: 0.72]",
+				"2. Keep _lenient_ parsing of `*_x_*` and 2*3: blank means zero. [confidence: 0.30]",
+				"3. Empty amount is bad *and* tighten format validation (reject `+` sign, etc.): strictest. [confidence: 0.15]",
+				"",
+				"Which do you choose?",
+			},
+			wantQuestion: "Question 4 of ~5 — Is an empty amount field \"bad\"?\n\nShould an empty `amount` field raise `LedgerError`, or keep the current lenient behavior?",
+			wantOptions: []opt{
+				{"Empty amount is bad (Recommended)", "missing data, not zero money."},
+				{"Keep lenient parsing of *_x_* and 2*3", "blank means zero."},
+				{"Empty amount is bad and tighten format validation (reject + sign, etc.)", "strictest."},
+			},
+		},
+		{
+			name: "specific trailing question kept after heading",
+			text: []string{
+				"**Question 5: Report layout.** The existing `summary` prints tab-separated lines. How should the report lay out its columns?",
+				"",
+				"1. **Tab-separated, no header (Recommended):** consistent with `summary`. [confidence: 0.70]",
+				"2. **Aligned table with header row:** nicer for humans. [confidence: 0.40]",
+				"",
+				"Should the budget report keep the tab-separated layout scripts already parse?",
+			},
+			wantQuestion: "Question 5: Report layout.\n\nThe existing `summary` prints tab-separated lines. How should the report lay out its columns?\n\nShould the budget report keep the tab-separated layout scripts already parse?",
+			wantOptions: []opt{
+				{"Tab-separated, no header (Recommended)", "consistent with `summary`."},
+				{"Aligned table with header row", "nicer for humans."},
+			},
+		},
+		{
+			name: "conditional follow-up kept after stem question",
+			text: []string{
+				"**Question 3 of ~6:** Which fields should `rules.csv` hold?",
+				"",
+				"1. `day,store,limit` rows (Recommended): one row per store per day, e.g. `2026-11-02,bakery,40.00`. [confidence: 0.70]",
+				"2. `store,limit` only: one limit per store for all days. [confidence: 0.30]",
+				"",
+				"If option 1: should totals also be restricted to the chosen `--day`?",
+			},
+			wantQuestion: "Question 3 of ~6:\n\nWhich fields should `rules.csv` hold?\n\nIf option 1: should totals also be restricted to the chosen `--day`?",
+			wantOptions: []opt{
+				{"day,store,limit rows (Recommended)", "one row per store per day, e.g. `2026-11-02,bakery,40.00`."},
+				{"store,limit only", "one limit per store for all days."},
+			},
+		},
+		{
+			name: "closer restating body words dropped",
+			text: []string{
+				"I've reviewed the parser and its tests. One question at a time.",
+				"",
+				"**Question 2 of ~4: Timestamp zone**",
+				"",
+				"When a record has no offset, which zone policy should the parser apply to its timestamp?",
+				"",
+				"1. **Assume UTC (Recommended)**: predictable across hosts. [confidence: 0.80]",
+				"2. **Assume local time**: matches what users typed. [confidence: 0.35]",
+				"",
+				"Which zone policy do you want?",
+			},
+			wantQuestion: "Question 2 of ~4: Timestamp zone\n\nWhen a record has no offset, which zone policy should the parser apply to its timestamp?",
+			wantOptions: []opt{
+				{"Assume UTC (Recommended)", "predictable across hosts."},
+				{"Assume local time", "matches what users typed."},
+			},
+		},
+		{
+			name: "generic closer dropped",
+			text: []string{
+				"**Question 1:** Where should cache files live?",
+				"",
+				"1. **XDG cache dir (Recommended)**: standard location. [confidence: 0.75]",
+				"2. **Next to the binary**: portable. [confidence: 0.25]",
+				"",
+				"Which do you pick?",
+			},
+			wantQuestion: "Question 1:\n\nWhere should cache files live?",
+			wantOptions: []opt{
+				{"XDG cache dir (Recommended)", "standard location."},
+				{"Next to the binary", "portable."},
+			},
+		},
+		{
+			name: "stem without question keeps trailing question",
+			text: []string{
+				"**Retry policy.** The client gives up after the first failure today.",
+				"",
+				"1. **Exponential backoff (Recommended)**: three attempts. [confidence: 0.70]",
+				"2. **No retries**: fail fast. [confidence: 0.30]",
+				"",
+				"Which do you pick?",
+			},
+			wantQuestion: "Retry policy.\n\nThe client gives up after the first failure today.\n\nWhich do you pick?",
+			wantOptions: []opt{
+				{"Exponential backoff (Recommended)", "three attempts."},
+				{"No retries", "fail fast."},
+			},
+		},
+		{
+			name: "bold in descriptions dropped outside code",
+			text: []string{
+				"Which files should the linter check?",
+				"",
+				"1. **Go only (Recommended)**: lint `**/*.go` **and** skip the rest. [confidence: 0.70]",
+				"2. **Everything**: slower *but* thorough. [confidence: 0.30]",
+			},
+			wantQuestion: "Which files should the linter check?",
+			wantOptions: []opt{
+				{"Go only (Recommended)", "lint `**/*.go` and skip the rest."},
+				{"Everything", "slower *but* thorough."},
+			},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			p, _, promptID := newPostHandshakeProtocol(t)
+			streamAssistantText(t, p, strings.Join(tt.text, "\n"))
+			msgs := endTurn(t, p, promptID)
+			if len(msgs) != 1 || msgs[0].ControlRequest == nil {
+				t.Fatalf("produced %+v, want one AskUserQuestion control request", msgs)
+			}
+			qs := askUserQuestionsFrom(t, msgs[0].ControlRequest)
+			if len(qs) != 1 || len(qs[0].Options) != len(tt.wantOptions) {
+				t.Fatalf("questions = %+v, want one question with %d options", qs, len(tt.wantOptions))
+			}
+			if qs[0].Question != tt.wantQuestion {
+				t.Errorf("question = %q, want %q", qs[0].Question, tt.wantQuestion)
+			}
+			for i, w := range tt.wantOptions {
+				if got := qs[0].Options[i]; got.Label != w.label || got.Description != w.desc {
+					t.Errorf("option %d = %q / %q, want %q / %q", i+1, got.Label, got.Description, w.label, w.desc)
+				}
+			}
+		})
+	}
+}
+
+// TestPromptEndTurn_QuestionTextDropsBoldMarkup proves synthesized question
+// text is plain text: bold markers go wherever they sit, inline code stays.
+func TestPromptEndTurn_QuestionTextDropsBoldMarkup(t *testing.T) {
+	options := []string{
+		"",
+		"1. **Alphabetical (Recommended)**: predictable order. [confidence: 0.80]",
+		"2. **By date**: newest first. [confidence: 0.40]",
+	}
+	tests := []struct {
+		name         string
+		text         []string
+		wantQuestion string
+		wantOptions  int
+	}{
+		{
+			name:         "heading inside a paragraph",
+			text:         append([]string{"Thanks, that settles storage. **Question 2: Which sort order should `list` use?**"}, options...),
+			wantQuestion: "Thanks, that settles storage. Question 2: Which sort order should `list` use?",
+			wantOptions:  2,
+		},
+		{
+			name:         "bold question sentence",
+			text:         append([]string{"Storage is settled.", "", "**Which sort order should the list use?**"}, options...),
+			wantQuestion: "Storage is settled.\n\nWhich sort order should the list use?",
+			wantOptions:  2,
+		},
+		{
+			name:         "bold mid-sentence words",
+			text:         append([]string{"Which sort order should the **default** listing use?"}, options...),
+			wantQuestion: "Which sort order should the default listing use?",
+			wantOptions:  2,
+		},
+		{
+			name:         "inline code containing bold markers kept",
+			text:         append([]string{"Should `glob **/*.go` be the **default** pattern?"}, options...),
+			wantQuestion: "Should `glob **/*.go` be the default pattern?",
+			wantOptions:  2,
+		},
+		{
+			name:         "plain question unchanged",
+			text:         append([]string{"Which sort order should `list` use?"}, options...),
+			wantQuestion: "Which sort order should `list` use?",
+			wantOptions:  2,
+		},
+		{
+			name:         "free-form question",
+			text:         []string{"FREE_FORM: What **exact** version string should I tag?"},
+			wantQuestion: "What exact version string should I tag?",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			p, _, promptID := newPostHandshakeProtocol(t)
+			streamAssistantText(t, p, strings.Join(tt.text, "\n"))
+			msgs := endTurn(t, p, promptID)
+			if len(msgs) != 1 || msgs[0].ControlRequest == nil {
+				t.Fatalf("produced %+v, want one AskUserQuestion control request", msgs)
+			}
+			qs := askUserQuestionsFrom(t, msgs[0].ControlRequest)
+			if len(qs) != 1 || len(qs[0].Options) != tt.wantOptions {
+				t.Fatalf("questions = %+v, want one question with %d options", qs, tt.wantOptions)
+			}
+			if qs[0].Question != tt.wantQuestion {
+				t.Errorf("question = %q, want %q", qs[0].Question, tt.wantQuestion)
+			}
+		})
 	}
 }
 

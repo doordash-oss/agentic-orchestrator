@@ -554,6 +554,8 @@ func (h *apiHandler) handleRunRoute(w http.ResponseWriter, r *http.Request, feat
 		h.handleLogContent(w, r, featureID, runNumber, parts[1])
 	case len(parts) == 1 && parts[0] == "sessions":
 		h.handleRunSessions(w, r, featureID, runNumber)
+	case len(parts) == 3 && parts[0] == "sessions" && parts[2] == "transcript":
+		h.handleRunSessionTranscript(w, r, featureID, runNumber, parts[1])
 	default:
 		writeAPIError(w, http.StatusNotFound, errcat.NotFound, errcat.WithParams(errcat.SubjectParams{Subject: "Endpoint"}))
 	}

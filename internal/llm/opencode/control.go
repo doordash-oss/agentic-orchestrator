@@ -906,7 +906,7 @@ func splitOptionLabelDesc(raw string) (string, string) {
 	} else if start, end := labelSeparator(raw); start >= 0 {
 		label, desc = raw[:start], raw[end:]
 	}
-	return cleanLabel(label), strings.TrimSpace(desc)
+	return cleanLabel(label), stripStrong(desc)
 }
 
 // splitBoldLabel splits "**Label:** desc", "**Label**: desc" and

@@ -786,6 +786,20 @@ func TestPromptEndTurn_NumberedOptionsRealSampleShapes(t *testing.T) {
 				{"No retries", "fail fast."},
 			},
 		},
+		{
+			name: "bold in descriptions dropped outside code",
+			text: []string{
+				"Which files should the linter check?",
+				"",
+				"1. **Go only (Recommended)**: lint `**/*.go` **and** skip the rest. [confidence: 0.70]",
+				"2. **Everything**: slower *but* thorough. [confidence: 0.30]",
+			},
+			wantQuestion: "Which files should the linter check?",
+			wantOptions: []opt{
+				{"Go only (Recommended)", "lint `**/*.go` and skip the rest."},
+				{"Everything", "slower *but* thorough."},
+			},
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
